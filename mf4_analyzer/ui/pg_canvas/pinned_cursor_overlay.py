@@ -10,14 +10,16 @@ from typing import Callable
 
 import pyqtgraph as pg
 from PyQt5 import sip
-from PyQt5.QtCore import QPointF, QRect, QRectF, Qt, QTimer, pyqtSignal
+from PyQt5.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
 from PyQt5.QtWidgets import (
+    QApplication,
     QFrame,
     QGraphicsLineItem,
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QScrollArea,
     QWIDGETSIZE_MAX,
     QWidget,
 )
@@ -32,10 +34,11 @@ _LABEL_H = 16
 _LABEL_GAP = 3
 _EDGE_PAD = 2
 _TINY_HOST_W = 40
+_MAX_LABEL_ROWS = 3
 _LINE_Z = 800
 _EXTREMA_Z = 850
 _LEADER_Z = 790
-_SINGLE_COLOR = "#7090be"
+_SINGLE_COLOR = "#54749d"
 _A_COLOR = "#2563eb"
 _B_COLOR = "#dc2626"
 _MIN_COLOR = "#16a34a"
@@ -100,8 +103,8 @@ def _leader_pen():
     global _LEADER_PEN
     if _LEADER_PEN is None:
         color = QColor(_SINGLE_COLOR)
-        color.setAlpha(_FAINT_ALPHA)
-        _LEADER_PEN = QPen(color, 1.0)
+        color.setAlpha(255)
+        _LEADER_PEN = QPen(color, 1.5)
     return _LEADER_PEN
 
 
@@ -123,6 +126,16 @@ def cluster_label_text(ordinals):
 
 def _label_width(text, fm):
     return max(18, int(fm.horizontalAdvance(str(text))) + 8)
+
+
+def _group_label_text(group):
+    """Keep a co-located dual cursor readable without merging A/B identity."""
+    if len(group) == 2:
+        record_ids = {str(item["record_id"]) for item in group}
+        endpoints = {str(item["endpoint"]) for item in group}
+        if len(record_ids) == 1 and endpoints == {"a", "b"}:
+            return f"P{group[0]['ordinal']}·A/B"
+    return cluster_label_text(item["ordinal"] for item in group)
 
 
 @dataclass(frozen=True)
@@ -154,7 +167,9 @@ class PinnedLabelGeom:
     leader: tuple[float, float, float, float] | None
     offscreen: str | None
     endpoint: str
-    members: tuple[tuple[str, str, int], ...]
+    # ``key`` and the layout slot are projection details.  Input is always
+    # addressed to this stable record/endpoint pair, including co-located A/B.
+    members: tuple[tuple[str, str, str, int], ...]
 
 
 @dataclass(frozen=True)
@@ -174,6 +189,7 @@ def layout_pinned_axis_labels(
     axis_top,
     axis_height,
     fm,
+    axis_floor=None,
 ):
     """Place axis-edge chips in a finite band. Never shove infinitely left."""
     left = int(axis_left)
@@ -195,7 +211,7 @@ def layout_pinned_axis_labels(
     if tiny:
         ordinals = tuple(item["ordinal"] for item in endpoints)
         record_ids = tuple(item["record_id"] for item in endpoints)
-        text = cluster_label_text(ordinals) if len(ordinals) > 1 else (
+        text = _group_label_text(endpoints) if len(ordinals) > 1 else (
             endpoints[0]["text"] if endpoints else "P"
         )
         chip_w = min(width, _label_width(text, fm))
@@ -212,19 +228,22 @@ def layout_pinned_axis_labels(
             offscreen=None,
             endpoint="",
             members=tuple(
-                (item["record_id"], item["text"], item["ordinal"])
+                (
+                    item["record_id"], item["endpoint"], item["text"],
+                    item["ordinal"],
+                )
                 for item in endpoints
             ),
         ))
         return _stamp_stable_keys(tuple(items))
 
-    def _place_group(group, *, kind, offscreen, edge_x=None):
+    def _place_group(group, *, kind, offscreen, edge_x=None, row_top=None):
         if not group:
             return None
         ordinals = tuple(item["ordinal"] for item in group)
         record_ids = tuple(item["record_id"] for item in group)
         if kind == "cluster" or len(group) > 1:
-            text = cluster_label_text(ordinals)
+            text = _group_label_text(group)
             kind = "cluster"
         else:
             text = group[0]["text"]
@@ -243,15 +262,19 @@ def layout_pinned_axis_labels(
             center = true_x
         x = int(round(center - chip_w / 2.0))
         x = max(left + _EDGE_PAD, min(x, right - chip_w - _EDGE_PAD))
-        rect = (x, top, chip_w, height)
+        row_top = top if row_top is None else int(row_top)
+        rect = (x, row_top, chip_w, height)
         leader = None
         label_cx = x + chip_w / 2.0
         if offscreen is None and abs(label_cx - true_x) > 1.5:
-            y0 = float(top + height)
-            y1 = float(top + height - 2)
+            y0 = float(row_top + height)
+            y1 = float(row_top + height - 2)
             leader = (true_x, y0, label_cx, y1)
         members = tuple(
-            (item["record_id"], item["text"], item["ordinal"])
+            (
+                item["record_id"], item["endpoint"], item["text"],
+                item["ordinal"],
+            )
             for item in group
         )
         key = (
@@ -292,42 +315,73 @@ def layout_pinned_axis_labels(
         else:
             groups.append([item])
 
-    last_right = left
+    floor = top if axis_floor is None else int(axis_floor)
+    max_rows = max(1, min(
+        _MAX_LABEL_ROWS, 1 + max(0, top - floor) // (height + _LABEL_GAP),
+    ))
+    row_rights = [left] * max_rows
     for group in groups:
-        geom = _place_group(
+        base = _place_group(
             group, kind="cluster" if len(group) > 1 else "pin", offscreen=None,
+        )
+        if base is None:
+            continue
+        _x, _y, width_hint, _h = base.canvas_rect
+        row_index = next(
+            (
+                index for index, last_right in enumerate(row_rights)
+                if base.canvas_rect[0] >= last_right + _LABEL_GAP
+            ),
+            None,
+        )
+        if row_index is None:
+            # All finite rows are occupied at this X.  Merge only the nearest
+            # same-row chip, retaining every record/endpoint as local members
+            # instead of replacing them with an inaccessible aggregate.
+            row_index = min(
+                range(max_rows), key=lambda index: row_rights[index],
+            )
+            prior = next(
+                (
+                    item for item in reversed(placed)
+                    if item.canvas_rect[1] == top - row_index * (height + _LABEL_GAP)
+                ),
+                None,
+            )
+            if prior is not None:
+                placed.remove(prior)
+                group = [
+                    {
+                        "record_id": record_id,
+                        "endpoint": endpoint,
+                        "text": text,
+                        "ordinal": ordinal,
+                        "canvas_x": prior.true_x,
+                        "offscreen": None,
+                    }
+                    for record_id, endpoint, text, ordinal in prior.members
+                ] + list(group)
+        row_top = top - row_index * (height + _LABEL_GAP)
+        geom = _place_group(
+            group, kind="cluster" if len(group) > 1 else "pin",
+            offscreen=None, row_top=row_top,
         )
         if geom is None:
             continue
         x, y, w, h = geom.canvas_rect
-        if x < last_right + _LABEL_GAP:
-            x = last_right + _LABEL_GAP
-        if x + w > right - _EDGE_PAD:
-            # Finite band: collapse remaining into this chip rather than
-            # shoving earlier labels past the left edge.
-            x = max(left + _EDGE_PAD, right - w - _EDGE_PAD)
-        geom = PinnedLabelGeom(
-            key=geom.key,
-            kind=geom.kind,
-            record_ids=geom.record_ids,
-            ordinals=geom.ordinals,
-            text=geom.text,
+        x = max(row_rights[row_index] + _LABEL_GAP, x)
+        x = min(x, right - w - _EDGE_PAD)
+        label_cx = x + w / 2.0
+        geom = replace(
+            geom,
             canvas_rect=(x, y, w, h),
-            true_x=geom.true_x,
             leader=(
-                None if abs((x + w / 2.0) - geom.true_x) <= 1.5
-                else (geom.true_x, float(y + h), x + w / 2.0, float(y + h - 2))
+                None if abs(label_cx - geom.true_x) <= 1.5
+                else (geom.true_x, float(y + h), label_cx, float(y + h - 2))
             ),
-            offscreen=geom.offscreen,
-            endpoint=geom.endpoint,
-            members=geom.members,
         )
         placed.append(geom)
-        last_right = x + w
-
-    placed = _merge_overlapping_labels(
-        placed, fm=fm, left=left, right=right, top=top, height=height,
-    )
+        row_rights[row_index] = x + w
 
     if left_off:
         geom = _place_group(
@@ -430,10 +484,20 @@ def _stamp_stable_keys(items):
 
 
 class PinnedAxisLabel(QFrame):
-    """Axis-edge Pn chip. Click raises the pill; hover expands a cluster."""
+    """Axis-edge Pn chip with local pointer capture and keyboard routing.
+
+    The label deliberately owns only raw Qt input.  Its controller receives a
+    record UUID and endpoint for every semantic action; neither a layout slot
+    nor a child-widget ordinal is an identity.
+    """
 
     clicked = pyqtSignal(str)
     hover_changed = pyqtSignal(object)
+    edit_started = pyqtSignal(str, str, object)
+    edit_preview = pyqtSignal(str, str, object, object)
+    edit_committed = pyqtSignal(str, str, object, object)
+    edit_cancelled = pyqtSignal(str, str)
+    nudge_requested = pyqtSignal(str, str, int, object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -445,7 +509,11 @@ class PinnedAxisLabel(QFrame):
         self._highlighted = False
         self._expanded = False
         self._buttons = []
+        self._member_scroll = None
+        self._member_host = None
         self._text = ""
+        self._press = None
+        self._dragged = False
         lay = QHBoxLayout(self)
         lay.setContentsMargins(3, 0, 3, 0)
         lay.setSpacing(2)
@@ -458,6 +526,10 @@ class PinnedAxisLabel(QFrame):
         lay.addWidget(self._caption)
 
     def apply_geom(self, geom: PinnedLabelGeom):
+        # A geometry refresh must not turn a captured P1·A into whatever
+        # happens to occupy this layout slot on the next frame.
+        if self._press is not None:
+            return
         self._geom = geom
         self._text = geom.text
         self._caption.setText(geom.text)
@@ -466,7 +538,7 @@ class PinnedAxisLabel(QFrame):
         if self._expanded and geom.kind == "cluster" and len(geom.members) > 1:
             self._release_size_constraint()
             self._ensure_members(geom)
-            self.adjustSize()
+            self.setFixedSize(max(16, w), max(12, h))
         else:
             if self._expanded:
                 self._expanded = False
@@ -488,6 +560,10 @@ class PinnedAxisLabel(QFrame):
     def geom(self):
         return self._geom
 
+    def pointer_captured(self):
+        """Whether a stable record/endpoint owns pointer capture right now."""
+        return self._press is not None
+
     def _tooltip(self, geom):
         if geom.offscreen == "unrepresentable":
             return PINNED_UNREPRESENTABLE_TEXT
@@ -508,20 +584,38 @@ class PinnedAxisLabel(QFrame):
     def _ensure_members(self, geom):
         if self._buttons and len(self._buttons) == len(geom.members):
             for button, member in zip(self._buttons, geom.members):
-                button.setText(member[1])
+                record_id, endpoint, text, _ordinal = member
+                button.setText(text)
                 button.setProperty("record_id", member[0])
-                button.setMinimumWidth(self._member_min_width(button, member[1]))
+                button.setProperty("endpoint", endpoint)
+                button.setMinimumWidth(self._member_min_width(button, text))
             return
         self._clear_members()
-        for record_id, text, _ordinal in geom.members:
-            button = QPushButton(text, self)
+        scroll = QScrollArea(self)
+        scroll.setObjectName("pinnedAxisLabelMembers")
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setWidgetResizable(False)
+        host = QWidget(scroll)
+        members_layout = QHBoxLayout(host)
+        members_layout.setContentsMargins(0, 0, 0, 0)
+        members_layout.setSpacing(2)
+        scroll.setWidget(host)
+        self.layout().addWidget(scroll)
+        self._member_scroll = scroll
+        self._member_host = host
+        for record_id, endpoint, text, _ordinal in geom.members:
+            button = QPushButton(text, host)
             button.setObjectName("pinnedAxisLabelMember")
             button.setCursor(Qt.PointingHandCursor)
+            button.setFocusPolicy(Qt.TabFocus)
             button.setFixedHeight(_LABEL_H - 2)
             button.setMinimumWidth(self._member_min_width(button, text))
             button.setProperty("record_id", record_id)
-            button.clicked.connect(self._emit_member_clicked)
-            self.layout().addWidget(button)
+            button.setProperty("endpoint", endpoint)
+            button.installEventFilter(self)
+            members_layout.addWidget(button)
             self._buttons.append(button)
 
     def _clear_members(self):
@@ -530,12 +624,111 @@ class PinnedAxisLabel(QFrame):
             button.setParent(None)
             button.deleteLater()
         self._buttons = []
+        scroll = self._member_scroll
+        self._member_scroll = None
+        self._member_host = None
+        if scroll is not None:
+            layout = self.layout()
+            if layout is not None:
+                layout.removeWidget(scroll)
+            scroll.hide()
+            scroll.setParent(None)
+            scroll.deleteLater()
 
-    def _emit_member_clicked(self):
-        button = self.sender()
-        record_id = button.property("record_id") if button is not None else None
-        if record_id:
-            self.clicked.emit(str(record_id))
+    @staticmethod
+    def _event_global_pos(source, event):
+        global_pos = getattr(event, "globalPos", None)
+        if callable(global_pos):
+            return QPoint(global_pos())
+        pos = getattr(event, "pos", None)
+        return source.mapToGlobal(pos()) if callable(pos) else QPoint()
+
+    def _target_for(self, source):
+        if source in self._buttons:
+            record_id = source.property("record_id")
+            endpoint = source.property("endpoint")
+            if record_id and endpoint:
+                return str(record_id), str(endpoint)
+            return None, None
+        geom = self._geom
+        if geom is None or geom.kind == "cluster" or len(geom.members) != 1:
+            return None, None
+        record_id, endpoint, _text, _ordinal = geom.members[0]
+        return str(record_id), str(endpoint)
+
+    def _begin_pointer(self, source, event):
+        record_id, endpoint = self._target_for(source)
+        if record_id is None or endpoint is None:
+            return False
+        self.setFocus(Qt.MouseFocusReason)
+        self._dragged = False
+        self._press = (source, record_id, endpoint, self._event_global_pos(source, event))
+        # Direction labels are intentionally toggle-only: their edge position
+        # is not the record's data coordinate.
+        if self._geom is not None and self._geom.offscreen:
+            return True
+        self.edit_started.emit(record_id, endpoint, self._press[3])
+        try:
+            source.grabMouse()
+        except RuntimeError:
+            self._press = None
+            return False
+        return True
+
+    def _move_pointer(self, source, event):
+        press = self._press
+        if press is None or press[0] is not source:
+            return False
+        global_pos = self._event_global_pos(source, event)
+        if not self._dragged:
+            distance = QApplication.startDragDistance()
+            if abs(global_pos.x() - press[3].x()) <= distance:
+                return True
+            if self._geom is not None and self._geom.offscreen:
+                return True
+            self._dragged = True
+            self.setCursor(Qt.ClosedHandCursor)
+        self.edit_preview.emit(press[1], press[2], global_pos, event.modifiers())
+        return True
+
+    def _release_pointer(self, source, event):
+        press = self._press
+        if press is None or press[0] is not source:
+            return False
+        try:
+            source.releaseMouse()
+        except RuntimeError:
+            pass
+        self._press = None
+        self.setCursor(Qt.PointingHandCursor)
+        if self._dragged:
+            self.edit_committed.emit(
+                press[1], press[2], self._event_global_pos(source, event),
+                event.modifiers(),
+            )
+        else:
+            # ``begin_axis_edit`` snapshots before the threshold so a drag can
+            # retain the exact endpoint/capture.  A click never edits X, so it
+            # must explicitly cancel that provisional transaction before
+            # toggling the panel; otherwise the next label press restores an
+            # old collapsed projection over the newly expanded card.
+            self.edit_cancelled.emit(press[1], press[2])
+            self.clicked.emit(press[1])
+        self._dragged = False
+        return True
+
+    def _cancel_pointer(self):
+        press = self._press
+        if press is None:
+            return
+        self._press = None
+        self._dragged = False
+        try:
+            press[0].releaseMouse()
+        except RuntimeError:
+            pass
+        self.setCursor(Qt.PointingHandCursor)
+        self.edit_cancelled.emit(press[1], press[2])
 
     def enterEvent(self, event):
         super().enterEvent(event)
@@ -547,13 +740,16 @@ class PinnedAxisLabel(QFrame):
             self._caption.setVisible(False)
             self._release_size_constraint()
             self._ensure_members(geom)
-            self.adjustSize()
+            _x, _y, width, height = geom.canvas_rect
+            self.setFixedSize(max(16, width), max(12, height))
             self.raise_()
         ids = geom.record_ids
         self.hover_changed.emit(ids[0] if len(ids) == 1 else ids)
 
     def leaveEvent(self, event):
         super().leaveEvent(event)
+        if self._press is not None:
+            return
         if self._expanded:
             self._expanded = False
             self._clear_members()
@@ -561,15 +757,82 @@ class PinnedAxisLabel(QFrame):
                 self.apply_geom(self._geom)
         self.hover_changed.emit(None)
 
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton and self._begin_pointer(self, event):
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._move_pointer(self, event):
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
     def mouseReleaseEvent(self, event):
-        if event.button() == Qt.LeftButton and self._geom is not None:
-            if not self._expanded:
-                record_id = self._geom.record_ids[0] if self._geom.record_ids else ""
-                if record_id:
-                    self.clicked.emit(record_id)
+        if event.button() == Qt.LeftButton and self._release_pointer(self, event):
             event.accept()
             return
         super().mouseReleaseEvent(event)
+
+    def keyPressEvent(self, event):
+        record_id, endpoint = self._target_for(self)
+        if record_id is not None and endpoint is not None:
+            if event.key() == Qt.Key_Escape:
+                self._cancel_pointer()
+                event.accept()
+                return
+            if event.key() in (Qt.Key_Left, Qt.Key_Right):
+                self.nudge_requested.emit(
+                    record_id, endpoint,
+                    -1 if event.key() == Qt.Key_Left else 1,
+                    self.mapToGlobal(self.rect().center()),
+                )
+                event.accept()
+                return
+        super().keyPressEvent(event)
+
+    def focusOutEvent(self, event):
+        self._cancel_pointer()
+        super().focusOutEvent(event)
+
+    def hideEvent(self, event):
+        self._cancel_pointer()
+        super().hideEvent(event)
+
+    def eventFilter(self, watched, event):  # noqa: N802
+        if watched not in self._buttons:
+            return super().eventFilter(watched, event)
+        etype = event.type()
+        if etype == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
+            if self._begin_pointer(watched, event):
+                event.accept()
+                return True
+        elif etype == QEvent.MouseMove and self._move_pointer(watched, event):
+            event.accept()
+            return True
+        elif etype == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
+            if self._release_pointer(watched, event):
+                event.accept()
+                return True
+        elif etype == QEvent.KeyPress:
+            record_id, endpoint = self._target_for(watched)
+            if record_id is not None and endpoint is not None:
+                if event.key() == Qt.Key_Escape:
+                    self._cancel_pointer()
+                    event.accept()
+                    return True
+                if event.key() in (Qt.Key_Left, Qt.Key_Right):
+                    self.nudge_requested.emit(
+                        record_id, endpoint,
+                        -1 if event.key() == Qt.Key_Left else 1,
+                        watched.mapToGlobal(watched.rect().center()),
+                    )
+                    event.accept()
+                    return True
+        elif etype in (QEvent.FocusOut, QEvent.Hide):
+            self._cancel_pointer()
+        return super().eventFilter(watched, event)
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -970,6 +1233,75 @@ class PinnedCursorOverlay(_CanvasBackref):
             return None
         return lo, hi
 
+    def _physical_x_for_view(self, value):
+        view_x = _finite(value)
+        if view_x is None:
+            return None
+        if self._kind != "frf":
+            return view_x
+        converter = getattr(self._c, "_view_x_to_hz", None)
+        if not callable(converter):
+            return view_x
+        try:
+            return _finite(converter(view_x))
+        except (RuntimeError, TypeError, ValueError):
+            return None
+
+    def bottom_axis_global_to_viewport(self, global_pos):
+        """Map an axis-label global X into the bottom data ViewBox.
+
+        Labels live below the data rectangle.  Mapping their Y straight into a
+        cursor evaluator makes otherwise valid bottom controls look like a
+        miss, so preserve the global X and select a known in-data scene Y.
+        ``QGraphicsView.mapToScene`` receives viewport coordinates only.
+        """
+        canvas = self._c
+        glw = getattr(canvas, "_glw", None)
+        vb = self._bottom_viewbox()
+        if not _alive(glw) or not _alive(vb):
+            return None
+        try:
+            viewport = glw.viewport()
+            if not _alive(viewport):
+                return None
+            raw = viewport.mapFromGlobal(QPoint(global_pos))
+            scene = glw.mapToScene(raw)
+            rect = vb.sceneBoundingRect()
+            if not rect.isValid():
+                return None
+            return glw.mapFromScene(QPointF(scene.x(), rect.center().y()))
+        except (RuntimeError, TypeError, AttributeError, ValueError):
+            return None
+
+    def bottom_axis_viewport_pos_for_physical(self, physical_x):
+        """Return an in-data viewport point for a persisted physical X."""
+        canvas = self._c
+        glw = getattr(canvas, "_glw", None)
+        vb = self._bottom_viewbox()
+        view_x = self._view_x(physical_x)
+        if view_x is None or not _alive(glw) or not _alive(vb):
+            return None
+        try:
+            rect = vb.sceneBoundingRect()
+            if not rect.isValid():
+                return None
+            view_y = vb.mapSceneToView(rect.center()).y()
+            scene = vb.mapViewToScene(QPointF(view_x, view_y))
+            return glw.mapFromScene(scene)
+        except (RuntimeError, TypeError, AttributeError, ValueError):
+            return None
+
+    def bottom_axis_physical_bounds(self):
+        vb = self._bottom_viewbox()
+        view_bounds = self._view_range(vb)
+        if view_bounds is None:
+            return None
+        lo = self._physical_x_for_view(view_bounds[0])
+        hi = self._physical_x_for_view(view_bounds[1])
+        if lo is None or hi is None:
+            return None
+        return (min(lo, hi), max(lo, hi))
+
     def _endpoint_color(self, key):
         if key == "a":
             return _A_COLOR
@@ -1030,6 +1362,14 @@ class PinnedCursorOverlay(_CanvasBackref):
         return line
 
     def _line_pen(self, endpoint_key, highlighted):
+        # A single P line needs enough contrast against dense curves without
+        # changing the A/B endpoint or channel-colour contracts.  Selection
+        # makes only the single-record chrome blue; dual A/B keep their own
+        # established semantic colours.
+        if endpoint_key == "x":
+            color = "#006bea" if highlighted else _SINGLE_COLOR
+            width = 2.25 if highlighted else 1.5
+            return _pen(color, alpha=255, width=width)
         alpha = _HIGHLIGHT_ALPHA if highlighted else _FAINT_ALPHA
         width = 1.5 if highlighted else 1.0
         return _pen(self._endpoint_color(endpoint_key), alpha=alpha, width=width)
@@ -1183,6 +1523,7 @@ class PinnedCursorOverlay(_CanvasBackref):
             axis_top=axis_top,
             axis_height=_LABEL_H,
             fm=fm,
+            axis_floor=host.top(),
         )
         return PinnedOverlayLayout(
             host_rect=(host.x(), host.y(), host.width(), host.height()),
@@ -1199,19 +1540,21 @@ class PinnedCursorOverlay(_CanvasBackref):
         if _alive(glw) and _alive(canvas):
             try:
                 scene = glw.scene()
+                viewport = glw.viewport()
             except (RuntimeError, TypeError, AttributeError):
                 scene = None
-            if scene is not None:
+                viewport = None
+            if scene is not None and _alive(viewport):
                 for geom in layout.items:
                     if geom.leader is None:
                         continue
                     x1, y1, x2, y2 = geom.leader
                     try:
                         p1 = glw.mapToScene(
-                            canvas.mapTo(glw, QPointF(x1, y1).toPoint())
+                            viewport.mapFrom(canvas, QPointF(x1, y1).toPoint())
                         )
                         p2 = glw.mapToScene(
-                            canvas.mapTo(glw, QPointF(x2, y2).toPoint())
+                            viewport.mapFrom(canvas, QPointF(x2, y2).toPoint())
                         )
                     except (RuntimeError, TypeError, AttributeError):
                         continue

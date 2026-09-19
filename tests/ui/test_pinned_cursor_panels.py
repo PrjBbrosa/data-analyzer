@@ -9,6 +9,11 @@ from PyQt5.QtWidgets import QApplication
 from mf4_analyzer.ui.chart_stack import ChartStack
 from mf4_analyzer.ui.chart_stack.cursor_display import live_pin_hint_text
 from mf4_analyzer.ui.cursor_display_model import CursorDisplayChannel
+from mf4_analyzer.ui.pinned_cursor_state import (
+    DEFAULT_ANCHOR,
+    collection_from_dict,
+    collection_to_dict,
+)
 
 
 def _plot_speed(canvas):
@@ -72,6 +77,49 @@ def _records(cs, canvas=None):
     return () if collection is None else collection.records
 
 
+def _panel_expansion_by_ordinal(cs, canvas=None):
+    return {
+        record.ordinal: record.panel_expanded
+        for record in _records(cs, canvas)
+    }
+
+
+def _visible_pinned_ordinals(cs, canvas=None):
+    canvas = cs.canvas_time if canvas is None else canvas
+    return {
+        pill.ordinal()
+        for pill in cs._pinned_cursors.pills_for(canvas)
+        if pill.pin_role() == "pinned" and pill.isVisible()
+    }
+
+
+def _label_for_record(cs, record_id, canvas=None):
+    canvas = cs.canvas_time if canvas is None else canvas
+    labels = [
+        label
+        for label in cs._pinned_cursors.axis_labels_for(canvas)
+        if record_id in label.record_ids()
+    ]
+    assert len(labels) == 1, (
+        f"expected one Pn control for {record_id}, got {len(labels)}"
+    )
+    return labels[0]
+
+
+def _click_record_label(qtbot, cs, record_id, canvas=None):
+    label = _label_for_record(cs, record_id, canvas)
+    qtbot.mouseClick(label, Qt.LeftButton, pos=label.rect().center())
+    QApplication.processEvents()
+
+
+def _is_descendant_of(widget, ancestor):
+    while widget is not None:
+        if widget is ancestor:
+            return True
+        widget = widget.parentWidget()
+    return False
+
+
 def test_a09_full_mini_independent_drag_close_and_reuse_ordinal(qapp, qtbot):
     cs = _make_stack(qtbot, qapp)
     vp = _viewport(cs.canvas_time)
@@ -79,9 +127,16 @@ def test_a09_full_mini_independent_drag_close_and_reuse_ordinal(qapp, qtbot):
     _press_p(vp)
     _aim(qtbot, cs.canvas_time, 0.7, cs._pinned_cursors)
     _press_p(vp)
-    pills = cs._pinned_cursors.pills_for(cs.canvas_time)
-    assert len(pills) == 2
-    first, second = pills
+    records = _records(cs)
+    assert len(records) == 2
+    _click_record_label(qtbot, cs, records[0].record_id)
+    _click_record_label(qtbot, cs, records[1].record_id)
+    pills = {
+        pill.ordinal(): pill
+        for pill in cs._pinned_cursors.pills_for(cs.canvas_time)
+    }
+    assert set(pills) == {1, 2}
+    first, second = pills[1], pills[2]
     assert first.display_mode() == "full"
     assert second.display_mode() == "full"
     second._toggle_mode()
@@ -131,6 +186,160 @@ def test_a09_full_mini_independent_drag_close_and_reuse_ordinal(qapp, qtbot):
     _press_p(vp)
     reused = [item for item in _records(cs) if item.ordinal == 1]
     assert reused, _records(cs)
+
+
+def test_new_pins_start_collapsed_but_keep_their_pn_controls(qapp, qtbot):
+    cs = _make_stack(qtbot, qapp)
+    vp = _viewport(cs.canvas_time)
+    _aim(qtbot, cs.canvas_time, 0.3, cs._pinned_cursors)
+    _press_p(vp)
+    _aim(qtbot, cs.canvas_time, 0.7, cs._pinned_cursors)
+    _press_p(vp)
+
+    records = _records(cs)
+    assert [record.ordinal for record in records] == [1, 2]
+    assert _panel_expansion_by_ordinal(cs) == {1: False, 2: False}
+    assert _visible_pinned_ordinals(cs) == set()
+    for record in records:
+        assert _label_for_record(cs, record.record_id).isVisible()
+
+
+def test_pn_clicks_toggle_only_the_target_panel(qapp, qtbot):
+    cs = _make_stack(qtbot, qapp)
+    vp = _viewport(cs.canvas_time)
+    for fraction in (0.2, 0.5, 0.8):
+        _aim(qtbot, cs.canvas_time, fraction, cs._pinned_cursors)
+        _press_p(vp)
+
+    records = _records(cs)
+    assert [record.ordinal for record in records] == [1, 2, 3]
+    assert _panel_expansion_by_ordinal(cs) == {
+        1: False, 2: False, 3: False,
+    }
+
+    _click_record_label(qtbot, cs, records[0].record_id)
+    assert _panel_expansion_by_ordinal(cs) == {
+        1: True, 2: False, 3: False,
+    }
+    assert _visible_pinned_ordinals(cs) == {1}
+
+    _click_record_label(qtbot, cs, records[1].record_id)
+    assert _panel_expansion_by_ordinal(cs) == {
+        1: True, 2: True, 3: False,
+    }
+    assert _visible_pinned_ordinals(cs) == {1, 2}
+
+    _click_record_label(qtbot, cs, records[0].record_id)
+    assert _panel_expansion_by_ordinal(cs) == {
+        1: False, 2: True, 3: False,
+    }
+    assert _visible_pinned_ordinals(cs) == {2}
+
+
+def test_three_expanded_pins_use_separate_actual_card_rects_and_hits(qapp, qtbot):
+    """A09: the real stack hit target must agree with the painted card."""
+    cs = _make_stack(qtbot, qapp)
+    canvas = cs.canvas_time
+    t = np.linspace(0.0, 1.0, 200)
+    canvas.plot_channels(
+        [
+            (
+                "VeryLongPowertrainSignal_EngineSpeed_Validated",
+                True, t, np.sin(2 * np.pi * t), "#1769e0", "rpm", "fid-a",
+            ),
+            (
+                "VeryLongPowertrainSignal_RequestedTorque_Validated",
+                True, t, np.cos(2 * np.pi * t), "#16a34a", "Nm", "fid-a",
+            ),
+        ],
+        mode="overlay",
+    )
+    qapp.processEvents()
+    vp = _viewport(canvas)
+    for fraction in (0.18, 0.50, 0.82):
+        _aim(qtbot, canvas, fraction, cs._pinned_cursors)
+        _press_p(vp)
+    records = _records(cs)
+    assert len(records) == 3
+    for record in records:
+        _click_record_label(qtbot, cs, record.record_id)
+
+    pills = sorted(
+        (
+            pill for pill in cs._pinned_cursors.pills_for(canvas)
+            if pill.isVisible()
+        ),
+        key=lambda pill: pill.ordinal(),
+    )
+    assert len(pills) == 3
+    assert all(record.anchor == DEFAULT_ANCHOR for record in _records(cs))
+    for index, pill in enumerate(pills):
+        assert pill.safe_rect().contains(pill.geometry()), pill.geometry()
+        for other in pills[index + 1:]:
+            assert not pill.geometry().intersects(other.geometry())
+        hit = cs.stack.childAt(pill.geometry().center())
+        assert hit is not None
+        assert _is_descendant_of(hit, pill), (
+            f"stack.childAt({pill.geometry().center()}) hit {hit!r}, "
+            f"not P{pill.ordinal()}"
+        )
+
+
+def test_expanding_a_new_card_does_not_move_a_user_placed_card(qapp, qtbot):
+    cs = _make_stack(qtbot, qapp)
+    canvas = cs.canvas_time
+    vp = _viewport(canvas)
+    for fraction in (0.3, 0.7):
+        _aim(qtbot, canvas, fraction, cs._pinned_cursors)
+        _press_p(vp)
+    first_record, second_record = _records(cs)
+    _click_record_label(qtbot, cs, first_record.record_id)
+    first = next(
+        pill for pill in cs._pinned_cursors.pills_for(canvas)
+        if pill.ordinal() == first_record.ordinal
+    )
+    start = first.rect().center()
+    qtbot.mousePress(first, Qt.LeftButton, pos=start)
+    qtbot.mouseRelease(first, Qt.LeftButton, pos=start + QPoint(-34, 24))
+    qapp.processEvents()
+    assert first.is_user_placed()
+    placed = first.geometry()
+    _click_record_label(qtbot, cs, second_record.record_id)
+    assert first.geometry() == placed
+    assert _records(cs)[0].anchor != DEFAULT_ANCHOR
+
+
+def test_panel_expansion_defaults_and_explicit_restore(qapp, qtbot):
+    cs = _make_stack(qtbot, qapp)
+    _aim(qtbot, cs.canvas_time, 0.45, cs._pinned_cursors)
+    _press_p(_viewport(cs.canvas_time))
+    record = _records(cs)[0]
+
+    legacy_payload = collection_to_dict(
+        cs.pinned_cursors_for_canvas(cs.canvas_time)
+    )
+    assert "panel_expanded" not in legacy_payload["records"][0]
+    legacy = collection_from_dict(legacy_payload)
+    assert legacy.records[0].panel_expanded is False
+
+    malformed_payload = collection_to_dict(legacy)
+    malformed_payload["records"][0]["panel_expanded"] = "false"
+    malformed = collection_from_dict(malformed_payload)
+    assert malformed.records[0].panel_expanded is False
+
+    expanded_payload = collection_to_dict(legacy)
+    expanded_payload["records"][0]["panel_expanded"] = True
+    restored = collection_from_dict(collection_to_dict(
+        collection_from_dict(expanded_payload)
+    ))
+    assert restored.records[0].record_id == record.record_id
+    assert restored.records[0].panel_expanded is True
+    assert collection_to_dict(restored)["records"][0]["panel_expanded"] is True
+
+    cs.set_pinned_cursors_for_canvas(cs.canvas_time, restored)
+    qapp.processEvents()
+    assert _panel_expansion_by_ordinal(cs) == {1: True}
+    assert _visible_pinned_ordinals(cs) == {1}
 
 
 def test_live_consumed_after_single_pin_returns_on_next_move(qapp, qtbot):

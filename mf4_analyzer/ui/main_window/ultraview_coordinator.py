@@ -151,6 +151,10 @@ class UltraViewCoordinator(QObject):
     def request_visible_section_capture(self, section: str, reason: str='plot') -> None:
         return self._capture.request_visible_section_capture(section, reason)
 
+    def request_pinned_cursor_capture(self) -> None:
+        """Refresh the active preview output after committed pin intent."""
+        return self._capture.request_pinned_cursor_capture()
+
     def notify_result_stored(self, section, view_id, pane_idx, key, result) -> None:
         return self._capture.notify_result_stored(section, view_id, pane_idx, key, result)
 

@@ -8,6 +8,7 @@ from PyQt5.QtGui import QCursor, QKeyEvent
 from PyQt5.QtWidgets import QApplication, QLineEdit
 
 from mf4_analyzer.ui.chart_stack import ChartStack
+from mf4_analyzer.ui.pinned_cursor_state import empty_collection, next_record
 
 
 def _plot_speed(canvas):
@@ -89,6 +90,23 @@ def _records(cs, canvas=None):
     return () if collection is None else collection.records
 
 
+def _axis_label_for(cs, canvas, record_id, endpoint):
+    for label in cs._pinned_cursors.axis_labels_for(canvas):
+        geom = label.geom()
+        if geom is None:
+            continue
+        if any(
+            member[0] == record_id and member[1] == endpoint
+            for member in geom.members
+        ):
+            return label
+    raise AssertionError(f"missing bottom label for {record_id}/{endpoint}")
+
+
+def _drag_delta():
+    return max(24, QApplication.startDragDistance() + 8)
+
+
 def test_a01_mouse_over_plot_without_click_pins(qapp, qtbot):
     cs = _make_stack(qtbot, qapp)
     vp = _viewport(cs.canvas_time)
@@ -109,7 +127,8 @@ def test_a01_mouse_over_plot_without_click_pins(qapp, qtbot):
     assert any("P1 已固定" in item for item in feedback)
     pills = cs._pinned_cursors.pills_for(cs.canvas_time)
     assert len(pills) == 1
-    assert pills[0].isVisible()
+    assert records[0].panel_expanded is False
+    assert pills[0].isVisible() is False
     assert pills[0].pin_role() == "pinned"
 
 
@@ -208,7 +227,7 @@ def test_a08_off_does_not_create_and_keeps_existing_pins(qapp, qtbot):
     assert not override.isAccepted()
     assert len(_records(cs)) == 1
     pills = cs._pinned_cursors.pills_for(cs.canvas_time)
-    assert pills and pills[0].isVisible()
+    assert pills and pills[0].isVisible() is False
     assert not cs.cursor_pill_visible()
 
 
@@ -257,3 +276,239 @@ def test_gesture_in_progress_does_not_pin(qapp, qtbot):
     assert not override.isAccepted()
     assert _records(cs) == ()
     qtbot.mouseRelease(vp, Qt.LeftButton, pos=local)
+
+
+def test_bottom_label_drag_previews_without_dirty_then_commits_once(qapp, qtbot):
+    cs = _make_stack(qtbot, qapp)
+    canvas = cs.canvas_time
+    _aim(qtbot, canvas, 0.35, cs._pinned_cursors)
+    _press_p(_viewport(canvas))
+    original = _records(cs)[0]
+    controller = cs._pinned_cursors
+    before_capture = controller.capture_fingerprint_for(canvas)
+    revisions = []
+    transaction_states = []
+    controller.intent_changed.connect(lambda: revisions.append(controller.user_intent_revision))
+    controller.axis_edit_state_changed.connect(
+        lambda observed, active: transaction_states.append(active)
+        if observed is canvas else None
+    )
+    label = _axis_label_for(cs, canvas, original.record_id, "x")
+    start = label.rect().center()
+
+    qtbot.mousePress(label, Qt.LeftButton, pos=start)
+    qtbot.mouseMove(label, QPoint(start.x() + _drag_delta(), start.y()))
+    qapp.processEvents()
+    qapp.processEvents()
+
+    owner = controller._owner(canvas)
+    assert owner.axis_edit is not None
+    assert owner.axis_edit.record_id == original.record_id
+    assert controller.is_axis_edit_active(canvas)
+    assert controller.axis_edit_is_settled(canvas) is False
+    assert _records(cs)[0].x == pytest.approx(original.x)
+    assert controller.capture_fingerprint_for(canvas) == before_capture
+    assert revisions == []
+    assert transaction_states == [True]
+
+    qtbot.mouseRelease(
+        label, Qt.LeftButton, pos=QPoint(start.x() + _drag_delta(), start.y()),
+    )
+    qapp.processEvents()
+
+    moved = _records(cs)[0]
+    assert moved.x != pytest.approx(original.x)
+    assert moved.panel_expanded is False
+    assert owner.axis_edit is None
+    assert controller.is_axis_edit_active(canvas) is False
+    assert controller.axis_edit_is_settled(canvas)
+    assert revisions == [controller.user_intent_revision]
+    assert transaction_states == [True, False]
+
+
+def test_bottom_label_drag_escape_and_cursor_mode_cancel_are_zero_dirty(qapp, qtbot):
+    cs = _make_stack(qtbot, qapp)
+    canvas = cs.canvas_time
+    _aim(qtbot, canvas, 0.45, cs._pinned_cursors)
+    _press_p(_viewport(canvas))
+    original = _records(cs)[0]
+    controller = cs._pinned_cursors
+    revisions = []
+    transaction_states = []
+    controller.intent_changed.connect(lambda: revisions.append(controller.user_intent_revision))
+    controller.axis_edit_state_changed.connect(
+        lambda observed, active: transaction_states.append(active)
+        if observed is canvas else None
+    )
+    label = _axis_label_for(cs, canvas, original.record_id, "x")
+    start = label.rect().center()
+
+    qtbot.mousePress(label, Qt.LeftButton, pos=start)
+    qtbot.mouseMove(label, QPoint(start.x() + _drag_delta(), start.y()))
+    qapp.processEvents()
+    qtbot.keyClick(label, Qt.Key_Escape)
+    qapp.processEvents()
+    assert controller._owner(canvas).axis_edit is None
+    assert _records(cs)[0].x == pytest.approx(original.x)
+    assert revisions == []
+    assert transaction_states == [True, False]
+
+    qtbot.mousePress(label, Qt.LeftButton, pos=start)
+    qtbot.mouseMove(label, QPoint(start.x() + _drag_delta(), start.y()))
+    qapp.processEvents()
+    cs.set_cursor_mode_for_canvas(canvas, "off")
+    qapp.processEvents()
+    assert controller._owner(canvas).axis_edit is None
+    assert _records(cs)[0].x == pytest.approx(original.x)
+    assert revisions == []
+    assert transaction_states == [True, False, True, False]
+    qtbot.mouseRelease(label, Qt.LeftButton, pos=start)
+
+
+def test_bottom_label_arrow_uses_time_domain_millisecond_step(qapp, qtbot):
+    cs = _make_stack(qtbot, qapp)
+    canvas = cs.canvas_time
+    _aim(qtbot, canvas, 0.5, cs._pinned_cursors)
+    _press_p(_viewport(canvas))
+    original = _records(cs)[0]
+    controller = cs._pinned_cursors
+    revisions = []
+    controller.intent_changed.connect(lambda: revisions.append(controller.user_intent_revision))
+    label = _axis_label_for(cs, canvas, original.record_id, "x")
+
+    label.setFocus(Qt.OtherFocusReason)
+    qtbot.keyClick(label, Qt.Key_Right)
+    qapp.processEvents()
+
+    moved = _records(cs)[0]
+    assert moved.x == pytest.approx(original.x + 0.001)
+    assert revisions == [controller.user_intent_revision]
+
+
+def test_bottom_label_arrow_uses_custom_x_pixel_mapping(qapp, qtbot):
+    from tests.ui.test_custom_x_cursor_contract import _plot_custom_x
+
+    cs = _make_stack(qtbot, qapp)
+    canvas = cs.canvas_time
+    x = np.linspace(0.0, 10.0, 201)
+    _plot_custom_x(
+        canvas,
+        [("speed", True, x, np.sin(x), "#1769e0", "rpm", "fid-a")],
+        unit="mm",
+        label="travel",
+        identity=("fid-a", "travel"),
+    )
+    _aim(qtbot, canvas, 0.5, cs._pinned_cursors)
+    _press_p(_viewport(canvas))
+    original = _records(cs)[0]
+    assert original.domain == "channel"
+    label = _axis_label_for(cs, canvas, original.record_id, "x")
+
+    label.setFocus(Qt.OtherFocusReason)
+    qtbot.keyClick(label, Qt.Key_Right)
+    qapp.processEvents()
+
+    moved = _records(cs)[0]
+    assert moved.x > original.x
+    assert moved.x - original.x != pytest.approx(0.001)
+
+
+def test_bottom_label_arrow_uses_next_effective_fft_frequency(qapp, qtbot):
+    cs = _make_stack(qtbot, qapp)
+    cs.set_mode("fft")
+    canvas = cs.canvas_fft
+    cs.set_cursor_mode_for_canvas(canvas, "single")
+    frequencies = np.array([1.0, 10.0, 50.0, 100.0, 200.0])
+    canvas.plot_spectra(
+        [{
+            "freq": frequencies,
+            "amp": np.arange(1.0, 6.0),
+            "label": "force",
+            "channel": "force",
+            "fid": "fid-a",
+            "color": "#2563eb",
+            "time": np.linspace(0.0, 1.0, 8),
+            "signal": np.zeros(8),
+        }],
+        xlim=(0.0, 200.0), amp_label="Amplitude", title="FFT",
+    )
+    collection, _ = next_record(empty_collection(), {
+        "mode": "single",
+        "domain": "frequency",
+        "x": 50.0,
+        "x_unit": "Hz",
+        "bindings": [{"fid": "fid-a", "channel": "force"}],
+    })
+    cs.set_pinned_cursors_for_canvas(canvas, collection)
+    qapp.processEvents()
+    original = _records(cs, canvas)[0]
+    assert cs._pinned_cursors.availability_for(canvas, original.record_id) == "ready"
+    label = _axis_label_for(cs, canvas, original.record_id, "x")
+
+    label.setFocus(Qt.OtherFocusReason)
+    qtbot.keyClick(label, Qt.Key_Right)
+    qapp.processEvents()
+
+    assert _records(cs, canvas)[0].x == pytest.approx(100.0)
+
+
+def test_bottom_label_arrow_keeps_frf_log_frequency_in_hz(qapp, qtbot):
+    from tests.ui.test_pinned_cursor_geometry import _frf_result
+
+    cs = _make_stack(qtbot, qapp)
+    cs.set_mode("frf")
+    canvas = cs.canvas_frf
+    cs.set_cursor_mode_for_canvas(canvas, "single")
+    canvas.set_result(
+        _frf_result(log=True),
+        {"frequency_scale": "log", "magnitude_scale": "linear"},
+        {},
+    )
+    collection, _ = next_record(empty_collection(), {
+        "mode": "single",
+        "domain": "frf",
+        "x": 10.0,
+        "x_unit": "Hz",
+        "bindings": [{"fid": "fid-a", "channel": "force"}],
+    })
+    cs.set_pinned_cursors_for_canvas(canvas, collection)
+    qapp.processEvents()
+    original = _records(cs, canvas)[0]
+    assert cs._pinned_cursors.availability_for(canvas, original.record_id) == "ready"
+    label = _axis_label_for(cs, canvas, original.record_id, "x")
+
+    label.setFocus(Qt.OtherFocusReason)
+    qtbot.keyClick(label, Qt.Key_Right)
+    qapp.processEvents()
+
+    assert _records(cs, canvas)[0].x == pytest.approx(100.0)
+
+
+def test_coincident_dual_members_expose_separate_a_b_targets(qapp, qtbot):
+    cs = _make_stack(qtbot, qapp, mode="dual")
+    canvas = cs.canvas_time
+    collection, _ = next_record(empty_collection(), {
+        "mode": "dual",
+        "domain": "time",
+        "ax": 0.4,
+        "bx": 0.4,
+        "x_unit": "s",
+        "bindings": [{"fid": "fid-a", "channel": "speed"}],
+    })
+    cs.set_pinned_cursors_for_canvas(canvas, collection)
+    qapp.processEvents()
+    original = _records(cs)[0]
+    label = _axis_label_for(cs, canvas, original.record_id, "a")
+    QApplication.sendEvent(label, QEvent(QEvent.Enter))
+    qapp.processEvents()
+    a_button = next(
+        button for button in label._buttons
+        if button.property("endpoint") == "a"
+    )
+    b_button = next(
+        button for button in label._buttons
+        if button.property("endpoint") == "b"
+    )
+    assert a_button.property("record_id") == original.record_id
+    assert b_button.property("record_id") == original.record_id
+    assert a_button is not b_button

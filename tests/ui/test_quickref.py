@@ -233,6 +233,8 @@ def test_quickref_documents_chart_pin_not_board_pen():
     assert "时域" in shortcut_row.sub and "频谱" in shortcut_row.sub
     assert "频响" in shortcut_row.sub
     assert "不必先点" in shortcut_row.sub
+    for phrase in ("现有可用上下文", "默认收起", "图底 Pn", "展开/收起", "拖动", "←/→", "Shift"):
+        assert phrase in shortcut_row.sub
     assert "Board" in shortcut_row.sub
     assert "画笔" in shortcut_row.sub
     assert "全局" not in shortcut_row.sub
@@ -243,8 +245,9 @@ def test_quickref_documents_chart_pin_not_board_pen():
     assert pin_row.keys == (pin_key,)
     assert pin_row.keys == (quickref._sc("pin_cursor"),)
     for phrase in (
-        "单游标", "双游标", "A、B", "关游标", "不隐藏", "蓝图钉",
-        "取消固定", "原地", "×", "−/+",
+        "单游标", "双游标", "A、B", "默认收起", "图底 Pn", "展开/收起",
+        "拖动", "焦点", "←/→", "Shift", "关游标", "不隐藏", "蓝图钉",
+        "取消固定", "原地", "×", "−/+", "full/mini",
     ):
         assert phrase in pin_row.sub, phrase
     assert "撤销" not in pin_row.sub

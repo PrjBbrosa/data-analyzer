@@ -5,7 +5,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from PyQt5.QtCore import QRect, QSettings
+from PyQt5.QtCore import QPoint, QRect, QSettings, Qt
 from PyQt5.QtGui import QColor, QPixmap
 from PyQt5.QtWidgets import QApplication
 
@@ -73,11 +73,16 @@ def _collection(domain, values, *, mode="single"):
     return collection
 
 
-def _pin(cs, canvas, values, *, domain="time", mode="single"):
+def _pin(cs, canvas, values, *, domain="time", mode="single", expand=False):
     cs.set_pinned_cursors_for_canvas(
         canvas, _collection(domain, values, mode=mode),
     )
     QApplication.processEvents()
+    if expand:
+        controller = cs._pinned_cursors
+        for record in cs.pinned_cursors_for_canvas(canvas).records:
+            controller.toggle_record_panel(canvas, record.record_id)
+        QApplication.processEvents()
     return cs.pinned_cursors_for_canvas(canvas).records
 
 
@@ -154,8 +159,9 @@ def test_copy_includes_pinned_pill_pixels(qapp, qtbot, monkeypatch):
     cs.set_mode("time")
     _plot_time(canvas)
     qapp.processEvents()
-    records = _pin(cs, canvas, [0.35])
+    records = _pin(cs, canvas, [0.35], expand=True)
     assert records
+    assert records[0].panel_expanded is True
     pills = cs._pinned_cursors.pills_for(canvas)
     labels = cs._pinned_cursors.axis_labels_for(canvas)
     assert pills
@@ -190,7 +196,7 @@ def test_copy_composites_pinned_chrome_inside_hidpi_pixmap(
     cs.set_mode("time")
     _plot_time(canvas)
     qapp.processEvents()
-    _pin(cs, canvas, [0.4])
+    _pin(cs, canvas, [0.4], expand=True)
     pills = cs._pinned_cursors.pills_for(canvas)
     assert pills
     _hide_live(cs)
@@ -226,7 +232,7 @@ def test_grab_presentation_includes_overlay_line_and_pill_values(
     cs.set_mode("time")
     _plot_time(canvas)
     qapp.processEvents()
-    records = _pin(cs, canvas, [0.35])
+    records = _pin(cs, canvas, [0.35], expand=True)
     overlay = canvas._pinned_overlay
     lines = overlay.lines_for(records[0].record_id, "x")
     assert lines
@@ -258,8 +264,8 @@ def test_time_split_primary_pins_stay_on_primary_half(qapp, qtbot, monkeypatch):
     _plot_time(primary)
     _plot_time(secondary)
     qapp.processEvents()
-    _pin(cs, primary, [0.3])
-    _pin(cs, secondary, [0.7])
+    _pin(cs, primary, [0.3], expand=True)
+    _pin(cs, secondary, [0.7], expand=True)
     primary_pills = cs._pinned_cursors.pills_for(primary)
     secondary_pills = cs._pinned_cursors.pills_for(secondary)
     assert primary_pills and secondary_pills
@@ -303,8 +309,8 @@ def test_analysis_combined_pins_stay_on_owner_half(qapp, qtbot, monkeypatch):
         entries, xlim=(0.0, 200.0), amp_label="Amplitude", title="FFT",
     )
     qapp.processEvents()
-    _pin(cs, left_canvas, [10.0], domain="frequency")
-    _pin(cs, right_canvas, [100.0], domain="frequency")
+    _pin(cs, left_canvas, [10.0], domain="frequency", expand=True)
+    _pin(cs, right_canvas, [100.0], domain="frequency", expand=True)
     left_pills = cs._pinned_cursors.pills_for(left_canvas)
     right_pills = cs._pinned_cursors.pills_for(right_canvas)
     assert left_pills and right_pills
@@ -374,6 +380,14 @@ def test_ultraview_digest_tracks_pins_not_hover(qapp, qtbot):
     records = _pin(cs, canvas, [0.3])
     added = coord.current_digest_for(ref)
     assert added != baseline
+    collapsed = cs._pinned_cursors.capture_fingerprint_for(canvas)
+    assert collapsed[0][7:9] == ("full", False)
+
+    cs._pinned_cursors.toggle_record_panel(canvas, records[0].record_id)
+    qapp.processEvents()
+    expanded = coord.current_digest_for(ref)
+    assert expanded != added
+    assert cs._pinned_cursors.capture_fingerprint_for(canvas)[0][8] is True
 
     collection = cs.pinned_cursors_for_canvas(canvas)
     from dataclasses import replace
@@ -383,7 +397,7 @@ def test_ultraview_digest_tracks_pins_not_hover(qapp, qtbot):
     )
     qapp.processEvents()
     mini_digest = coord.current_digest_for(ref)
-    assert mini_digest != added
+    assert mini_digest != expanded
 
     collection = cs.pinned_cursors_for_canvas(canvas)
     from mf4_analyzer.ui.pinned_cursor_state import PinnedCursorAnchor
@@ -398,9 +412,110 @@ def test_ultraview_digest_tracks_pins_not_hover(qapp, qtbot):
     moved_digest = coord.current_digest_for(ref)
     assert moved_digest != mini_digest
 
+    committed = replace(moved, x=0.48)
+    cs.set_pinned_cursors_for_canvas(
+        canvas, replace(collection, records=(committed,)),
+    )
+    qapp.processEvents()
+    committed_digest = coord.current_digest_for(ref)
+    assert committed_digest != moved_digest
+
     cs._pinned_cursors.raise_record(canvas, records[0].record_id)
     qapp.processEvents()
-    assert coord.current_digest_for(ref) == moved_digest
+    assert coord.current_digest_for(ref) == committed_digest
 
     coord.clear()
     coord.deleteLater()
+
+
+def test_ultraview_digest_omits_axis_edit_preview(qapp, qtbot):
+    cs = _make_stack(qtbot, qapp)
+    canvas = cs.canvas_time
+    cs.set_mode("time")
+    _plot_time(canvas)
+    qapp.processEvents()
+
+    window, coord = _make_coord()
+    window.chart_stack = cs
+    window.view_manager.get(0).view_id = "view-a"
+    ref = _ref("view-a")
+    coord.bind_canvas(canvas, ref)
+    record = _pin(cs, canvas, [0.35])[0]
+    before = coord.current_digest_for(ref)
+
+    controller = cs._pinned_cursors
+    overlay = canvas._pinned_overlay
+    viewport = canvas._glw.viewport()
+    start = overlay.bottom_axis_viewport_pos_for_physical(record.x)
+    global_start = viewport.mapToGlobal(start)
+    assert controller.begin_axis_edit(canvas, record.record_id, "x", global_start)
+    controller.preview_axis_edit(
+        canvas,
+        record.record_id,
+        "x",
+        QPoint(global_start.x() + 24, global_start.y()),
+        Qt.NoModifier,
+    )
+    qapp.processEvents()
+    qapp.processEvents()
+
+    assert controller.is_axis_edit_active(canvas)
+    assert coord.current_digest_for(ref) == before
+
+    controller.cancel_axis_edit(canvas, record.record_id, "x")
+    qapp.processEvents()
+    assert coord.current_digest_for(ref) == before
+    coord.clear()
+    coord.deleteLater()
+
+
+def _image_fingerprint(pix):
+    from PyQt5.QtGui import QImage
+    import hashlib
+
+    img = pix.toImage().convertToFormat(QImage.Format_ARGB32)
+    bits = img.bits()
+    bits.setsize(img.byteCount())
+    return (img.width(), img.height(), hashlib.md5(bytes(bits)).hexdigest())
+
+
+def test_copy_flush_layout_matches_settled_geometry_pixels(
+    qapp, qtbot, monkeypatch,
+):
+    cs = _make_stack(qtbot, qapp, width=1100, height=640)
+    canvas = cs.canvas_time
+    cs.set_mode("time")
+    _plot_time(canvas)
+    qapp.processEvents()
+    _pin(cs, canvas, [0.35], expand=True)
+    _hide_live(cs)
+    pills = cs._pinned_cursors.pills_for(canvas)
+    assert pills
+    _place_on_canvas(cs, canvas, pills[0])
+    red = QColor("#dd1111")
+    _install_chrome_colors(cs, {id(pills[0]): red}, monkeypatch)
+    cs.resize(1000, 600)
+    qapp.processEvents()
+    cs._pinned_cursors.flush_layout()
+    settled = []
+    cs.image_captured.connect(settled.append)
+    cs._copy_card_image(cs._time_card)
+    oracle = settled[-1]
+    oracle_size = pills[0].size()
+    oracle_pill_key = _image_fingerprint(pills[0].grab())
+
+    cs.resize(1100, 600)
+    qapp.processEvents()
+    cs._pinned_cursors.flush_layout()
+    for width in (1060, 1020, 1000):
+        cs.resize(width, 600)
+    flushed = []
+    cs.image_captured.connect(flushed.append)
+    cs._copy_card_image(cs._time_card)
+    assert pills[0].size() == oracle_size
+    assert _image_fingerprint(pills[0].grab()) == oracle_pill_key
+    img = flushed[-1].toImage()
+    pill_rect = _mapped_rect(cs, canvas, pills[0], flushed[-1])
+    assert _count_color(img, red, rect=pill_rect) > 0
+    assert _count_color(oracle.toImage(), red, rect=_mapped_rect(cs, canvas, pills[0], oracle)) > 0
+    assert not cs._pinned_cursors._projector._layout_timer.isActive()

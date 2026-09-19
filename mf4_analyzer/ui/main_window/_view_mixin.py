@@ -1,5 +1,6 @@
 """ViewMixin: time-domain split-view switch / capture / render pipeline."""
 
+import json
 from contextlib import contextmanager, nullcontext
 from dataclasses import replace
 from functools import partial
@@ -10,6 +11,13 @@ from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import QColorDialog, QMessageBox
 
 from ...ui_kit.message_box_buttons import fit_message_box_buttons_to_text
+from ..chart_appearance_model import (
+    KIND_AXIS_BINDING,
+    KIND_AXIS_CHANNEL,
+    KIND_COMPANION,
+    KIND_GROUP,
+    parse_appearance_color_key,
+)
 from ..time_xaxis import (
     CHANNEL_MODE,
     EXACT_SOURCE,
@@ -170,13 +178,18 @@ class ViewMixin:
         """Wire a time canvas's recolor signal back to the navigator so the
         left channel-list swatch (and the color source-of-truth used by time
         replot + FFT/order analysis) follows a 图表选项 recolor. Idempotent per
-        canvas via the ``_color_sync_connected`` guard."""
+        canvas via the ``_color_sync_connected`` guard.
+
+        One write path: ``appearance_color_changed``. The legacy
+        ``channel_color_changed`` signal stays on the canvas but is not
+        connected here.
+        """
         if canvas is None:
             return
         if not getattr(canvas, "_color_sync_connected", False):
-            sig = getattr(canvas, "channel_color_changed", None)
+            sig = getattr(canvas, "appearance_color_changed", None)
             if sig is not None:
-                sig.connect(self._on_canvas_channel_color_changed)
+                sig.connect(self._on_canvas_appearance_color_changed)
                 canvas._color_sync_connected = True
         if not getattr(canvas, "_chart_options_sync_connected", False):
             options_sig = getattr(canvas, "chart_options_applied", None)
@@ -184,24 +197,26 @@ class ViewMixin:
                 options_sig.connect(self._on_canvas_chart_options_applied)
                 canvas._chart_options_sync_connected = True
 
-    def _on_canvas_channel_color_changed(self, data_id, display_name, color):
-        """A curve was recolored on a canvas. Map its display name back to the
-        raw ``(fid, ch)`` and write ``navigator._colors`` so the swatch icon
-        and every replot/analysis that reads navigator colors stay in sync.
+    def _on_canvas_appearance_color_changed(self, encoded_key, color):
+        """A uniquely identified curve was recolored on a canvas.
 
-        Filter companions have no navigator row. Their color is a View-owned
-        override keyed by the source ``(fid, ch)``, not a display name."""
+        Ordinary channels write navigator + View colors. Filter companions
+        have no navigator row; their color is a View-owned override keyed by
+        the source ``(fid, ch)``. Unknown or ambiguous keys are ignored.
+        """
         canvas = self.sender()
-        resolved = self._resolve_navigator_channel_key(data_id, display_name)
-        if resolved is None:
-            source = self._resolve_companion_source_key(
-                canvas, data_id, display_name,
-            )
-            if source is None:
-                return
-            self._store_companion_color_override(canvas, source, color)
+        parsed = parse_appearance_color_key(encoded_key)
+        if parsed is None:
             return
-        fid, ch = resolved
+        kind = parsed[0]
+        if kind == KIND_COMPANION:
+            self._store_companion_color_override(
+                canvas, (parsed[1], parsed[2]), color,
+            )
+            return
+        if kind != KIND_AXIS_CHANNEL or len(parsed) < 3:
+            return
+        fid, ch = parsed[1], parsed[2]
         from ..view_bridge import _canvas_owns_shared_projection
         setter = getattr(self.navigator, 'set_channel_colors', None)
         if callable(setter) and _canvas_owns_shared_projection(self, canvas):
@@ -217,53 +232,40 @@ class ViewMixin:
         state.colors = updated
 
     def _resolve_companion_source_key(self, canvas, data_id, display_name):
-        """Map a filter-companion display name to its source ``(fid, ch)``."""
-        if canvas is None or not display_name:
+        """Map a filter-companion curve to its source ``(fid, ch)``.
+
+        Uses the canvas identity registry. Unknown or ambiguous companions
+        return None; this does not guess a display-name prefix.
+        """
+        if canvas is None:
             return None
-        companions = getattr(canvas, "_companion_names", set()) or set()
-        source_map = getattr(canvas, "_companion_source", {}) or {}
-        channel_data = getattr(canvas, "channel_data", None)
-        composite_items = getattr(channel_data, "composite_items", None)
-        if not callable(composite_items):
+        resolver = getattr(canvas, "companion_source_key", None)
+        if not callable(resolver):
             return None
-        try:
-            items = list(composite_items())
-        except (AttributeError, RuntimeError):
-            # Canvas storage can already be sip-deleted while a color signal
-            # is still draining; there is then no companion identity to map.
-            return None
-        for ck, name, _row in items:
-            if ck not in companions or str(name) != str(display_name):
+        keys = []
+        if display_name:
+            data_token = None if data_id is None else str(data_id)
+            keys.append(json.dumps(
+                [data_token, str(display_name)],
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ))
+            keys.append(str(display_name))
+        seen = set()
+        for key in keys:
+            if not key or key in seen:
                 continue
-            source_ck = source_map.get(ck)
-            if source_ck is None:
+            seen.add(key)
+            try:
+                source = resolver(key)
+            except (AttributeError, RuntimeError, TypeError):
+                source = None
+            if not isinstance(source, (tuple, list)) or len(source) < 2:
                 continue
-            src_id = None
-            data_ids = getattr(canvas, "_channel_data_id", None)
-            if data_ids is not None:
-                src_id = data_ids.get(source_ck)
-            src_name = name
-            label = getattr(channel_data, "display_label", None)
-            if callable(label):
-                src_name = label(source_ck, source_ck)
-            resolved = self._resolve_navigator_channel_key(src_id, src_name)
-            if resolved is not None:
-                return resolved
-        if data_id is not None:
-            prefix = None
-            for fid, fd in self.files.items():
-                if str(fid) != str(data_id):
-                    continue
-                columns = getattr(getattr(fd, "data", None), "columns", None)
-                if columns is None:
-                    continue
-                for ch in columns:
-                    prefixed = fd.get_prefixed_channel(ch)
-                    if str(display_name).startswith(f"{prefixed} ("):
-                        return (fid, ch)
-                prefix = fid
-            if prefix is not None:
-                return None
+            fid = str(source[0] or "").strip()
+            channel = str(source[1] or "").strip()
+            if fid and channel:
+                return (fid, channel)
         return None
 
     def _store_companion_color_override(self, canvas, source_key, color):
@@ -298,34 +300,32 @@ class ViewMixin:
         self._note_user_project_mutation()
 
     def _capture_chart_appearance_from_handle(self, state, canvas, handle, before):
-        from mf4_analyzer.ui._axis_handle import snapshot_axis_appearance
-
-        after = snapshot_axis_appearance(handle)
-        master = getattr(canvas, "_x_master_handle", None)
-        if master is not None:
-            after["x_scale"] = snapshot_axis_appearance(master).get(
-                "x_scale", after.get("x_scale")
-            )
+        snapshot_fn = getattr(canvas, "snapshot_chart_appearance", None)
+        if not callable(snapshot_fn):
+            return
+        try:
+            snap = snapshot_fn(handle)
+        except (AttributeError, RuntimeError, TypeError):
+            return
         appearance = normalize_chart_appearance(
             getattr(state, "chart_appearance", None)
         )
-        if after.get("x_scale") != before.get("x_scale"):
-            appearance["x_scale"] = (
-                "log" if after.get("x_scale") == "log" else "linear"
-            )
+        after_x = getattr(snap, "x_scale", None)
+        if after_x != before.get("x_scale"):
+            appearance["x_scale"] = "log" if after_x == "log" else "linear"
         key = self._appearance_key_for_handle(canvas, handle, state)
         if key:
             spec = dict((appearance.get("axes") or {}).get(key) or {})
-            if after.get("title") != before.get("title"):
-                spec["title"] = str(after.get("title") or "")
-            if after.get("y_label") != before.get("y_label"):
-                spec["y_label"] = str(after.get("y_label") or "")
-            if after.get("y_scale") != before.get("y_scale"):
+            if getattr(snap, "title", "") != before.get("title"):
+                spec["title"] = str(getattr(snap, "title", "") or "")
+            if getattr(snap, "y_label", "") != before.get("y_label"):
+                spec["y_label"] = str(getattr(snap, "y_label", "") or "")
+            if getattr(snap, "y_scale", None) != before.get("y_scale"):
                 spec["y_scale"] = (
-                    "log" if after.get("y_scale") == "log" else "linear"
+                    "log" if getattr(snap, "y_scale", None) == "log" else "linear"
                 )
-            if bool(after.get("grid")) != bool(before.get("grid")):
-                spec["grid"] = bool(after.get("grid"))
+            if bool(getattr(snap, "grid", False)) != bool(before.get("grid")):
+                spec["grid"] = bool(getattr(snap, "grid", False))
             axes = dict(appearance.get("axes") or {})
             if spec:
                 axes[key] = spec
@@ -333,14 +333,19 @@ class ViewMixin:
         state.chart_appearance = appearance
 
     def _sync_custom_x_label_from_handle(self, state, canvas, handle, before):
-        if not self._handle_owns_time_xlabel(canvas, handle):
+        snapshot_fn = getattr(canvas, "snapshot_chart_appearance", None)
+        if not callable(snapshot_fn):
             return
-        from mf4_analyzer.ui._axis_handle import snapshot_axis_appearance
-
-        after = snapshot_axis_appearance(handle)
-        if str(after.get("xlabel") or "") == str(before.get("xlabel") or ""):
+        try:
+            snap = snapshot_fn(handle)
+        except (AttributeError, RuntimeError, TypeError):
             return
-        label = self._strip_rendered_xaxis_label(after.get("xlabel") or "")
+        if not getattr(snap, "owns_xlabel", False):
+            return
+        xlabel = str(getattr(snap, "xlabel", "") or "")
+        if xlabel == str(before.get("xlabel") or ""):
+            return
+        label = self._strip_rendered_xaxis_label(xlabel)
         axis_opts = dict(state.axis_opts or {})
         spec = CustomXAxisSpec.from_axis_opts(axis_opts.get("x_axis"))
         spec = replace(spec, label=label)
@@ -390,151 +395,70 @@ class ViewMixin:
             return text[: -len(token)].rstrip()
         return text
 
-    def _handle_owns_time_xlabel(self, canvas, handle):
-        if canvas is None or handle is None:
-            return False
-        if getattr(canvas, "_overlay_mode", False):
-            return True
-        axes = list(getattr(canvas, "axes_list", None) or [])
-        return bool(axes) and handle is axes[-1]
-
     def _appearance_key_for_handle(self, canvas, handle, state):
-        gid = getattr(handle, "axis_group", None)
-        if gid:
-            return appearance_group_key(gid)
-        companions = getattr(canvas, "_companion_names", set()) or set()
-        channel_lines = getattr(canvas, "_channel_lines", None)
-        composite_items = getattr(channel_lines, "composite_items", None)
-        if not callable(composite_items):
+        target_fn = getattr(canvas, "appearance_target_for_handle", None)
+        if not callable(target_fn):
             return ""
         try:
-            items = list(composite_items())
-        except (AttributeError, RuntimeError):
-            # Same teardown window as companion lookup: a dying canvas has no
-            # stable composite identity for chart-options capture.
+            target = target_fn(handle)
+        except (AttributeError, RuntimeError, TypeError):
             return ""
-        for ck, name, pair in items:
-            owner = pair[0] if pair else None
-            if owner is not handle or ck in companions:
-                continue
-            data_ids = getattr(canvas, "_channel_data_id", None)
-            data_id = data_ids.get(ck) if data_ids is not None else None
-            resolved = self._resolve_navigator_channel_key(data_id, name)
-            if resolved is not None:
-                return appearance_channel_key(*resolved)
-            for binding in getattr(state, "curve_bindings", None) or ():
-                binding_id = str(getattr(binding, "binding_id", "") or "")
-                y_ref = getattr(binding, "y_ref", None)
-                if not binding_id:
-                    continue
-                y_fid = str(getattr(y_ref, "fid", "") or "")
-                display = str(getattr(binding, "display_name", "") or "")
-                if data_id is not None and y_fid and y_fid != str(data_id):
-                    continue
-                if str(name) != binding_id and str(name) != display:
-                    continue
-                return appearance_binding_key(binding_id)
-        return ""
+        if not getattr(target, "available", False):
+            return ""
+        kind = str(getattr(target, "kind", "") or "")
+        if kind == KIND_GROUP:
+            return appearance_group_key(getattr(target, "group_id", "") or "")
+        if kind == KIND_AXIS_CHANNEL:
+            fid = str(getattr(target, "fid", "") or "").strip()
+            channel = str(getattr(target, "channel", "") or "").strip()
+            if fid and channel:
+                return appearance_channel_key(fid, channel)
+            return ""
+        if kind == KIND_AXIS_BINDING:
+            return appearance_binding_key(getattr(target, "binding_id", "") or "")
+        return str(getattr(target, "encoded_key", "") or "")
 
     def _apply_view_chart_appearance(self, state, canvas):
         if canvas is None or state is None:
             return
+        apply_fn = getattr(canvas, "apply_chart_appearance", None)
+        if not callable(apply_fn):
+            return
         appearance = normalize_chart_appearance(
             getattr(state, "chart_appearance", None)
         )
-        x_scale = appearance.get("x_scale") or "linear"
         axes_specs = appearance.get("axes") or {}
-        handles = list(getattr(canvas, "axes_list", None) or [])
-        master = getattr(canvas, "_x_master_handle", None)
-        scale_targets = []
-        if master is not None:
-            scale_targets.append(master)
-        scale_targets.extend(handles)
-        seen = set()
-        for handle in scale_targets:
-            if handle is None or id(handle) in seen:
-                continue
-            seen.add(id(handle))
-            setter = getattr(handle, "set_xscale", None)
-            getter = getattr(handle, "get_xscale", None)
-            current = getter() if callable(getter) else None
-            if callable(setter) and current != x_scale:
-                setter(x_scale)
-        for handle in handles:
-            spec = axes_specs.get(
-                self._appearance_key_for_handle(canvas, handle, state)
-            ) or {}
-            y_scale = spec.get("y_scale") or "linear"
-            setter = getattr(handle, "set_yscale", None)
-            getter = getattr(handle, "get_yscale", None)
-            current_y = getter() if callable(getter) else None
-            if callable(setter) and current_y != y_scale:
-                setter(y_scale)
-            if x_scale == "log":
-                self._autoscale_log_axis_if_invalid(handle, "x")
-            if y_scale == "log":
-                self._autoscale_log_axis_if_invalid(handle, "y")
-            if "title" in spec:
-                title_setter = getattr(handle, "set_title", None)
-                if callable(title_setter):
-                    title_setter(spec.get("title") or "")
-            if "y_label" in spec:
-                label_setter = getattr(handle, "set_ylabel", None)
-                if callable(label_setter):
-                    label_setter(spec.get("y_label") or "")
-                self._hide_inside_labels_for_handle(canvas, handle)
-            if "grid" in spec:
-                grid_setter = getattr(handle, "grid", None)
-                if callable(grid_setter):
-                    grid_setter(bool(spec.get("grid")))
-        if master is not None and x_scale == "log":
-            self._autoscale_log_axis_if_invalid(master, "x")
+        resolved = []
+        for handle in list(getattr(canvas, "axes_list", None) or []):
+            key = self._appearance_key_for_handle(canvas, handle, state)
+            spec = dict(axes_specs.get(key) or {}) if key else {}
+            if "y_scale" not in spec:
+                spec["y_scale"] = "linear"
+            resolved.append({"handle": handle, **spec})
+        apply_fn({
+            "x_scale": appearance.get("x_scale") or "linear",
+            "axes": resolved,
+        })
 
     def _repair_log_axis_ranges(self, state, canvas):
         if canvas is None or state is None:
             return
+        repair_fn = getattr(canvas, "repair_chart_appearance_ranges", None)
+        if not callable(repair_fn):
+            return
         appearance = normalize_chart_appearance(
             getattr(state, "chart_appearance", None)
         )
-        if appearance.get("x_scale") == "log":
-            primary = getattr(canvas, "_primary_xaxis_ax", None)
-            if primary is not None:
-                self._autoscale_log_axis_if_invalid(primary, "x")
         axes_specs = appearance.get("axes") or {}
+        resolved = []
         for handle in list(getattr(canvas, "axes_list", None) or []):
-            spec = axes_specs.get(
-                self._appearance_key_for_handle(canvas, handle, state)
-            ) or {}
-            if spec.get("y_scale") == "log":
-                self._autoscale_log_axis_if_invalid(handle, "y")
-
-    @staticmethod
-    def _autoscale_log_axis_if_invalid(handle, axis):
-        getter = getattr(handle, f"get_{axis}lim", None)
-        autoscale = getattr(handle, "autoscale", None)
-        if not callable(getter) or not callable(autoscale):
-            return
-        try:
-            lo, hi = getter()
-        except (AttributeError, RuntimeError):
-            # Handle or ViewBox already gone; skip the log-range repair.
-            return
-        if float(lo) <= 0.0 or float(hi) <= 0.0:
-            autoscale(axis=axis)
-
-    @staticmethod
-    def _hide_inside_labels_for_handle(canvas, handle):
-        labels = getattr(canvas, "_inside_label_items", None) or []
-        owners = getattr(canvas, "_inside_label_handles", None) or []
-        for owner, item in zip(owners, labels):
-            if owner is not handle:
-                continue
-            try:
-                item.setVisible(False)
-            except (AttributeError, RuntimeError):
-                # Inside-label QGraphicsItem can already be sip-deleted during
-                # a View rebuild; skip that stale handle pairing.
-                continue
+            key = self._appearance_key_for_handle(canvas, handle, state)
+            spec = dict(axes_specs.get(key) or {}) if key else {}
+            resolved.append({"handle": handle, **spec})
+        repair_fn({
+            "x_scale": appearance.get("x_scale"),
+            "axes": resolved,
+        })
 
     def _inherit_chart_appearance_after_groups_changed(
         self, state, prev_groups, new_groups,

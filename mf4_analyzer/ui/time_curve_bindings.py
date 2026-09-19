@@ -14,6 +14,11 @@ from typing import AbstractSet, Any, Iterable, Literal, Mapping, Sequence
 
 import numpy as np
 
+from .chart_appearance_model import (
+    attach_appearance_ref,
+    binding_appearance_ref,
+    channel_appearance_ref,
+)
 from .time_xaxis import (
     CHANNEL_MODE,
     EXACT_SOURCE,
@@ -767,7 +772,14 @@ def bound_time_plot_rows(
             x_values, y_values = _apply_acquisition_mask(
                 x_values, y_values, owner, range_lo, range_hi
             )
-        meta = {"axis_group": binding.axis_id}
+        meta = attach_appearance_ref(
+            {"axis_group": binding.axis_id},
+            (
+                channel_appearance_ref(*y_key)
+                if y_key is not None
+                else binding_appearance_ref(binding.binding_id)
+            ),
+        )
         if y_key is not None:
             successful.add(y_key)
         color = binding.color

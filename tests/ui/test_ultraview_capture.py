@@ -7,6 +7,7 @@ import json
 import logging
 from collections import OrderedDict
 from contextlib import nullcontext
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -565,7 +566,13 @@ def test_presentation_digest_pixel_affecting_field_matrix(qapp):
 
     collection, _intent = next_record(
         empty_collection(),
-        {"mode": "single", "domain": "time", "x": 0.25, "x_unit": "s"},
+        {
+            "mode": "single",
+            "domain": "time",
+            "x": 0.25,
+            "x_unit": "s",
+            "bindings": [{"fid": "f1", "channel": "torque"}],
+        },
     )
     state.pinned_cursors = collection
     pinned = coord.current_digest_for(ref)
@@ -1098,7 +1105,7 @@ def test_pin_digest_changes_on_add_full_mini_move_not_hover(qapp):
     baseline = coord.current_digest_for(ref)
     row = [
         "pin-1", 1, "single", "time", 0.4, None, None, "full",
-        "right", "top", 1.0, 0.0, 2,
+        False, "right", "top", 1.0, 0.0, 2,
     ]
     stack.pins = [list(row)]
     added = coord.current_digest_for(ref)
@@ -1110,14 +1117,14 @@ def test_pin_digest_changes_on_add_full_mini_move_not_hover(qapp):
     assert coord.current_digest_for(ref) != added
 
     moved = list(mini)
-    moved[10] = 0.15
-    moved[11] = 0.55
+    moved[11] = 0.15
+    moved[12] = 0.55
     stack.pins = [moved]
     moved_digest = coord.current_digest_for(ref)
     assert moved_digest != added
 
     revised = list(moved)
-    revised[12] = 9
+    revised[13] = 9
     stack.pins = [revised]
     assert coord.current_digest_for(ref) != moved_digest
 
@@ -1132,6 +1139,167 @@ def test_pin_digest_changes_on_add_full_mini_move_not_hover(qapp):
     coord.deleteLater()
 
 
+def test_pin_state_fallback_tracks_strict_committed_panel_expansion(qapp):
+    from mf4_analyzer.ui.pinned_cursor_state import empty_collection, next_record
+
+    window, coord = _make_coord()
+    state = window.view_manager.get(0)
+    state.view_id = "view-a"
+    collection, _ = next_record(
+        empty_collection(),
+        {
+            "mode": "single",
+            "domain": "time",
+            "x": 0.4,
+            "x_unit": "s",
+            "bindings": [{"fid": "fid-a", "channel": "speed"}],
+        },
+    )
+    record = collection.records[0]
+    state.pinned_cursors = replace(
+        collection,
+        records=(replace(record, presentation="mini", panel_expanded=True),),
+    )
+    ref = _ref("view-a")
+    payload = coord.presentation_payload_for(ref)
+    assert payload["pins"][0][7:9] == ["mini", True]
+    expanded_digest = coord.current_digest_for(ref)
+
+    state.pinned_cursors = replace(
+        collection,
+        records=(replace(record, presentation="mini", panel_expanded="true"),),
+    )
+    payload = coord.presentation_payload_for(ref)
+    assert payload["pins"][0][8] is False
+    assert coord.current_digest_for(ref) != expanded_digest
+    coord.clear()
+    coord.deleteLater()
+
+
+def test_capture_waits_for_axis_edit_then_grabs_once(qapp):
+    class _AxisEditController(QObject):
+        axis_edit_state_changed = pyqtSignal(object, bool)
+
+        def __init__(self):
+            super().__init__()
+            self._active = set()
+
+        def axis_edit_is_settled(self, canvas) -> bool:
+            return id(canvas) not in self._active
+
+        def set_active(self, canvas, active: bool) -> None:
+            if active:
+                self._active.add(id(canvas))
+            else:
+                self._active.discard(id(canvas))
+            self.axis_edit_state_changed.emit(canvas, active)
+
+    window, coord = _make_coord()
+    stack = _PillStack()
+    editor = _AxisEditController()
+    stack._pinned_cursors = editor
+    stack.pins = [[
+        "pin-1", 1, "single", "time", 0.4, None, None, "full",
+        False, "right", "top", 1.0, 0.0, 2,
+    ]]
+    window.chart_stack = stack
+    window.view_manager.get(0).view_id = "view-a"
+    canvas = FakeCanvas()
+    ref = _ref("view-a")
+    coord.bind_canvas(canvas, ref)
+
+    editor.set_active(canvas, True)
+    coord.request_capture(ref, canvas, "pinned-cursor")
+    _flush()
+    assert canvas.grab_calls == 0
+
+    editor.set_active(canvas, False)
+    _flush()
+    assert canvas.grab_calls == 1
+    assert coord.store.get(ref).captured_digest == coord.current_digest_for(ref)
+
+    editor.axis_edit_state_changed.emit(canvas, False)
+    _flush()
+    assert canvas.grab_calls == 1
+    canvas.deleteLater()
+    coord.clear()
+    coord.deleteLater()
+
+
+def test_pin_intent_change_marks_project_once_then_requests_ultraview_capture():
+    from mf4_analyzer.ui.main_window._project_io_mixin import ProjectIOMixin
+
+    class _Dirty:
+        def __init__(self) -> None:
+            self.tokens = []
+
+        def mark_user_mutation(self, token=None) -> bool:
+            self.tokens.append(token)
+            return True
+
+    class _UltraView:
+        def __init__(self) -> None:
+            self.capture_requests = 0
+
+        def request_pinned_cursor_capture(self) -> None:
+            self.capture_requests += 1
+
+    class _Host(ProjectIOMixin):
+        def __init__(self) -> None:
+            self._project_dirty = _Dirty()
+            self._ultraview = _UltraView()
+
+    host = _Host()
+    host._on_pinned_cursor_intent_changed()
+    assert host._project_dirty.tokens == ["pinned_cursor"]
+    assert host._ultraview.capture_requests == 1
+
+
+def test_pinned_cursor_capture_facade_isolates_time_partner_and_analysis_page(qapp):
+    window, coord = _make_coord()
+    primary, secondary = FakeCanvas("#112233"), FakeCanvas("#334455")
+    stack = _FakeStack("time")
+    stack.canvas_time = primary
+    stack._split = True
+    stack._secondary = secondary
+    window.chart_stack = stack
+    manager = window.view_manager
+    manager.get(0).view_id = "time-primary"
+    partner_idx = manager.new_view(activate=False)
+    manager.get(partner_idx).view_id = "time-secondary"
+    manager.set_split(partner_idx)
+
+    coord.request_pinned_cursor_capture()
+    _flush()
+    primary_ref = _ref("time-primary")
+    secondary_ref = _ref("time-secondary")
+    assert primary.grab_calls == 1
+    assert secondary.grab_calls == 1
+    assert coord.store.get(primary_ref) is not None
+    assert coord.store.get(secondary_ref) is not None
+
+    fft_manager = ViewManager(state_factory=AnalysisViewState)
+    window.analysis_managers["fft"] = fft_manager
+    fft_state = fft_manager.get(0)
+    fft_state.view_id = "fft-active"
+    fft_state.panes = [PaneState(sources=[("fid-a", "force")])]
+    page = FakePage([FakeCanvas("#556677")])
+    window.pages["fft"] = page
+    stack._mode = "fft"
+
+    coord.request_pinned_cursor_capture()
+    _flush()
+    assert page.combined_calls == 1
+    assert coord.store.get(_ref("fft-active", "fft")) is not None
+    assert primary.grab_calls == 1
+    assert secondary.grab_calls == 1
+    page.deleteLater()
+    primary.deleteLater()
+    secondary.deleteLater()
+    coord.clear()
+    coord.deleteLater()
+
+
 def test_pin_fingerprint_survives_hidden_and_rebind(qapp):
     from mf4_analyzer.ui.ultraview_state import STATUS_FRESH, derive_preview_status
 
@@ -1139,7 +1307,7 @@ def test_pin_fingerprint_survives_hidden_and_rebind(qapp):
     stack = _PillStack()
     stack.pins = [[
         "pin-1", 1, "single", "time", 0.4, None, None, "full",
-        "right", "top", 1.0, 0.0, 2,
+        False, "right", "top", 1.0, 0.0, 2,
     ]]
     window.chart_stack = stack
     manager = window.view_manager

@@ -11,7 +11,7 @@ import re
 from html import escape, unescape
 from math import ceil
 
-from PyQt5.QtCore import QRect, QSize, QTimer, Qt, pyqtSignal
+from PyQt5.QtCore import QEvent, QRect, QSize, QTimer, Qt, pyqtSignal
 from PyQt5.QtGui import (
     QColor, QFont, QFontMetrics, QPainter, QPen, QTextDocument, QTextOption,
 )
@@ -30,6 +30,7 @@ from .cursor_table_layout import choose_table_layout, compute_wcap
 
 _CURSOR_PILL_RADIUS = 9.0
 _CURSOR_PILL_BG = QColor(255, 255, 255, 235)
+_PINNED_CURSOR_PILL_BG = QColor(255, 255, 255)
 _CURSOR_PILL_BORDER = QColor("#d8e0eb")
 
 # Gap kept on the toggle's right. Live and pinned share one title-action
@@ -70,6 +71,17 @@ QLabel#cursorPillPinHint {
     background: transparent;
 }
 """
+
+_PIN_CHROME_INVALIDATE_EVENTS = frozenset(
+    event_type
+    for event_type in (
+        QEvent.StyleChange,
+        QEvent.FontChange,
+        QEvent.PaletteChange,
+        getattr(QEvent, "DevicePixelRatioChange", None),
+    )
+    if event_type is not None
+)
 
 _CURSOR_HTML_SEP = '<span style="color:#cbd5e1;">  &nbsp;│&nbsp;  </span>'
 
@@ -386,6 +398,9 @@ class CursorPill(QFrame):
         self._ordinal = 0
         self._live_hint = ""
         self._highlighted = False
+        self._pin_role_style_token = None
+        self._pin_hint_geometry_token = None
+        self._pin_chrome_syncing = False
         self.setObjectName("cursorPill")
         self.setCursor(Qt.OpenHandCursor)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
@@ -398,6 +413,7 @@ class CursorPill(QFrame):
         self._primary.setVisible(False)
         self._primary.setTextFormat(Qt.RichText)
         self._primary.setTextInteractionFlags(Qt.NoTextInteraction)
+        self._primary.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         # Reserve the shared title-action strip (P hint/pin + +/- + close)
         # so live→pinned does not change the first-line width.
         self._primary.setContentsMargins(0, 0, _TITLE_ACTION_RESERVE, 0)
@@ -405,11 +421,13 @@ class CursorPill(QFrame):
         self._detail.setObjectName("cursorPillDetail")
         self._detail.setTextFormat(Qt.RichText)
         self._detail.setTextInteractionFlags(Qt.NoTextInteraction)
+        self._detail.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self._detail.setVisible(False)
         self._clear_content_tooltip()
         lay.addWidget(self._primary)
         lay.addWidget(self._detail)
         self._drag_offset = None
+        self._drag_moved = False
         # User-positioned flag — true after first manual drag, so resize events
         # respect the chosen spot instead of snapping back to default corner.
         self._user_placed = False
@@ -547,15 +565,28 @@ class CursorPill(QFrame):
 
     def set_pin_role(self, role):
         next_role = "pinned" if role == "pinned" else "live"
-        if next_role == self._pin_role:
-            self._sync_pin_chrome()
-            return
+        role_changed = next_role != self._pin_role
         self._pin_role = next_role
-        self._sync_pin_chrome()
+        if role_changed:
+            self._refresh_pin_role_style()
+        self._sync_pin_hint_geometry()
 
     def set_live_hint(self, text):
         self._live_hint = str(text or "")
-        self._sync_pin_chrome()
+        self._sync_pin_hint_geometry()
+
+    def invalidate_pin_chrome(self):
+        """Rebuild pin role style and hint geometry after theme/font/style/DPR."""
+        self._pin_role_style_token = None
+        self._pin_hint_geometry_token = None
+        self._sync_pin_chrome(force=True)
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if getattr(self, "_pin_chrome_syncing", True):
+            return
+        if event.type() in _PIN_CHROME_INVALIDATE_EVENTS:
+            self.invalidate_pin_chrome()
 
     def is_dragging(self):
         return self._drag_offset is not None
@@ -570,18 +601,40 @@ class CursorPill(QFrame):
         self._highlighted = False
         self.update()
 
-    def _sync_pin_chrome(self):
+    def _sync_pin_chrome(self, *, force=False):
+        self._refresh_pin_role_style(force=force)
+        self._sync_pin_hint_geometry(force=force)
+
+    def _refresh_pin_role_style(self, *, force=False):
+        """Re-evaluate pin-button QSS for the current role. Skip if unchanged."""
+        token = "true" if self._pin_role == "pinned" else "false"
+        if not force and self._pin_role_style_token == token:
+            return
+        self._pin_chrome_syncing = True
+        try:
+            self._pin_btn.setProperty("pinned", token)
+            self._pin_btn.style().unpolish(self._pin_btn)
+            self._pin_btn.style().polish(self._pin_btn)
+            self._pin_role_style_token = token
+        finally:
+            self._pin_chrome_syncing = False
+
+    def _sync_pin_hint_geometry(self, *, force=False):
+        """Update hint text and title-action packing without role polish."""
         pinned = self._pin_role == "pinned"
+        hint = self._live_hint if (not pinned) else ""
+        hint_text = "P" if hint else ""
+        hint_visible = bool(hint) and not pinned
+        token = (pinned, hint_visible, hint_text, hint)
+        if not force and self._pin_hint_geometry_token == token:
+            return
         self._pin_btn.setVisible(pinned)
         self._close_btn.setVisible(pinned)
-        hint = self._live_hint if (not pinned) else ""
-        self._pin_hint.setText("P" if hint else "")
+        self._pin_hint.setText(hint_text)
         self._pin_hint.setToolTip(hint)
-        self._pin_hint.setVisible(bool(hint) and not pinned)
-        self._pin_btn.setProperty("pinned", "true" if pinned else "false")
-        self._pin_btn.style().unpolish(self._pin_btn)
-        self._pin_btn.style().polish(self._pin_btn)
+        self._pin_hint.setVisible(hint_visible)
         self._position_title_actions()
+        self._pin_hint_geometry_token = token
 
     def adjustSize(self):
         # Every content/width change funnels through adjustSize(); reposition the
@@ -598,7 +651,13 @@ class CursorPill(QFrame):
         try:
             painter.setRenderHint(QPainter.Antialiasing, True)
             rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
-            painter.setBrush(_CURSOR_PILL_BG)
+            # Pinned cards are persistent readout surfaces.  Their content
+            # must not blend with the plot ink underneath; live hover chrome
+            # keeps its established translucent treatment.
+            painter.setBrush(
+                _PINNED_CURSOR_PILL_BG
+                if self._pin_role == "pinned" else _CURSOR_PILL_BG
+            )
             border = _CURSOR_PILL_HIGHLIGHT if self._highlighted else _CURSOR_PILL_BORDER
             painter.setPen(QPen(border, 1.4 if self._highlighted else 1.0))
             painter.drawRoundedRect(rect, _CURSOR_PILL_RADIUS, _CURSOR_PILL_RADIUS)
@@ -1327,13 +1386,17 @@ class CursorPill(QFrame):
     def mousePressEvent(self, e):
         if e.button() == Qt.LeftButton:
             self._drag_offset = e.pos()
+            self._drag_moved = False
             self.setCursor(Qt.ClosedHandCursor)
             e.accept()
             return
         super().mousePressEvent(e)
 
     def mouseMoveEvent(self, e):
-        if self._drag_offset is not None and (e.buttons() & Qt.LeftButton):
+        # The captured press owns this drag until ``mouseReleaseEvent``.  Qt's
+        # synthetic/offscreen moves may omit the button bit even though the
+        # matching release has not arrived yet.
+        if self._drag_offset is not None:
             parent = self.parentWidget()
             new_top_left = self.mapToParent(e.pos() - self._drag_offset)
             if parent is not None:
@@ -1344,19 +1407,43 @@ class CursorPill(QFrame):
                 y = max(safe.top(), min(
                     new_top_left.y(), safe.bottom() - self.height() + 1
                 ))
+                before = self.pos()
                 self.move(x, y)
+                self._drag_moved = self._drag_moved or self.pos() != before
             else:
+                before = self.pos()
                 self.move(new_top_left)
-            self._user_placed = True
+                self._drag_moved = self._drag_moved or self.pos() != before
+            self._user_placed = self._user_placed or self._drag_moved
             e.accept()
             return
         super().mouseMoveEvent(e)
 
     def mouseReleaseEvent(self, e):
         if e.button() == Qt.LeftButton and self._drag_offset is not None:
+            # Some offscreen/QPA backends deliver a matching release but omit
+            # the intermediate move.  The release position still carries the
+            # user drag delta, so settle it once instead of turning a real
+            # title drag into a no-op.  A stationary click remains stationary.
+            parent = self.parentWidget()
+            if parent is not None and e.pos() != self._drag_offset:
+                new_top_left = self.mapToParent(e.pos() - self._drag_offset)
+                safe = self.safe_rect()
+                x = max(safe.left(), min(
+                    new_top_left.x(), safe.right() - self.width() + 1
+                ))
+                y = max(safe.top(), min(
+                    new_top_left.y(), safe.bottom() - self.height() + 1
+                ))
+                before = self.pos()
+                self.move(x, y)
+                self._drag_moved = self._drag_moved or self.pos() != before
+            self._user_placed = self._user_placed or self._drag_moved
             self._drag_offset = None
             self.setCursor(Qt.OpenHandCursor)
-            self.moved.emit()
+            if self._drag_moved:
+                self.moved.emit()
+            self._drag_moved = False
             e.accept()
             return
         super().mouseReleaseEvent(e)

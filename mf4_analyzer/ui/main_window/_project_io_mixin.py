@@ -92,6 +92,10 @@ class ProjectIOMixin:
 
     def _on_pinned_cursor_intent_changed(self):
         self._note_user_project_mutation(token="pinned_cursor")
+        ultraview = getattr(self, "_ultraview", None)
+        request = getattr(ultraview, "request_pinned_cursor_capture", None)
+        if callable(request):
+            request()
 
     def _drop_pinned_cursor_identities(self, *, fids=(), channels=()):
         """Remove closed source/channel identities from View/Pane pin records."""

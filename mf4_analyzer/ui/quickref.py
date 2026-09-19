@@ -294,7 +294,7 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             QuickRow(
                 "固定当前读数",
                 keys=(_sc("pin_cursor"),),
-                sub="仅时域 / 频谱 / 频响数据图，不必先点。总览 Board 与图片标注里 P 仍是画笔。",
+                sub="仅时域 / 频谱 / 频响数据图的现有可用上下文，不必先点。新 Pin 默认收起；点图底 Pn 各自展开/收起，左右拖动或焦点下 ←/→ 调位置，Shift 微调。总览 Board 与图片标注里 P 仍是画笔。",
             ),
             QuickRow(
                 "平移 / 框选模式",
@@ -420,7 +420,7 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             QuickRow(
                 "固定读数面板",
                 keys=(_sc("pin_cursor"),),
-                sub="单游标按 P 固定鼠标处；双游标先点 A、B 再 P。关游标不隐藏已固定。蓝图钉取消固定并原地接回；× 关闭。每张独立 −/+。",
+                sub="单游标按 P 固定鼠标处；双游标先点 A、B 再 P。新 Pin 默认收起；点图底 Pn 各自展开/收起，左右拖动或焦点下 ←/→ 调位置，Shift 微调。关游标不隐藏已固定。蓝图钉取消固定并原地接回；× 关闭；面板 −/+ 仍切换 full/mini。",
             ),
             QuickRow(
                 "游标显示设置",

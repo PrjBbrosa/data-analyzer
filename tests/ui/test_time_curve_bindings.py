@@ -473,7 +473,12 @@ def test_unchecking_ordinary_channel_backed_y_follows_view_checked_set(
     prefixed = fd.get_prefixed_channel(y_key[1])
     matching = [row for row in shown.rows if row[0] == prefixed]
     assert len(matching) == 1
-    assert len(matching[0]) == 7
+    assert len(matching[0]) == 8
+    assert matching[0][7]["appearance_ref"] == {
+        "kind": "channel",
+        "fid": str(y_key[0]),
+        "channel": str(y_key[1]),
+    }
 
 
 def test_missing_record_x_claims_channel_y_without_row():
@@ -545,6 +550,10 @@ def test_record_only_y_plots_without_checked_identity():
     np.testing.assert_array_equal(result.rows[0][2], x)
     np.testing.assert_array_equal(result.rows[0][3], y)
     assert result.rows[0][7]["axis_group"] == binding.axis_id
+    assert result.rows[0][7]["appearance_ref"] == {
+        "kind": "binding",
+        "binding_id": binding.binding_id,
+    }
     assert "native_xy_full_range" not in result.rows[0][7]
     assert binding.y_ref.kind == "wwt_record"
 
@@ -675,6 +684,11 @@ def test_channel_backed_binding_prefers_tracelab_channel_color():
     assert len(result.rows) == 1
     assert result.rows[0][4] == "#13a36b"
     assert result.rows[0][0] == "ChanY"
+    assert result.rows[0][7]["appearance_ref"] == {
+        "kind": "channel",
+        "fid": "f1",
+        "channel": "ChanY",
+    }
 
 
 def test_channel_backed_binding_uses_winwert_color_without_navigator_override():

@@ -269,6 +269,11 @@ class AnalysisSectionPage(QWidget):
         from PyQt5.QtGui import QPainter, QPixmap
         from PyQt5.QtCore import Qt
 
+        stack = self.parent()
+        controller = getattr(stack, "_pinned_cursors", None)
+        flush = getattr(controller, "flush_layout", None)
+        if callable(flush):
+            flush()
         compositor = getattr(self, "_pin_chrome_compositor", None)
         pixes = []
         for card in self._cards:

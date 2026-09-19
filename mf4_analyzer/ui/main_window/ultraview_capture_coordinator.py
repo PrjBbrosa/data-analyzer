@@ -130,6 +130,7 @@ def _pin_intent_row(intent, *, data_revision=None) -> list:
         finite_or_none(getattr(intent, "ax", None)),
         finite_or_none(getattr(intent, "bx", None)),
         str(getattr(intent, "presentation", "full") or "full"),
+        getattr(intent, "panel_expanded", False) is True,
         str(getattr(anchor, "h_edge", "right") if anchor is not None else "right"),
         str(getattr(anchor, "v_edge", "top") if anchor is not None else "top"),
         finite_or_none(getattr(anchor, "nx", None) if anchor is not None else None),
@@ -356,6 +357,8 @@ class UltraViewCaptureCoordinator(QObject):
         self._bindings: dict[int, tuple[UltraViewRef, Any]] = {}
         self._queued: dict[tuple, QTimer] = {}
         self._unstable: dict[int, tuple] = {}
+        self._axis_edit_waits: dict[tuple, tuple] = {}
+        self._axis_edit_controller = None
         self._hooks: list[tuple[Any, Any, Any]] = []
         self._hooked_ids: set[int] = set()
         self._destroy_watched: set[int] = set()
@@ -442,6 +445,7 @@ class UltraViewCaptureCoordinator(QObject):
             self._store.clear()
         self._bindings.clear()
         self._unstable.clear()
+        self._axis_edit_waits.clear()
         self._result_refs.clear()
         self._result_generation.clear()
         self._digest_retries.clear()
@@ -479,6 +483,7 @@ class UltraViewCaptureCoordinator(QObject):
             return
         self._bindings[ident] = (ref, weakref.ref(canvas))
         self._ensure_stability_hooks(canvas)
+        self._ensure_axis_edit_hook()
         self._watch_canvas_destroyed(canvas)
 
     def bound_ref_for(self, canvas) -> UltraViewRef | None:
@@ -521,6 +526,8 @@ class UltraViewCaptureCoordinator(QObject):
             if not widget.isVisible():
                 return
         except RuntimeError:
+            return
+        if self._defer_capture_for_axis_edit(ref, widget, reason):
             return
         if self._defer_capture_for_page_transition(ref, widget, reason):
             return
@@ -602,6 +609,78 @@ class UltraViewCaptureCoordinator(QObject):
             controller, resume, ref, widget_ref, str(reason),
         )
         return True
+
+    def _ensure_axis_edit_hook(self) -> None:
+        """Listen only to the controller's public edit-settlement contract."""
+        window = self._window
+        stack = getattr(window, "chart_stack", None) if window is not None else None
+        controller = getattr(stack, "_pinned_cursors", None)
+        if controller is None or controller is self._axis_edit_controller:
+            return
+        signal = getattr(controller, "axis_edit_state_changed", None)
+        if signal is None:
+            return
+        try:
+            signal.connect(self._on_axis_edit_state_changed)
+        except (RuntimeError, TypeError):
+            return
+        self._axis_edit_controller = controller
+        self._hooks.append((controller, signal, self._on_axis_edit_state_changed))
+
+    def _axis_edits_settled(self, widget) -> bool:
+        self._ensure_axis_edit_hook()
+        controller = self._axis_edit_controller
+        settled = getattr(controller, "axis_edit_is_settled", None)
+        if not callable(settled):
+            return True
+        for host in _iter_overlay_hosts(widget):
+            try:
+                if not settled(host):
+                    return False
+            except (RuntimeError, TypeError):
+                return False
+        return True
+
+    def _defer_capture_for_axis_edit(self, ref, widget, reason: str) -> bool:
+        if self._axis_edits_settled(widget):
+            return False
+        self._axis_edit_waits[(ref, id(widget))] = (
+            ref,
+            weakref.ref(widget),
+            str(reason),
+        )
+        return True
+
+    @staticmethod
+    def _widget_has_overlay_host(widget, canvas) -> bool:
+        return any(host is canvas for host in _iter_overlay_hosts(widget))
+
+    def _on_axis_edit_state_changed(self, canvas, active: bool) -> None:
+        if self._inactive():
+            return
+        if active:
+            for ref, widget_ref in list(self._bindings.values()):
+                widget = widget_ref() if widget_ref is not None else None
+                if widget is None or not _alive(widget):
+                    continue
+                if not self._widget_has_overlay_host(widget, canvas):
+                    continue
+                self._drop_queued_for_ref(ref)
+                self._axis_edit_waits[(ref, id(widget))] = (
+                    ref,
+                    weakref.ref(widget),
+                    "pinned-cursor",
+                )
+            return
+        for key, (ref, widget_ref, reason) in list(self._axis_edit_waits.items()):
+            widget = widget_ref() if widget_ref is not None else None
+            if widget is None or not _alive(widget):
+                self._axis_edit_waits.pop(key, None)
+                continue
+            if not self._axis_edits_settled(widget):
+                continue
+            self._axis_edit_waits.pop(key, None)
+            self.request_capture(ref, widget, reason)
 
     def _resume_page_transition_capture(self, key) -> None:
         entry = self._page_transition_waits.pop(key, None)
@@ -1080,6 +1159,19 @@ class UltraViewCaptureCoordinator(QObject):
             self.bind_canvas(widget, ref)
             self.request_capture(ref, widget, reason)
 
+    def request_pinned_cursor_capture(self) -> None:
+        """Capture the active owner output after a committed pin mutation."""
+        if self._inactive():
+            return
+        window = self._window
+        stack = getattr(window, "chart_stack", None) if window is not None else None
+        mode_getter = getattr(stack, "current_mode", None)
+        mode = mode_getter() if callable(mode_getter) else None
+        if mode == "time":
+            self._capture_visible_time_refs("pinned-cursor")
+        elif mode in SOURCE_SECTIONS:
+            self.request_visible_section_capture(mode, "pinned-cursor")
+
     def _time_canvas_for_ref(self, ref: UltraViewRef):
         """Resolve time-domain canvas by pane ownership, not click-focus.
 
@@ -1513,6 +1605,8 @@ class UltraViewCaptureCoordinator(QObject):
             return False
         if not _alive(widget):
             return False
+        if self._defer_capture_for_axis_edit(ref, widget, reason):
+            return False
         bound = self.bound_ref_for(widget)
         if bound is not None and bound != ref:
             return False
@@ -1604,6 +1698,12 @@ class UltraViewCaptureCoordinator(QObject):
         pixmap = None
         window = self._window
         stack = getattr(window, "chart_stack", None) if window is not None else None
+        flush = getattr(getattr(stack, "_pinned_cursors", None), "flush_layout", None)
+        if callable(flush):
+            try:
+                flush()
+            except (RuntimeError, TypeError):
+                pass
         grab_pres = getattr(stack, "grab_presentation_pixmap", None)
         scale = self._grab_scale(widget, ref)
         reuse_source = getattr(stack, "transition_source_pixmap_for", None)
@@ -1726,6 +1826,8 @@ class UltraViewCaptureCoordinator(QObject):
         self._clear_page_transition_waits(widget_id=ident)
         self._bindings.pop(ident, None)
         self._unstable.pop(ident, None)
+        for key in [key for key in self._axis_edit_waits if key[1] == ident]:
+            self._axis_edit_waits.pop(key, None)
         self._hooked_ids.discard(ident)
         self._destroy_watched.discard(ident)
         kept = []
@@ -2128,6 +2230,7 @@ class UltraViewCaptureCoordinator(QObject):
     def _drop_all_timers(self) -> None:
         self._idle_timer.stop()
         self._idle_pending.clear()
+        self._axis_edit_waits.clear()
         self._digest_retries.clear()
         self._focus_timer.stop()
         self._sidecar_timer.stop()
@@ -2149,3 +2252,4 @@ class UltraViewCaptureCoordinator(QObject):
                 continue
         self._hooks.clear()
         self._hooked_ids.clear()
+        self._axis_edit_controller = None

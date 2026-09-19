@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from mf4_analyzer.ui.pg_canvas.annotations import AnnotationManager
+from mf4_analyzer.ui.pg_canvas.appearance import AppearanceManager
 from mf4_analyzer.ui.pg_canvas.cursor import CursorController
 from mf4_analyzer.ui.pg_canvas.overlay_axes import OverlayAxisManager
 from mf4_analyzer.ui.pg_canvas.pinned_cursor_overlay import PinnedCursorOverlay
@@ -33,6 +34,7 @@ EXPECTED_WRITE_THROUGH = {
     "CursorController": set(),
     "TickDensityController": set(),
     "AnnotationManager": {"_last_rclick_scene_pos"},
+    "AppearanceManager": set(),
     # _aa_backstop_armed is the ONE piece of quality state that deliberately
     # lives on the canvas: the resident paint timer reads it from inside Qt's
     # paintEvent on every frame, and it holds the canvas, not the manager.
@@ -65,6 +67,7 @@ COLLABORATOR_CLASSES = (
     CursorController,
     TickDensityController,
     AnnotationManager,
+    AppearanceManager,
     QualityManager,
     PinnedCursorOverlay,
 )
@@ -176,3 +179,16 @@ def test_cursor_display_state_and_live_methods_are_explicitly_declared():
     assert "set_source_label_resolver" in CursorController._delegate_names
     assert "_custom_x_path_cache" in CursorController._owned_names
     assert "invalidate_custom_x_path_cache" in CursorController._delegate_names
+
+
+def test_appearance_identity_state_is_explicitly_owned():
+    assert "_identities" in AppearanceManager._owned_names
+    assert "_ambiguous_curve_keys" in AppearanceManager._owned_names
+    assert "_merged_curve_keys" in AppearanceManager._owned_names
+    assert "appearance_target_for_handle" in AppearanceManager._delegate_names
+    assert "companion_source_key" in AppearanceManager._delegate_names
+    assert "snapshot_chart_appearance" in AppearanceManager._delegate_names
+    assert "apply_chart_appearance" in AppearanceManager._delegate_names
+    assert "repair_chart_appearance_ranges" in AppearanceManager._delegate_names
+    assert "sync_from_rows" in AppearanceManager._delegate_names
+    assert "reset" in AppearanceManager._delegate_names

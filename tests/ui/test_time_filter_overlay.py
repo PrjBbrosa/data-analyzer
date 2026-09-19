@@ -66,6 +66,18 @@ def test_filtered_trace_appended_and_attenuated(
     assert np.std(filt[3]) < np.std(orig[3])
     # the original trace stays visible, the filtered trace too (defaults on)
     assert orig[1] is True and filt[1] is True
+    fid = orig[6]
+    assert orig[7]["appearance_ref"] == {
+        "kind": "channel",
+        "fid": str(fid),
+        "channel": "sig",
+    }
+    assert filt[7]["companion_of"] == orig[0]
+    assert filt[7]["appearance_ref"] == {
+        "kind": "companion",
+        "fid": str(fid),
+        "channel": "sig",
+    }
 
 
 def test_uncheck_show_filtered_hides_trace(

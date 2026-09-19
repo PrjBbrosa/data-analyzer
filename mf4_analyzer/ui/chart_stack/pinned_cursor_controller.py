@@ -5,79 +5,73 @@ per-canvas pill; pinned records never share ``_cursor_rows_by_canvas``.
 """
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass, field, replace
 from functools import partial
-from uuid import uuid4
 
 from PyQt5 import sip
-from PyQt5.QtCore import QEvent, QObject, QPoint, QRect, QTimer, Qt, pyqtSignal
-from PyQt5.QtGui import QCursor, QKeyEvent
+from PyQt5.QtCore import QEvent, QObject, QPoint, QTimer, Qt, pyqtSignal
+from PyQt5.QtGui import QKeyEvent
 from PyQt5.QtWidgets import QApplication, QWidget
 
-from ..pg_canvas.frf_canvas import PgFrfCanvas
-from ..pg_canvas.heatmap_canvas import PgHeatmapCanvas
-from ..pg_canvas.line_canvas import PgLineCanvas
-from ..pg_canvas.pinned_cursor_overlay import (
-    PINNED_OFFSCREEN_TEXT,
-    PinnedAxisLabel,
-    PinnedOverlayEndpoint,
-    PinnedOverlayRecord,
+from ..cursor_display_model import PinnedCursorSample
+from ..pinned_cursor_facts import (
+    HIDDEN_CHANNEL_TEXT,
+    UNCHECKED_TEXT,
+    UNAVAILABLE_TEXT,
+    _binding_key as _facts_binding_key,
+    _finite,
+    _hidden_channel_row as _facts_hidden_channel_row,
+    _hidden_keys_from_sample as _facts_hidden_keys_from_sample,
+    _identity_key as _facts_identity_key,
+    _key_in as _facts_key_in,
+    _reconcile_sample as _facts_reconcile_sample,
+    _sample_has_hidden as _facts_sample_has_hidden,
+    _sample_has_numeric as _facts_sample_has_numeric,
+    _sample_has_unchecked as _facts_sample_has_unchecked,
 )
-from ..cursor_display_model import CursorDisplayChannel, PinnedCursorSample
-from ..pg_canvases import TimeDomainCanvasPG
 from ..pinned_cursor_state import (
     DEFAULT_ANCHOR,
-    PinnedCursorAnchor,
-    PinnedCursorBinding,
     PinnedCursorCollection,
     PinnedCursorIntent,
-    captures_equal,
     clear_collection,
     coords_equal,
     empty_collection,
     next_record,
-    remove_record,
 )
-from ..plot_helpers import _cursor_identity_parts
+from .pinning.commands import PinCommands, PinnedAxisEdit
+from .pinning.key_router import PinKeyRouter
+from .pinning.presentation import (
+    INCOMPATIBLE_AXIS_TEXT,
+    PENDING_TEXT,
+    PinPanelProjector,
+)
+from .pinning.sampling import (
+    PIN_STATUS_INCOMPATIBLE_AXIS,
+    PIN_STATUS_PENDING,
+    PIN_STATUS_READY,
+    PIN_STATUS_UNAVAILABLE,
+    PinSampleEvaluator,
+)
 from .cursor_display import (
-    build_cursor_presentation,
-    build_fft_cursor_presentation,
-    build_frf_cursor_presentation,
     live_pin_hint_text,
+    pin_coord_html,
+    pin_format_coord_html,
+    pin_format_dual_html,
+    pin_format_number,
+    pin_format_value,
+    pin_live_primary_html,
+    pin_primary_html,
+    pin_status_primary_html,
 )
 from .cursor_pill import CursorPill
-from .ultraview.author_widgets import is_text_input_widget
 
 _PLACE_B_MESSAGE = "先放置 B，再按 P 固定"
 _PLACE_AB_MESSAGE = "先放置 A、B，再按 P 固定"
 _PIN_WARNING_MESSAGES = frozenset({
     _PLACE_B_MESSAGE, _PLACE_AB_MESSAGE, "无数据",
 })
-_NUDGE_STEP = 28
-_NUDGE_LIMIT = 72
 _DUMMY_RECORD_ID = "00000000-0000-0000-0000-000000000001"
-_P_EVENT_TYPES = frozenset({
-    QEvent.ShortcutOverride,
-    QEvent.KeyPress,
-    QEvent.Enter,
-    QEvent.Leave,
-    QEvent.FocusIn,
-    QEvent.FocusOut,
-    QEvent.Show,
-    QEvent.Hide,
-})
-
-PIN_STATUS_READY = "ready"
-PIN_STATUS_PENDING = "pending"
-PIN_STATUS_UNAVAILABLE = "unavailable"
-PIN_STATUS_INCOMPATIBLE_AXIS = "incompatible_axis"
-
-HIDDEN_CHANNEL_TEXT = "已隐藏"
-UNCHECKED_TEXT = "未勾选"
-PENDING_TEXT = "更新中"
-INCOMPATIBLE_AXIS_TEXT = "X 轴已更改"
-UNAVAILABLE_TEXT = "无数据"
+_HOST_FILTER_EVENTS = frozenset({QEvent.Show, QEvent.Hide})
 
 
 def pin_feedback_level(message: str) -> str:
@@ -85,18 +79,6 @@ def pin_feedback_level(message: str) -> str:
     if text in _PIN_WARNING_MESSAGES or text.startswith("先放置"):
         return "warning"
     return "info"
-
-
-def _finite(value):
-    if value is None or isinstance(value, bool):
-        return None
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    if not math.isfinite(number):
-        return None
-    return number
 
 
 def _canvas_viewport(canvas):
@@ -121,11 +103,11 @@ def _widget_alive(widget):
 
 @dataclass
 class _OwnerState:
+    """Committed pin logic. Pill/label maps live on ``PinPanelProjector``."""
+
     canvas: object
     collection: PinnedCursorCollection | None = None
-    pills: dict = field(default_factory=dict)
     samples: dict = field(default_factory=dict)
-    axis_labels: dict = field(default_factory=dict)
     reserved_ordinal: int | None = None
     reserved_intent: PinnedCursorIntent | None = None
     live_suppressed: bool = False
@@ -133,9 +115,140 @@ class _OwnerState:
     availability: dict = field(default_factory=dict)
     pending_epoch: int = 0
     reproject_timer: object = None
+    axis_edit_timer: object = None
+    axis_edit: object = None
     signal_conns: list = field(default_factory=list)
     projected_generation: tuple | None = None
     skip_stale_invalidation: bool = False
+
+
+class _PinHostPorts:
+    """Narrow callbacks for Router/Projector. Not a service container."""
+
+    def __init__(self, controller):
+        self._c = controller
+
+    def host_widget(self):
+        return self._c._host
+
+    def source_on_screen(self, canvas):
+        host = self._c._host
+        return bool(_widget_alive(host) and host._cursor_source_on_screen(canvas))
+
+    def cursor_mode(self, canvas):
+        host = self._c._host
+        if not _widget_alive(host):
+            return None
+        return host._cursor_mode_for_canvas(canvas)
+
+    def canvas_belongs(self, canvas):
+        return self._c._canvas_belongs_to_host(canvas)
+
+    def ultraview_widget(self):
+        host = self._c._host
+        return getattr(host, "page_ultraview", None) if _widget_alive(host) else None
+
+    def fallback_widget_at(self, pos):
+        host = self._c._host
+        stack = getattr(host, "stack", None) if _widget_alive(host) else None
+        if not isinstance(stack, QWidget) or not _widget_alive(stack):
+            return None
+        local = stack.mapFromGlobal(pos)
+        child = stack.childAt(local)
+        return child if _widget_alive(child) else None
+
+    def gesture_busy(self, canvas):
+        return self._c._gesture_in_progress(canvas)
+
+    def domain_for(self, canvas):
+        return self._c._domain_for(canvas)
+
+    def on_confirmed_hit(self, hit):
+        self._c._pin_at_mouse(hit)
+
+    def stack_widget(self):
+        host = self._c._host
+        return getattr(host, "stack", None) if _widget_alive(host) else None
+
+    def card_for_canvas(self, canvas):
+        host = self._c._host
+        fn = getattr(host, "_card_for_canvas", None)
+        return fn(canvas) if callable(fn) else None
+
+    def sync_pill_safe_rect(self, pill, card):
+        host = self._c._host
+        fn = getattr(host, "_sync_pill_safe_rect", None)
+        if callable(fn):
+            return fn(pill, card)
+        return False
+
+    def update_pill_content(self, pill, card, update):
+        host = self._c._host
+        fn = getattr(host, "_update_pill_content", None)
+        if callable(fn):
+            fn(pill, card, update)
+            return
+        update()
+
+    def split_active(self):
+        host = self._c._host
+        fn = getattr(host, "split_active", None)
+        return bool(callable(fn) and fn())
+
+    def secondary_card(self):
+        host = self._c._host
+        return getattr(host, "_secondary_card", None) if _widget_alive(host) else None
+
+    def map_canvas_rect_to_stack(self, canvas, rect):
+        host = self._c._host
+        fn = getattr(host, "map_canvas_rect_to_stack", None)
+        return fn(canvas, rect) if callable(fn) else None
+
+    def cursor_display_options(self):
+        host = self._c._host
+        return getattr(host, "_cursor_display_options", None)
+
+    def live_pill(self, canvas):
+        return self._c._live_pill(canvas)
+
+    def prepare_overlay_layout(self, canvas):
+        return self._c._prepare_overlay_layout(canvas)
+
+    def on_unpin(self, canvas, record_id):
+        self._c.unpin_record(canvas, record_id)
+
+    def on_close(self, canvas, record_id):
+        self._c.close_record(canvas, record_id)
+
+    def on_user_moved(self, canvas, record_id):
+        self._c._commit_user_anchor(canvas, record_id)
+
+    def on_display_mode(self, canvas, record_id, mode):
+        self._c._commit_display_mode(canvas, record_id, mode)
+
+    def on_toggle_panel(self, canvas, record_id):
+        self._c.toggle_record_panel(canvas, record_id)
+
+    def on_edit_started(self, canvas, record_id, endpoint, global_pos):
+        self._c.begin_axis_edit(canvas, record_id, endpoint, global_pos)
+
+    def on_edit_preview(self, canvas, record_id, endpoint, global_pos, modifiers):
+        self._c.preview_axis_edit(canvas, record_id, endpoint, global_pos, modifiers)
+
+    def on_edit_committed(self, canvas, record_id, endpoint, global_pos, modifiers):
+        self._c.commit_axis_edit(canvas, record_id, endpoint, global_pos, modifiers)
+
+    def on_edit_cancelled(self, canvas, record_id=None, endpoint=None):
+        self._c.cancel_axis_edit(canvas, record_id, endpoint)
+
+    def on_nudge(self, canvas, record_id, endpoint, direction, global_pos):
+        self._c.nudge_axis_edit(canvas, record_id, endpoint, direction, global_pos)
+
+    def log_unavailable(self, canvas, intent):
+        return self._c._log_unavailable(canvas, intent)
+
+
+_PinnedAxisEdit = PinnedAxisEdit
 
 
 class PinnedCursorController(QObject):
@@ -143,19 +256,43 @@ class PinnedCursorController(QObject):
 
     pin_feedback = pyqtSignal(str)
     intent_changed = pyqtSignal()
+    # ``False`` is emitted only after the committed or restored projection is
+    # in place.  Capture owners use this to defer their own idle work while a
+    # preview can differ from the serializable collection.
+    axis_edit_state_changed = pyqtSignal(object, bool)
 
     def __init__(self, host):
         super().__init__(host)
         self._host = host
         self._owners: dict[int, _OwnerState] = {}
-        self._application_filter_installed = False
-        self._last_mouse_global = QPoint()
+        self._sampling = PinSampleEvaluator()
+        self._commands = PinCommands()
+        ports = _PinHostPorts(self)
+        self._router = PinKeyRouter(self, ports)
+        self._projector = PinPanelProjector(self, ports)
         self.user_intent_revision = 0
         if host is not None:
             host.installEventFilter(self)
             host.destroyed.connect(self._remove_application_filter)
+            mode_changed = getattr(host, "mode_changed", None)
+            if mode_changed is not None:
+                mode_changed.connect(self._cancel_axis_edits_for_mode_change)
             if host.isVisible():
                 self._install_application_filter()
+
+    @property
+    def _application_filter_installed(self) -> bool:
+        """True only while the Router's application filter is actually installed."""
+        router = getattr(self, "_router", None)
+        return bool(router is not None and router.application_filter_installed)
+
+    @property
+    def _last_mouse_global(self):
+        return self._router.last_mouse_global
+
+    @_last_mouse_global.setter
+    def _last_mouse_global(self, value):
+        self._router.last_mouse_global = QPoint() if value is None else QPoint(value)
 
     # ---- bind / collections -------------------------------------------------
 
@@ -169,15 +306,18 @@ class PinnedCursorController(QObject):
         timer.setSingleShot(True)
         timer.setInterval(0)
         timer.timeout.connect(partial(self._reproject_owner, key))
+        axis_edit_timer = QTimer(self)
+        axis_edit_timer.setSingleShot(True)
+        axis_edit_timer.setInterval(0)
+        axis_edit_timer.timeout.connect(partial(self._flush_axis_edit_preview, key))
         owner = _OwnerState(
             canvas=canvas,
             collection=None,
             reproject_timer=timer,
+            axis_edit_timer=axis_edit_timer,
         )
         self._owners[key] = owner
-        overlay = getattr(canvas, "_pinned_overlay", None)
-        if overlay is not None:
-            overlay.set_layout_callback(partial(self._on_overlay_layout, canvas))
+        self._projector.bind_canvas(key, canvas)
         destroyed = getattr(canvas, "destroyed", None)
         if destroyed is not None:
             slot = partial(self._on_canvas_destroyed, key)
@@ -205,12 +345,22 @@ class PinnedCursorController(QObject):
             return None
         return owner.collection
 
+    def is_axis_edit_active(self, canvas) -> bool:
+        """Whether ``canvas`` has an uncommitted bottom-handle transaction."""
+        owner = self._owner(canvas)
+        return owner is not None and owner.axis_edit is not None
+
+    def axis_edit_is_settled(self, canvas) -> bool:
+        """Whether capture may safely read the committed owner collection."""
+        return not self.is_axis_edit_active(canvas)
+
     def set_collection(self, canvas, collection) -> None:
         owner = self._owner(canvas, create=True)
         if owner is None:
             return
         if not isinstance(collection, PinnedCursorCollection):
             return
+        self.cancel_axis_edit(canvas, render=False)
         self._cancel_reproject(owner)
         self._clear_pills(owner)
         owner.collection = collection
@@ -237,7 +387,9 @@ class PinnedCursorController(QObject):
         emit ``intent_changed``; those paths already mark project dirty.
         Does not mint a new ``scope_id``.
         """
+        self._projector.invalidate_tokens()
         for owner in list(self._owners.values()):
+            self._cancel_axis_edit(owner, render=False)
             self._cancel_reproject(owner)
             overlay = getattr(owner.canvas, "_pinned_overlay", None)
             if overlay is not None:
@@ -298,32 +450,26 @@ class PinnedCursorController(QObject):
             )
             if filtered is owner.collection:
                 continue
+            self._cancel_axis_edit(owner, render=False)
             removed = {
                 item.record_id for item in owner.collection.records
             } - {item.record_id for item in filtered.records}
             for record_id in removed:
-                pill = owner.pills.pop(record_id, None)
                 owner.samples.pop(record_id, None)
                 owner.availability.pop(record_id, None)
-                self._destroy_pill(pill)
+                self._projector.destroy_record(id(owner.canvas), record_id)
             owner.collection = filtered
             self._reproject_now(owner)
 
     def pills_for(self, canvas) -> tuple[CursorPill, ...]:
-        owner = self._owner(canvas)
-        if owner is None:
+        if canvas is None:
             return ()
-        return tuple(
-            pill for pill in owner.pills.values() if _widget_alive(pill)
-        )
+        return self._projector.pills_for(id(canvas))
 
-    def axis_labels_for(self, canvas) -> tuple[PinnedAxisLabel, ...]:
-        owner = self._owner(canvas)
-        if owner is None:
+    def axis_labels_for(self, canvas):
+        if canvas is None:
             return ()
-        return tuple(
-            label for label in owner.axis_labels.values() if _widget_alive(label)
-        )
+        return self._projector.axis_labels_for(id(canvas))
 
     def capture_fingerprint_for(self, canvas) -> tuple:
         """Stable pin presentation digest. Hover highlight is omitted."""
@@ -352,6 +498,7 @@ class PinnedCursorController(QObject):
                 _finite(intent.ax),
                 _finite(intent.bx),
                 str(intent.presentation or "full"),
+                intent.panel_expanded is True,
                 str(anchor.h_edge),
                 str(anchor.v_edge),
                 _finite(anchor.nx),
@@ -365,20 +512,394 @@ class PinnedCursorController(QObject):
 
     def raise_record(self, canvas, record_id: str) -> None:
         """Raise/locate the pill. Does not change X, zoom, or placement."""
-        owner = self._owner(canvas)
-        if owner is None:
+        if canvas is None:
             return
-        pill = owner.pills.get(str(record_id))
-        if _widget_alive(pill):
-            pill.raise_()
-            pill.flash_highlight()
-        overlay = getattr(canvas, "_pinned_overlay", None)
-        if overlay is not None:
-            overlay.set_highlight(str(record_id))
-        for label in owner.axis_labels.values():
-            if not _widget_alive(label):
-                continue
-            label.set_highlighted(str(record_id) in label.record_ids())
+        self._projector.raise_record(id(canvas), canvas, str(record_id))
+
+    def toggle_record_panel(self, canvas, record_id: str) -> None:
+        """Commit one record's independent bottom-Pn expand/collapse intent."""
+        owner = self._owner(canvas)
+        if owner is None or owner.collection is None:
+            return
+        intent = self._intent(owner, record_id)
+        if intent is None:
+            return
+        result = self._commands.toggle_panel(owner.collection, intent)
+        if result.collection is None or result.record is None:
+            return
+        owner.collection = result.collection
+        self._project_record(
+            owner,
+            result.record,
+            owner.samples.get(record_id),
+            availability=owner.availability.get(record_id, PIN_STATUS_READY),
+        )
+        self._sync_overlay(owner)
+        self._arrange_pinned_panels(owner)
+        if result.mark_intent:
+            self._mark_user_intent()
+
+    # ---- bottom-axis edit transaction -------------------------------------
+
+    @staticmethod
+    def _endpoint_value(intent, endpoint):
+        return PinCommands.endpoint_value(intent, endpoint)
+
+    @staticmethod
+    def _with_endpoint_value(intent, endpoint, value):
+        return PinCommands.with_endpoint_value(intent, endpoint, value)
+
+    def _sample_endpoint_value(self, sample, endpoint):
+        return self._commands.sample_endpoint_value(sample, endpoint)
+
+    def _axis_edit_overlay(self, owner):
+        canvas = owner.canvas if owner is not None else None
+        overlay = getattr(canvas, "_pinned_overlay", None) if _widget_alive(canvas) else None
+        return overlay if overlay is not None else None
+
+    def _axis_edit_bounds(self, owner):
+        overlay = self._axis_edit_overlay(owner)
+        getter = getattr(overlay, "bottom_axis_physical_bounds", None)
+        bounds = getter() if callable(getter) else None
+        if not isinstance(bounds, tuple) or len(bounds) != 2:
+            return None
+        lo, hi = _finite(bounds[0]), _finite(bounds[1])
+        if lo is None or hi is None or hi <= lo:
+            return None
+        return lo, hi
+
+    @staticmethod
+    def _axis_bounds_equal(left, right):
+        return PinCommands.axis_bounds_equal(left, right)
+
+    def _axis_edit_is_valid(self, owner, edit):
+        if owner is None or edit is None or owner.collection is None:
+            return False
+        return self._commands.axis_edit_is_valid(
+            edit,
+            scope_id=str(owner.collection.scope_id),
+            current_intent=self._intent(owner, edit.record_id),
+            generation=self._canvas_generations(owner.canvas),
+            visible_bounds=self._axis_edit_bounds(owner),
+        )
+
+    def begin_axis_edit(self, canvas, record_id, endpoint, global_pos) -> bool:
+        """Start a side-effect-free edit for one stable record endpoint."""
+        owner = self._owner(canvas)
+        if owner is None or owner.collection is None:
+            return False
+        record_id, endpoint = str(record_id), str(endpoint)
+        intent = self._intent(owner, record_id)
+        value = self._endpoint_value(intent, endpoint)
+        if value is None or owner.availability.get(record_id, PIN_STATUS_READY) != PIN_STATUS_READY:
+            return False
+        overlay = self._axis_edit_overlay(owner)
+        position_for = getattr(overlay, "bottom_axis_viewport_pos_for_physical", None)
+        if not callable(position_for):
+            return False
+        viewport_pos = position_for(value)
+        viewport = _canvas_viewport(canvas)
+        bounds = self._axis_edit_bounds(owner)
+        if viewport_pos is None or viewport is None or bounds is None:
+            return False
+        try:
+            endpoint_global = viewport.mapToGlobal(viewport_pos)
+        except RuntimeError:
+            return False
+        if owner.axis_edit is not None:
+            self._cancel_axis_edit(owner, render=True)
+        result = self._commands.begin_axis_edit(
+            scope_id=str(owner.collection.scope_id),
+            record_id=record_id,
+            endpoint=endpoint,
+            original=intent,
+            generation=self._canvas_generations(canvas),
+            visible_bounds=bounds,
+            endpoint_global=endpoint_global,
+            pointer_global=global_pos,
+        )
+        owner.axis_edit = result.axis_edit
+        self.axis_edit_state_changed.emit(canvas, True)
+        return True
+
+    def preview_axis_edit(self, canvas, record_id, endpoint, global_pos, modifiers) -> None:
+        owner = self._owner(canvas)
+        edit = owner.axis_edit if owner is not None else None
+        if (
+            edit is None or edit.record_id != str(record_id)
+            or edit.endpoint != str(endpoint)
+        ):
+            return
+        if not self._axis_edit_is_valid(owner, edit):
+            self._cancel_axis_edit(owner, render=True)
+            return
+        self._commands.accumulate_preview_pointer(edit, global_pos, modifiers)
+        timer = owner.axis_edit_timer
+        if timer is None:
+            self._flush_axis_edit_preview(id(owner.canvas))
+            return
+        try:
+            if not timer.isActive():
+                timer.start()
+        except RuntimeError:
+            self._flush_axis_edit_preview(id(owner.canvas))
+
+    def _candidate_for_axis_endpoint(self, owner, intent, endpoint, raw_value):
+        bounds = self._axis_edit_bounds(owner)
+        requested = self._commands.requested_endpoint(
+            intent, endpoint, raw_value, bounds,
+        )
+        if requested is None:
+            return None, None
+        sample = self._evaluate_intent(owner.canvas, requested)
+        if not self._sample_has_result(sample):
+            return None, None
+        return self._commands.accept_endpoint_sample(requested, endpoint, sample)
+
+    def _flush_axis_edit_preview(self, key) -> None:
+        owner = self._owners.get(key)
+        edit = owner.axis_edit if owner is not None else None
+        if edit is None or edit.pending_global is None:
+            return
+        if not self._axis_edit_is_valid(owner, edit):
+            self._cancel_axis_edit(owner, render=True)
+            return
+        overlay = self._axis_edit_overlay(owner)
+        mapper = getattr(overlay, "bottom_axis_global_to_viewport", None)
+        viewport_pos = mapper(edit.pending_global) if callable(mapper) else None
+        edit.pending_global = None
+        if viewport_pos is None:
+            return
+        value = self._physical_x(owner.canvas, edit.original.domain, viewport_pos)
+        candidate, sample = self._candidate_for_axis_endpoint(
+            owner, edit.original, edit.endpoint, value,
+        )
+        result = self._commands.accept_preview_candidate(edit, candidate, sample)
+        if result.preview_intent is None:
+            return
+        self._project_record(
+            owner, result.preview_intent, result.preview_sample,
+            availability=owner.availability.get(edit.record_id, PIN_STATUS_READY),
+        )
+        self._sync_overlay(owner)
+
+    def commit_axis_edit(self, canvas, record_id, endpoint, global_pos, modifiers) -> None:
+        owner = self._owner(canvas)
+        edit = owner.axis_edit if owner is not None else None
+        if (
+            edit is None or edit.record_id != str(record_id)
+            or edit.endpoint != str(endpoint)
+        ):
+            return
+        if QPoint(global_pos) != edit.last_pointer_global:
+            self.preview_axis_edit(canvas, record_id, endpoint, global_pos, modifiers)
+        self._flush_axis_edit_preview(id(canvas))
+        edit = owner.axis_edit
+        result = self._commands.decide_axis_commit(
+            edit,
+            collection=owner.collection if owner is not None else None,
+            current_intent=(
+                self._intent(owner, edit.record_id)
+                if owner is not None and edit is not None else None
+            ),
+            generation=(
+                self._canvas_generations(canvas)
+                if owner is not None else None
+            ),
+            visible_bounds=(
+                self._axis_edit_bounds(owner) if owner is not None else None
+            ),
+        )
+        if result.action == "edit_stale" or edit is None:
+            self._cancel_axis_edit(owner, render=True)
+            return
+        original = edit.original
+        record_id = edit.record_id
+        self._clear_axis_edit(owner)
+        if result.action != "edit_commit":
+            self._restore_axis_edit_projection(owner, original)
+            self._emit_axis_edit_settled(owner)
+            return
+        owner.collection = result.collection
+        owner.samples[record_id] = result.sample
+        owner.availability[record_id] = PIN_STATUS_READY
+        self._project_record(
+            owner, result.record, result.sample, availability=PIN_STATUS_READY,
+        )
+        self._sync_overlay(owner)
+        if result.mark_intent:
+            self._mark_user_intent()
+        self._emit_axis_edit_settled(owner)
+
+    def cancel_axis_edit(self, canvas, record_id=None, endpoint=None, *, render=True) -> None:
+        owner = self._owner(canvas)
+        edit = owner.axis_edit if owner is not None else None
+        if edit is None:
+            return
+        if record_id is not None and edit.record_id != str(record_id):
+            return
+        if endpoint is not None and edit.endpoint != str(endpoint):
+            return
+        self._cancel_axis_edit(owner, render=render)
+
+    def _cancel_axis_edit(self, owner, *, render, notify=None):
+        edit = owner.axis_edit if owner is not None else None
+        if edit is None:
+            return
+        self._clear_axis_edit(owner)
+        if render and _widget_alive(owner.canvas):
+            self._restore_axis_edit_projection(owner, edit.original)
+        # Destructive callers clear or replace the owner projection in the
+        # same stack frame.  They leave notification to their own settled
+        # generation rather than falsely advertising a still-visible preview.
+        if notify is None:
+            notify = render
+        if notify:
+            self._emit_axis_edit_settled(owner)
+
+    @staticmethod
+    def _clear_axis_edit(owner):
+        owner.axis_edit = None
+        timer = owner.axis_edit_timer
+        if timer is not None:
+            try:
+                timer.stop()
+            except RuntimeError:
+                pass
+
+    def _emit_axis_edit_settled(self, owner) -> None:
+        canvas = owner.canvas if owner is not None else None
+        if _widget_alive(canvas):
+            self.axis_edit_state_changed.emit(canvas, False)
+
+    def _restore_axis_edit_projection(self, owner, intent):
+        self._project_record(
+            owner, intent, owner.samples.get(intent.record_id),
+            availability=owner.availability.get(intent.record_id, PIN_STATUS_READY),
+        )
+        self._sync_overlay(owner)
+
+    def _cancel_axis_edits_for_mode_change(self, *_args):
+        for owner in list(self._owners.values()):
+            self._cancel_axis_edit(owner, render=True)
+
+    def nudge_axis_edit(self, canvas, record_id, endpoint, direction, global_pos) -> None:
+        """Commit one keyboard step through the existing coordinate/fact path."""
+        owner = self._owner(canvas)
+        if owner is None or owner.collection is None or direction not in {-1, 1}:
+            return
+        if owner.axis_edit is not None:
+            return
+        intent = self._intent(owner, str(record_id))
+        value = self._endpoint_value(intent, str(endpoint))
+        if value is None or owner.availability.get(str(record_id), PIN_STATUS_READY) != PIN_STATUS_READY:
+            return
+        if intent.domain == "time":
+            raw_value = value + (0.001 * direction)
+            candidate, sample = self._candidate_for_axis_endpoint(
+                owner, intent, str(endpoint), raw_value,
+            )
+        elif intent.domain == "channel":
+            candidate, sample = self._pixel_axis_candidate(
+                owner, intent, str(endpoint), direction,
+            )
+        elif intent.domain in {"frequency", "frf"}:
+            candidate, sample = self._adjacent_frequency_candidate(
+                owner, intent, str(endpoint), direction,
+            )
+        else:
+            return
+        if candidate is None or sample is None:
+            if intent.domain in {"frequency", "frf"}:
+                self.pin_feedback.emit("无相邻有效频点")
+            return
+        result = self._commands.decide_nudge_commit(
+            collection=owner.collection,
+            original=intent,
+            endpoint=str(endpoint),
+            candidate=candidate,
+            sample=sample,
+        )
+        if result.action != "edit_commit":
+            if intent.domain in {"frequency", "frf"}:
+                self.pin_feedback.emit("无相邻有效频点")
+            return
+        owner.collection = result.collection
+        owner.samples[str(record_id)] = result.sample
+        owner.availability[str(record_id)] = PIN_STATUS_READY
+        self._project_record(
+            owner, result.record, result.sample, availability=PIN_STATUS_READY,
+        )
+        self._sync_overlay(owner)
+        if result.mark_intent:
+            self._mark_user_intent()
+
+    def _pixel_axis_candidate(self, owner, intent, endpoint, direction):
+        overlay = self._axis_edit_overlay(owner)
+        position_for = getattr(overlay, "bottom_axis_viewport_pos_for_physical", None)
+        pos = position_for(self._endpoint_value(intent, endpoint)) if callable(position_for) else None
+        if pos is None:
+            return None, None
+        shifted = QPoint(pos.x() + int(direction), pos.y())
+        raw_value = self._physical_x(owner.canvas, intent.domain, shifted)
+        return self._candidate_for_axis_endpoint(owner, intent, endpoint, raw_value)
+
+    def _adjacent_frequency_candidate(self, owner, intent, endpoint, direction):
+        """Find the neighbouring effective grid point without reading arrays.
+
+        Frequency canvases already expose a side-effect-free evaluator which
+        snaps a query to their active reference grid.  Probe that public fact
+        interface across the current viewport; no DSP or private curve array is
+        duplicated here.
+        """
+        overlay = self._axis_edit_overlay(owner)
+        position_for = getattr(overlay, "bottom_axis_viewport_pos_for_physical", None)
+        origin = position_for(self._endpoint_value(intent, endpoint)) if callable(position_for) else None
+        viewport = _canvas_viewport(owner.canvas)
+        if origin is None or viewport is None or not viewport.rect().contains(origin):
+            return None, None
+        original = self._endpoint_value(intent, endpoint)
+        low = 0
+        high = 1
+        found = None
+        limit = (
+            viewport.width() - origin.x() - 1
+            if direction > 0 else origin.x()
+        )
+        while high <= max(0, int(limit)):
+            probe = QPoint(origin.x() + direction * high, origin.y())
+            candidate, sample = self._candidate_for_axis_endpoint(
+                owner, intent, endpoint,
+                self._physical_x(owner.canvas, intent.domain, probe),
+            )
+            value = self._endpoint_value(candidate, endpoint)
+            if candidate is not None and value is not None and (
+                (direction > 0 and value > original and not coords_equal(value, original))
+                or (direction < 0 and value < original and not coords_equal(value, original))
+            ):
+                found = (high, candidate, sample)
+                break
+            low, high = high, high * 2
+        if found is None:
+            return None, None
+        hi, candidate, sample = found
+        while hi - low > 1:
+            middle = (low + hi) // 2
+            probe = QPoint(origin.x() + direction * middle, origin.y())
+            trial, trial_sample = self._candidate_for_axis_endpoint(
+                owner, intent, endpoint,
+                self._physical_x(owner.canvas, intent.domain, probe),
+            )
+            value = self._endpoint_value(trial, endpoint)
+            changed = trial is not None and value is not None and (
+                (direction > 0 and value > original and not coords_equal(value, original))
+                or (direction < 0 and value < original and not coords_equal(value, original))
+            )
+            if changed:
+                hi, candidate, sample = middle, trial, trial_sample
+            else:
+                low = middle
+        return candidate, sample
 
     def is_live_suppressed(self, canvas) -> bool:
         owner = self._owner(canvas)
@@ -396,94 +917,48 @@ class PinnedCursorController(QObject):
             self._nudge_live_from_pins(owner)
 
     def reflow_visible(self) -> None:
-        host = self._host
-        for owner in list(self._owners.values()):
-            canvas = owner.canvas
-            if not _widget_alive(canvas):
-                continue
-            on_screen = bool(host._cursor_source_on_screen(canvas))
-            card = host._card_for_canvas(canvas)
-            if (
-                card is getattr(host, "_secondary_card", None)
-                and not host.split_active()
-            ):
-                on_screen = False
-            for pill in list(owner.pills.values()):
-                if not _widget_alive(pill):
-                    continue
-                if not on_screen:
-                    pill.setVisible(False)
-                    continue
-                host._sync_pill_safe_rect(pill, card)
-                if pill._display_projection is not None:
-                    pill.reflow_to_parent()
-                self._apply_anchor(pill, owner.collection, pill_record_id=self._record_id_for(owner, pill))
-                pill.setVisible(True)
-                pill.raise_()
-            if on_screen:
-                self._nudge_live_from_pins(owner)
-            overlay = getattr(canvas, "_pinned_overlay", None)
-            if overlay is not None:
-                overlay.reproject()
+        owners = [
+            (id(owner.canvas), owner.canvas, owner.collection)
+            for owner in list(self._owners.values())
+        ]
+        self._projector.request_reflow(owners)
+
+    def flush_layout(self, canvas=None) -> None:
+        """Consume pending Pin geometry. Does not sample or mark intent."""
+        if canvas is None:
+            owners = [
+                (id(owner.canvas), owner.canvas, owner.collection)
+                for owner in list(self._owners.values())
+            ]
+            self._projector.flush_layout(owners)
+            return
+        owner = self._owner(canvas)
+        if owner is None:
+            self._projector.flush_layout()
+            return
+        self._projector.flush_layout(
+            [(id(owner.canvas), owner.canvas, owner.collection)]
+        )
 
     # ---- P routing ----------------------------------------------------------
 
     def eventFilter(self, watched, event):  # noqa: N802
-        etype = event.type()
-        if etype not in _P_EVENT_TYPES:
-            return False
-        if watched is self._host:
-            if etype in (QEvent.Show, QEvent.Hide):
-                self._sync_application_filter()
-            return False
-        if isinstance(watched, CursorPill):
-            self._on_pinned_pill_event(watched, event)
-        if etype not in (QEvent.ShortcutOverride, QEvent.KeyPress):
-            return False
-        if not self._is_unmodified_p(event):
-            return False
-        if event.isAutoRepeat():
-            return False
-        eligible = self._pin_eligible()
-        if etype == QEvent.ShortcutOverride:
-            if eligible:
-                event.accept()
-                return True
-            return False
-        if not eligible:
-            return False
-        self._pin_at_mouse()
-        event.accept()
-        return True
+        if watched is self._host and event.type() in _HOST_FILTER_EVENTS:
+            self._sync_application_filter()
+        return False
 
     def _sync_application_filter(self) -> None:
-        host = self._host
-        if _widget_alive(host) and host.isVisible():
-            self._install_application_filter()
-            return
-        self._remove_application_filter()
+        self._router.sync_application_filter()
 
     def _install_application_filter(self) -> None:
-        if self._application_filter_installed:
-            return
-        app = QApplication.instance()
-        if app is None:
-            return
-        app.installEventFilter(self)
-        self._application_filter_installed = True
+        self._router.install_application_filter()
 
     def _remove_application_filter(self) -> None:
-        if not self._application_filter_installed:
-            return
-        app = QApplication.instance()
-        if app is not None:
-            try:
-                app.removeEventFilter(self)
-            except RuntimeError:
-                pass
-        self._application_filter_installed = False
+        self._router.remove_application_filter()
 
     def close(self) -> None:
+        self._router.invalidate_tokens()
+        self._projector.invalidate_tokens()
         host = self._host
         if _widget_alive(host):
             try:
@@ -496,8 +971,9 @@ class PinnedCursorController(QObject):
 
     # ---- transaction --------------------------------------------------------
 
-    def _pin_at_mouse(self) -> None:
-        hit = self._hit_owner()
+    def _pin_at_mouse(self, hit=None) -> None:
+        if hit is None:
+            hit = self._router.hit_owner()
         if hit is None:
             return
         canvas, domain, viewport_pos = hit
@@ -541,18 +1017,31 @@ class PinnedCursorController(QObject):
         )
         if intent is None:
             return
-        if self._highlight_duplicate(owner, intent):
+        result = self._commands.create_pin(
+            collection=owner.collection,
+            intent=intent,
+            sample=sample,
+            reserved_ordinal=owner.reserved_ordinal,
+            reserved_intent=owner.reserved_intent,
+        )
+        if result.action == "duplicate":
+            self._flash_duplicate(owner, result.duplicate_record_id)
             self._consume_live(owner, canvas, dual=False)
+            if result.feedback:
+                self.pin_feedback.emit(result.feedback)
             return
-        collection, record = self._commit_record(owner, intent)
-        owner.collection = collection
-        owner.samples[record.record_id] = sample
-        owner.availability[record.record_id] = PIN_STATUS_READY
-        self._project_record(owner, record, sample, inherit_live=live)
+        if result.clear_reserved:
+            owner.reserved_ordinal = None
+            owner.reserved_intent = None
+        owner.collection = result.collection
+        owner.samples[result.record.record_id] = sample
+        owner.availability[result.record.record_id] = PIN_STATUS_READY
+        self._project_record(owner, result.record, sample, inherit_live=live)
         self._sync_overlay(owner)
         self._consume_live(owner, canvas, dual=False)
-        self._mark_user_intent()
-        self.pin_feedback.emit(self._success_text(record))
+        if result.mark_intent:
+            self._mark_user_intent()
+        self.pin_feedback.emit(self._success_text(result.record))
 
     def _pin_dual(self, owner, canvas, domain) -> None:
         placement = self._snapshot_placement(canvas)
@@ -584,59 +1073,52 @@ class PinnedCursorController(QObject):
         )
         if intent is None:
             return
-        if self._highlight_duplicate(owner, intent):
+        result = self._commands.create_pin(
+            collection=owner.collection,
+            intent=intent,
+            sample=sample,
+            reserved_ordinal=owner.reserved_ordinal,
+            reserved_intent=owner.reserved_intent,
+        )
+        if result.action == "duplicate":
+            self._flash_duplicate(owner, result.duplicate_record_id)
             self._consume_live(owner, canvas, dual=True, placement=placement)
+            if result.feedback:
+                self.pin_feedback.emit(result.feedback)
             return
-        collection, record = self._commit_record(owner, intent)
-        owner.collection = collection
-        owner.samples[record.record_id] = sample
-        owner.availability[record.record_id] = PIN_STATUS_READY
-        self._project_record(owner, record, sample, inherit_live=live)
+        if result.clear_reserved:
+            owner.reserved_ordinal = None
+            owner.reserved_intent = None
+        owner.collection = result.collection
+        owner.samples[result.record.record_id] = sample
+        owner.availability[result.record.record_id] = PIN_STATUS_READY
+        self._project_record(owner, result.record, sample, inherit_live=live)
         self._sync_overlay(owner)
         self._consume_live(owner, canvas, dual=True, placement=placement)
-        self._mark_user_intent()
-        self.pin_feedback.emit(self._success_text(record))
+        if result.mark_intent:
+            self._mark_user_intent()
+        self.pin_feedback.emit(self._success_text(result.record))
 
     def _commit_record(self, owner, intent):
-        if owner.collection is None:
-            owner.collection = empty_collection()
-        reserved = owner.reserved_ordinal
-        reserved_intent = owner.reserved_intent
+        collection, record = self._commands.commit_record(
+            owner.collection, intent,
+            reserved_ordinal=owner.reserved_ordinal,
+            reserved_intent=owner.reserved_intent,
+        )
         owner.reserved_ordinal = None
         owner.reserved_intent = None
-        if (
-            reserved is not None
-            and reserved_intent is not None
-            and captures_equal(reserved_intent, intent)
-            and all(item.ordinal != reserved for item in owner.collection.records)
-        ):
-            record = replace(
-                intent,
-                record_id=str(uuid4()),
-                ordinal=int(reserved),
-            )
-            collection = replace(
-                owner.collection,
-                records=owner.collection.records + (record,),
-            )
-            return collection, record
-        return next_record(owner.collection, intent)
+        return collection, record
 
     def _highlight_duplicate(self, owner, intent) -> bool:
-        if owner.collection is None:
+        duplicate = self._commands.find_duplicate(owner.collection, intent)
+        if duplicate is None:
             return False
-        for existing in owner.collection.records:
-            if not captures_equal(existing, intent):
-                continue
-            pill = owner.pills.get(existing.record_id)
-            if _widget_alive(pill):
-                pill.flash_highlight()
-            overlay = getattr(owner.canvas, "_pinned_overlay", None)
-            if overlay is not None:
-                overlay.set_highlight(existing.record_id)
-            self.pin_feedback.emit(f"P{existing.ordinal} 已在此位置")
-            return True
-        return False
+        self._flash_duplicate(owner, duplicate.record_id)
+        self.pin_feedback.emit(f"P{duplicate.ordinal} 已在此位置")
+        return True
+
+    def _flash_duplicate(self, owner, record_id) -> None:
+        self._projector.flash_duplicate(id(owner.canvas), owner.canvas, record_id)
 
     def _consume_live(self, owner, canvas, *, dual, placement=None) -> None:
         owner.live_suppressed = True
@@ -646,7 +1128,7 @@ class PinnedCursorController(QObject):
             consume(canvas)
         self._nudge_live_from_pins(owner)
 
-    # ---- unpin / close / undo ----------------------------------------------
+    # ---- unpin / close ------------------------------------------------------
 
     def unpin_record(self, canvas, record_id: str) -> None:
         owner = self._owner(canvas)
@@ -655,29 +1137,38 @@ class PinnedCursorController(QObject):
         intent = self._intent(owner, record_id)
         if intent is None:
             return
-        pill = owner.pills.pop(record_id, None)
-        snapshot = pill.snapshot() if _widget_alive(pill) else {}
-        pos = (pill.x(), pill.y()) if _widget_alive(pill) else (0, 0)
-        owner.collection = remove_record(owner.collection, record_id)
+        result = self._commands.unpin(owner.collection, intent)
+        if result.action != "unpin":
+            return
+        self.cancel_axis_edit(canvas, record_id, render=False)
+        snapshot, pos = self._projector.snapshot_pill(
+            self._projector.pill_for(id(canvas), record_id)
+        )
+        self._projector.destroy_record(id(canvas), record_id)
+        owner.collection = result.collection
         owner.samples.pop(record_id, None)
         owner.availability.pop(record_id, None)
-        owner.reserved_ordinal = intent.ordinal
-        owner.reserved_intent = intent
-        owner.live_suppressed = False
-        owner.dual_hidden_placement = intent
-        self._destroy_pill(pill)
+        if result.set_reserved:
+            owner.reserved_ordinal = result.reserved_ordinal
+            owner.reserved_intent = result.reserved_intent
+        if result.live_suppressed is not None:
+            owner.live_suppressed = result.live_suppressed
+        if result.set_dual_hidden_placement:
+            owner.dual_hidden_placement = result.dual_hidden_placement
         self._sync_overlay(owner)
-        self._mark_user_intent()
-        if intent.mode == "dual":
+        if result.mark_intent:
+            self._mark_user_intent()
+        if result.restore_placement is not None:
             restore = getattr(canvas, "restore_cursor_placement", None)
             if callable(restore):
-                restore({"ax": intent.ax, "bx": intent.bx})
+                restore(result.restore_placement)
         restore_live = getattr(self._host, "restore_live_from_pin", None)
         if callable(restore_live):
             restore_live(canvas, snapshot, pos, intent.mode)
         else:
             self._host.set_cursor_mode_for_canvas(canvas, intent.mode)
-        self.pin_feedback.emit(f"P{intent.ordinal} 已取消固定")
+        if result.feedback:
+            self.pin_feedback.emit(result.feedback)
 
     def close_record(self, canvas, record_id: str) -> None:
         owner = self._owner(canvas)
@@ -686,14 +1177,19 @@ class PinnedCursorController(QObject):
         intent = self._intent(owner, record_id)
         if intent is None:
             return
-        pill = owner.pills.pop(record_id, None)
+        result = self._commands.close(owner.collection, intent)
+        if result.action != "close":
+            return
+        self.cancel_axis_edit(canvas, record_id, render=False)
+        self._projector.destroy_record(id(canvas), record_id)
         owner.samples.pop(record_id, None)
         owner.availability.pop(record_id, None)
-        owner.collection = remove_record(owner.collection, record_id)
-        self._destroy_pill(pill)
+        owner.collection = result.collection
         self._sync_overlay(owner)
-        self._mark_user_intent()
-        self.pin_feedback.emit(f"已关闭 P{intent.ordinal}")
+        if result.mark_intent:
+            self._mark_user_intent()
+        if result.feedback:
+            self.pin_feedback.emit(result.feedback)
 
     # ---- eligibility / hit test --------------------------------------------
 
@@ -701,59 +1197,7 @@ class PinnedCursorController(QObject):
         return self._hit_owner() is not None
 
     def _hit_owner(self):
-        app = QApplication.instance()
-        if app is None:
-            return None
-        if app.activeModalWidget() is not None or app.activePopupWidget() is not None:
-            return None
-        focus = app.focusWidget()
-        if focus is not None and (
-            bool(focus.testAttribute(Qt.WA_InputMethodEnabled))
-            or is_text_input_widget(focus)
-        ):
-            return None
-        host = self._host
-        ultraview = getattr(host, "page_ultraview", None)
-        widget = self._widget_under_mouse()
-        if widget is None:
-            return None
-        if ultraview is not None and self._is_under(widget, ultraview):
-            return None
-        if self._is_under_type(widget, CursorPill):
-            return None
-        canvas = self._canvas_from_widget(widget)
-        if canvas is None or isinstance(canvas, PgHeatmapCanvas):
-            return None
-        if not _widget_alive(canvas) or not canvas.isVisible() or not canvas.isVisibleTo(host):
-            return None
-        window = canvas.window()
-        active = app.activeWindow()
-        if window is None or active is None or window is not active:
-            return None
-        if id(canvas) not in self._owners:
-            if not self._canvas_belongs_to_host(canvas):
-                return None
-            self.bind_canvas(canvas)
-        if not host._cursor_source_on_screen(canvas):
-            return None
-        mode = host._cursor_mode_for_canvas(canvas)
-        if mode not in {"single", "dual"}:
-            return None
-        if self._gesture_in_progress(canvas):
-            return None
-        domain = self._domain_for(canvas)
-        if domain is None:
-            return None
-        viewport = _canvas_viewport(canvas)
-        if viewport is None or not viewport.isVisible():
-            return None
-        global_pos = self._mouse_global()
-        local = viewport.mapFromGlobal(global_pos)
-        if not viewport.rect().contains(local):
-            return None
-        if not self._in_data_viewport(canvas, domain, local):
-            return None
-        return canvas, domain, local
+        return self._router.hit_owner()
 
     def _gesture_in_progress(self, canvas) -> bool:
         app = QApplication.instance()
@@ -762,11 +1206,8 @@ class PinnedCursorController(QObject):
         live = self._live_pill(canvas)
         if live is not None and live.is_dragging():
             return True
-        owner = self._owner(canvas)
-        if owner is not None:
-            for pill in owner.pills.values():
-                if _widget_alive(pill) and pill.is_dragging():
-                    return True
+        if self._projector.any_dragging(id(canvas)):
+            return True
         activity = getattr(canvas, "_idle_activity", None)
         if activity is not None and callable(getattr(activity, "is_busy", None)):
             if activity.is_busy():
@@ -779,180 +1220,41 @@ class PinnedCursorController(QObject):
         return False
 
     def _in_data_viewport(self, canvas, domain, viewport_pos) -> bool:
-        if domain in {"time", "channel"}:
-            return _finite(self._physical_x(canvas, domain, viewport_pos)) is not None
-        if domain == "frequency":
-            host_rect = getattr(canvas, "frequency_cursor_host_rect", None)
-            rect = host_rect() if callable(host_rect) else None
-            if rect is None or not QRect(rect).isValid():
-                return False
-            try:
-                mapped = canvas.mapTo(canvas._glw.viewport(), rect.center())
-            except (RuntimeError, TypeError, AttributeError):
-                mapped = viewport_pos
-            if isinstance(rect, QRect):
-                top_left = canvas.mapTo(canvas._glw.viewport(), rect.topLeft())
-                bottom_right = canvas.mapTo(canvas._glw.viewport(), rect.bottomRight())
-                local_rect = QRect(top_left, bottom_right)
-                if not local_rect.contains(viewport_pos):
-                    return False
-            return _finite(self._physical_x(canvas, domain, viewport_pos)) is not None
-        if domain == "frf":
-            return _finite(self._physical_x(canvas, domain, viewport_pos)) is not None
-        return False
+        return self._router.in_data_viewport(canvas, domain, viewport_pos)
 
     def _physical_x(self, canvas, domain, viewport_pos):
-        if domain in {"time", "channel"}:
-            fn = getattr(canvas, "data_x_from_viewport_pos", None)
-            return _finite(fn(viewport_pos) if callable(fn) else None)
-        glw = getattr(canvas, "_glw", None)
-        if glw is None:
-            return None
-        try:
-            scene_pos = glw.mapToScene(viewport_pos)
-        except (RuntimeError, TypeError):
-            return None
-        if domain == "frequency":
-            plot = getattr(canvas, "_plot_amp", None)
-            vb = getattr(plot, "vb", None)
-            if vb is None:
-                return None
-            try:
-                if not vb.sceneBoundingRect().contains(scene_pos):
-                    return None
-                return _finite(vb.mapSceneToView(scene_pos).x())
-            except (RuntimeError, TypeError, ValueError):
-                return None
-        plots = getattr(canvas, "plots", None) or ()
-        for plot in plots:
-            vb = getattr(plot, "vb", None)
-            if vb is None:
-                continue
-            try:
-                if not vb.sceneBoundingRect().contains(scene_pos):
-                    continue
-                view_x = float(vb.mapSceneToView(scene_pos).x())
-            except (RuntimeError, TypeError, ValueError):
-                continue
-            converter = getattr(canvas, "_view_x_to_hz", None)
-            if callable(converter):
-                return _finite(converter(view_x))
-            return _finite(view_x)
-        return None
+        return self._router.physical_x(canvas, domain, viewport_pos)
 
     def _domain_for(self, canvas) -> str | None:
-        if isinstance(canvas, PgFrfCanvas):
-            return "frf"
-        if isinstance(canvas, PgLineCanvas):
-            return "frequency"
-        if isinstance(canvas, TimeDomainCanvasPG):
-            checker = getattr(canvas, "cursor_x_mode", None)
-            if callable(checker) and checker():
-                return "channel"
-            return "time"
-        return None
+        return self._sampling.domain_for(canvas)
 
     # ---- evaluate / project -------------------------------------------------
 
     def _evaluate(self, canvas, domain, *, mode, x=None, ax=None, bx=None):
-        if mode == "single":
-            if domain in {"time", "channel"}:
-                fn = self._sample_fn(canvas, "evaluate_single_cursor_sample")
-                if callable(fn):
-                    return fn(x)
-                rows = canvas.evaluate_single_cursor(x)
-                return self._wrap_channels(domain, "single", x=x, channels=rows)
-            fn = getattr(canvas, "evaluate_frequency_cursor_sample", None)
-            if callable(fn):
-                return fn(x)
-            result = canvas.evaluate_frequency_cursor(x)
-            if result is None:
-                return None
-            if domain == "frf":
-                return self._wrap_frf("single", result)
-            snapped, channels = result
-            return self._wrap_channels(
-                "frequency", "single", x=snapped, channels=channels,
-            )
-        if domain in {"time", "channel"}:
-            fn = self._sample_fn(canvas, "evaluate_dual_cursor_sample")
-            if callable(fn):
-                return fn(ax, bx)
-            rows = canvas.evaluate_dual_cursor(ax, bx)
-            return self._wrap_channels(domain, "dual", ax=ax, bx=bx, channels=rows)
-        fn = getattr(canvas, "evaluate_dual_frequency_cursor_sample", None)
-        if callable(fn):
-            return fn(ax, bx)
-        result = canvas.evaluate_dual_frequency_cursor(ax, bx)
-        if result is None:
-            return None
-        if domain == "frf":
-            return self._wrap_frf("dual", result)
-        a_value, b_value, channels = result
-        return self._wrap_channels(
-            "frequency", "dual", ax=a_value, bx=b_value, channels=channels,
+        return self._sampling.evaluate(
+            canvas, domain, mode=mode, x=x, ax=ax, bx=bx,
         )
 
     def _evaluate_intent(self, canvas, intent):
-        if not self._axis_compatible(canvas, intent):
-            return None
-        domain = intent.domain
-        if intent.mode == "single":
-            sample = self._evaluate(canvas, domain, mode="single", x=intent.x)
-        else:
-            sample = self._evaluate(
-                canvas, domain, mode="dual", ax=intent.ax, bx=intent.bx,
-            )
-        return self._stamp_sample(canvas, sample)
+        return self._sampling.evaluate_intent(canvas, intent)
 
     @staticmethod
     def _sample_fn(canvas, name):
-        fn = getattr(canvas, name, None)
-        if callable(fn):
-            return fn
-        cursor = getattr(canvas, "_cursor", None)
-        fn = getattr(cursor, name, None)
-        return fn if callable(fn) else None
+        return PinSampleEvaluator.sample_fn(canvas, name)
 
     @staticmethod
     def _wrap_channels(domain, mode, *, x=None, ax=None, bx=None, channels=()):
-        return PinnedCursorSample(
-            domain=domain,
-            mode=mode,
-            x=_finite(x),
-            ax=_finite(ax),
-            bx=_finite(bx),
-            channels=tuple(channels or ()),
+        return PinSampleEvaluator.wrap_channels(
+            domain, mode, x=x, ax=ax, bx=bx, channels=channels,
         )
 
     @staticmethod
     def _wrap_frf(mode, sample):
-        if sample is None:
-            return None
-        if mode == "single":
-            return PinnedCursorSample(
-                domain="frf",
-                mode="single",
-                x=_finite(getattr(sample, "frequency_hz", None)),
-                frf_sample=sample,
-            )
-        return PinnedCursorSample(
-            domain="frf",
-            mode="dual",
-            ax=None if sample.a is None else _finite(sample.a.frequency_hz),
-            bx=None if sample.b is None else _finite(sample.b.frequency_hz),
-            frf_sample=sample,
-        )
+        return PinSampleEvaluator.wrap_frf(mode, sample)
 
     @staticmethod
     def _sample_has_result(sample) -> bool:
-        if sample is None:
-            return False
-        if getattr(sample, "frf_sample", None) is not None:
-            return True
-        if tuple(getattr(sample, "channels", ()) or ()):
-            return True
-        return bool(str(getattr(sample, "diagnostic", "") or "").strip())
+        return PinSampleEvaluator.sample_has_result(sample)
 
     def _draft_intent(
         self, canvas, domain, mode, live, *, x=None, ax=None, bx=None, sample=None,
@@ -961,16 +1263,17 @@ class PinnedCursorController(QObject):
         presentation = "full"
         if live is not None and live.display_mode() in {"full", "mini"}:
             presentation = live.display_mode()
-        anchor = DEFAULT_ANCHOR
-        if live is not None and live.isVisible():
-            anchor = self._anchor_from_pill(live)
         payload = {
             "mode": mode,
             "domain": domain,
             "x_unit": unit,
             "bindings": self._bindings_from_sample(sample),
             "presentation": presentation,
-            "anchor": anchor,
+            "panel_expanded": False,
+            # A new pin always starts with a default (not user-placed)
+            # anchor.  Its first expanded geometry comes from the bounded
+            # multi-card solver below, never the live pill's location.
+            "anchor": DEFAULT_ANCHOR,
             "axis_identity": self._axis_identity(canvas, domain),
         }
         if mode == "single":
@@ -987,103 +1290,27 @@ class PinnedCursorController(QObject):
     def _project_record(
         self, owner, intent, sample, *, inherit_live=None, availability=None,
     ) -> None:
-        canvas = owner.canvas
-        host = self._host
-        stack = host.stack
         status = availability or owner.availability.get(
             intent.record_id, PIN_STATUS_READY,
         )
-        pill = owner.pills.get(intent.record_id)
-        if not _widget_alive(pill):
-            pill = CursorPill(stack)
-            pill.set_pin_role("pinned")
-            pill.setFocusPolicy(Qt.TabFocus)
-            pill.installEventFilter(self)
-            pill.unpin_requested.connect(
-                partial(self.unpin_record, canvas, intent.record_id)
-            )
-            pill.close_requested.connect(
-                partial(self.close_record, canvas, intent.record_id)
-            )
-            pill.moved.connect(
-                partial(self._on_pinned_moved, canvas, intent.record_id)
-            )
-            pill.display_mode_changed.connect(
-                partial(self._on_pinned_display_mode, canvas, intent.record_id)
-            )
-            owner.pills[intent.record_id] = pill
-        pill.set_ordinal(intent.ordinal)
-        pill.set_pin_role("pinned")
-        pill.set_live_hint("")
-        card = host._card_for_canvas(canvas)
-        host._sync_pill_safe_rect(pill, card)
-        primary, projection = self._pill_content(intent, sample, host, status)
-        if inherit_live is not None and _widget_alive(inherit_live):
-            pill.mark_user_placed(True)
-            pill.move(inherit_live.x(), inherit_live.y())
-        else:
-            pill.mark_user_placed(intent.anchor != DEFAULT_ANCHOR)
-
-        def update():
-            pill._primary_original = primary
-            if projection is not None:
-                pill.set_display_projection(projection)
-            else:
-                pill.set_display_projection(None)
-                pill.set_primary(primary)
-            pill.setVisible(True)
-
-        host._update_pill_content(pill, card, update)
-        if inherit_live is None or not _widget_alive(inherit_live):
-            self._apply_anchor(pill, owner.collection, pill_record_id=intent.record_id)
-        else:
-            self._store_anchor_from_pill(owner, intent.record_id, pill)
-        pill.raise_()
-        self._nudge_live_from_pins(owner)
+        self._projector.project_record(
+            id(owner.canvas),
+            owner.canvas,
+            intent,
+            sample,
+            inherit_live=inherit_live,
+            availability=status,
+            collection=owner.collection,
+        )
 
     def _pill_content(self, intent, sample, host, status):
-        if status == PIN_STATUS_PENDING:
-            return self._status_primary_html(intent, PENDING_TEXT), None
-        if status == PIN_STATUS_INCOMPATIBLE_AXIS:
-            return self._status_primary_html(intent, INCOMPATIBLE_AXIS_TEXT), None
-        if status == PIN_STATUS_UNAVAILABLE:
-            if self._sample_has_unchecked(sample):
-                return (
-                    self._primary_html(intent),
-                    self._presentation_for(intent, sample, host),
-                )
-            diagnostic = str(getattr(sample, "diagnostic", "") or "").strip()
-            text = diagnostic or UNAVAILABLE_TEXT
-            return self._status_primary_html(intent, text), None
-        return self._primary_html(intent), self._presentation_for(intent, sample, host)
-
-    def _status_primary_html(self, intent, status_text) -> str:
-        from html import escape
-
-        tag = (
-            f'<span style="color:#416faa;">P{intent.ordinal}</span>'
-            '<span style="color:#cbd5e1;">  &nbsp;│&nbsp;  </span>'
-        )
-        return (
-            tag
-            + f'<span style="color:#64748b;">{escape(str(status_text))}</span>'
-        )
+        return self._projector.pill_content(intent, sample, status)
 
     def _presentation_for(self, intent, sample, host):
-        mini = intent.presentation == "mini"
-        if intent.domain == "frf":
-            frf = getattr(sample, "frf_sample", None) if sample is not None else None
-            return build_frf_cursor_presentation(frf, mini=mini)
-        channels = tuple(getattr(sample, "channels", ()) or ()) if sample is not None else ()
-        if intent.domain == "frequency":
-            return build_fft_cursor_presentation(
-                channels, cursor_mode=intent.mode, mini=mini,
-            )
-        x_mode = "custom" if intent.domain == "channel" else "time"
-        options = host._cursor_display_options
-        return build_cursor_presentation(
-            channels, options, cursor_mode=intent.mode, x_mode=x_mode, mini=mini,
-        )
+        return self._projector.presentation_for(intent, sample)
+
+    def _status_primary_html(self, intent, status_text) -> str:
+        return pin_status_primary_html(intent, status_text)
 
     def _refresh_live_from_sample(self, canvas, sample, domain, mode) -> None:
         """Keep header/rows on the same evaluate version as the pin."""
@@ -1118,16 +1345,17 @@ class PinnedCursorController(QObject):
 
     # ---- geometry -----------------------------------------------------------
 
-    def _on_pinned_moved(self, canvas, record_id) -> None:
+
+    def _commit_user_anchor(self, canvas, record_id) -> None:
         owner = self._owner(canvas)
         if owner is None:
             return
-        pill = owner.pills.get(record_id)
+        pill = self._projector.pill_for(id(canvas), record_id)
         if not _widget_alive(pill):
             return
         self._store_anchor_from_pill(owner, record_id, pill)
 
-    def _on_pinned_display_mode(self, canvas, record_id, mode) -> None:
+    def _commit_display_mode(self, canvas, record_id, mode) -> None:
         owner = self._owner(canvas)
         if owner is None or owner.collection is None:
             return
@@ -1145,23 +1373,16 @@ class PinnedCursorController(QObject):
         owner.collection = replace(owner.collection, records=records)
         self._mark_user_intent()
         sample = owner.samples.get(record_id)
-        pill = owner.pills.get(record_id)
-        if not _widget_alive(pill):
-            return
         status = owner.availability.get(record_id, PIN_STATUS_READY)
-        if status != PIN_STATUS_READY:
-            self._project_record(owner, updated, sample, availability=status)
-            return
-        projection = self._presentation_for(updated, sample, self._host)
-        pill._primary_original = self._primary_html(updated)
-        if projection is not None:
-            pill.set_display_projection(projection)
+        self._projector.update_display_projection(
+            id(canvas), canvas, updated, sample, status, owner.collection,
+        )
 
     def _store_anchor_from_pill(self, owner, record_id, pill) -> None:
         intent = self._intent(owner, record_id)
         if intent is None:
             return
-        anchor = self._anchor_from_pill(pill)
+        anchor = self._projector.anchor_from_pill(pill)
         if anchor == intent.anchor:
             return
         updated = replace(intent, anchor=anchor)
@@ -1172,80 +1393,29 @@ class PinnedCursorController(QObject):
         owner.collection = replace(owner.collection, records=records)
         self._mark_user_intent()
 
-    def _apply_anchor(self, pill, collection, *, pill_record_id) -> None:
-        if collection is None:
-            return
-        intent = next(
-            (item for item in collection.records if item.record_id == pill_record_id),
-            None,
+    def _arrange_pinned_panels(self, owner) -> None:
+        self._projector.arrange_pinned_panels(
+            id(owner.canvas), owner.canvas, owner.collection,
         )
-        if intent is None:
-            return
-        safe = pill.safe_rect()
-        if not safe.isValid() or safe.width() <= 0 or safe.height() <= 0:
-            return
-        x, y = self._pos_from_anchor(intent.anchor, pill, safe)
-        pill.move(x, y)
 
-    @staticmethod
-    def _pos_from_anchor(anchor, pill, safe):
-        width = max(1, safe.width() - 1)
-        height = max(1, safe.height() - 1)
-        nx = _finite(anchor.nx)
-        ny = _finite(anchor.ny)
-        if nx is None:
-            nx = 1.0
-        if ny is None:
-            ny = 0.0
-        if anchor.h_edge == "right":
-            x = int(round(safe.left() + nx * width)) - pill.width() + 1
-        else:
-            x = int(round(safe.left() + nx * width))
-        if anchor.v_edge == "bottom":
-            y = int(round(safe.top() + ny * height)) - pill.height() + 1
-        else:
-            y = int(round(safe.top() + ny * height))
-        x = max(safe.left(), min(x, safe.right() - pill.width() + 1))
-        y = max(safe.top(), min(y, safe.bottom() - pill.height() + 1))
-        return x, y
-
-    @staticmethod
-    def _anchor_from_pill(pill) -> PinnedCursorAnchor:
-        safe = pill.safe_rect()
-        if not safe.isValid() or safe.width() <= 1 or safe.height() <= 1:
-            return DEFAULT_ANCHOR
-        nx = (pill.geometry().right() - safe.left()) / float(safe.width() - 1)
-        ny = (pill.y() - safe.top()) / float(safe.height() - 1)
-        return PinnedCursorAnchor(
-            h_edge="right",
-            v_edge="top",
-            nx=float(nx),
-            ny=float(ny),
+    def _apply_anchor(self, pill, collection, *, pill_record_id) -> None:
+        self._projector.apply_anchor(
+            pill, collection, pill_record_id=pill_record_id,
         )
 
     def _nudge_live_from_pins(self, owner) -> None:
-        live = self._live_pill(owner.canvas)
-        if live is None or not live.isVisible() or live.is_user_placed():
-            return
-        safe = live.safe_rect()
-        if not safe.isValid():
-            return
-        geo = live.geometry()
-        shifted = 0
-        for pill in owner.pills.values():
-            if not _widget_alive(pill) or not pill.isVisible():
-                continue
-            title = QRect(pill.x(), pill.y(), pill.width(), min(26, pill.height()))
-            if not geo.intersects(title.adjusted(-6, -6, 6, 6)):
-                continue
-            new_y = min(title.bottom() + 8, safe.bottom() - live.height() + 1)
-            new_x = geo.x()
-            if new_y <= geo.y() or shifted >= _NUDGE_LIMIT:
-                new_x = max(safe.left(), geo.x() - _NUDGE_STEP)
-                new_y = geo.y()
-            live.move(new_x, new_y)
-            geo = live.geometry()
-            shifted += _NUDGE_STEP
+        self._projector.nudge_live_from_pins(id(owner.canvas), owner.canvas)
+
+    def _prepare_overlay_layout(self, canvas) -> bool:
+        owner = self._owner(canvas)
+        if owner is None:
+            return False
+        if owner.axis_edit is not None and not self._axis_edit_is_valid(
+            owner, owner.axis_edit,
+        ):
+            self._cancel_axis_edit(owner, render=True)
+            return False
+        return True
 
     # ---- host / widget helpers ---------------------------------------------
 
@@ -1273,12 +1443,8 @@ class PinnedCursorController(QObject):
                 return item
         return None
 
-    @staticmethod
-    def _record_id_for(owner, pill):
-        for record_id, item in owner.pills.items():
-            if item is pill:
-                return record_id
-        return None
+    def _record_id_for(self, owner, pill):
+        return self._projector.record_id_for_pill(pill)
 
     def _live_pill(self, canvas):
         fn = getattr(self._host, "_pill_for_canvas", None)
@@ -1292,27 +1458,20 @@ class PinnedCursorController(QObject):
         return getattr(card, "canvas", None) is canvas
 
     def _drop_owner(self, key, *, destroy_pills) -> None:
-        owner = self._owners.pop(key, None)
+        owner = self._owners.get(key)
         if owner is None:
             return
+        self._router.invalidate_tokens()
+        self._projector.invalidate_key(key)
+        self._cancel_axis_edit(owner, render=False)
+        self._owners.pop(key, None)
         self._cancel_reproject(owner)
         self._disconnect_owner_signals(owner)
-        overlay = None
         canvas = owner.canvas
-        if _widget_alive(canvas):
-            try:
-                overlay = getattr(canvas, "_pinned_overlay", None)
-            except RuntimeError:
-                overlay = None
-        if overlay is not None:
-            try:
-                overlay.set_layout_callback(None)
-                if destroy_pills:
-                    overlay.clear()
-            except RuntimeError:
-                pass
+        self._projector.unbind_canvas(key, canvas, destroy_widgets=destroy_pills)
         if destroy_pills:
-            self._clear_pills(owner)
+            owner.samples.clear()
+            owner.availability.clear()
         timer = owner.reproject_timer
         if timer is not None:
             try:
@@ -1321,35 +1480,22 @@ class PinnedCursorController(QObject):
             except RuntimeError:
                 pass
             owner.reproject_timer = None
+        axis_edit_timer = owner.axis_edit_timer
+        if axis_edit_timer is not None:
+            try:
+                axis_edit_timer.stop()
+                axis_edit_timer.deleteLater()
+            except RuntimeError:
+                pass
+            owner.axis_edit_timer = None
 
     def _on_canvas_destroyed(self, key, *_args) -> None:
         self._drop_owner(key, destroy_pills=True)
 
     def _clear_pills(self, owner) -> None:
-        for pill in list(owner.pills.values()):
-            self._destroy_pill(pill)
-        owner.pills.clear()
+        self._projector.clear_widgets(id(owner.canvas))
         owner.samples.clear()
         owner.availability.clear()
-        for label in list(owner.axis_labels.values()):
-            self._destroy_axis_label(label)
-        owner.axis_labels.clear()
-
-    @staticmethod
-    def _destroy_pill(pill) -> None:
-        if not _widget_alive(pill):
-            return
-        pill.hide()
-        pill.setParent(None)
-        pill.deleteLater()
-
-    @staticmethod
-    def _destroy_axis_label(label) -> None:
-        if not _widget_alive(label):
-            return
-        label.hide()
-        label.setParent(None)
-        label.deleteLater()
 
     def _mark_user_intent(self) -> None:
         self.user_intent_revision += 1
@@ -1402,6 +1548,7 @@ class PinnedCursorController(QObject):
         owner = self._owners.get(key)
         if owner is None or owner.collection is None or not owner.collection.records:
             return
+        self._cancel_axis_edit(owner, render=True)
         if not _widget_alive(owner.canvas):
             return
         if owner.skip_stale_invalidation:
@@ -1416,6 +1563,7 @@ class PinnedCursorController(QObject):
         owner = self._owners.get(key)
         if owner is None or owner.collection is None or not owner.collection.records:
             return
+        self._cancel_axis_edit(owner, render=True)
         if not _widget_alive(owner.canvas):
             return
         self._cancel_reproject(owner)
@@ -1445,6 +1593,7 @@ class PinnedCursorController(QObject):
                 availability=PIN_STATUS_PENDING,
             )
         self._sync_overlay(owner)
+        self._arrange_pinned_panels(owner)
 
     def _reproject_now(self, owner) -> None:
         canvas = owner.canvas
@@ -1517,654 +1666,160 @@ class PinnedCursorController(QObject):
             owner.collection = replace(owner.collection, records=tuple(kept))
         owner.projected_generation = (generation, revision)
         self._sync_overlay(owner)
+        self._arrange_pinned_panels(owner)
 
     def _axis_status(self, canvas, intent) -> str:
-        if not self._axis_compatible(canvas, intent):
-            return PIN_STATUS_INCOMPATIBLE_AXIS
-        if self._log_unavailable(canvas, intent):
-            return PIN_STATUS_UNAVAILABLE
-        return PIN_STATUS_READY
+        return self._sampling.axis_status(canvas, intent)
 
     def _status_for_sample(self, canvas, intent, sample) -> str:
-        status = self._axis_status(canvas, intent)
-        if status != PIN_STATUS_READY:
-            return status
-        if sample is None or (
-            not self._sample_has_numeric(sample)
-            and not self._sample_has_hidden(sample)
-            and not self._sample_has_unchecked(sample)
-        ):
-            return PIN_STATUS_UNAVAILABLE
-        return PIN_STATUS_READY
+        return self._sampling.status_for_sample(canvas, intent, sample)
 
     def _axis_compatible(self, canvas, intent) -> bool:
-        current = self._domain_for(canvas)
-        if intent.domain in {"frequency", "frf"}:
-            return current == intent.domain
-        if intent.domain == "time":
-            return current == "time"
-        if intent.domain == "channel":
-            if current != "channel":
-                return False
-            wanted = intent.axis_identity
-            if wanted is None:
-                return True
-            return self._axis_identity(canvas, "channel") == wanted
-        return current == intent.domain
+        return self._sampling.axis_compatible(canvas, intent)
 
     def _log_unavailable(self, canvas, intent) -> bool:
-        checker = getattr(canvas, "_is_log_frequency", None)
-        if not callable(checker) or not checker():
-            return False
-        if intent.domain not in {"frequency", "frf"}:
-            return False
-        values = (intent.x,) if intent.mode == "single" else (intent.ax, intent.bx)
-        return any(value is not None and _finite(value) is not None and value <= 0 for value in values)
+        return self._sampling.log_unavailable(canvas, intent)
 
     def _canvas_compute_pending(self, canvas) -> bool:
-        state = getattr(canvas, "state", None)
-        token = state() if callable(state) else None
-        return token in {"progress", "stale"}
+        return self._sampling.canvas_compute_pending(canvas)
 
     def _canvas_generations(self, canvas):
-        binding = getattr(canvas, "_spectrum_display_generation", None)
-        if binding is None:
-            binding = getattr(canvas, "_interaction_generation", None)
-        revision = getattr(canvas, "_spectrum_display_revision", None)
-        if revision is None:
-            revision = getattr(canvas, "_cursor_data_revision", None)
-        if revision is None:
-            cursor = getattr(canvas, "_cursor", None)
-            revision = getattr(cursor, "_cursor_data_revision", None)
-        try:
-            binding = int(binding) if binding is not None else None
-        except (TypeError, ValueError):
-            binding = None
-        try:
-            revision = int(revision) if revision is not None else None
-        except (TypeError, ValueError):
-            revision = None
-        return binding, revision
+        return self._sampling.canvas_generations(canvas)
 
     def _stamp_sample(self, canvas, sample):
-        if sample is None or not isinstance(sample, PinnedCursorSample):
-            return sample
-        generation, revision = self._canvas_generations(canvas)
-        updates = {}
-        if sample.binding_generation is None and generation is not None:
-            updates["binding_generation"] = generation
-        if sample.data_revision is None and revision is not None:
-            updates["data_revision"] = revision
-        return replace(sample, **updates) if updates else sample
+        return self._sampling.stamp_sample(canvas, sample)
 
     @staticmethod
     def _sample_matches_generation(sample, generation, revision) -> bool:
-        if sample is None:
-            return False
-        sample_gen = getattr(sample, "binding_generation", None)
-        sample_rev = getattr(sample, "data_revision", None)
-        if sample_gen is not None and generation is not None and sample_gen != generation:
-            return False
-        if sample_rev is not None and revision is not None and sample_rev != revision:
-            return False
-        return True
+        return PinSampleEvaluator.sample_matches_generation(
+            sample, generation, revision,
+        )
 
     def _reconcile_sample(self, intent, sample, *, bound, hidden):
-        if not intent.bindings:
-            return sample, intent, False
-        evaluated = {}
-        for channel in tuple(getattr(sample, "channels", ()) or ()) if sample is not None else ():
-            key = self._identity_key(getattr(channel, "identity", None))
-            if key is not None:
-                evaluated[key] = channel
-        kept_bindings = []
-        channels = []
-        for binding in intent.bindings:
-            key = self._binding_key(binding)
-            is_bound = self._key_in(key, bound)
-            is_hidden = self._key_in(key, hidden)
-            kept_bindings.append(binding)
-            if not is_bound and not is_hidden:
-                channels.append(
-                    self._hidden_channel_row(binding, None, diagnostic=UNCHECKED_TEXT)
-                )
-                continue
-            match = evaluated.get(key)
-            if match is None:
-                for ekey, channel in evaluated.items():
-                    if self._key_in(key, {ekey}):
-                        match = channel
-                        break
-            if is_hidden:
-                channels.append(self._hidden_channel_row(binding, match))
-                continue
-            if match is not None:
-                channels.append(match)
-                continue
-            channels.append(self._hidden_channel_row(binding, None, diagnostic=UNAVAILABLE_TEXT))
-        if not kept_bindings:
-            return None, intent, True
-        next_intent = intent
-        if tuple(kept_bindings) != intent.bindings:
-            next_intent = replace(intent, bindings=tuple(kept_bindings))
-        if sample is None:
-            sample = PinnedCursorSample(
-                domain=intent.domain,
-                mode=intent.mode,
-                x=intent.x,
-                ax=intent.ax,
-                bx=intent.bx,
-                channels=tuple(channels),
-            )
-        else:
-            extrema = tuple(
-                item for item in (getattr(sample, "extrema", ()) or ())
-                if not self._key_in(
-                    self._identity_key(getattr(item, "identity", None)), hidden,
-                )
-            )
-            sample = replace(sample, channels=tuple(channels), extrema=extrema)
-        return sample, next_intent, False
+        return _facts_reconcile_sample(intent, sample, bound=bound, hidden=hidden)
 
     @staticmethod
     def _binding_key(binding):
-        fid = str(binding.fid)
-        channel = str(binding.channel)
-        binding_id = str(getattr(binding, "binding_id", "") or "")
-        if binding_id:
-            return (fid, channel, binding_id)
-        return (fid, channel)
+        return _facts_binding_key(binding)
 
     @staticmethod
     def _key_in(key, pool) -> bool:
-        if key is None or not pool:
-            return False
-        if key in pool:
-            return True
-        fid, channel = key[0], key[1]
-        if not fid or not channel:
-            return False
-        return any(
-            item[0] == fid and item[1] == channel
-            for item in pool
-        )
+        return _facts_key_in(key, pool)
 
     @staticmethod
     def _hidden_channel_row(binding, existing, diagnostic=HIDDEN_CHANNEL_TEXT):
-        if existing is not None and isinstance(existing, CursorDisplayChannel):
-            return replace(
-                existing,
-                current_value=None,
-                delta=None,
-                min_value=None,
-                max_value=None,
-                avg_value=None,
-                branches=(),
-                diagnostic=diagnostic,
-            )
-        return CursorDisplayChannel(
-            identity=(
-                (binding.fid, binding.channel, binding.binding_id)
-                if binding.binding_id else (binding.fid, binding.channel)
-            ),
-            source_label="",
-            channel_label=binding.channel,
-            diagnostic=diagnostic,
-        )
+        return _facts_hidden_channel_row(binding, existing, diagnostic=diagnostic)
 
     @staticmethod
     def _sample_has_numeric(sample) -> bool:
-        if sample is None:
-            return False
-        if getattr(sample, "frf_sample", None) is not None:
-            return True
-        skip = {HIDDEN_CHANNEL_TEXT, UNAVAILABLE_TEXT, UNCHECKED_TEXT}
-        for channel in tuple(getattr(sample, "channels", ()) or ()):
-            if str(getattr(channel, "diagnostic", "") or "") in skip:
-                continue
-            if getattr(channel, "current_value", None) is not None:
-                return True
-            if getattr(channel, "value", None) is not None:
-                return True
-            if getattr(channel, "a_value", None) is not None:
-                return True
-            if getattr(channel, "min_value", None) is not None:
-                return True
-            if tuple(getattr(channel, "branches", ()) or ()):
-                return True
-            if str(getattr(channel, "diagnostic", "") or ""):
-                return True
-        return False
+        return _facts_sample_has_numeric(sample)
 
     @staticmethod
     def _sample_has_hidden(sample) -> bool:
-        for channel in tuple(getattr(sample, "channels", ()) or ()):
-            if str(getattr(channel, "diagnostic", "") or "") == HIDDEN_CHANNEL_TEXT:
-                return True
-        return False
+        return _facts_sample_has_hidden(sample)
 
     @staticmethod
     def _sample_has_unchecked(sample) -> bool:
-        for channel in tuple(getattr(sample, "channels", ()) or ()):
-            if str(getattr(channel, "diagnostic", "") or "") == UNCHECKED_TEXT:
-                return True
-        return False
+        return _facts_sample_has_unchecked(sample)
 
     @staticmethod
     def _hidden_keys_from_sample(sample):
-        keys = set()
-        skip = {HIDDEN_CHANNEL_TEXT, UNCHECKED_TEXT}
-        for channel in tuple(getattr(sample, "channels", ()) or ()) if sample is not None else ():
-            if str(getattr(channel, "diagnostic", "") or "") not in skip:
-                continue
-            key = PinnedCursorController._identity_key(getattr(channel, "identity", None))
-            if key is not None:
-                keys.add(key)
-        return keys
+        return _facts_hidden_keys_from_sample(sample)
 
     def _bound_identity_keys(self, canvas):
-        keys = set()
-        lines = getattr(canvas, "_channel_lines", None)
-        items = getattr(lines, "composite_items", None)
-        if callable(items):
-            for channel_key, name, _values in items():
-                key = self._identity_key(channel_key)
-                if key is not None:
-                    keys.add(key)
-            return keys
-        data = getattr(canvas, "channel_data", None)
-        if data is not None and hasattr(data, "items"):
-            for name in data:
-                key = self._identity_key(name)
-                if key is not None:
-                    keys.add(key)
-        entries = getattr(canvas, "_entries", None) or ()
-        for entry in entries:
-            identity = entry.get("identity") if isinstance(entry, dict) else None
-            if identity is None and isinstance(entry, dict):
-                fid = entry.get("fid")
-                channel = entry.get("channel")
-                binding_id = entry.get("binding_id") or ""
-                if fid and channel:
-                    identity = (fid, channel, binding_id) if binding_id else (fid, channel)
-            key = self._identity_key(identity)
-            if key is not None:
-                keys.add(key)
-        return keys
+        return self._sampling.bound_identity_keys(canvas)
 
     def _hidden_identity_keys(self, canvas):
-        keys = set()
-        cursor = getattr(canvas, "_cursor", None)
-        hidden = getattr(cursor, "_hidden_channel_names", None)
-        names = hidden() if callable(hidden) else ()
-        for item in names or ():
-            key = self._identity_key(item)
-            if key is not None:
-                keys.add(key)
-        return keys
+        return self._sampling.hidden_identity_keys(canvas)
 
     @staticmethod
     def _identity_key(identity):
-        if identity is None:
-            return None
-        if isinstance(identity, (tuple, list)) and len(identity) >= 2:
-            fid = "" if identity[0] is None else str(identity[0])
-            channel = "" if identity[1] is None else str(identity[1])
-            binding_id = ""
-            if len(identity) >= 3 and identity[2]:
-                binding_id = str(identity[2])
-            if fid and channel:
-                return (fid, channel, binding_id) if binding_id else (fid, channel)
-            return None
-        fid, channel = _cursor_identity_parts(identity)
-        if fid and channel:
-            return (str(fid), str(channel))
-        return None
+        return _facts_identity_key(identity)
 
     def _widget_under_mouse(self):
-        app = QApplication.instance()
-        pos = self._mouse_global()
-        widget = app.widgetAt(pos) if app is not None else None
-        if _widget_alive(widget):
-            return widget
-        stack = getattr(self._host, "stack", None)
-        if isinstance(stack, QWidget) and _widget_alive(stack):
-            local = stack.mapFromGlobal(pos)
-            child = stack.childAt(local)
-            if _widget_alive(child):
-                return child
-        return None
+        return self._router.widget_under_mouse()
 
     def _mouse_global(self) -> QPoint:
-        pos = QCursor.pos()
-        app = QApplication.instance()
-        if app is not None and app.widgetAt(pos) is not None:
-            return pos
-        if not self._last_mouse_global.isNull():
-            return QPoint(self._last_mouse_global)
-        return pos
+        return self._router.mouse_global()
 
     @staticmethod
     def _is_unmodified_p(event: QKeyEvent) -> bool:
-        if event.key() != Qt.Key_P:
-            return False
-        mods = event.modifiers()
-        blocked = Qt.ControlModifier | Qt.MetaModifier | Qt.AltModifier | Qt.ShiftModifier
-        return not bool(mods & blocked)
+        return PinKeyRouter._is_unmodified_p(event)
 
     @staticmethod
     def _is_under(widget, ancestor) -> bool:
-        current = widget
-        while current is not None:
-            if current is ancestor:
-                return True
-            current = current.parentWidget()
-        return False
+        return PinKeyRouter._is_under(widget, ancestor)
 
     @staticmethod
     def _is_under_type(widget, cls) -> bool:
-        current = widget
-        while current is not None:
-            if isinstance(current, cls):
-                return True
-            current = current.parentWidget()
-        return False
+        return PinKeyRouter._is_under_type(widget, cls)
 
     @staticmethod
     def _canvas_from_widget(widget):
-        current = widget
-        while current is not None:
-            if isinstance(current, PgHeatmapCanvas):
-                return None
-            if isinstance(current, (TimeDomainCanvasPG, PgLineCanvas, PgFrfCanvas)):
-                return current
-            current = current.parentWidget()
-        return None
+        return PinKeyRouter.canvas_from_widget(widget)
 
     def _snapshot_placement(self, canvas):
         fn = getattr(canvas, "snapshot_cursor_placement", None)
         return fn() if callable(fn) else None
 
     @staticmethod
-    def _bindings_from_sample(sample) -> tuple[PinnedCursorBinding, ...]:
-        if sample is None:
-            return ()
-        out = []
-        seen = set()
-        for channel in getattr(sample, "channels", ()) or ():
-            identity = getattr(channel, "identity", None)
-            fid = channel_name = binding_id = ""
-            if isinstance(identity, (tuple, list)) and len(identity) >= 2:
-                fid = str(identity[0] or "")
-                channel_name = str(identity[1] or "")
-                if len(identity) >= 3 and identity[2]:
-                    binding_id = str(identity[2])
-            else:
-                parsed_fid, parsed_channel = _cursor_identity_parts(identity)
-                fid = str(parsed_fid or "")
-                channel_name = str(parsed_channel or "")
-            if not channel_name:
-                channel_name = str(getattr(channel, "channel_label", "") or "")
-            if not fid or not channel_name:
-                continue
-            key = (fid, channel_name, binding_id)
-            if key in seen:
-                continue
-            seen.add(key)
-            out.append(PinnedCursorBinding(
-                fid=fid, channel=channel_name, binding_id=binding_id,
-            ))
-        return tuple(out)
+    def _bindings_from_sample(sample):
+        return PinSampleEvaluator.bindings_from_sample(sample)
 
     @staticmethod
     def _axis_identity(canvas, domain):
-        if domain != "channel":
-            return None
-        ctx = getattr(getattr(canvas, "_cursor", None), "x_axis_context", None)
-        identity = getattr(ctx, "identity", None)
-        if isinstance(identity, tuple) and len(identity) == 2:
-            fid, channel = identity
-            if fid and channel:
-                return (str(fid), str(channel))
-        return None
+        return PinSampleEvaluator.axis_identity(canvas, domain)
 
     @staticmethod
     def _x_unit(canvas, domain) -> str:
-        if domain == "time":
-            return "s"
-        if domain in {"frequency", "frf"}:
-            return "Hz"
-        ctx = getattr(getattr(canvas, "_cursor", None), "x_axis_context", None)
-        unit = str(getattr(ctx, "unit", "") or "").strip()
-        return unit
+        return PinSampleEvaluator.x_unit(canvas, domain)
 
     def _primary_html(self, intent) -> str:
-        tag = (
-            f'<span style="color:#416faa;">P{intent.ordinal}</span>'
-            '<span style="color:#cbd5e1;">  &nbsp;│&nbsp;  </span>'
-        )
-        return tag + self._coord_html(intent)
+        return pin_primary_html(intent)
 
     def _live_primary_html(self, domain, mode, sample) -> str:
-        unit = "s" if domain == "time" else ("Hz" if domain in {"frequency", "frf"} else "")
-        if mode == "single":
-            return self._format_coord_html(domain, getattr(sample, "x", None), unit)
-        return self._format_dual_html(
-            domain, getattr(sample, "ax", None), getattr(sample, "bx", None), unit,
-        )
+        return pin_live_primary_html(domain, mode, sample)
 
     def _coord_html(self, intent) -> str:
-        unit = intent.x_unit
-        if intent.mode == "single":
-            return self._format_coord_html(intent.domain, intent.x, unit)
-        return self._format_dual_html(intent.domain, intent.ax, intent.bx, unit)
+        return pin_coord_html(intent)
 
     @staticmethod
     def _format_coord_html(domain, x, unit) -> str:
-        value = _finite(x)
-        text = "—" if value is None else PinnedCursorController._format_value(domain, value, unit)
-        return f'<span style="color:#111827;">{text}</span>'
+        return pin_format_coord_html(domain, x, unit)
 
     @staticmethod
     def _format_dual_html(domain, ax, bx, unit) -> str:
-        a = _finite(ax)
-        b = _finite(bx)
-        a_text = "—" if a is None else PinnedCursorController._format_number(domain, a, unit)
-        b_text = "—" if b is None else PinnedCursorController._format_number(domain, b, unit)
-        return (
-            f'<span style="color:#111827;">A={a_text}</span>'
-            '<span style="color:#cbd5e1;">  &nbsp;│&nbsp;  </span>'
-            f'<span style="color:#111827;">B={b_text}</span>'
-        )
+        return pin_format_dual_html(domain, ax, bx, unit)
 
     @staticmethod
     def _format_value(domain, value, unit) -> str:
-        if domain == "time":
-            return f"t={value:.4f}{unit or 's'}"
-        if domain == "channel":
-            suffix = f" {unit}" if unit else ""
-            return f"X={value:.4g}{suffix}"
-        suffix = f" {unit}" if unit else " Hz"
-        return f"f={value:g}{suffix}"
+        return pin_format_value(domain, value, unit)
 
     @staticmethod
     def _format_number(domain, value, unit) -> str:
-        if domain == "time":
-            return f"{value:.4f}{unit or 's'}"
-        suffix = f" {unit}" if unit else ""
-        if domain in {"frequency", "frf"} and not suffix:
-            suffix = " Hz"
-        return f"{value:g}{suffix}"
+        return pin_format_number(domain, value, unit)
 
     def _sync_overlay(self, owner) -> None:
-        canvas = owner.canvas
-        overlay = getattr(canvas, "_pinned_overlay", None)
-        if overlay is None:
-            return
-        overlay.set_records(self._overlay_records(owner))
+        self._projector.sync_overlay(
+            id(owner.canvas),
+            owner.canvas,
+            collection=owner.collection,
+            samples=owner.samples,
+            availability=owner.availability,
+            axis_edit=owner.axis_edit,
+        )
 
     def _overlay_records(self, owner):
-        if owner.collection is None:
-            return ()
-        records = []
-        for intent in owner.collection.records:
-            status = owner.availability.get(intent.record_id, PIN_STATUS_READY)
-            if status == PIN_STATUS_INCOMPATIBLE_AXIS:
-                continue
-            sample = owner.samples.get(intent.record_id)
-            extrema = tuple(getattr(sample, "extrema", ()) or ()) if sample is not None else ()
-            hidden = self._hidden_keys_from_sample(sample)
-            if hidden:
-                extrema = tuple(
-                    item for item in extrema
-                    if self._identity_key(getattr(item, "identity", None)) not in hidden
-                )
-            if status == PIN_STATUS_UNAVAILABLE and self._log_unavailable(
-                owner.canvas, intent,
-            ):
-                continue
-            if intent.mode == "dual":
-                if coords_equal(intent.ax, intent.bx):
-                    endpoints = (
-                        PinnedOverlayEndpoint(
-                            "ab", float(intent.ax), f"P{intent.ordinal}·A/B",
-                        ),
-                    )
-                else:
-                    endpoints = (
-                        PinnedOverlayEndpoint(
-                            "a", float(intent.ax), f"P{intent.ordinal}·A",
-                        ),
-                        PinnedOverlayEndpoint(
-                            "b", float(intent.bx), f"P{intent.ordinal}·B",
-                        ),
-                    )
-            else:
-                x_value = _finite(intent.x)
-                if x_value is None:
-                    continue
-                endpoints = (
-                    PinnedOverlayEndpoint("x", x_value, f"P{intent.ordinal}"),
-                )
-            records.append(PinnedOverlayRecord(
-                record_id=intent.record_id,
-                ordinal=int(intent.ordinal),
-                mode=intent.mode,
-                domain=intent.domain,
-                endpoints=endpoints,
-                extrema=extrema,
-            ))
-        return tuple(records)
-
-    def _on_overlay_layout(self, canvas, layout) -> None:
-        owner = self._owner(canvas)
-        if owner is None:
-            return
-        self._project_axis_labels(owner, layout)
-        self._apply_offscreen(owner, layout)
-
-    def _project_axis_labels(self, owner, layout) -> None:
-        host = self._host
-        stack = getattr(host, "stack", None)
-        canvas = owner.canvas
-        mapper = getattr(host, "map_canvas_rect_to_stack", None)
-        on_screen = bool(host._cursor_source_on_screen(canvas))
-        wanted = {}
-        if (
-            layout is not None
-            and not layout.pending
-            and on_screen
-            and callable(mapper)
-        ):
-            for geom in layout.items:
-                mapped = mapper(canvas, QRect(*geom.canvas_rect))
-                if mapped is None or not mapped.isValid():
-                    continue
-                wanted[geom.key] = (geom, mapped)
-        for key in list(owner.axis_labels):
-            if key not in wanted:
-                self._destroy_axis_label(owner.axis_labels.pop(key))
-        for key, (geom, mapped) in wanted.items():
-            label = owner.axis_labels.get(key)
-            if not _widget_alive(label):
-                label = PinnedAxisLabel(stack)
-                label.clicked.connect(partial(self.raise_record, canvas))
-                label.hover_changed.connect(partial(self._set_hover, canvas))
-                owner.axis_labels[key] = label
-            label.apply_geom(geom)
-            label.move(mapped.x(), mapped.y())
-            label.setVisible(True)
-            highlight = self._hover_matches(owner, geom.record_ids)
-            label.set_highlighted(highlight)
-            label.raise_()
-
-    def _apply_offscreen(self, owner, layout) -> None:
-        offscreen = layout.offscreen_ids if layout is not None else frozenset()
-        for record_id, pill in owner.pills.items():
-            if not _widget_alive(pill):
-                continue
-            away = record_id in offscreen
-            pill.setProperty("pinnedOffscreen", away)
-            pill.setToolTip(PINNED_OFFSCREEN_TEXT if away else "")
+        return self._projector.overlay_records(
+            owner.canvas,
+            collection=owner.collection,
+            samples=owner.samples,
+            availability=owner.availability,
+            axis_edit=owner.axis_edit,
+        )
 
     def _set_hover(self, canvas, target) -> None:
-        owner = self._owner(canvas)
-        if owner is None:
-            return
-        overlay = getattr(canvas, "_pinned_overlay", None)
-        if overlay is not None:
-            overlay.set_highlight(target)
-        ids = set()
-        if isinstance(target, (tuple, list, set, frozenset)):
-            ids.update(str(item) for item in target)
-        elif target:
-            ids.add(str(target))
-        for record_id, pill in owner.pills.items():
-            if not _widget_alive(pill):
-                continue
-            highlighted = record_id in ids
-            pill._highlighted = highlighted
-            if highlighted:
-                pill.raise_()
-                timer = getattr(pill, "_highlight_timer", None)
-                if timer is not None:
-                    timer.stop()
-            pill.update()
-        for label in owner.axis_labels.values():
-            if not _widget_alive(label):
-                continue
-            label.set_highlighted(bool(ids.intersection(label.record_ids())))
-
-    def _hover_matches(self, owner, record_ids) -> bool:
-        overlay = getattr(owner.canvas, "_pinned_overlay", None)
-        target = overlay.highlight_id() if overlay is not None else None
-        if target is None:
-            return False
-        ids = set(record_ids)
-        if isinstance(target, (tuple, list, set, frozenset)):
-            return bool(ids.intersection(str(item) for item in target))
-        return str(target) in ids
-
-    def _on_pinned_pill_event(self, pill, event) -> None:
-        if pill.pin_role() != "pinned":
-            return
-        etype = event.type()
-        if etype not in (QEvent.Enter, QEvent.Leave, QEvent.FocusIn, QEvent.FocusOut):
-            return
-        owner, record_id = self._owner_and_record_for_pill(pill)
-        if owner is None:
-            return
-        if etype in (QEvent.Enter, QEvent.FocusIn):
-            self._set_hover(owner.canvas, record_id)
-        else:
-            self._set_hover(owner.canvas, None)
-
-    def _owner_and_record_for_pill(self, pill):
-        for owner in self._owners.values():
-            for record_id, item in owner.pills.items():
-                if item is pill:
-                    return owner, record_id
-        return None, None
+        self._projector.set_hover(canvas, target)
 
     def _success_text(self, intent) -> str:
         label = f"P{intent.ordinal} 已固定"

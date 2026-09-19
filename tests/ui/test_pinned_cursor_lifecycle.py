@@ -516,7 +516,7 @@ def test_reset_cursor_state_and_off_mode_keep_pins(qapp, qtbot):
     assert cs.pinned_cursors_for_canvas(cs.canvas_time).records[0].record_id == record_id
     pills = cs._pinned_cursors.pills_for(cs.canvas_time)
     assert pills
-    assert pills[0].isVisible()
+    assert pills[0].isVisible() is False
 
 
 def test_home_keeps_pins(qapp, qtbot):

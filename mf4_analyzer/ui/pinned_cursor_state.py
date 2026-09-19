@@ -1,7 +1,8 @@
 """Qt-free pinned-cursor INTENT model.
 
 Persists reproducible pin intent (coordinates, owner identity, bindings,
-full/mini, safe-rect anchor). Does not store HTML, widgets, arrays,
+full/mini, expanded/collapsed state, safe-rect anchor). Does not store HTML,
+widgets, arrays,
 screenshots, derived numeric samples, or runtime caches. Must not import
 Qt, pyqtgraph, or ``cursor_display_model`` Sample DTOs.
 """
@@ -45,6 +46,7 @@ REASON_MISSING_COORD = "missing_coord"
 REASON_INCOMPLETE_DUAL = "incomplete_dual"
 REASON_INVALID_BINDINGS = "invalid_bindings"
 REASON_INVALID_AXIS_IDENTITY = "invalid_axis_identity"
+REASON_INVALID_PANEL_EXPANDED = "invalid_panel_expanded"
 
 
 @dataclass(frozen=True)
@@ -99,6 +101,7 @@ class PinnedCursorIntent:
     axis_identity: tuple[str, str] | None = None
     bindings: tuple[PinnedCursorBinding, ...] = ()
     presentation: str = "full"
+    panel_expanded: bool = False
     anchor: PinnedCursorAnchor = field(default_factory=PinnedCursorAnchor)
     payload_version: int = PAYLOAD_VERSION
 
@@ -380,6 +383,8 @@ def _intent_to_dict(intent: PinnedCursorIntent) -> dict[str, Any]:
         data["x"] = intent.x
     if intent.axis_identity is not None:
         data["axis_identity"] = [intent.axis_identity[0], intent.axis_identity[1]]
+    if intent.panel_expanded is True:
+        data["panel_expanded"] = True
     return data
 
 
@@ -471,6 +476,7 @@ def _parse_intent(
             axis_identity=axis,
             bindings=bindings,
             presentation=str(presentation),
+            panel_expanded=_parse_panel_expanded(raw, index=index),
             anchor=_parse_anchor(raw.get("anchor")),
             payload_version=PAYLOAD_VERSION,
         ),
@@ -522,6 +528,22 @@ def _coord_status(value: Any) -> str:
     if _finite_float(value) is None:
         return "non_finite"
     return "ok"
+
+
+def _parse_panel_expanded(raw: Mapping[str, Any], *, index: int | None) -> bool:
+    """Read the optional display intent without coercing truthy payload values."""
+    if "panel_expanded" not in raw:
+        return False
+    value = raw.get("panel_expanded")
+    if isinstance(value, bool):
+        return value
+    logger.warning(
+        "normalized pinned cursor %s at index %s to false: %s",
+        REASON_INVALID_PANEL_EXPANDED,
+        index,
+        type(value).__name__,
+    )
+    return False
 
 
 def _parse_axis_identity(

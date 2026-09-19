@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from mf4_analyzer.ui.dialogs import ChartOptionsDialog
@@ -452,50 +453,199 @@ def test_record_only_appearance_key_matches_binding_id_not_first_fid():
     """F-V2-5: two WWT record-only curves on the same fid must not alias."""
     from types import SimpleNamespace
 
+    from mf4_analyzer.ui.chart_appearance_model import (
+        available_binding_target,
+        unavailable_target,
+    )
     from mf4_analyzer.ui.main_window._view_mixin import ViewMixin
-    from mf4_analyzer.ui.time_curve_bindings import TimeCurveBinding, TimeDataRef
 
     handle = SimpleNamespace(axis_group=None)
-    ck = '["f1","TolB"]'
 
-    class _Lines:
-        def composite_items(self):
-            return [(ck, "TolB", (handle, None))]
+    class _Canvas:
+        def appearance_target_for_handle(self, axis):
+            if axis is handle:
+                return available_binding_target("rec-b")
+            return unavailable_target("missing-identity")
 
-    canvas = SimpleNamespace(
-        _companion_names=set(),
-        _channel_lines=_Lines(),
-        _channel_data_id={ck: "f1"},
-    )
-    first = TimeCurveBinding(
-        binding_id="rec-a",
-        y_ref=TimeDataRef(kind="wwt_record", fid="f1", record_index=1),
-        x_ref=TimeDataRef(kind="wwt_record", fid="f1", record_index=0),
-        display_name="TolA",
-        unit="mm",
-        color="#ff0000",
-        axis_id="window-0-axis-1",
-        y_range=(0.0, 1.0),
-    )
-    second = TimeCurveBinding(
-        binding_id="rec-b",
-        y_ref=TimeDataRef(kind="wwt_record", fid="f1", record_index=3),
-        x_ref=TimeDataRef(kind="wwt_record", fid="f1", record_index=2),
-        display_name="TolB",
-        unit="mm",
-        color="#00ff00",
-        axis_id="window-0-axis-2",
-        y_range=(0.0, 1.0),
-    )
     class _Host:
-        files = {}
-        _resolve_navigator_channel_key = ViewMixin._resolve_navigator_channel_key
         _appearance_key_for_handle = ViewMixin._appearance_key_for_handle
 
     key = _Host()._appearance_key_for_handle(
-        canvas, handle, SimpleNamespace(curve_bindings=(first, second)),
+        _Canvas(), handle, SimpleNamespace(curve_bindings=()),
     )
     assert key == appearance_binding_key("rec-b")
+
+
+def test_unavailable_appearance_key_does_not_guess_first_fid_or_prefix():
+    from types import SimpleNamespace
+
+    from mf4_analyzer.ui.chart_appearance_model import unavailable_target
+    from mf4_analyzer.ui.main_window._view_mixin import ViewMixin
+
+    handle = SimpleNamespace(axis_group=None)
+
+    class _Canvas:
+        def appearance_target_for_handle(self, axis):
+            return unavailable_target("ambiguous-identity")
+
+        def companion_source_key(self, curve_key):
+            return None
+
+    class _Fd:
+        def __init__(self):
+            self.data = SimpleNamespace(columns=["torque"])
+
+        def get_prefixed_channel(self, ch):
+            return ch
+
+    class _Host:
+        files = {"f1": _Fd()}
+        _appearance_key_for_handle = ViewMixin._appearance_key_for_handle
+        _resolve_companion_source_key = ViewMixin._resolve_companion_source_key
+
+    host = _Host()
+    key = host._appearance_key_for_handle(
+        _Canvas(), handle, SimpleNamespace(curve_bindings=()),
+    )
+    assert key == ""
+    source = host._resolve_companion_source_key(
+        _Canvas(), "f1", "torque (低通 50Hz)",
+    )
+    assert source is None
+
+
+def test_companion_source_uses_canvas_facade_identity():
+    from mf4_analyzer.ui.main_window._view_mixin import ViewMixin
+
+    class _Canvas:
+        def companion_source_key(self, curve_key):
+            assert "torque (LP 50Hz)" in str(curve_key)
+            return ("f1", "torque")
+
+    class _Host:
+        files = {}
+        _resolve_companion_source_key = ViewMixin._resolve_companion_source_key
+
+    source = _Host()._resolve_companion_source_key(
+        _Canvas(), "f1", "torque (LP 50Hz)",
+    )
+    assert source == ("f1", "torque")
+
+
+def test_unavailable_target_does_not_apply_sibling_axis_spec():
+    from types import SimpleNamespace
+
+    from mf4_analyzer.ui.chart_appearance_model import (
+        available_channel_target,
+        unavailable_target,
+    )
+    from mf4_analyzer.ui.main_window._view_mixin import ViewMixin
+    from mf4_analyzer.ui.view_state import normalize_chart_appearance
+
+    wanted = object()
+    other = object()
+    applied = []
+
+    class _Canvas:
+        axes_list = [wanted, other]
+
+        def appearance_target_for_handle(self, handle):
+            if handle is wanted:
+                return available_channel_target("f1", "torque")
+            return unavailable_target("ambiguous-identity")
+
+        def apply_chart_appearance(self, specs):
+            applied.append(specs)
+
+    key = appearance_channel_key("f1", "torque")
+    sibling = appearance_channel_key("f1", "speed")
+    state = SimpleNamespace(chart_appearance=normalize_chart_appearance({
+        "x_scale": "linear",
+        "axes": {
+            key: {"title": "Wanted", "y_scale": "log"},
+            sibling: {"title": "Other source", "y_scale": "log"},
+        },
+    }))
+
+    class _Host:
+        _appearance_key_for_handle = ViewMixin._appearance_key_for_handle
+        _apply_view_chart_appearance = ViewMixin._apply_view_chart_appearance
+
+    _Host()._apply_view_chart_appearance(state, _Canvas())
+    assert applied
+    axes = applied[0]["axes"]
+    by_handle = {item["handle"]: item for item in axes}
+    assert by_handle[wanted]["title"] == "Wanted"
+    assert by_handle[wanted]["y_scale"] == "log"
+    assert by_handle[other].get("title") != "Other source"
+    assert by_handle[other].get("title") != "Wanted"
+    assert by_handle[other].get("y_scale") == "linear"
+
+
+def test_legacy_six_tuple_rows_still_plot_with_empty_mixin_key(qapp):
+    from types import SimpleNamespace
+
+    from PyQt5.QtCore import QCoreApplication
+
+    from mf4_analyzer.ui.main_window._view_mixin import ViewMixin
+    from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+    t = np.linspace(0.0, 1.0, 32)
+    canvas = TimeDomainCanvasPG()
+    canvas.resize(640, 320)
+    canvas.show()
+    QCoreApplication.processEvents()
+    canvas.plot_channels(
+        [("legacy6", True, t, t.copy(), "#f00", "Nm")],
+        mode="subplot",
+    )
+    QCoreApplication.processEvents()
+    assert canvas.axes_list
+    class _Host:
+        _appearance_key_for_handle = ViewMixin._appearance_key_for_handle
+
+    key = _Host()._appearance_key_for_handle(
+        canvas, canvas.axes_list[0], SimpleNamespace(curve_bindings=()),
+    )
+    assert key == ""
+
+
+def test_project_schema_is_unchanged_by_appearance_migration():
+    from mf4_analyzer.ui.project_io import SCHEMA_VERSION
+
+    assert SCHEMA_VERSION == 4
+
+
+def test_canvas_appearance_api_uses_binding_id_for_same_fid_records(qapp):
+    """Owner API: two same-fid record-only rows map to explicit binding keys."""
+    from PyQt5.QtCore import QCoreApplication
+
+    from mf4_analyzer.ui.chart_appearance_model import binding_appearance_ref
+    from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+    t = np.linspace(0.0, 1.0, 32)
+
+    def _row(name, binding_id, color):
+        return (
+            name, True, t, t.copy(), color, "mm", "f1",
+            {"appearance_ref": binding_appearance_ref(binding_id)},
+        )
+
+    canvas = TimeDomainCanvasPG()
+    canvas.resize(640, 320)
+    canvas.show()
+    QCoreApplication.processEvents()
+    canvas.plot_channels(
+        [_row("TolA", "rec-a", "#ff0000"), _row("TolB", "rec-b", "#00ff00")],
+        mode="subplot",
+    )
+    QCoreApplication.processEvents()
+    assert canvas.appearance_target_for_handle(canvas.axes_list[0]).encoded_key == (
+        appearance_binding_key("rec-a")
+    )
+    assert canvas.appearance_target_for_handle(canvas.axes_list[1]).encoded_key == (
+        appearance_binding_key("rec-b")
+    )
 
 
 def test_split_unfocused_recolor_keeps_focused_navigator_colors(

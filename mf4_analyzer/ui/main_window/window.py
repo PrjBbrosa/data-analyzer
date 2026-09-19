@@ -4778,15 +4778,17 @@ class MainWindow(
                         filtered = filtered[finite_x]
 
             gid = eff_groups.get((fid, ch))
+            appearance_meta = {"appearance_ref": {
+                "kind": "channel",
+                "fid": str(fid),
+                "channel": str(ch),
+            }}
             if gid is not None:
-                primary_row = (
-                    name, show_orig, x_axis, sig, color, unit, fid,
-                    {"axis_group": gid},
-                )
-            else:
-                primary_row = (
-                    name, show_orig, x_axis, sig, color, unit, fid
-                )
+                appearance_meta["axis_group"] = gid
+            primary_row = (
+                name, show_orig, x_axis, sig, color, unit, fid,
+                appearance_meta,
+            )
             slot_rows = [primary_row]
             result.rows.append(primary_row)
             result.successful_channel_keys.add((fid, ch))
@@ -4801,7 +4803,15 @@ class MainWindow(
                 # source channel ``name`` so the canvas overlays it (dashed) on
                 # the SAME axis/row instead of allocating a fresh subplot row.
                 # Original 7-tuple rows are unchanged → backward compatible.
-                meta = {"companion_of": name, "dash": True}
+                meta = {
+                    "companion_of": name,
+                    "dash": True,
+                    "appearance_ref": {
+                        "kind": "companion",
+                        "fid": str(fid),
+                        "channel": str(ch),
+                    },
+                }
                 companion_color = color
                 if _appearance_color_key is not None and companion_colors:
                     companion_color = companion_colors.get(

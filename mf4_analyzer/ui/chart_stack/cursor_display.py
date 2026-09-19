@@ -19,6 +19,7 @@ from PyQt5.QtWidgets import (
 
 from ...ui_kit.dialog_geometry import fit_popover
 
+from ..pinned_cursor_facts import _finite
 from ..cursor_display_model import (
     CursorDisplayBlock,
     CursorDisplayBranch,
@@ -809,6 +810,78 @@ def live_pin_hint_text(cursor_mode: str, *, dual_complete: bool = True) -> str:
     if cursor_mode == "dual":
         return "P 固定此组" if dual_complete else ""
     return ""
+
+
+def pin_status_primary_html(intent, status_text) -> str:
+    tag = (
+        f'<span style="color:#416faa;">P{intent.ordinal}</span>'
+        '<span style="color:#cbd5e1;">  &nbsp;│&nbsp;  </span>'
+    )
+    return (
+        tag
+        + f'<span style="color:#64748b;">{escape(str(status_text))}</span>'
+    )
+
+
+def pin_primary_html(intent) -> str:
+    tag = (
+        f'<span style="color:#416faa;">P{intent.ordinal}</span>'
+        '<span style="color:#cbd5e1;">  &nbsp;│&nbsp;  </span>'
+    )
+    return tag + pin_coord_html(intent)
+
+
+def pin_live_primary_html(domain, mode, sample) -> str:
+    unit = "s" if domain == "time" else ("Hz" if domain in {"frequency", "frf"} else "")
+    if mode == "single":
+        return pin_format_coord_html(domain, getattr(sample, "x", None), unit)
+    return pin_format_dual_html(
+        domain, getattr(sample, "ax", None), getattr(sample, "bx", None), unit,
+    )
+
+
+def pin_coord_html(intent) -> str:
+    unit = intent.x_unit
+    if intent.mode == "single":
+        return pin_format_coord_html(intent.domain, intent.x, unit)
+    return pin_format_dual_html(intent.domain, intent.ax, intent.bx, unit)
+
+
+def pin_format_coord_html(domain, x, unit) -> str:
+    value = _finite(x)
+    text = "—" if value is None else pin_format_value(domain, value, unit)
+    return f'<span style="color:#111827;">{text}</span>'
+
+
+def pin_format_dual_html(domain, ax, bx, unit) -> str:
+    a = _finite(ax)
+    b = _finite(bx)
+    a_text = "—" if a is None else pin_format_number(domain, a, unit)
+    b_text = "—" if b is None else pin_format_number(domain, b, unit)
+    return (
+        f'<span style="color:#111827;">A={a_text}</span>'
+        '<span style="color:#cbd5e1;">  &nbsp;│&nbsp;  </span>'
+        f'<span style="color:#111827;">B={b_text}</span>'
+    )
+
+
+def pin_format_value(domain, value, unit) -> str:
+    if domain == "time":
+        return f"t={value:.4f}{unit or 's'}"
+    if domain == "channel":
+        suffix = f" {unit}" if unit else ""
+        return f"X={value:.4g}{suffix}"
+    suffix = f" {unit}" if unit else " Hz"
+    return f"f={value:g}{suffix}"
+
+
+def pin_format_number(domain, value, unit) -> str:
+    if domain == "time":
+        return f"{value:.4f}{unit or 's'}"
+    suffix = f" {unit}" if unit else ""
+    if domain in {"frequency", "frf"} and not suffix:
+        suffix = " Hz"
+    return f"{value:g}{suffix}"
 
 
 def build_frf_cursor_presentation(

@@ -333,8 +333,8 @@ def test_pinned_cursor_hints_are_mode_gated_and_not_global_p():
     pin_ids = ("cursor.pin_single", "cursor.pin_dual", "cursor.pin_off")
     pin_modes = frozenset({"time", "fft", "frf"})
     for hint_id, cursor_mode, phrase in (
-        ("cursor.pin_single", "single", "P 固定当前读数"),
-        ("cursor.pin_dual", "dual", "先放 A/B"),
+        ("cursor.pin_single", "single", "P 固定；点 Pn 展开"),
+        ("cursor.pin_dual", "dual", "先放 A/B；P 固定；点 Pn 展开"),
         ("cursor.pin_off", "off", "不隐藏已固定"),
     ):
         hint = by_id[hint_id]

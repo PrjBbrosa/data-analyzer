@@ -1,13 +1,19 @@
 """Pinned-cursor marker geometry (Task 3). Measure painted items, not a detached document."""
 from __future__ import annotations
 
+import hashlib
+import os
+import signal
+import subprocess
+import sys
+import textwrap
 from pathlib import Path
 
 import numpy as np
 import pytest
-from PyQt5.QtCore import QEvent, QPointF, QSettings, Qt
-from PyQt5.QtGui import QFont, QFontMetrics
-from PyQt5.QtWidgets import QApplication, QPushButton
+from PyQt5.QtCore import QEvent, QPointF, QRect, QSettings, Qt
+from PyQt5.QtGui import QFont, QFontMetrics, QImage
+from PyQt5.QtWidgets import QApplication, QPushButton, QScrollArea
 
 from mf4_analyzer.ui.chart_stack import ChartStack
 from mf4_analyzer.ui.pg_canvas.pinned_cursor_overlay import (
@@ -18,6 +24,9 @@ from mf4_analyzer.ui.pg_canvas.pinned_cursor_overlay import (
     layout_pinned_axis_labels,
 )
 from mf4_analyzer.ui.pinned_cursor_state import empty_collection, next_record
+
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 @pytest.fixture
@@ -120,12 +129,173 @@ def _scene_x(line):
     return float(vb.mapViewToScene(QPointF(float(line.value()), 0.0)).x())
 
 
-def _pin(cs, canvas, values, *, domain="time", mode="single"):
+def _pin(cs, canvas, values, *, domain="time", mode="single", expand=False):
     cs.set_pinned_cursors_for_canvas(
         canvas, _collection(domain, values, mode=mode),
     )
     QApplication.processEvents()
+    if expand:
+        controller = cs._pinned_cursors
+        for record in cs.pinned_cursors_for_canvas(canvas).records:
+            controller.toggle_record_panel(canvas, record.record_id)
+        QApplication.processEvents()
+        controller.flush_layout()
     return cs.pinned_cursors_for_canvas(canvas).records
+
+
+def test_native_pin_coordinate_mappings_exit_cleanly_in_subprocess(tmp_path):
+    """Keep QWidget ancestry faults out of the pytest process.
+
+    The child exercises the two production paths with a canvas layout margin
+    and QGraphicsView viewport frame offset.  A parent-to-child ``mapTo``
+    call used to terminate this process with SIGSEGV before Python could
+    report an assertion failure.
+    """
+    script = textwrap.dedent(
+        """
+        import math
+        import os
+        from pathlib import Path
+
+        import numpy as np
+        from PyQt5.QtCore import QPoint, QPointF, QSettings
+        from PyQt5.QtWidgets import QApplication, QVBoxLayout, QWidget
+
+        from mf4_analyzer.ui.chart_stack import ChartStack
+        from mf4_analyzer.ui.pinned_cursor_state import empty_collection, next_record
+
+
+        def events(app, count=4):
+            for _ in range(count):
+                app.processEvents()
+
+
+        app = QApplication.instance() or QApplication([])
+        root = QWidget()
+        outer = QVBoxLayout(root)
+        outer.setContentsMargins(19, 23, 29, 31)
+        settings = QSettings(
+            str(Path(os.environ["TMPDIR"]) / "pin-native-map.ini"),
+            QSettings.IniFormat,
+        )
+        stack = ChartStack(cursor_settings=settings)
+        outer.addWidget(stack)
+        root.resize(1180, 760)
+        root.show()
+        events(app)
+
+        canvas = stack.canvas_time
+        canvas.layout().setContentsMargins(11, 13, 17, 19)
+        stack.set_cursor_mode_for_canvas(canvas, "single")
+        samples = np.linspace(0.0, 1.0, 200)
+        canvas.plot_channels([
+            ("speed", True, samples, np.sin(2 * np.pi * samples),
+             "#1769e0", "rpm", "fid-a"),
+        ], mode="overlay")
+        events(app)
+
+        collection = empty_collection()
+        for value in (*[0.40 + index * 0.002 for index in range(12)], 1.0):
+            collection, _ = next_record(collection, {
+                "mode": "single",
+                "domain": "time",
+                "x_unit": "s",
+                "bindings": [{"fid": "fid-a", "channel": "speed"}],
+                "x": value,
+            })
+        stack.set_pinned_cursors_for_canvas(canvas, collection)
+        overlay = canvas._pinned_overlay
+        overlay.reproject()
+        events(app)
+
+        glw = canvas._glw
+        viewport = glw.viewport()
+        assert canvas.isAncestorOf(viewport)
+        assert canvas.layout().contentsMargins().left() == 11
+        assert viewport.mapFrom(canvas, QPoint(0, 0)) != QPoint(0, 0)
+        leaders = [item for item in overlay.layout().items if item.leader]
+        assert leaders
+        assert len(overlay._leader_items) == len(leaders)
+        for geometry, item in zip(leaders, overlay._leader_items):
+            x1, y1, x2, y2 = geometry.leader
+            expected_a = glw.mapToScene(
+                viewport.mapFrom(canvas, QPointF(x1, y1).toPoint())
+            )
+            expected_b = glw.mapToScene(
+                viewport.mapFrom(canvas, QPointF(x2, y2).toPoint())
+            )
+            actual = item.line()
+            assert math.isclose(actual.x1(), expected_a.x(), abs_tol=0.01)
+            assert math.isclose(actual.y1(), expected_a.y(), abs_tol=0.01)
+            assert math.isclose(actual.x2(), expected_b.x(), abs_tol=0.01)
+            assert math.isclose(actual.y2(), expected_b.y(), abs_tol=0.01)
+
+        stack.set_mode("fft")
+        fft = stack.canvas_fft
+        fft.layout().setContentsMargins(13, 17, 19, 23)
+        stack.set_cursor_mode_for_canvas(fft, "single")
+        frequency = np.array([1.0, 10.0, 50.0, 100.0, 200.0])
+        fft.plot_spectra([
+            {
+                "freq": frequency,
+                "amp": np.array([1.0, 2.0, 3.0, 4.0, 5.0]),
+                "label": "force",
+                "channel": "force",
+                "fid": "fid-a",
+                "color": "#2563eb",
+                "time": np.linspace(0.0, 1.0, 8),
+                "signal": np.zeros(8),
+            },
+        ], xlim=(0.0, 200.0), amp_label="Amplitude", title="FFT")
+        events(app)
+
+        host = fft.frequency_cursor_host_rect()
+        assert host is not None and host.isValid()
+        fft_glw = fft._glw
+        fft_viewport = fft_glw.viewport()
+        assert fft.isAncestorOf(fft_viewport)
+        assert fft.layout().contentsMargins().left() == 13
+        assert fft_viewport.mapFrom(fft, QPoint(0, 0)) != QPoint(0, 0)
+        viewport_pos = fft_viewport.mapFrom(fft, host.center())
+        controller = stack._pinned_cursors
+        assert controller._in_data_viewport(fft, "frequency", viewport_pos)
+        scene_pos = fft_glw.mapToScene(viewport_pos)
+        expected_x = fft._plot_amp.vb.mapSceneToView(scene_pos).x()
+        actual_x = controller._physical_x(fft, "frequency", viewport_pos)
+        assert actual_x is not None
+        assert math.isclose(actual_x, expected_x, abs_tol=1e-9)
+        preview_pos = fft_glw.mapFromScene(
+            fft._plot_time.vb.sceneBoundingRect().center()
+        )
+        assert not controller._in_data_viewport(fft, "frequency", preview_pos)
+
+        root.close()
+        root.deleteLater()
+        events(app)
+        print("ok")
+        """
+    )
+    env = os.environ.copy()
+    env.update(
+        PYTHONPATH=str(_REPO_ROOT),
+        QT_QPA_PLATFORM="offscreen",
+        TMP=str(tmp_path),
+        TEMP=str(tmp_path),
+        TMPDIR=str(tmp_path),
+        MPLCONFIGDIR=str(tmp_path),
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(_REPO_ROOT),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    details = result.stderr + result.stdout
+    assert result.returncode != -signal.SIGSEGV, details
+    assert result.returncode == 0, details
+    assert "ok" in result.stdout
 
 
 def test_cluster_label_text_consecutive_and_plus_n():
@@ -379,12 +549,76 @@ def test_same_x_cluster_hover_expands_numbers(
         if child.objectName() == "pinnedAxisLabelMember"
     ]
     assert len(member_buttons) == 8
+    local_scroll = cluster.findChild(QScrollArea, "pinnedAxisLabelMembers")
+    assert local_scroll is not None
+    assert cluster.size() == cluster.sizeHint() or (
+        cluster.width() == cluster.geom().canvas_rect[2]
+    )
     for button in member_buttons:
         text = button.text()
         fm = QFontMetrics(button.font())
         assert button.width() >= fm.horizontalAdvance(text), (
             f"{text!r} button width {button.width()} < text {fm.horizontalAdvance(text)}"
         )
+
+
+def test_dense_axis_labels_stagger_across_finite_rows_without_losing_members(qapp):
+    fm = QFontMetrics(QFont())
+    endpoints = [
+        {
+            "record_id": f"id-{index}",
+            "ordinal": index + 1,
+            "endpoint": "x",
+            "text": f"P{index + 1}",
+            "canvas_x": 30.0 + index * 31.0,
+            "offscreen": None,
+        }
+        for index in range(8)
+    ]
+    items = layout_pinned_axis_labels(
+        endpoints,
+        axis_left=20, axis_right=245, axis_top=100, axis_height=16,
+        axis_floor=30, fm=fm,
+    )
+    assert items
+    assert len({item.canvas_rect[1] for item in items}) > 1
+    seen = {
+        (record_id, endpoint)
+        for item in items
+        for record_id, endpoint, _text, _ordinal in item.members
+    }
+    assert seen == {(item["record_id"], item["endpoint"]) for item in endpoints}
+    rects = [QRect(*item.canvas_rect) for item in items]
+    for index, rect in enumerate(rects):
+        assert rect.left() >= 20 and rect.right() <= 245
+        assert rect.top() >= 30
+        for other in rects[index + 1:]:
+            assert not rect.intersects(other)
+
+
+def test_single_pin_line_has_opaque_bluegray_and_selected_blue_chrome(
+    qapp, qtbot, production_style,
+):
+    cs = _make_stack(qtbot, qapp)
+    canvas = cs.canvas_time
+    _plot_time(canvas)
+    qapp.processEvents()
+    _wait_host(qtbot, canvas)
+    record = _pin(cs, canvas, [0.5])[0]
+    overlay = canvas._pinned_overlay
+    line = overlay.lines_for(record.record_id, "x")[0]
+    pen = line.pen
+    pen = pen() if callable(pen) else pen
+    assert pen.color().name() == "#54749d"
+    assert pen.color().alpha() == 255
+    assert pen.widthF() == pytest.approx(1.5)
+
+    overlay.set_highlight(record.record_id)
+    selected = line.pen
+    selected = selected() if callable(selected) else selected
+    assert selected.color().name() == "#006bea"
+    assert selected.color().alpha() == 255
+    assert selected.widthF() == pytest.approx(2.25)
 
 
 def test_offscreen_endpoint_is_not_clamped_and_marks_out_of_view(
@@ -516,10 +750,17 @@ def test_dual_ab_merge_and_a_b_colors(qapp, qtbot, production_style):
     _wait_host(qtbot, canvas)
     equal = _pin(cs, canvas, [(0.4, 0.4)], mode="dual")
     overlay = canvas._pinned_overlay
-    assert overlay.lines_for(equal[0].record_id, "ab")
+    assert overlay.lines_for(equal[0].record_id, "a")
+    assert overlay.lines_for(equal[0].record_id, "b")
     labels = cs._pinned_cursors.axis_labels_for(canvas)
     assert any(
         label.geom() and "A/B" in label.geom().text for label in labels
+    )
+    assert any(
+        label.geom()
+        and {(member[0], member[1]) for member in label.geom().members}
+        == {(equal[0].record_id, "a"), (equal[0].record_id, "b")}
+        for label in labels
     )
     split = _pin(cs, canvas, [(0.2, 0.8)], mode="dual")
     a_lines = overlay.lines_for(split[-1].record_id, "a")
@@ -707,3 +948,316 @@ def test_view_geometry_coalesces_and_reuses_leaders(
     after = [id(item) for item in overlay._leader_items]
     if before and after:
         assert before[0] in after
+
+
+def _wrap_reflow(pill):
+    calls = []
+    original = pill.reflow_to_parent
+
+    def wrapped(*args, **kwargs):
+        calls.append(pill.geometry().getRect())
+        return original(*args, **kwargs)
+
+    pill.reflow_to_parent = wrapped
+    return calls
+
+
+def _image_key(pix):
+    img = pix.toImage().convertToFormat(QImage.Format_ARGB32)
+    bits = img.bits()
+    bits.setsize(img.byteCount())
+    return (img.width(), img.height(), hashlib.md5(bytes(bits)).hexdigest())
+
+
+def test_resize_burst_coalesces_qtextdocument_reflow(
+    qapp, qtbot, production_style,
+):
+    """Same-turn geometry bursts typeset once on the next event-loop turn."""
+    cs = _make_stack(qtbot, qapp, width=1100, height=640)
+    canvas = cs.canvas_time
+    _plot_time(canvas)
+    qapp.processEvents()
+    _wait_host(qtbot, canvas)
+    _pin(cs, canvas, [0.35], expand=True)
+    cs._pill.setVisible(False)
+    cs.resize(1000, 600)
+    qapp.processEvents()
+    cs._pinned_cursors.flush_layout()
+    pills = cs._pinned_cursors.pills_for(canvas)
+    assert pills
+    pill = pills[0]
+    assert pill.isVisible()
+    calls = _wrap_reflow(pill)
+    projector = cs._pinned_cursors._projector
+
+    for delta in range(6):
+        cs.resize(1000 + delta * 8, 600)
+    assert len(calls) == 0
+    assert projector._layout_timer.isActive()
+
+    qapp.processEvents()
+    assert len(calls) == 1
+    assert not projector._layout_timer.isActive()
+
+    cs.resize(1000, 600)
+    qapp.processEvents()
+    cs._pinned_cursors.flush_layout()
+    oracle_size = pill.size()
+    oracle_key = _image_key(pill.grab())
+    calls.clear()
+
+    cs.resize(1100, 600)
+    qapp.processEvents()
+    cs._pinned_cursors.flush_layout()
+    calls.clear()
+    for width in (1060, 1020, 1000):
+        cs.resize(width, 600)
+    pix = cs.grab_presentation_pixmap(canvas, scale=1.0)
+    assert pix is not None and not pix.isNull()
+    assert len(calls) == 1
+    assert pill.size() == oracle_size
+    assert _image_key(pill.grab()) == oracle_key
+    assert not projector._layout_timer.isActive()
+
+
+def test_flush_layout_cancels_duplicate_pending_and_layout_once(
+    qapp, qtbot, production_style,
+):
+    cs = _make_stack(qtbot, qapp)
+    canvas = cs.canvas_time
+    _plot_time(canvas)
+    qapp.processEvents()
+    _wait_host(qtbot, canvas)
+    _pin(cs, canvas, [0.4], expand=True)
+    cs._pinned_cursors.flush_layout()
+    pill = cs._pinned_cursors.pills_for(canvas)[0]
+    calls = _wrap_reflow(pill)
+    for delta in range(5):
+        cs.resize(1080 - delta * 6, 640)
+    assert len(calls) == 0
+    cs._pinned_cursors.flush_layout()
+    assert len(calls) == 1
+    cs._pinned_cursors.flush_layout()
+    qapp.processEvents()
+    assert len(calls) == 1
+    assert not cs._pinned_cursors._projector._layout_timer.isActive()
+
+
+def test_origin_only_safe_rect_does_not_retypeset(
+    qapp, qtbot, production_style,
+):
+    cs = _make_stack(qtbot, qapp)
+    canvas = cs.canvas_time
+    _plot_time(canvas)
+    qapp.processEvents()
+    _wait_host(qtbot, canvas)
+    _pin(cs, canvas, [0.45], expand=True)
+    cs._pinned_cursors.flush_layout()
+    pill = cs._pinned_cursors.pills_for(canvas)[0]
+    before = pill.geometry()
+    calls = _wrap_reflow(pill)
+    real_sync = cs._sync_pill_safe_rect
+
+    def shifted(widget, card):
+        changed = real_sync(widget, card)
+        if widget is not pill:
+            return changed
+        safe = widget.safe_rect()
+        if not safe.isValid():
+            return changed
+        return widget.set_safe_rect(safe.translated(18, 12))
+
+    cs._sync_pill_safe_rect = shifted
+    cs._pinned_cursors.reflow_visible()
+    cs._pinned_cursors.flush_layout()
+    assert calls == []
+    after = pill.geometry()
+    assert after.size() == before.size()
+    assert after.topLeft() != before.topLeft()
+
+
+def test_content_change_same_size_still_reflows(
+    qapp, qtbot, production_style,
+):
+    cs = _make_stack(qtbot, qapp)
+    canvas = cs.canvas_time
+    _plot_time(canvas)
+    qapp.processEvents()
+    _wait_host(qtbot, canvas)
+    _pin(cs, canvas, [0.3], expand=True)
+    cs._pinned_cursors.flush_layout()
+    pill = cs._pinned_cursors.pills_for(canvas)[0]
+    safe = QRect(pill.safe_rect())
+    calls = _wrap_reflow(pill)
+    pill._primary_original = str(getattr(pill, "_primary_original", "") or "") + " "
+    cs._pinned_cursors.reflow_visible()
+    cs._pinned_cursors.flush_layout()
+    assert len(calls) == 1
+    assert pill.safe_rect().size() == safe.size()
+
+
+def test_collapsed_pin_skips_geometry_reflow(
+    qapp, qtbot, production_style,
+):
+    cs = _make_stack(qtbot, qapp)
+    canvas = cs.canvas_time
+    _plot_time(canvas)
+    qapp.processEvents()
+    _wait_host(qtbot, canvas)
+    _pin(cs, canvas, [0.25])
+    cs._pinned_cursors.flush_layout()
+    pills = cs._pinned_cursors.pills_for(canvas)
+    assert pills
+    pill = pills[0]
+    assert not pill.isVisible()
+    calls = _wrap_reflow(pill)
+    for delta in range(4):
+        cs.resize(1090 - delta * 10, 640)
+    cs._pinned_cursors.flush_layout()
+    qapp.processEvents()
+    assert calls == []
+
+
+def test_awaiting_space_retries_when_pane_grows(
+    qapp, qtbot, production_style,
+):
+    cs = _make_stack(qtbot, qapp, width=1100, height=640)
+    canvas = cs.canvas_time
+    extra = [
+        (f"ch{i}", True, np.linspace(0.0, 1.0, 200), np.cos(2 * np.pi * (i + 1) * np.linspace(0.0, 1.0, 200)),
+         "#16a34a", "rpm", "fid-a")
+        for i in range(8)
+    ]
+    _plot_time(canvas, extra=extra)
+    qapp.processEvents()
+    _wait_host(qtbot, canvas)
+    _pin(cs, canvas, [0.4], expand=True)
+    cs._pinned_cursors.flush_layout()
+    pill = cs._pinned_cursors.pills_for(canvas)[0]
+    assert pill.isVisible()
+    readable_h = pill.height()
+    real_sync = cs._sync_pill_safe_rect
+    tiny = QRect(8, 41, 36, 18)
+
+    def cramped(widget, card):
+        if widget is pill:
+            return widget.set_safe_rect(tiny)
+        return real_sync(widget, card)
+
+    cs._sync_pill_safe_rect = cramped
+    cs._pinned_cursors.reflow_visible()
+    cs._pinned_cursors.flush_layout()
+    assert pill.awaiting_space() or not pill.isVisible()
+    cs._sync_pill_safe_rect = real_sync
+    cs._pinned_cursors.reflow_visible()
+    cs._pinned_cursors.flush_layout()
+    assert pill.isVisible()
+    assert not pill.awaiting_space()
+    assert pill.height() >= min(readable_h - 2, max(1, pill.safe_rect().height()))
+    doc = pill._detail.document
+    assert doc.size().height() <= pill._detail.height() + 8
+
+
+def test_invalidate_cancels_pending_layout(
+    qapp, qtbot, production_style,
+):
+    cs = _make_stack(qtbot, qapp)
+    canvas = cs.canvas_time
+    _plot_time(canvas)
+    qapp.processEvents()
+    _wait_host(qtbot, canvas)
+    _pin(cs, canvas, [0.5], expand=True)
+    cs._pinned_cursors.flush_layout()
+    pill = cs._pinned_cursors.pills_for(canvas)[0]
+    calls = _wrap_reflow(pill)
+    cs.resize(1000, 600)
+    cs.resize(980, 600)
+    assert cs._pinned_cursors._projector._layout_timer.isActive()
+    cs._pinned_cursors.clear_all()
+    qapp.processEvents()
+    assert calls == []
+    assert not cs._pinned_cursors._projector._layout_timer.isActive()
+
+
+def test_layout_reentrancy_leaves_one_more_turn(
+    qapp, qtbot, production_style,
+):
+    cs = _make_stack(qtbot, qapp)
+    canvas = cs.canvas_time
+    _plot_time(canvas)
+    qapp.processEvents()
+    _wait_host(qtbot, canvas)
+    _pin(cs, canvas, [0.33], expand=True)
+    cs._pinned_cursors.flush_layout()
+    pill = cs._pinned_cursors.pills_for(canvas)[0]
+    original = pill.reflow_to_parent
+    calls = []
+
+    def wrapped(*args, **kwargs):
+        calls.append(1)
+        result = original(*args, **kwargs)
+        if len(calls) == 1:
+            cs._pinned_cursors.reflow_visible()
+        return result
+
+    pill.reflow_to_parent = wrapped
+    cs.resize(1040, 640)
+    cs._pinned_cursors.flush_layout()
+    assert len(calls) == 1
+    assert cs._pinned_cursors._projector._layout_timer.isActive()
+    qapp.processEvents()
+    assert not cs._pinned_cursors._projector._layout_timer.isActive()
+    qapp.processEvents()
+    assert not cs._pinned_cursors._projector._layout_timer.isActive()
+
+
+def test_resize_does_not_sample_or_mark_intent(
+    qapp, qtbot, production_style, monkeypatch,
+):
+    cs = _make_stack(qtbot, qapp)
+    canvas = cs.canvas_time
+    _plot_time(canvas)
+    qapp.processEvents()
+    _wait_host(qtbot, canvas)
+    _pin(cs, canvas, [0.28], expand=True)
+    cs._pinned_cursors.flush_layout()
+    controller = cs._pinned_cursors
+    revision = controller.user_intent_revision
+    scheduled = []
+    evaluated = []
+    monkeypatch.setattr(
+        controller, "_schedule_reproject",
+        lambda *args, **kwargs: scheduled.append(1),
+    )
+    original_eval = controller._evaluate_intent
+    monkeypatch.setattr(
+        controller, "_evaluate_intent",
+        lambda *args, **kwargs: evaluated.append(1) or original_eval(*args, **kwargs),
+    )
+    cs.resize(1020, 620)
+    cs.resize(1000, 600)
+    controller.flush_layout()
+    qapp.processEvents()
+    assert scheduled == []
+    assert evaluated == []
+    assert controller.user_intent_revision == revision
+
+
+def test_font_revision_forces_typeset(
+    qapp, qtbot, production_style,
+):
+    cs = _make_stack(qtbot, qapp)
+    canvas = cs.canvas_time
+    _plot_time(canvas)
+    qapp.processEvents()
+    _wait_host(qtbot, canvas)
+    _pin(cs, canvas, [0.22], expand=True)
+    cs._pinned_cursors.flush_layout()
+    pill = cs._pinned_cursors.pills_for(canvas)[0]
+    calls = _wrap_reflow(pill)
+    font = QFont(pill.font())
+    font.setPointSize(max(8, font.pointSize()) + 3)
+    pill.setFont(font)
+    cs._pinned_cursors.reflow_visible()
+    cs._pinned_cursors.flush_layout()
+    assert len(calls) == 1

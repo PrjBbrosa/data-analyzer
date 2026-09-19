@@ -314,6 +314,7 @@ FROZEN_COORDINATOR_PUBLIC_METHODS = (
     "offer_capture_bound_canvas",
     "request_capture",
     "request_visible_section_capture",
+    "request_pinned_cursor_capture",
     "notify_result_stored",
     "result_generation_for",
     "presentation_payload_for",
@@ -860,7 +861,7 @@ def test_interaction_facts_keys_are_frozen():
 def test_coordinator_public_methods_are_frozen():
     names = _coordinator_public_methods()
     assert names == FROZEN_COORDINATOR_PUBLIC_METHODS
-    assert len(names) == 38
+    assert len(names) == 39
     for required in ("shutdown", "reset_project_state", "clear"):
         assert required in names
 

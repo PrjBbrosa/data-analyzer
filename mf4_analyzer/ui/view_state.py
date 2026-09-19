@@ -20,6 +20,13 @@ from PyQt5.QtCore import QObject, pyqtSignal
 
 from mf4_analyzer.ui_kit.ticks_math import _DEGENERATE_SPAN_RATIO
 
+from .chart_appearance_model import (
+    appearance_binding_key,
+    appearance_channel_key,
+    appearance_group_key,
+    normalize_appearance_axis_key,
+    parse_appearance_axis_key,
+)
 from .pinned_cursor_state import (
     PinnedCursorCollection,
     collection_from_dict,
@@ -146,69 +153,6 @@ def normalize_chart_appearance(value: Any) -> dict[str, Any]:
 
 def is_default_chart_appearance(value: Any) -> bool:
     return normalize_chart_appearance(value) == default_chart_appearance()
-
-
-def appearance_channel_key(fid: Any, channel: Any) -> str:
-    return json.dumps(
-        ["ch", str(fid), str(channel)],
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
-
-
-def appearance_group_key(group_id: Any) -> str:
-    return json.dumps(
-        ["g", str(group_id)],
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
-
-
-def appearance_binding_key(binding_id: Any) -> str:
-    return json.dumps(
-        ["b", str(binding_id)],
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
-
-
-def normalize_appearance_axis_key(value: Any) -> str:
-    """Canonical JSON key for a chart-options axis identity."""
-    raw = value
-    if isinstance(value, str):
-        try:
-            raw = json.loads(value)
-        except (TypeError, ValueError, json.JSONDecodeError):
-            return ""
-    if not isinstance(raw, (list, tuple)) or not raw:
-        return ""
-    kind = str(raw[0] or "")
-    if kind == "ch" and len(raw) >= 3:
-        fid = str(raw[1] or "").strip()
-        channel = str(raw[2] or "").strip()
-        if fid and channel:
-            return appearance_channel_key(fid, channel)
-        return ""
-    if kind == "g" and len(raw) >= 2:
-        group_id = str(raw[1] or "").strip()
-        return appearance_group_key(group_id) if group_id else ""
-    if kind == "b" and len(raw) >= 2:
-        binding_id = str(raw[1] or "").strip()
-        return appearance_binding_key(binding_id) if binding_id else ""
-    return ""
-
-
-def parse_appearance_axis_key(value: Any) -> tuple[str, ...] | None:
-    key = normalize_appearance_axis_key(value)
-    if not key:
-        return None
-    try:
-        parsed = json.loads(key)
-    except (TypeError, ValueError, json.JSONDecodeError):
-        return None
-    if not isinstance(parsed, list) or not parsed:
-        return None
-    return tuple(str(part) for part in parsed)
 
 
 def prune_chart_appearance(

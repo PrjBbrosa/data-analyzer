@@ -23,6 +23,7 @@ from mf4_analyzer.ui.pinned_cursor_state import (
     REASON_INCOMPLETE_DUAL,
     REASON_INVALID_AXIS_IDENTITY,
     REASON_INVALID_BINDINGS,
+    REASON_INVALID_PANEL_EXPANDED,
     REASON_MISSING_COORD,
     REASON_NON_FINITE_COORD,
     REASON_UNKNOWN_PAYLOAD_VERSION,
@@ -430,6 +431,72 @@ def test_scope_id_is_stable_on_serialize():
     assert encoded["scope_id"] == restored.scope_id == again["scope_id"]
     assert encoded["scope_id"] == collection.scope_id
     json.dumps(encoded, allow_nan=False)
+
+
+def test_panel_expanded_defaults_false_and_omits_legacy_payload_field():
+    collection = _collection(_raw_single())
+
+    intent = collection.records[0]
+    encoded = collection_to_dict(collection)
+
+    assert intent.panel_expanded is False
+    assert encoded["payload_version"] == 1
+    assert encoded["records"][0]["payload_version"] == 1
+    assert "panel_expanded" not in encoded["records"][0]
+    assert collection_from_dict(encoded).records[0].panel_expanded is False
+
+
+@pytest.mark.parametrize("value", ["true", "false", 0, 1, None, [], {}])
+def test_panel_expanded_rejects_non_bool_with_diagnostic(value, caplog):
+    raw = _raw_single(panel_expanded=value)
+    with caplog.at_level(
+        "WARNING", logger="mf4_analyzer.ui.pinned_cursor_state",
+    ):
+        collection = collection_from_dict({
+            "payload_version": 1,
+            "scope_id": _uuid(),
+            "records": [raw],
+        })
+
+    assert len(collection.records) == 1
+    assert collection.records[0].panel_expanded is False
+    assert "panel_expanded" not in collection_to_dict(collection)["records"][0]
+    assert any(
+        REASON_INVALID_PANEL_EXPANDED in record.message
+        for record in caplog.records
+    )
+
+
+def test_panel_expanded_true_survives_roundtrip_clone_and_fid_remap():
+    collection = _collection(_raw_single(panel_expanded=True))
+
+    encoded = collection_to_dict(collection)
+    restored = collection_from_dict(json.loads(json.dumps(encoded)))
+    copied = duplicate_collection(restored)
+    remapped = remap_collection_fids(restored, {"f0": "F0"})
+
+    assert encoded["records"][0]["panel_expanded"] is True
+    assert restored.records[0].panel_expanded is True
+    assert copied.records[0].panel_expanded is True
+    assert remapped.records[0].panel_expanded is True
+    assert remapped.records[0].bindings[0].fid == "F0"
+
+
+def test_time_and_analysis_codecs_preserve_expanded_pin_intent():
+    from mf4_analyzer.ui.analysis_view_state import PaneState
+    from mf4_analyzer.ui.view_state import ViewState
+
+    collection = _collection(_raw_single(panel_expanded=True))
+    time_view = ViewState(
+        name="Time", tab_color="#2d7ff9", pinned_cursors=collection,
+    )
+    analysis_pane = PaneState(pinned_cursors=collection)
+
+    restored_time = ViewState.from_dict(time_view.to_dict())
+    restored_pane = PaneState.from_dict(analysis_pane.to_dict())
+
+    assert restored_time.pinned_cursors.records[0].panel_expanded is True
+    assert restored_pane.pinned_cursors.records[0].panel_expanded is True
 
 
 def test_duplicate_remints_scope_and_record_ids_keeps_ordinals():

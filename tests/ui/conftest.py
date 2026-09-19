@@ -120,23 +120,40 @@ def pytest_runtest_teardown(item):
 
 
 def _assert_pinned_cursor_filters_not_accumulated(item):
-    """F-P1-3: living app-level pin filters must not accumulate across tests."""
+    """F-P1-3: living app-level pin filters must not accumulate across tests.
+
+    After T3 the unique filter lives on ``PinKeyRouter``. The façade flag
+    ``PinnedCursorController._application_filter_installed`` must track that
+    real install; a leaked Router with a False façade is a failure.
+    """
     from mf4_analyzer.ui.chart_stack.pinned_cursor_controller import (
         PinnedCursorController,
     )
-    living = 0
+    from mf4_analyzer.ui.chart_stack.pinning.key_router import PinKeyRouter
+
+    living_controllers = 0
+    living_routers = 0
     for obj in gc.get_objects():
         try:
-            if type(obj) is not PinnedCursorController:
+            if type(obj) is not PinnedCursorController and type(obj) is not PinKeyRouter:
                 continue
-            if getattr(obj, "_application_filter_installed", False):
-                living += 1
+            if type(obj) is PinnedCursorController:
+                if getattr(obj, "_application_filter_installed", False):
+                    living_controllers += 1
+            elif getattr(obj, "application_filter_installed", False):
+                living_routers += 1
         except (ReferenceError, RuntimeError, TypeError):
             continue
-    if living > 1:
+    if living_controllers > 1 or living_routers > 1:
         pytest.fail(
-            f"{living} PinnedCursorController app filters still installed "
+            f"{living_controllers} PinnedCursorController flags and "
+            f"{living_routers} PinKeyRouter app filters still installed "
             f"after {item.nodeid}"
+        )
+    if living_controllers != living_routers:
+        pytest.fail(
+            f"controller filter flag ({living_controllers}) does not match "
+            f"Router install ({living_routers}) after {item.nodeid}"
         )
 
 

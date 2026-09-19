@@ -695,6 +695,7 @@ class ChartStack(QWidget):
         """
         if not self.split_active() or self._secondary_card is None:
             return None
+        self._flush_pinned_layout()
         left = _grab_pixmap_hidpi(self.canvas_time)
         right = _grab_pixmap_hidpi(self._secondary_card.canvas)
         if left is None or right is None or left.isNull() or right.isNull():
@@ -1741,6 +1742,7 @@ class ChartStack(QWidget):
     def set_cursor_mode(self, mode):
         if mode not in ('off', 'single', 'dual'):
             return
+        self._pinned_cursors.cancel_axis_edit(self.canvas_time)
         old_primary = self._primary_cursor_mode
         if old_primary == mode:
             if not self._shared_time_controls_follow_secondary():
@@ -1755,6 +1757,7 @@ class ChartStack(QWidget):
         """Set cursor mode on the card/canvas owning ``canvas`` without signals."""
         if mode not in ('off', 'single', 'dual'):
             return
+        self._pinned_cursors.cancel_axis_edit(canvas)
         if isinstance(canvas, (PgLineCanvas, PgFrfCanvas)):
             card = self._card_for_canvas(canvas)
             setter = getattr(card, "set_cursor_mode", None)
@@ -1909,6 +1912,7 @@ class ChartStack(QWidget):
         # outgoing View before that canvas is reused.
         if cancel_page_transition:
             self.cancel_page_transition("explicit-presentation-capture")
+        self._flush_pinned_layout()
         canvas, page = self._presentation_canvas_and_page(target)
         if page is not None and callable(getattr(page, "pane_count", None)):
             try:
@@ -2741,6 +2745,13 @@ class ChartStack(QWidget):
         if not mapped.isValid() or mapped.width() <= 0 or mapped.height() <= 0:
             return None
         return mapped
+
+    def _flush_pinned_layout(self):
+        """Consume pending Pin geometry before a pixmap grab/copy."""
+        controller = getattr(self, "_pinned_cursors", None)
+        flush = getattr(controller, "flush_layout", None)
+        if callable(flush):
+            flush()
 
     def pinned_cursor_host_on_stack(self, canvas):
         """Owner host rect in stack coordinates. Pending geometry returns None."""

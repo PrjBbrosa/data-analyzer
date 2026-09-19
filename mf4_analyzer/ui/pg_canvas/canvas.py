@@ -111,7 +111,12 @@ from mf4_analyzer.ui.pg_canvas.fonts import (
     _apply_pg_axis_font,
     _apply_pg_text_item_font,
 )
+from mf4_analyzer.ui.chart_appearance_model import (
+    appearance_ref_fingerprint,
+    parse_appearance_ref,
+)
 from mf4_analyzer.ui.pg_canvas.annotations import AnnotationManager
+from mf4_analyzer.ui.pg_canvas.appearance import AppearanceManager
 from mf4_analyzer.ui.pg_canvas.cursor import CursorController
 from mf4_analyzer.ui.pg_canvas.pinned_cursor_overlay import PinnedCursorOverlay
 from mf4_analyzer.ui.pg_canvas.ticks_math import (
@@ -350,6 +355,10 @@ class TimeDomainCanvasPG(QWidget):
     # back to the raw (fid, ch) and writes navigator._colors so the left
     # channel-list swatch AND time/FFT replot follow one color truth.
     channel_color_changed = pyqtSignal(object, object, str)
+    # Typed identity recolor. Encoded appearance key + color when the curve's
+    # identity is unique. MainWindow writes from this signal only; keep
+    # ``channel_color_changed`` for compatibility and do not connect both.
+    appearance_color_changed = pyqtSignal(str, str)
     # Fires after 图表选项 Apply/OK on a live axis handle, carrying
     # (handle, pre-dialog appearance snapshot) so the bound View can persist
     # only the fields the user actually changed.
@@ -678,6 +687,7 @@ class TimeDomainCanvasPG(QWidget):
         self._cursor = CursorController(self)
         self._pinned_overlay = PinnedCursorOverlay(self, kind="time")
         self._annotations = AnnotationManager(self)
+        self._appearance = AppearanceManager(self)
         self._tick_density_controller = TickDensityController(self)
         self._overlay_axes = OverlayAxisManager(self)
         self._dense_raster = DenseDiscreteRasterLayer(self)
@@ -943,6 +953,7 @@ class TimeDomainCanvasPG(QWidget):
             # No channel owns an axis (every original hidden AND no visible
             # companion) → nothing to draw and nothing to anchor companions to.
             self._project_remarks()
+            self._appearance.sync_from_rows(ch_list)
             self.chart_rebuilt.emit()
             report_progress(1000)
             return
@@ -1297,6 +1308,7 @@ class TimeDomainCanvasPG(QWidget):
         self._restore_dual_cursor_items()
         self._project_remarks()
 
+        self._appearance.sync_from_rows(ch_list)
         self.chart_rebuilt.emit()
         self._display_x_coverage = (
             None if defer_first_frame else self._current_display_x_coverage()
@@ -1314,6 +1326,32 @@ class TimeDomainCanvasPG(QWidget):
     def nudge_signals(self) -> dict:
         """Situational signals for the footer nudge surface (see hints.py)."""
         return dict(getattr(self, "_nudge_signals", {}) or {})
+
+    def appearance_target_for_handle(self, handle):
+        """Stable group/channel/binding identity for ``handle``, or unavailable."""
+        return AppearanceManager.appearance_target_for_handle(
+            self._appearance, handle,
+        )
+
+    def companion_source_key(self, curve_key):
+        """Exact ``(fid, channel)`` source for a companion curve key, or None."""
+        return AppearanceManager.companion_source_key(self._appearance, curve_key)
+
+    def snapshot_chart_appearance(self, handle):
+        """Read-only appearance snapshot, including shared-X scale awareness."""
+        return AppearanceManager.snapshot_chart_appearance(self._appearance, handle)
+
+    def apply_chart_appearance(self, resolved_specs):
+        """Apply already-resolved specs. Does not emit user-modified signals."""
+        return AppearanceManager.apply_chart_appearance(
+            self._appearance, resolved_specs,
+        )
+
+    def repair_chart_appearance_ranges(self, resolved_specs):
+        """Log-range repair for View restore. Does not settle or retune timers."""
+        return AppearanceManager.repair_chart_appearance_ranges(
+            self._appearance, resolved_specs,
+        )
 
     @staticmethod
     def _selection_array_fingerprint(values):
@@ -1343,17 +1381,28 @@ class TimeDomainCanvasPG(QWidget):
                 meta.get("companion_of"),
                 bool(meta.get("dash", False)),
             )
+            appearance_fp = appearance_ref_fingerprint(meta)
+            previous = parsed.get(key)
+            collision = False
+            if previous is not None:
+                prev_fp = previous.get("appearance_fingerprint") or ()
+                if prev_fp != appearance_fp and (prev_fp or appearance_fp):
+                    collision = True
             parsed[key] = {
                 "name": str(name),
                 "visible": bool(visible),
                 "row": row,
                 "topology": topology,
+                "appearance_ref": None if collision else parse_appearance_ref(meta),
+                "appearance_fingerprint": appearance_fp,
+                "appearance_collision": collision,
                 "signature": (
                     data_id,
                     str(name),
                     self._selection_array_fingerprint(t),
                     self._selection_array_fingerprint(sig),
                     topology,
+                    appearance_fp,
                 ),
             }
         return parsed
@@ -1470,6 +1519,7 @@ class TimeDomainCanvasPG(QWidget):
             self._settle_visible_data(self._interaction_generation)
         self._dense_raster.sync_visibility()
         self.draw_idle()
+        self._appearance.sync_from_parsed(parsed)
         self._note_presentation_content_invalidated()
         return dict(self._last_selection_delta)
 
@@ -1679,6 +1729,7 @@ class TimeDomainCanvasPG(QWidget):
             self._run_replot_callbacks()
         self.disable_interactive_quality()
         self.schedule_idle_quality()
+        self._appearance.sync_from_parsed(parsed)
         self.chart_rebuilt.emit()
         self._note_presentation_content_invalidated()
         self.draw_idle()
@@ -2883,6 +2934,7 @@ class TimeDomainCanvasPG(QWidget):
             data_id = self._channel_data_id.get(channel_name)
             display_name = self.channel_data.display_label(channel_name, channel_name)
             self.channel_color_changed.emit(data_id, display_name, str(color))
+            self._appearance.emit_typed_color_if_unique(channel_name, str(color))
         except Exception:
             pass
         self._dense_raster.invalidate_all("color-changed", schedule=True)
@@ -3322,6 +3374,9 @@ class TimeDomainCanvasPG(QWidget):
         self._channel_data_id = _ChannelKeyDict()
         self._companion_names = set()
         self._companion_source = {}
+        appearance = getattr(self, "_appearance", None)
+        if appearance is not None:
+            appearance.reset()
         self._channel_is_monotonic = _ChannelKeyDict()
         self._channel_render_profiles.clear()
         self._primary_xaxis_ax = None

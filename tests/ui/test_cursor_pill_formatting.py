@@ -442,3 +442,275 @@ def test_custom_x_pill_mini_keeps_direction_avg_without_hover_tooltip(qapp, qtbo
     assert "X↑" in html and "X↓" in html
     assert "Avg" in html
     assert pill._detail.toolTip() == ""
+
+
+# ---------------------------------------------------------------------------
+# Pin chrome idempotency (T6) -- role style vs hint/geometry
+# Frozen HTML helpers above stay verbatim; these tests only count pin-button
+# style refresh and rendered chrome, not readout markup.
+# ---------------------------------------------------------------------------
+
+_PINNED_PIN_FILL = "#427de4"
+
+
+def _apply_structured_pin_update(pill, role, hint):
+    """Same call order as ChartStack's live structured update."""
+    pill.set_pin_role(role)
+    pill.set_live_hint(hint)
+
+
+def _count_pin_btn_role_polish(pill):
+    """Count QStyle unpolish/polish on this pill's pin button only."""
+    from contextlib import contextmanager
+
+    from PyQt5 import sip
+
+    btn = pill._pin_btn
+    style = btn.style()
+    pin_id = sip.unwrapinstance(btn)
+    counts = {"unpolish": 0, "polish": 0}
+    orig_unpolish = style.unpolish
+    orig_polish = style.polish
+
+    def _is_pin(widget):
+        try:
+            return sip.unwrapinstance(widget) == pin_id
+        except (RuntimeError, TypeError, ValueError):
+            return False
+
+    def unpolish(widget):
+        if _is_pin(widget):
+            counts["unpolish"] += 1
+        return orig_unpolish(widget)
+
+    def polish(widget):
+        if _is_pin(widget):
+            counts["polish"] += 1
+        return orig_polish(widget)
+
+    @contextmanager
+    def _installed():
+        style.unpolish = unpolish
+        style.polish = polish
+        try:
+            yield counts
+        finally:
+            style.unpolish = orig_unpolish
+            style.polish = orig_polish
+
+    return _installed()
+
+
+def _pin_btn_fill_count(pill, color=_PINNED_PIN_FILL):
+    from PyQt5.QtGui import QColor
+
+    image = pill._pin_btn.grab().toImage()
+    target = QColor(color).rgb()
+    return sum(
+        1
+        for y in range(image.height())
+        for x in range(image.width())
+        if image.pixel(x, y) == target
+    )
+
+
+def _seed_wide_readout(pill):
+    pill.set_primary("<span>t=216.2100s</span>")
+    pill.set_dual_rows([
+        ("very_long_dual_cursor_channel_name_to_force_width",
+         -1.0, 2.0, 0.5, 1.5, " Nm", "#ef4444"),
+        ("another_long_dual_cursor_channel_name_for_more_width",
+         -3.0, 4.0, 0.25, -0.75, " Nm", "#1769e0"),
+    ])
+
+
+def _make_chrome_pill(qtbot, parent_cls=None):
+    from PyQt5.QtWidgets import QWidget
+    from mf4_analyzer.ui.chart_stack import CursorPill
+
+    parent = QWidget() if parent_cls is None else parent_cls()
+    parent.resize(1000, 400)
+    qtbot.addWidget(parent)
+    pill = CursorPill(parent)
+    qtbot.addWidget(pill)
+    _seed_wide_readout(pill)
+    parent.show()
+    pill.show()
+    return parent, pill
+
+
+def _toggle_corner(pill, qapp):
+    pill.adjustSize()
+    pill.resize(pill.sizeHint())
+    qapp.processEvents()
+    btn = pill._toggle_btn
+    return pill.width() - (btn.x() + btn.width()), btn.y()
+
+
+def _pinned_action_corner(pill, qapp):
+    pill.adjustSize()
+    pill.resize(pill.sizeHint())
+    qapp.processEvents()
+    close = pill._close_btn
+    toggle = pill._toggle_btn
+    pin = pill._pin_btn
+    close_inset = pill.width() - (close.x() + close.width())
+    toggle_gap = close.x() - (toggle.x() + toggle.width())
+    pin_gap = toggle.x() - (pin.x() + pin.width())
+    return close_inset, close.y(), toggle_gap, toggle.y(), pin_gap, pin.y()
+
+
+def test_identical_structured_pin_updates_do_not_repolish_role(qapp, qtbot):
+    _parent, pill = _make_chrome_pill(qtbot)
+    _apply_structured_pin_update(pill, "live", "P 固定")
+    qapp.processEvents()
+
+    with _count_pin_btn_role_polish(pill) as counts:
+        for _ in range(100):
+            _apply_structured_pin_update(pill, "live", "P 固定")
+        qapp.processEvents()
+
+    assert counts["unpolish"] == 0
+    assert counts["polish"] == 0
+    assert pill.pin_role() == "live"
+    assert pill._pin_hint.toolTip() == "P 固定"
+    assert _pin_btn_fill_count(pill) == 0
+
+
+def test_hint_only_change_does_not_repolish_pin_role_style(qapp, qtbot):
+    _parent, pill = _make_chrome_pill(qtbot)
+    _apply_structured_pin_update(pill, "live", "P 固定")
+    qapp.processEvents()
+
+    with _count_pin_btn_role_polish(pill) as counts:
+        pill.set_live_hint("P 固定此组")
+        qapp.processEvents()
+
+    assert counts["unpolish"] == 0
+    assert counts["polish"] == 0
+    assert pill.pin_role() == "live"
+    assert pill._pin_hint.text() == "P"
+    assert pill._pin_hint.toolTip() == "P 固定此组"
+    assert pill._pin_hint.isVisibleTo(pill)
+    assert not pill._pin_btn.isVisibleTo(pill)
+    live_inset, live_top = _toggle_corner(pill, qapp)
+    assert live_inset <= 6 and live_top <= 6
+    assert _pin_btn_fill_count(pill) == 0
+
+
+def test_live_pinned_role_change_polishes_once_and_keeps_action_corner(qapp, qtbot):
+    _parent, pill = _make_chrome_pill(qtbot)
+    _apply_structured_pin_update(pill, "live", "P 固定")
+    qapp.processEvents()
+    live_fill = _pin_btn_fill_count(pill)
+    live_inset, live_top = _toggle_corner(pill, qapp)
+
+    with _count_pin_btn_role_polish(pill) as counts:
+        pill.set_pin_role("pinned")
+        qapp.processEvents()
+
+    assert counts["unpolish"] == 1
+    assert counts["polish"] == 1
+    pinned_fill = _pin_btn_fill_count(pill)
+    assert live_fill == 0
+    assert pinned_fill >= 50
+    close_inset, close_top, toggle_gap, toggle_top, pin_gap, pin_top = (
+        _pinned_action_corner(pill, qapp)
+    )
+    assert close_inset <= 6 and close_top <= 6
+    assert 0 <= toggle_gap <= 6
+    assert 0 <= pin_gap <= 6
+    assert toggle_top == close_top == pin_top
+
+    with _count_pin_btn_role_polish(pill) as counts:
+        _apply_structured_pin_update(pill, "live", "P 固定")
+        qapp.processEvents()
+
+    assert counts["unpolish"] == 1
+    assert counts["polish"] == 1
+    assert _pin_btn_fill_count(pill) == 0
+    live_inset_after, live_top_after = _toggle_corner(pill, qapp)
+    assert live_inset_after <= 6 and live_top_after <= 6
+    assert abs(live_inset_after - live_inset) <= 2
+    assert abs(live_top_after - live_top) <= 2
+
+
+def test_full_mini_and_hide_show_keep_pin_action_corners(qapp, qtbot):
+    _parent, pill = _make_chrome_pill(qtbot)
+    pill.set_pin_role("pinned")
+    qapp.processEvents()
+
+    full_corner = _pinned_action_corner(pill, qapp)
+    full_width = pill.width()
+    full_fill = _pin_btn_fill_count(pill)
+    pill._toggle_mode()
+    mini_corner = _pinned_action_corner(pill, qapp)
+    mini_width = pill.width()
+    mini_fill = _pin_btn_fill_count(pill)
+
+    assert mini_width != full_width
+    for close_inset, close_top, toggle_gap, toggle_top, pin_gap, pin_top in (
+        full_corner, mini_corner,
+    ):
+        assert close_inset <= 6 and close_top <= 6
+        assert 0 <= toggle_gap <= 6
+        assert 0 <= pin_gap <= 6
+        assert toggle_top == close_top == pin_top
+    assert full_fill >= 50 and mini_fill >= 50
+
+    pill.hide()
+    qapp.processEvents()
+    pill.show()
+    qapp.processEvents()
+    shown_corner = _pinned_action_corner(pill, qapp)
+    assert shown_corner[0] <= 6 and shown_corner[1] <= 6
+    assert 0 <= shown_corner[2] <= 6
+    assert _pin_btn_fill_count(pill) >= 50
+
+    pill.set_pin_role("live")
+    pill.set_live_hint("P 固定")
+    qapp.processEvents()
+    live_full_inset, live_full_top = _toggle_corner(pill, qapp)
+    pill._toggle_mode()
+    live_other_inset, live_other_top = _toggle_corner(pill, qapp)
+    assert live_full_inset <= 6 and live_full_top <= 6
+    assert live_other_inset <= 6 and live_other_top <= 6
+
+
+def test_pin_chrome_invalidate_rebuilds_role_style_after_theme_change(qapp, qtbot):
+    from PyQt5.QtCore import QEvent
+    from PyQt5.QtGui import QFont
+
+    _parent, pill = _make_chrome_pill(qtbot)
+    _apply_structured_pin_update(pill, "pinned", "")
+    qapp.processEvents()
+    assert hasattr(pill, "invalidate_pin_chrome")
+
+    with _count_pin_btn_role_polish(pill) as counts:
+        for _ in range(20):
+            _apply_structured_pin_update(pill, "pinned", "")
+        qapp.processEvents()
+    assert counts["polish"] == 0
+
+    with _count_pin_btn_role_polish(pill) as counts:
+        pill.invalidate_pin_chrome()
+        qapp.processEvents()
+    assert counts["unpolish"] == 1
+    assert counts["polish"] == 1
+    assert _pin_btn_fill_count(pill) >= 50
+
+    with _count_pin_btn_role_polish(pill) as counts:
+        qapp.sendEvent(pill, QEvent(QEvent.StyleChange))
+        qapp.processEvents()
+    assert counts["polish"] == 1
+    assert _pin_btn_fill_count(pill) >= 50
+
+    font = QFont(pill.font())
+    font.setPointSize(max(font.pointSize(), 12) + 2)
+    with _count_pin_btn_role_polish(pill) as counts:
+        pill.setFont(font)
+        qapp.processEvents()
+    assert counts["polish"] == 1
+    close_inset, close_top, toggle_gap, *_rest = _pinned_action_corner(pill, qapp)
+    assert close_inset <= 6 and close_top <= 6
+    assert 0 <= toggle_gap <= 6
