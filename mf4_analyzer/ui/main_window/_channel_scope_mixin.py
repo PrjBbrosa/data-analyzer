@@ -501,6 +501,11 @@ class ChannelScopeMixin:
         state.colors = {
             key: value for key, value in state.colors.items() if key in next_set
         }
+        from ..view_state import prune_chart_appearance
+        state.chart_appearance = prune_chart_appearance(
+            getattr(state, "chart_appearance", None),
+            kept_channels=next_set,
+        )
         if state.overlay_primary not in next_set:
             state.overlay_primary = None
         self._project_view_controls(idx)
@@ -722,6 +727,20 @@ class ChannelScopeMixin:
             ):
                 axis_opts.pop("frf_source_signature", None)
         state.axis_opts = axis_opts
+        from ..view_state import prune_chart_appearance
+        live_groups = set(
+            (state.axis_opts.get("channel_axis_groups") or {}).values()
+        )
+        live_bindings = [
+            str(getattr(binding, "binding_id", "") or "")
+            for binding in (getattr(state, "curve_bindings", None) or ())
+        ]
+        state.chart_appearance = prune_chart_appearance(
+            getattr(state, "chart_appearance", None),
+            removed_fids=removed,
+            live_group_ids=live_groups,
+            live_binding_ids=live_bindings,
+        )
 
     @staticmethod
     def _filter_time_view_state_for_removed_channels(state, removed):
@@ -790,3 +809,17 @@ class ChannelScopeMixin:
             ):
                 axis_opts.pop("frf_source_signature", None)
         state.axis_opts = axis_opts
+        from ..view_state import prune_chart_appearance
+        live_groups = set(
+            (state.axis_opts.get("channel_axis_groups") or {}).values()
+        )
+        live_bindings = [
+            str(getattr(binding, "binding_id", "") or "")
+            for binding in (getattr(state, "curve_bindings", None) or ())
+        ]
+        state.chart_appearance = prune_chart_appearance(
+            getattr(state, "chart_appearance", None),
+            removed_channels=removed,
+            live_group_ids=live_groups,
+            live_binding_ids=live_bindings,
+        )

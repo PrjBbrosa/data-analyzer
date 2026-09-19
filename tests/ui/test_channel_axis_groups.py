@@ -193,6 +193,21 @@ class TestAxisGroupModel:
         assert w.axis_group_for("f1", "a") is None
 
 
+    def test_imported_axis_seed_survives_empty_view_projection(self, qapp):
+        w = MultiFileChannelWidget()
+        imported = "window-0-axis-7"
+        w.set_restored_axis_group_projection({
+            '["f1","a"]': imported,
+            '["f1","b"]': imported,
+        })
+        assert w._imported_axis_group_seed[("f1", "a")] == imported
+        w.split_axis_group([("f1", "a"), ("f1", "b")])
+        w.set_restored_axis_group_projection({})
+        assert w._imported_axis_group_seed[("f1", "a")] == imported
+        assert w.restore_imported_axis_group([("f1", "a"), ("f1", "b")]) is True
+        assert w.axis_group_for("f1", "a") == imported
+
+
 class TestChannelTreeIndent:
     def test_indentation_is_narrowed(self, qapp):
         w = MultiFileChannelWidget()

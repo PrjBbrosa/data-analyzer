@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import math
 from dataclasses import asdict, dataclass, field
-from typing import Any
+from typing import Any, Iterable
 from uuid import uuid4
 
 from PyQt5.QtCore import QObject, pyqtSignal
@@ -49,6 +49,357 @@ def default_view_tab_color(index: int) -> str:
 
 ChannelKey = tuple[str, str]
 
+_DEFAULT_FILTER_SPEC = {
+    "kind": "low",
+    "order": 4,
+    "cutoff": 100.0,
+    "cutoff_lo": 100.0,
+    "cutoff_hi": 2000.0,
+}
+_FILTER_KINDS = frozenset({"low", "high", "band", "bandstop"})
+
+
+def default_time_filter() -> dict[str, Any]:
+    """Fresh time-domain filter intent: off, panel widget defaults kept."""
+    return {
+        "enabled": False,
+        "spec": dict(_DEFAULT_FILTER_SPEC),
+        "show_original": True,
+        "show_filtered": True,
+    }
+
+
+def normalize_time_filter(value: Any) -> dict[str, Any]:
+    """Return a serializable copy of one View's time-domain filter intent."""
+    payload = default_time_filter()
+    if not isinstance(value, dict):
+        return payload
+    raw_spec = value.get("spec") if isinstance(value.get("spec"), dict) else {}
+    kind = str(raw_spec.get("kind", payload["spec"]["kind"]) or "low")
+    if kind not in _FILTER_KINDS:
+        kind = "low"
+    payload["enabled"] = bool(value.get("enabled", False))
+    payload["show_original"] = bool(value.get("show_original", True))
+    payload["show_filtered"] = bool(value.get("show_filtered", True))
+    payload["spec"] = {
+        "kind": kind,
+        "order": _coerce_filter_order(raw_spec.get("order")),
+        "cutoff": _coerce_filter_float(
+            raw_spec.get("cutoff"), payload["spec"]["cutoff"]
+        ),
+        "cutoff_lo": _coerce_filter_float(
+            raw_spec.get("cutoff_lo"), payload["spec"]["cutoff_lo"]
+        ),
+        "cutoff_hi": _coerce_filter_float(
+            raw_spec.get("cutoff_hi"), payload["spec"]["cutoff_hi"]
+        ),
+    }
+    return payload
+
+
+def is_default_time_filter(value: Any) -> bool:
+    return normalize_time_filter(value) == default_time_filter()
+
+
+def default_chart_appearance() -> dict[str, Any]:
+    """Fresh time-domain chart-options appearance: linear, no per-axis overrides."""
+    return {
+        "x_scale": "linear",
+        "axes": {},
+        "companion_colors": {},
+    }
+
+
+def normalize_chart_appearance(value: Any) -> dict[str, Any]:
+    """Return a serializable copy of one View's chart-options appearance."""
+    payload = default_chart_appearance()
+    if not isinstance(value, dict):
+        return payload
+    payload["x_scale"] = _normalize_scale(value.get("x_scale"))
+    axes_in = value.get("axes")
+    if isinstance(axes_in, dict):
+        axes: dict[str, dict[str, Any]] = {}
+        for raw_key, raw_spec in axes_in.items():
+            key = normalize_appearance_axis_key(raw_key)
+            spec = _normalize_axis_appearance_spec(raw_spec)
+            if key and spec:
+                axes[key] = spec
+        payload["axes"] = axes
+    colors_in = value.get("companion_colors")
+    if isinstance(colors_in, dict):
+        colors: dict[str, str] = {}
+        for raw_key, color in colors_in.items():
+            encoded = _coerce_appearance_channel_color_key(raw_key)
+            text = str(color or "").strip()
+            if encoded and text:
+                colors[encoded] = text
+        payload["companion_colors"] = colors
+    return payload
+
+
+def is_default_chart_appearance(value: Any) -> bool:
+    return normalize_chart_appearance(value) == default_chart_appearance()
+
+
+def appearance_channel_key(fid: Any, channel: Any) -> str:
+    return json.dumps(
+        ["ch", str(fid), str(channel)],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
+def appearance_group_key(group_id: Any) -> str:
+    return json.dumps(
+        ["g", str(group_id)],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
+def appearance_binding_key(binding_id: Any) -> str:
+    return json.dumps(
+        ["b", str(binding_id)],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
+def normalize_appearance_axis_key(value: Any) -> str:
+    """Canonical JSON key for a chart-options axis identity."""
+    raw = value
+    if isinstance(value, str):
+        try:
+            raw = json.loads(value)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return ""
+    if not isinstance(raw, (list, tuple)) or not raw:
+        return ""
+    kind = str(raw[0] or "")
+    if kind == "ch" and len(raw) >= 3:
+        fid = str(raw[1] or "").strip()
+        channel = str(raw[2] or "").strip()
+        if fid and channel:
+            return appearance_channel_key(fid, channel)
+        return ""
+    if kind == "g" and len(raw) >= 2:
+        group_id = str(raw[1] or "").strip()
+        return appearance_group_key(group_id) if group_id else ""
+    if kind == "b" and len(raw) >= 2:
+        binding_id = str(raw[1] or "").strip()
+        return appearance_binding_key(binding_id) if binding_id else ""
+    return ""
+
+
+def parse_appearance_axis_key(value: Any) -> tuple[str, ...] | None:
+    key = normalize_appearance_axis_key(value)
+    if not key:
+        return None
+    try:
+        parsed = json.loads(key)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(parsed, list) or not parsed:
+        return None
+    return tuple(str(part) for part in parsed)
+
+
+def prune_chart_appearance(
+    value: Any,
+    *,
+    removed_fids: Iterable[Any] | None = None,
+    removed_channels: Iterable[Any] | None = None,
+    kept_channels: Iterable[Any] | None = None,
+    live_group_ids: Iterable[Any] | None = None,
+    live_binding_ids: Iterable[Any] | None = None,
+) -> dict[str, Any]:
+    """Drop appearance keys whose channel/file/group/binding identity is gone."""
+    appearance = normalize_chart_appearance(value)
+    removed_fid_set = {str(fid) for fid in (removed_fids or ())}
+    removed_channel_set = {
+        (str(item[0]), str(item[1]))
+        for item in (removed_channels or ())
+        if isinstance(item, (list, tuple)) and len(item) >= 2
+    }
+    kept_channel_set = None
+    if kept_channels is not None:
+        kept_channel_set = {
+            (str(item[0]), str(item[1]))
+            for item in kept_channels
+            if isinstance(item, (list, tuple)) and len(item) >= 2
+        }
+    live_groups = (
+        {str(gid) for gid in live_group_ids}
+        if live_group_ids is not None else None
+    )
+    live_bindings = (
+        {str(bid) for bid in live_binding_ids}
+        if live_binding_ids is not None else None
+    )
+
+    def _keep_channel(fid: str, channel: str) -> bool:
+        pair = (str(fid), str(channel))
+        if pair[0] in removed_fid_set:
+            return False
+        if pair in removed_channel_set:
+            return False
+        if kept_channel_set is not None and pair not in kept_channel_set:
+            return False
+        return True
+
+    axes: dict[str, dict[str, Any]] = {}
+    for key, spec in appearance["axes"].items():
+        parsed = parse_appearance_axis_key(key)
+        if parsed is None:
+            continue
+        kind = parsed[0]
+        if kind == "ch":
+            if len(parsed) < 3 or not _keep_channel(parsed[1], parsed[2]):
+                continue
+        elif kind == "g":
+            if live_groups is not None and parsed[1] not in live_groups:
+                continue
+        elif kind == "b":
+            if live_bindings is not None and parsed[1] not in live_bindings:
+                continue
+        else:
+            continue
+        axes[key] = spec
+    appearance["axes"] = axes
+
+    companion: dict[str, str] = {}
+    for key, color in appearance["companion_colors"].items():
+        try:
+            fid, channel = _decode_channel_key(key)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        if _keep_channel(fid, channel):
+            companion[key] = color
+    appearance["companion_colors"] = companion
+    return appearance
+
+
+def remap_chart_appearance(value: Any, fid_map: dict[str, str]) -> dict[str, Any]:
+    """Rewrite file ids inside a persisted chart-appearance payload."""
+    appearance = normalize_chart_appearance(value)
+    axes: dict[str, dict[str, Any]] = {}
+    for key, spec in appearance["axes"].items():
+        parsed = parse_appearance_axis_key(key)
+        if parsed is None:
+            continue
+        kind = parsed[0]
+        if kind == "ch":
+            if len(parsed) < 3 or parsed[1] not in fid_map:
+                continue
+            axes[appearance_channel_key(fid_map[parsed[1]], parsed[2])] = spec
+        else:
+            axes[key] = spec
+    companion: dict[str, str] = {}
+    for key, color in appearance["companion_colors"].items():
+        try:
+            fid, channel = _decode_channel_key(key)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        if fid in fid_map:
+            companion[_encode_channel_key((fid_map[fid], channel))] = color
+    appearance["axes"] = axes
+    appearance["companion_colors"] = companion
+    return appearance
+
+
+def inherit_chart_appearance_for_group_change(
+    value: Any,
+    prev_groups: Any,
+    new_groups: Any,
+) -> dict[str, Any]:
+    """Copy y_scale/grid between member and group keys on merge/split."""
+    appearance = normalize_chart_appearance(value)
+    prev = _normalize_channel_axis_groups(prev_groups)
+    new = _normalize_channel_axis_groups(new_groups)
+    axes = dict(appearance["axes"])
+
+    def _members(groups: dict[str, str], gid: str) -> list[ChannelKey]:
+        out: list[ChannelKey] = []
+        for raw_key, axis_id in groups.items():
+            if str(axis_id) != str(gid):
+                continue
+            try:
+                out.append(_decode_channel_key(raw_key))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+        return out
+
+    prev_gids = {str(gid) for gid in prev.values()}
+    new_gids = {str(gid) for gid in new.values()}
+    for gid in prev_gids - new_gids:
+        gspec = axes.get(appearance_group_key(gid)) or {}
+        inherit = {
+            key: gspec[key]
+            for key in ("y_scale", "grid")
+            if key in gspec
+        }
+        if not inherit:
+            continue
+        for fid, channel in _members(prev, gid):
+            ckey = appearance_channel_key(fid, channel)
+            spec = dict(axes.get(ckey) or {})
+            for key, item in inherit.items():
+                spec.setdefault(key, item)
+            axes[ckey] = spec
+    for gid in new_gids:
+        members = _members(new, gid)
+        if len(members) < 2:
+            continue
+        gkey = appearance_group_key(gid)
+        if gkey in axes:
+            continue
+        scales = []
+        grids = []
+        for fid, channel in members:
+            spec = axes.get(appearance_channel_key(fid, channel)) or {}
+            scales.append(_normalize_scale(spec.get("y_scale")))
+            grids.append(bool(spec["grid"]) if "grid" in spec else True)
+        gspec: dict[str, Any] = {}
+        if scales and all(item == scales[0] for item in scales):
+            gspec["y_scale"] = scales[0]
+        if grids and all(item == grids[0] for item in grids):
+            gspec["grid"] = grids[0]
+        if gspec:
+            axes[gkey] = gspec
+    appearance["axes"] = axes
+    return appearance
+
+
+def _normalize_scale(value: Any) -> str:
+    return "log" if value == "log" else "linear"
+
+
+def _normalize_axis_appearance_spec(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    spec: dict[str, Any] = {}
+    if "title" in value:
+        spec["title"] = str(value.get("title") or "")
+    if "y_label" in value:
+        spec["y_label"] = str(value.get("y_label") or "")
+    if "y_scale" in value:
+        spec["y_scale"] = _normalize_scale(value.get("y_scale"))
+    if "grid" in value:
+        spec["grid"] = bool(value.get("grid"))
+    return spec
+
+
+def _coerce_appearance_channel_color_key(value: Any) -> str:
+    if isinstance(value, str):
+        try:
+            fid, channel = _decode_channel_key(value)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return ""
+        return _encode_channel_key((fid, channel))
+    if isinstance(value, (list, tuple)) and len(value) >= 2:
+        return _encode_channel_key((str(value[0]), str(value[1])))
+    return ""
+
 
 def is_reusable_blank_view(state: "ViewState") -> bool:
     """True for an untouched initial time View that import may replace."""
@@ -63,6 +414,10 @@ def is_reusable_blank_view(state: "ViewState") -> bool:
     if state.cursor_mode != "off" or state.plot_mode != "subplot":
         return False
     if state.overlay_primary is not None:
+        return False
+    if not is_default_time_filter(getattr(state, "time_filter", None)):
+        return False
+    if not is_default_chart_appearance(getattr(state, "chart_appearance", None)):
         return False
     axis_opts = state.axis_opts or {}
     return not any(
@@ -92,6 +447,10 @@ class ViewState:
     cursor_placement: dict | None = None
     curve_bindings: list[TimeCurveBinding] = field(default_factory=list)
     hidden_curve_binding_ids: list[str] = field(default_factory=list)
+    time_filter: dict[str, Any] = field(default_factory=default_time_filter)
+    chart_appearance: dict[str, Any] = field(
+        default_factory=default_chart_appearance
+    )
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -114,6 +473,10 @@ class ViewState:
             binding.to_dict() for binding in self.curve_bindings
         ]
         data["axis_opts"] = _normalize_axis_opts(self.axis_opts)
+        data["time_filter"] = normalize_time_filter(self.time_filter)
+        data["chart_appearance"] = normalize_chart_appearance(
+            self.chart_appearance
+        )
         return data
 
     @classmethod
@@ -153,6 +516,10 @@ class ViewState:
             curve_bindings=parse_curve_bindings(data.get("curve_bindings")),
             hidden_curve_binding_ids=_coerce_id_list(
                 data.get("hidden_curve_binding_ids")
+            ),
+            time_filter=normalize_time_filter(data.get("time_filter")),
+            chart_appearance=normalize_chart_appearance(
+                data.get("chart_appearance")
             ),
         )
 
@@ -221,6 +588,26 @@ def _coerce_optional_channel_key(value: Any) -> ChannelKey | None:
     if value is None:
         return None
     return _coerce_channel_key(value)
+
+
+def _coerce_filter_order(value: Any) -> int:
+    try:
+        order = int(value)
+    except (TypeError, ValueError):
+        return 4
+    if order not in {2, 4, 6, 8}:
+        return 4
+    return order
+
+
+def _coerce_filter_float(value: Any, default: float) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return float(default)
+    if not math.isfinite(number):
+        return float(default)
+    return number
 
 
 def _coerce_id_list(value: Any) -> list[str]:

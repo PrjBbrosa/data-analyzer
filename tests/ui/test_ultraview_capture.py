@@ -528,11 +528,32 @@ def test_presentation_digest_pixel_affecting_field_matrix(qapp):
     assert coord.current_digest_for(ref) != baseline
     state.xlim = (0.0, 1.0)
 
-    window._filter["enabled"] = True
-    window._filter["spec"] = {"kind": "low", "cutoff": 40.0}
+    state.time_filter = {
+        "enabled": True,
+        "spec": {
+            "kind": "low",
+            "order": 4,
+            "cutoff": 40.0,
+            "cutoff_lo": 100.0,
+            "cutoff_hi": 2000.0,
+        },
+        "show_original": True,
+        "show_filtered": True,
+    }
     assert coord.current_digest_for(ref) != baseline
-    window._filter["enabled"] = False
-    window._filter["spec"] = {}
+    from mf4_analyzer.ui.view_state import default_time_filter
+
+    state.time_filter = default_time_filter()
+
+    from mf4_analyzer.ui.view_state import default_chart_appearance
+
+    state.chart_appearance = {
+        **default_chart_appearance(),
+        "x_scale": "log",
+    }
+    assert coord.current_digest_for(ref) != baseline
+    state.chart_appearance = default_chart_appearance()
+    assert coord.current_digest_for(ref) == baseline
 
     canvas = FakeCanvas()
     coord.bind_canvas(canvas, ref)

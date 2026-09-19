@@ -505,8 +505,8 @@ class UltraViewCoordinator(QObject):
     def _channel_signature(self, files, fid, channel):
         return self._capture._channel_signature(files, fid, channel)
 
-    def _filter_payload(self, window) -> dict:
-        return self._capture._filter_payload(window)
+    def _filter_payload(self, window, state=None) -> dict:
+        return self._capture._filter_payload(window, state)
 
     def _pane_cache_keys(self, window, section, view_id, pane_idx) -> list:
         return self._capture._pane_cache_keys(window, section, view_id, pane_idx)

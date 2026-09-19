@@ -1056,12 +1056,16 @@ class MultiFileChannelWidget(QWidget):
         # NEW: for nested (HEAD .hdf) mode
         self._source_items = {}  # filepath_str -> QTreeWidgetItem (top-level file node)
         self._raster_items = {}  # fid -> QTreeWidgetItem (raster subgroup node)
-        self._axis_groups = {}      # (fid, ch) -> group_id:int
+        # Retired session co-axis map. Interactive merge/split and View apply
+        # use ``_restored_axis_group_projection`` as the only live truth;
+        # this dict is cleared on projection apply so an empty View cannot
+        # inherit leftover ordinary groups.
+        self._axis_groups = {}
         self._axis_group_seq = 0
-        # ViewState-owned axis memberships restored for the focused Time View.
-        # Unlike user-created groups, a WWT group may have one Navigator
-        # channel plus an exceptional record-only binding, so it must not go
-        # through the ordinary singleton-pruning model above.
+        # ViewState-owned axis memberships for the focused Time View.
+        # Ordinary and imported groups share this map. A WWT group may have
+        # one Navigator channel plus an exceptional record-only binding, so
+        # imported ids are not pruned by ordinary channel count.
         self._restored_axis_group_projection = {}
         # WWT keeps an opaque axis ID so ordinary channels can share an axis
         # with a record-only curve. A split must not make that relationship
@@ -1404,7 +1408,7 @@ class MultiFileChannelWidget(QWidget):
         checked = list(self.get_checked_channels())
         hidden = list(self.get_hidden_channels())
         colors = dict(self._colors)
-        axis_groups = dict(self._axis_groups)
+        axis_groups = dict(self._restored_axis_group_projection)
         tree_state = self._file_tree_state(fid)
 
         self._clear_detach_hover()
@@ -1524,11 +1528,16 @@ class MultiFileChannelWidget(QWidget):
             for item in self._iter_channel_items()
             for data in (item.data(0, Qt.UserRole),)
         }
-        self._axis_groups = {
-            key: group for key, group in previous.items() if key in valid_keys
+        projected = {
+            key: str(group)
+            for key, group in (previous or {}).items()
+            if key in valid_keys and str(group or "").strip()
         }
-        self._prune_axis_groups()
-        if self._axis_groups != previous:
+        before = dict(self._restored_axis_group_projection)
+        self.set_restored_axis_group_projection(
+            projected, preserve_imported_axis_seed=True,
+        )
+        if self._restored_axis_group_projection != before:
             self.axis_groups_changed.emit()
 
     def _remove_file_tree_item(self, fid):
@@ -2572,6 +2581,11 @@ class MultiFileChannelWidget(QWidget):
             for key, group in self._restored_axis_group_projection.items()
             if key[0] != str(fid)
         }
+        self._imported_axis_group_seed = {
+            key: group
+            for key, group in self._imported_axis_group_seed.items()
+            if key[0] != str(fid)
+        }
         self._hidden_channels = {
             key for key in self._hidden_channels if key[0] != fid
         }
@@ -2983,9 +2997,11 @@ class MultiFileChannelWidget(QWidget):
     # ---- overlay shared-axis groups -------------------------------------
     def axis_group_for(self, fid, ch):
         key = (str(fid), str(ch))
-        return self._axis_groups.get(
-            key, self._restored_axis_group_projection.get(key)
-        )
+        if key in self._restored_axis_group_projection:
+            return self._canonical_group_id(
+                self._restored_axis_group_projection[key]
+            )
+        return None
 
     def axis_group_badge_label(self, fid, ch):
         """Return the compact, human-facing number for a shared-axis badge.
@@ -3002,16 +3018,20 @@ class MultiFileChannelWidget(QWidget):
     def _axis_group_badge_labels(self):
         """Map all current group identities to stable, contiguous labels."""
         ordinary = sorted({
-            int(group)
-            for group in self._axis_groups.values()
-            if isinstance(group, int) and not isinstance(group, bool) and group > 0
+            n
+            for n in (
+                self._numeric_group_id(group)
+                for group in self._restored_axis_group_projection.values()
+            )
+            if n is not None
         })
         labels = {group: str(group) for group in ordinary}
+        labels.update({str(group): str(group) for group in ordinary})
         next_label = (ordinary[-1] if ordinary else 0) + 1
         imported = sorted({
             str(group)
             for group in self._restored_axis_group_projection.values()
-            if str(group).strip() and str(group) not in labels
+            if str(group).strip() and self._numeric_group_id(group) is None
         })
         for group in imported:
             labels[group] = str(next_label)
@@ -3031,72 +3051,135 @@ class MultiFileChannelWidget(QWidget):
                 return True
         return False
 
+    @staticmethod
+    def _numeric_group_id(group):
+        if isinstance(group, int) and not isinstance(group, bool) and group > 0:
+            return group
+        text = str(group or "").strip()
+        if text.isdigit():
+            value = int(text)
+            if value > 0:
+                return value
+        return None
+
+    @classmethod
+    def _canonical_group_id(cls, group):
+        numeric = cls._numeric_group_id(group)
+        if numeric is not None:
+            return numeric
+        text = str(group or "").strip()
+        return text or None
+
     def _new_axis_group_id(self):
-        self._axis_group_seq += 1
+        live = [
+            self._numeric_group_id(group)
+            for group in (
+                *self._restored_axis_group_projection.values(),
+                *self._axis_groups.values(),
+            )
+        ]
+        current = max((value for value in live if value is not None), default=0)
+        self._axis_group_seq = current + 1
         return self._axis_group_seq
+
+    def _collect_group_members(self, group_ids):
+        wanted = {str(group) for group in group_ids if str(group or "").strip()}
+        wanted_numeric = {
+            value
+            for value in (self._numeric_group_id(group) for group in group_ids)
+            if value is not None
+        }
+        members = set()
+        for key, group in self._restored_axis_group_projection.items():
+            numeric = self._numeric_group_id(group)
+            if str(group) in wanted or (
+                numeric is not None and numeric in wanted_numeric
+            ):
+                members.add(key)
+        return members
+
+    def _prune_and_renumber_ordinary_projection(self, projected):
+        """Dissolve ordinary singletons and compact numeric ids in-place.
+
+        Imported WWT ids are relationship identity and are left untouched;
+        whether a leftover ordinary singleton is drawable is decided at plot
+        time from live bindings.
+        """
+        counts = Counter(
+            group
+            for group in projected.values()
+            if self._numeric_group_id(group) is not None
+        )
+        for key, group in list(projected.items()):
+            if self._numeric_group_id(group) is not None and counts[group] < 2:
+                del projected[key]
+        live = sorted({
+            value
+            for value in (
+                self._numeric_group_id(group) for group in projected.values()
+            )
+            if value is not None
+        })
+        mapping = {old: idx + 1 for idx, old in enumerate(live)}
+        for key, group in list(projected.items()):
+            numeric = self._numeric_group_id(group)
+            if numeric is not None:
+                projected[key] = str(mapping[numeric])
+        self._axis_group_seq = max(mapping.values()) if mapping else 0
 
     def merge_axis_group(self, keys):
         """Put ``keys`` (iterable of (fid, ch)) on one shared axis.
 
-        If any key already belongs to a group, fold everything into the
-        smallest such group id; else allocate a fresh id. Returns the group
-        id, or None when fewer than 2 keys are given."""
+        Ordinary and imported memberships live in the focused View projection.
+        If any key already belongs to a group, fold every member of those
+        groups into one id; imported ids win so WWT record-only companions
+        stay attached. Returns the group id, or None when fewer than 2 keys
+        are given.
+        """
         keys = [(str(f), str(c)) for (f, c) in keys]
         if len(keys) < 2:
             return None
 
-        # A ViewState-projected group is the persistent owner for imported
-        # WWT channels.  Promoting it into the generic session-only model
-        # would make a subsequent capture lose the edit (capture deliberately
-        # serializes this projection, not ``_axis_groups``).  Keep the entire
-        # merged component in that View-owned map instead, including any
-        # ordinary session group that joins an imported member.
-        persisted = self._restored_axis_group_projection
-        persisted_ids = {
-            persisted[key] for key in keys if key in persisted
-        }
-        if persisted_ids:
-            gid = next(persisted[key] for key in keys if key in persisted)
-            persistent_keys = {
-                key for key, group in persisted.items()
-                if group in persisted_ids
-            }
-            session_ids = {
-                self._axis_groups[key] for key in keys
-                if key in self._axis_groups
-            }
-            for key, group in self._axis_groups.items():
-                if group in session_ids:
-                    persistent_keys.add(key)
-            persistent_keys.update(keys)
+        persisted = dict(self._restored_axis_group_projection)
+        existing_ids = []
+        for key in keys:
+            if key in persisted:
+                existing_ids.append(persisted[key])
+        existing_ids = list(dict.fromkeys(existing_ids))
+        imported_ids = [
+            group for group in existing_ids if self._is_imported_axis_group(group)
+        ]
+        numeric_ids = [
+            value
+            for value in (self._numeric_group_id(group) for group in existing_ids)
+            if value is not None
+        ]
+        if imported_ids:
+            gid = imported_ids[0]
+        elif numeric_ids:
+            gid = str(min(numeric_ids))
+        elif existing_ids:
+            gid = str(existing_ids[0])
+        else:
+            gid = str(self._new_axis_group_id())
 
-            updated = dict(persisted)
-            for key in persistent_keys:
-                updated[key] = gid
-                self._axis_groups.pop(key, None)
-            self._prune_axis_groups()
-            self.set_restored_axis_group_projection(
-                updated, preserve_imported_axis_seed=True,
-            )
-            self.axis_groups_changed.emit()
-            return gid
-
-        existing = sorted({self._axis_groups[k] for k in keys if k in self._axis_groups})
-        gid = existing[0] if existing else self._new_axis_group_id()
-        fold = set(existing[1:])
-        if fold:
-            for k, g in list(self._axis_groups.items()):
-                if g in fold:
-                    self._axis_groups[k] = gid
-        for k in keys:
-            self._restored_axis_group_projection.pop(k, None)
-            self._axis_groups[k] = gid
-        self._prune_axis_groups()
+        persistent_keys = self._collect_group_members(existing_ids)
+        persistent_keys.update(keys)
+        updated = dict(persisted)
+        for key in persistent_keys:
+            updated[key] = str(gid)
+        self._axis_groups.clear()
+        self._axis_group_seq = max(
+            self._axis_group_seq, self._numeric_group_id(gid) or 0,
+        )
+        self.set_restored_axis_group_projection(
+            updated, preserve_imported_axis_seed=True,
+        )
         self.axis_groups_changed.emit()
-        return gid
+        return self._canonical_group_id(gid)
 
     def split_axis_group(self, keys):
-        """Remove ``keys`` from their groups; dissolve any group left < 2."""
+        """Remove ``keys`` from their groups; dissolve ordinary groups left < 2."""
         changed = False
         persisted = dict(self._restored_axis_group_projection)
         for (f, c) in keys:
@@ -3108,7 +3191,8 @@ class MultiFileChannelWidget(QWidget):
                 del persisted[k]
                 changed = True
         if changed:
-            self._prune_axis_groups()
+            self._prune_and_renumber_ordinary_projection(persisted)
+            self._axis_groups.clear()
             self.set_restored_axis_group_projection(
                 persisted, preserve_imported_axis_seed=True,
             )
@@ -3128,8 +3212,7 @@ class MultiFileChannelWidget(QWidget):
         for key, group in self._imported_axis_group_seed.items():
             if group in target_ids:
                 restored[key] = group
-                self._axis_groups.pop(key, None)
-        self._prune_axis_groups()
+        self._axis_groups.clear()
         self.set_restored_axis_group_projection(
             restored, preserve_imported_axis_seed=True,
         )
@@ -3163,13 +3246,22 @@ class MultiFileChannelWidget(QWidget):
 
     def checked_axis_groups(self):
         checked = {(f, c) for (f, c, _color) in self.get_checked_channels()}
-        effective = {
+        combined = {}
+        for key, group in self._restored_axis_group_projection.items():
+            if key in checked:
+                combined[key] = group
+        imported = {
             key: group
-            for key, group in self._restored_axis_group_projection.items()
-            if key in checked
+            for key, group in combined.items()
+            if self._is_imported_axis_group(group)
         }
-        # Explicit ordinary Canvas edits win over the imported initial seed.
-        effective.update(self._effective_groups(self._axis_groups, checked))
+        ordinary = {
+            key: self._canonical_group_id(group)
+            for key, group in combined.items()
+            if key not in imported
+        }
+        effective = dict(imported)
+        effective.update(self._effective_groups(ordinary, checked))
         return effective
 
     def set_restored_axis_group_projection(
@@ -3178,10 +3270,10 @@ class MultiFileChannelWidget(QWidget):
         """Set the focused View's persistent axis-group membership.
 
         The persisted JSON map uses composite ``[fid, channel]`` keys and an
-        opaque axis id.  ``_axis_groups`` is intentionally reserved for
-        non-imported, session-level grouping; a persistent View member must
-        not also live there.  A View may retain one normal Navigator row when
-        its other shared-axis member is an exceptional record-only binding.
+        opaque axis id. Ordinary merge/split writes this same map. Switching
+        to a View with no groups must clear leftover session memberships.
+        A View may retain one normal Navigator row when its other shared-axis
+        member is an exceptional record-only binding.
         """
         projected = {}
         if isinstance(raw_groups, Mapping):
@@ -3201,18 +3293,19 @@ class MultiFileChannelWidget(QWidget):
                 if not group:
                     continue
                 projected[(str(fid), str(channel))] = group
+        self._axis_groups.clear()
+        self._prune_axis_groups()
         if projected == self._restored_axis_group_projection:
+            self.tree.viewport().update()
             return
         if not preserve_imported_axis_seed:
-            self._imported_axis_group_seed = {
-                key: group
-                for key, group in projected.items()
-                if self._is_imported_axis_group(group)
-            }
+            # File-level WWT identity must survive applying an empty View.
+            # Union incoming imported ids; never drop seed keys just because
+            # this projection has none.
+            for key, group in projected.items():
+                if self._is_imported_axis_group(group):
+                    self._imported_axis_group_seed[key] = group
         self._restored_axis_group_projection = projected
-        for key in projected:
-            self._axis_groups.pop(key, None)
-        self._prune_axis_groups()
         # This setter projects persisted/imported View state.  It is not an
         # interactive merge/split intent, so publishing ``axis_groups_changed``
         # would re-enter MainWindow's user-edit path while the rest of the View
@@ -3223,18 +3316,16 @@ class MultiFileChannelWidget(QWidget):
     def restored_axis_group_projection(self):
         """Return the focused View's persisted-ready composite-key map."""
         return {
-            json.dumps([fid, channel], ensure_ascii=False, separators=(",", ":")): group
+            json.dumps([fid, channel], ensure_ascii=False, separators=(",", ":")): str(group)
             for (fid, channel), group in self._restored_axis_group_projection.items()
+            if str(group or "").strip()
         }
 
     def _axis_group_menu_plan(self, sel_keys):
         """(can_merge, can_split) for the right-click menu (Task 2)."""
         sel = [(str(f), str(c)) for (f, c) in sel_keys]
         can_merge = len(sel) >= 2
-        can_split = any(
-            k in self._axis_groups or k in self._restored_axis_group_projection
-            for k in sel
-        )
+        can_split = any(k in self._restored_axis_group_projection for k in sel)
         return can_merge, can_split
 
     def _confirm_selected_channel_checks(self, count, state):
@@ -3373,8 +3464,7 @@ class MultiFileChannelWidget(QWidget):
     def get_channel_colors(self):
         return dict(self._colors)
 
-    def set_channel_colors(self, colors):
-        # Rebuild valid_keys from all channel leaves in tree
+    def _live_channel_keys(self):
         valid_keys = set()
 
         def _collect_keys(item):
@@ -3386,7 +3476,34 @@ class MultiFileChannelWidget(QWidget):
 
         for i in range(self.tree.topLevelItemCount()):
             _collect_keys(self.tree.topLevelItem(i))
+        return valid_keys
 
+    def _palette_default_colors(self):
+        defaults = {}
+        for fid, fd in self._files.items():
+            getter = getattr(fd, "get_signal_channels", None)
+            palette_getter = getattr(fd, "get_color_palette", None)
+            if not callable(getter) or not callable(palette_getter):
+                continue
+            channels = list(getter() or ())
+            palette = list(palette_getter() or ())
+            if not channels or not palette:
+                continue
+            for index, channel in enumerate(channels):
+                defaults[(fid, channel)] = palette[index % len(palette)]
+        return defaults
+
+    def get_channel_color_overrides(self):
+        """Return explicit colors that differ from the file palette default."""
+        defaults = self._palette_default_colors()
+        return {
+            key: color
+            for key, color in self._colors.items()
+            if color != defaults.get(key)
+        }
+
+    def set_channel_colors(self, colors):
+        valid_keys = self._live_channel_keys()
         projected = {k: v for k, v in self._colors.items() if k in valid_keys}
         for key, hex_color in (colors or {}).items():
             try:
@@ -3396,7 +3513,27 @@ class MultiFileChannelWidget(QWidget):
             if (fid, ch) not in valid_keys:
                 continue
             projected[(fid, ch)] = hex_color
+        self._apply_projected_channel_colors(projected, valid_keys)
 
+    def restore_channel_color_overrides(self, colors):
+        """Replace the override set; uncovered channels use palette defaults."""
+        valid_keys = self._live_channel_keys()
+        projected = {
+            key: color
+            for key, color in self._palette_default_colors().items()
+            if key in valid_keys
+        }
+        for key, hex_color in (colors or {}).items():
+            try:
+                fid, ch = key
+            except (TypeError, ValueError):
+                continue
+            if (fid, ch) not in valid_keys:
+                continue
+            projected[(fid, ch)] = hex_color
+        self._apply_projected_channel_colors(projected, valid_keys)
+
+    def _apply_projected_channel_colors(self, projected, valid_keys):
         changed_keys = {
             key for key in valid_keys
             if projected.get(key) != self._colors.get(key)

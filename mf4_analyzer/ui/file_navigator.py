@@ -990,8 +990,14 @@ class FileNavigator(QWidget):
     def get_channel_colors(self):
         return self.channel_list.get_channel_colors()
 
+    def get_channel_color_overrides(self):
+        return self.channel_list.get_channel_color_overrides()
+
     def set_channel_colors(self, colors):
         self.channel_list.set_channel_colors(colors)
+
+    def restore_channel_color_overrides(self, colors):
+        self.channel_list.restore_channel_color_overrides(colors)
 
     def get_file_data(self, fid):
         return self.channel_list.get_file_data(fid)

@@ -68,6 +68,22 @@ def test_pg_axis_handle_get_ylim_and_set_ylim(qapp):
     assert handle.get_ylim() == pytest.approx((-1.0, 4.0))
 
 
+def test_snapshot_axis_appearance_reads_handle_fields(qapp):
+    from mf4_analyzer.ui._axis_handle import snapshot_axis_appearance
+
+    handle, _canvas = _pg_time_handle(qapp)
+    handle.set_ylim(0.1, 3.0)
+    handle.set_title("Snap")
+    handle.set_ylabel("Y")
+    handle.set_yscale("log")
+    handle.grid(False)
+    snap = snapshot_axis_appearance(handle)
+    assert "Snap" in str(snap["title"])
+    assert "Y" in str(snap["y_label"])
+    assert snap["y_scale"] == "log"
+    assert snap["grid"] is False
+
+
 def test_pg_axis_handle_label_and_title_roundtrip(qapp):
     handle, _canvas = _pg_time_handle(qapp)
 

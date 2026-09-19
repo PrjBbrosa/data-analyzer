@@ -339,9 +339,9 @@ def test_wwt_view_color_seed_does_not_pollute_other_views(
 ):
     """Seeding WinWert RGB onto the imported View does not rewrite other views.
 
-    ``apply_controls_from_state`` overlays ``ViewState.colors`` onto the shared
-    navigator; that is the existing per-view mechanism, not a global swatch
-    rewrite. CSV-only channels and the other View's stored colors stay put.
+    Navigator swatches are a projection of the focused View. CSV overrides stay
+    in View 0's stored colors and return when that View is projected; they must
+    not be copied into the WinWert View.
     """
     from mf4_analyzer.ui.main_window.file_scope_follow import FollowPrefs
     from tests._helpers import wwt_factory as wwt
@@ -393,9 +393,9 @@ def test_wwt_view_color_seed_does_not_pollute_other_views(
 
     assert dict(window.view_manager.get(0).colors) == other_colors
     nav = window.navigator.get_channel_colors()
-    assert nav.get((csv_fid, "torque")) == csv_torque
-    assert nav.get((csv_fid, "speed")) == csv_speed
     assert nav.get(y_key) == winwert
+    assert nav.get((csv_fid, "torque")) != csv_torque
+    assert nav.get((csv_fid, "speed")) != csv_speed
 
     window._project_view_controls(0)
     qapp.processEvents()

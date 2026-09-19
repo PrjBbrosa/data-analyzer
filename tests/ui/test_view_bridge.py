@@ -589,6 +589,32 @@ def test_apply_and_capture_keep_view_axis_group_projection():
     assert state.axis_opts["channel_axis_groups"] == persisted_groups
 
 
+def test_capture_controls_does_not_wipe_chart_appearance():
+    win = _Window()
+    from mf4_analyzer.ui.view_state import (
+        appearance_channel_key,
+        default_chart_appearance,
+    )
+
+    appearance = default_chart_appearance()
+    appearance["x_scale"] = "log"
+    appearance["axes"][appearance_channel_key("f1", "rpm")] = {
+        "title": "Keep",
+        "y_scale": "log",
+        "grid": False,
+    }
+    state = ViewState(
+        name="v",
+        tab_color="#000000",
+        chart_appearance=appearance,
+    )
+    view_bridge.capture_controls_into(state, win)
+    assert state.chart_appearance["x_scale"] == "log"
+    assert state.chart_appearance["axes"][appearance_channel_key("f1", "rpm")]["title"] == (
+        "Keep"
+    )
+
+
 def test_capture_controls_uses_snapshot_without_merging_previous():
     win = _Window()
     previous = dict(_REMARK)

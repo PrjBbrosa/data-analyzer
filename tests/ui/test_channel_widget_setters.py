@@ -132,6 +132,24 @@ def test_set_channel_colors_skips_unknown_channels(qtbot):
     assert ("f1", "missing") not in colors
 
 
+def test_restore_channel_color_overrides_does_not_keep_previous_view(qtbot):
+    widget = MultiFileChannelWidget()
+    qtbot.addWidget(widget)
+    widget.add_file("f1", _FakeFileData())
+    widget.set_attached_file_ids(["f1"])
+    widget.set_channel_colors({
+        ("f1", "rpm"): "#ff0000",
+        ("f1", "spd"): "#00ff00",
+    })
+
+    widget.restore_channel_color_overrides({("f1", "rpm"): "#0000ff"})
+
+    colors = widget.get_channel_colors()
+    assert colors[("f1", "rpm")] == "#0000ff"
+    assert colors[("f1", "spd")] == "#222222"
+    assert widget.get_channel_color_overrides() == {("f1", "rpm"): "#0000ff"}
+
+
 def test_file_navigator_delegates_channel_state(qtbot):
     navigator = FileNavigator()
     qtbot.addWidget(navigator)

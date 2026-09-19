@@ -815,12 +815,28 @@ _HINTS = (
     ),
     Hint(
         id="coaxis.gesture",
-        text="多选通道右键共轴；WWT 拆分可恢复",
+        text="多选通道右键共轴；只作用于当前 View",
         surface="context",
         tier="A",
         modes=frozenset({"time"}),
         plot_modes=frozenset({"overlay", "subplot"}),
         priority=70,
+    ),
+    Hint(
+        id="filter.view_scope",
+        text="滤波开关和参数只作用于当前 View",
+        surface="context",
+        tier="A",
+        modes=frozenset({"time"}),
+        priority=65,
+    ),
+    Hint(
+        id="chart_options.view_scope",
+        text="图表选项外观只作用于当前 View",
+        surface="context",
+        tier="A",
+        modes=frozenset({"time"}),
+        priority=64,
     ),
     # ---- Situational nudges (surface="nudge"): condition-gated, shown in the
     # footer's discovery slot only while their data predicate (see

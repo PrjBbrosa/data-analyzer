@@ -23,6 +23,16 @@ from ...signal.filters import FilterSpec
 _KIND_MAP = {"低通": "low", "高通": "high", "带通": "band", "带阻": "bandstop"}
 
 
+def _coerce_filter_spin(value, default):
+    """Widget restore must keep 0 Hz; ``or default`` would rewrite it to 100."""
+    if value is None or value == "":
+        return float(default)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
 class FilterPanel(QWidget):
     filter_changed = pyqtSignal()
     # Live display toggles for the already-plotted chart. ``original_visibility_changed``
@@ -163,13 +173,14 @@ class FilterPanel(QWidget):
     def _is_band(self):
         return _KIND_MAP[self.combo_kind.currentText()] in ("band", "bandstop")
 
-    def _sync_rows(self, *_):
+    def _sync_rows(self, *_, emit=True):
         band = self._is_band()
         self._cutoff_host.layout().setCurrentWidget(
             self._band_row if band else self._single_row
         )
         self._single_label.setText("下限:" if band else "截止:")
-        self.filter_changed.emit()
+        if emit:
+            self.filter_changed.emit()
 
     # --- programmatic setters (tests / presets) ------------------------
     def set_kind(self, label):
@@ -213,3 +224,54 @@ class FilterPanel(QWidget):
 
     def show_filtered(self):
         return self.chk_filt.isChecked()
+
+    def capture_payload(self):
+        """Full View-owned intent, including unused cutoff widgets."""
+        spec = self.filter_spec().to_dict()
+        spec["cutoff"] = float(self.spin_cut.value())
+        spec["cutoff_lo"] = float(self.spin_lo.value())
+        spec["cutoff_hi"] = float(self.spin_hi.value())
+        return {
+            "enabled": bool(self.is_enabled()),
+            "spec": spec,
+            "show_original": bool(self.show_original()),
+            "show_filtered": bool(self.show_filtered()),
+        }
+
+    def restore_payload(self, payload):
+        """Project saved intent without emitting edit/visibility signals."""
+        data = payload if isinstance(payload, dict) else {}
+        spec = data.get("spec") if isinstance(data.get("spec"), dict) else {}
+        kind = str(spec.get("kind") or "low")
+        label = {
+            "low": "低通",
+            "high": "高通",
+            "band": "带通",
+            "bandstop": "带阻",
+        }.get(kind, "低通")
+        widgets = (
+            self._enable_switch,
+            self.combo_kind,
+            self.combo_order,
+            self.spin_cut,
+            self.spin_lo,
+            self.spin_hi,
+            self.chk_orig,
+            self.chk_filt,
+        )
+        blocked = [(widget, widget.blockSignals(True)) for widget in widgets]
+        try:
+            self.combo_kind.setCurrentText(label)
+            order = spec.get("order", 4)
+            self.combo_order.setCurrentText(str(int(order)))
+            self.spin_cut.setValue(_coerce_filter_spin(spec.get("cutoff"), 100.0))
+            self.spin_lo.setValue(_coerce_filter_spin(spec.get("cutoff_lo"), 100.0))
+            self.spin_hi.setValue(_coerce_filter_spin(spec.get("cutoff_hi"), 2000.0))
+            self.chk_orig.setChecked(bool(data.get("show_original", True)))
+            self.chk_filt.setChecked(bool(data.get("show_filtered", True)))
+            self._enable_switch.setChecked(bool(data.get("enabled", False)))
+            self._sync_rows(emit=False)
+            self._apply_enabled_state()
+        finally:
+            for widget, previous in blocked:
+                widget.blockSignals(previous)

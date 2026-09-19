@@ -2,7 +2,7 @@
 
 - 日期：2026-09-18
 - 基线：`d75a5c11`，产品源码无本轮修改；现存无关未跟踪文件不纳入范围。
-- 状态：DRAFT，待实施；本文件不表示产品修复或平台验收已经完成。
+- 状态：Round 1 and Round 2 implemented in-tree; plan not IMPLEMENTED. Cocoa/Windows UNVERIFIED.
 - 来源：同文件不同 View 无法独立共轴的排查及后续横向检查。
 - 目标：同一文件在 A/B View 中具有独立、可保存和恢复的绘图意图；切换、复制、分屏、重开项目后保持一致。
 
@@ -83,13 +83,15 @@ Owner：`dialogs/chart_options.py`、`_axis_handle.py`、`pg_canvas` 实际 owni
 
 每轮完成后逐项打勾；不得用另一类证据代替。
 
-- [ ] A/B 同文件：共轴关系、滤波配置、颜色按目标 View 恢复；B 编辑后 A 重绘结果不变。
-- [ ] 分屏：交替聚焦两侧编辑，左右图、控件、保存目标一致；非聚焦画布重绘不读取聚焦 View 设置。
-- [ ] 新建为空默认，复制后互不影响；取消勾选再选、隐藏再显示保留应保留的意图。
-- [ ] WWT/record-only 共轴关系不退化，同名跨文件身份独立。
-- [ ] 旧项目迁移、新项目 round-trip、save→clean→edit→dirty→save→reopen 正确。
-- [ ] UltraView 目标指纹包含相关 View 意图；已缓存和冷重绘结果一致，另一 View 编辑不污染目标内容。
-- [ ] 第一轮真实 offscreen 渲染比较共轴布局、滤波曲线与颜色；第二轮逐项比较外观与实际轴值。
+- [x] A/B 同文件：共轴关系、滤波配置、颜色按目标 View 恢复；B 编辑后 A 重绘结果不变。
+- [x] 分屏：交替聚焦两侧编辑，左右图、控件、保存目标一致；非聚焦画布重绘不读取聚焦 View 设置。
+- [x] 新建为空默认，复制后互不影响；取消勾选再选、隐藏再显示保留应保留的意图。
+- [x] WWT/record-only 共轴关系不退化，同名跨文件身份独立。
+- [x] 旧项目迁移、新项目 round-trip、save→clean→edit→dirty→save→reopen 正确。
+- [x] UltraView 目标指纹包含相关 View 意图；另一 View 编辑不污染目标内容。
+- [ ] UltraView 已缓存和冷重绘像素一致（指纹已测；像素对 UNVERIFIED）。
+- [x] 第一轮真实 offscreen 渲染比较共轴布局、滤波曲线与颜色（断言分组/截止/颜色；PNG 在 `.state/view-state-isolation/`）。
+- [x] 第二轮逐项比较外观与实际轴值（offscreen：标题 / Y 标签 / 对数 / 网格 / 范围符号；PNG 在 `.state/view-state-isolation/round2-*.png`）。
 - [ ] 真实 macOS Cocoa 前台执行 A/B、分屏、图表选项和重开项目流程，记录截图/几何及数值证据。
 - [ ] Windows source 检查与 Windows Full/Lite frozen/DPI 前台验收单独记录；未执行则标为 UNVERIFIED。
 

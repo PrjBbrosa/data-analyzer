@@ -41,6 +41,8 @@ def test_context_hints_filter_by_mode_and_tier_priority():
     assert [hint.id for hint in hints.context_hints(overlay)] == [
         "overlay.drag_y",
         "coaxis.gesture",
+        "filter.view_scope",
+        "chart_options.view_scope",
     ]
 
     subplot = HintState(mode="time", plot_mode="subplot")
@@ -50,6 +52,8 @@ def test_context_hints_filter_by_mode_and_tier_priority():
         "subplot.wheel_target",
         "subplot.shift_y",
         "coaxis.gesture",
+        "filter.view_scope",
+        "chart_options.view_scope",
     ]
 
     dual = HintState(mode="time", plot_mode="overlay", cursor_mode="dual")
@@ -93,6 +97,8 @@ def test_context_hints_suppress_recently_used_ids():
     assert [hint.id for hint in hints.context_hints(state)] == [
         "subplot.shift_y",
         "coaxis.gesture",
+        "filter.view_scope",
+        "chart_options.view_scope",
     ]
 
 

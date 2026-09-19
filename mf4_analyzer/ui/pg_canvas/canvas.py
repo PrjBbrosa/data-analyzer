@@ -349,6 +349,10 @@ class TimeDomainCanvasPG(QWidget):
     # back to the raw (fid, ch) and writes navigator._colors so the left
     # channel-list swatch AND time/FFT replot follow one color truth.
     channel_color_changed = pyqtSignal(object, object, str)
+    # Fires after 图表选项 Apply/OK on a live axis handle, carrying
+    # (handle, pre-dialog appearance snapshot) so the bound View can persist
+    # only the fields the user actually changed.
+    chart_options_applied = pyqtSignal(object, object)
     markup_revision_changed = pyqtSignal()
 
     # Mirror TimeDomainCanvas constants so callers see the same surface.
@@ -3652,10 +3656,23 @@ class TimeDomainCanvasPG(QWidget):
         # _mouse_button_pressed flag, but it does carry overlay-drag
         # bookkeeping — drop it so the dialog cannot resume a stale drag.
         self._overlay_axes.drag_start = None
+        from mf4_analyzer.ui._axis_handle import snapshot_axis_appearance
+
+        before = snapshot_axis_appearance(handle)
+        master = getattr(self, "_x_master_handle", None)
+        if master is not None:
+            before["x_scale"] = snapshot_axis_appearance(master).get(
+                "x_scale", before.get("x_scale")
+            )
         self._chart_options_opening = True
         try:
             target_parent = parent if parent is not None else self.window()
-            return bool(_axis_interaction.edit_chart_options_dialog(target_parent, handle))
+            applied = bool(
+                _axis_interaction.edit_chart_options_dialog(target_parent, handle)
+            )
+            if applied:
+                self.chart_options_applied.emit(handle, before)
+            return applied
         finally:
             self._chart_options_opening = False
 

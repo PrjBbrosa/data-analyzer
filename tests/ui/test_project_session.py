@@ -292,7 +292,7 @@ def test_project_roundtrip_preserves_navigator_file_and_channel_order(qapp, tmp_
     mw.save_project(proj)
 
     raw = json.loads(proj.read_text(encoding="utf-8"))
-    assert raw["schema_version"] == 3
+    assert raw["schema_version"] == 4
     assert [entry["path_rel"] for entry in raw["files"]] == ["b.csv", "a.csv"]
     assert raw["files"][1]["channel_order"][0] == "speed"
 
@@ -588,12 +588,15 @@ def test_project_roundtrip_restores_time_filter_state(qapp, tmp_path):
     mw.save_project(proj)
 
     doc = pio.load_project_from_json(proj)
-    assert doc.filter == {
-        "enabled": True,
-        "spec": FilterSpec("band", order=6, cutoff_lo=5.0, cutoff_hi=30.0).to_dict(),
-        "show_original": False,
-        "show_filtered": True,
-    }
+    assert doc.filter is None
+    view_filter = doc.views[0]["time_filter"]
+    assert view_filter["enabled"] is True
+    assert view_filter["spec"]["kind"] == "band"
+    assert view_filter["spec"]["order"] == 6
+    assert view_filter["spec"]["cutoff_lo"] == pytest.approx(5.0)
+    assert view_filter["spec"]["cutoff_hi"] == pytest.approx(30.0)
+    assert view_filter["show_original"] is False
+    assert view_filter["show_filtered"] is True
 
     mw2 = MainWindow()
     mw2.open_project(proj)

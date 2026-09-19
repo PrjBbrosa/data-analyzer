@@ -13,6 +13,53 @@ PG_AXIS_NEUTRAL_COLOR = "#9ca3af"
 PG_AXIS_NEUTRAL_WIDTH = 1.0
 
 
+def _plain_axis_text(value) -> str:
+    text = str(value or "")
+    if "<" not in text:
+        return text
+    import re
+    return re.sub(r"<[^>]+>", "", text)
+
+
+def snapshot_axis_appearance(handle) -> dict[str, object]:
+    """Plain chart-options fields currently on ``handle``."""
+    title = ""
+    getter = getattr(handle, "get_title", None)
+    if callable(getter):
+        title = _plain_axis_text(getter())
+    xlabel = ""
+    getter = getattr(handle, "get_xlabel", None)
+    if callable(getter):
+        xlabel = _plain_axis_text(getter())
+    ylabel = ""
+    getter = getattr(handle, "get_ylabel", None)
+    if callable(getter):
+        ylabel = _plain_axis_text(getter())
+    x_scale = "linear"
+    getter = getattr(handle, "get_xscale", None)
+    if callable(getter):
+        x_scale = "log" if getter() == "log" else "linear"
+    y_scale = "linear"
+    getter = getattr(handle, "get_yscale", None)
+    if callable(getter):
+        y_scale = "log" if getter() == "log" else "linear"
+    grid = False
+    getter = getattr(handle, "is_grid_enabled", None)
+    if callable(getter):
+        try:
+            grid = bool(getter())
+        except Exception:
+            grid = False
+    return {
+        "title": title,
+        "xlabel": xlabel,
+        "y_label": ylabel,
+        "x_scale": x_scale,
+        "y_scale": y_scale,
+        "grid": grid,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Line protocol + pyqtgraph wrapper
 # ---------------------------------------------------------------------------

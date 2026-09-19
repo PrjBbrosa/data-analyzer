@@ -10,6 +10,7 @@ class _PageTransitionFence(QObject):
     """Minimal natural-paint seam for a real View deletion path."""
 
     presentation_paint_acknowledged = pyqtSignal(object)
+    presentation_content_invalidated = pyqtSignal()
 
     def __init__(self) -> None:
         super().__init__()

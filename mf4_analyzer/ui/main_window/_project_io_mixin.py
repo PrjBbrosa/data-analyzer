@@ -94,6 +94,9 @@ class ProjectIOMixin:
         self._note_user_project_mutation()
 
     def _on_project_filter_changed(self):
+        sync = getattr(self, "_sync_focused_view_time_filter", None)
+        if callable(sync):
+            sync()
         self._note_user_project_mutation()
 
     def _on_markup_revision_changed(self):
@@ -1974,13 +1977,19 @@ class ProjectIOMixin:
 
         filter_panel = getattr(getattr(self, "inspector", None), "filter_panel", None)
         if filter_panel is not None:
-            filter_panel.set_kind("低通")
-            filter_panel.set_cutoff(100.0)
-            filter_panel.set_band(100.0, 2000.0)
-            filter_panel.set_order(4)
-            filter_panel.chk_orig.setChecked(True)
-            filter_panel.chk_filt.setChecked(True)
-            filter_panel.set_enabled(False)
+            restore = getattr(filter_panel, "restore_payload", None)
+            if callable(restore):
+                from ..view_state import default_time_filter
+
+                restore(default_time_filter())
+            else:
+                filter_panel.set_kind("低通")
+                filter_panel.set_cutoff(100.0)
+                filter_panel.set_band(100.0, 2000.0)
+                filter_panel.set_order(4)
+                filter_panel.chk_orig.setChecked(True)
+                filter_panel.chk_filt.setChecked(True)
+                filter_panel.set_enabled(False)
 
         chart_stack = getattr(self, "chart_stack", None)
         if chart_stack is not None:
@@ -2233,7 +2242,7 @@ class ProjectIOMixin:
                 }
                 for sec, mgr in self.analysis_managers.items()
             },
-            filter=self._project_filter_payload(),
+            filter=None,
             ultraview=None if uv is None else uv.to_project_payload(),
         )
 
@@ -2359,8 +2368,6 @@ class ProjectIOMixin:
                 dropped_time_refs=dropped_time,
                 dropped_analysis_refs=dropped_analysis,
             )
-
-        self._restore_project_filter(doc.filter)
 
         remapped = pio.remap_view_fids(doc.views, fid_map)
         states = [ViewState.from_dict(v) for v in remapped]

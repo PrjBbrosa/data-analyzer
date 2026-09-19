@@ -1107,7 +1107,7 @@ class UltraViewCaptureCoordinator(QObject):
         if state is None:
             return None
         facts = self._runtime_facts_for(ref)
-        filter_payload = self._filter_payload(window)
+        filter_payload = self._filter_payload(window, state)
         return {
             "attached_file_ids": [str(fid) for fid in (state.attached_file_ids or [])],
             "checked": [
@@ -1131,6 +1131,9 @@ class UltraViewCaptureCoordinator(QObject):
             },
             "overlay_primary": _channel_pair(state.overlay_primary),
             "axis_opts": dict(state.axis_opts or {}),
+            "chart_appearance": dict(
+                getattr(state, "chart_appearance", None) or {}
+            ),
             "filter": filter_payload,
             "data_signatures": self._time_data_signatures(window, state),
             "markup_revision": facts.markup_revision,
@@ -1220,16 +1223,34 @@ class UltraViewCaptureCoordinator(QObject):
         except (TypeError, ValueError):
             return None
 
-    def _filter_payload(self, window) -> dict:
-        getter = getattr(window, "_project_filter_payload", None)
-        if callable(getter):
-            payload = getter()
-            if isinstance(payload, dict):
+    def _filter_payload(self, window, state=None) -> dict:
+        payload = getattr(state, "time_filter", None)
+        if isinstance(payload, dict):
+            spec = payload.get("spec") if isinstance(payload.get("spec"), dict) else {}
+            return {
+                "enabled": bool(payload.get("enabled", False)),
+                "spec": dict(spec),
+                "show_original": bool(payload.get("show_original", True)),
+                "show_filtered": bool(payload.get("show_filtered", False)),
+            }
+        getter = getattr(window, "_time_filter_config_for_view", None)
+        if callable(getter) and state is not None:
+            views = getattr(getattr(window, "view_manager", None), "views", None) or []
+            idx = next(
+                (
+                    index for index, item in enumerate(views)
+                    if getattr(item, "view_id", None) == getattr(state, "view_id", None)
+                ),
+                None,
+            )
+            resolved = getter(idx)
+            if isinstance(resolved, dict):
+                spec = resolved.get("spec") if isinstance(resolved.get("spec"), dict) else {}
                 return {
-                    "enabled": bool(payload.get("enabled", False)),
-                    "spec": dict(payload.get("spec") or {}),
-                    "show_original": bool(payload.get("show_original", True)),
-                    "show_filtered": bool(payload.get("show_filtered", False)),
+                    "enabled": bool(resolved.get("enabled", False)),
+                    "spec": dict(spec),
+                    "show_original": bool(resolved.get("show_original", True)),
+                    "show_filtered": bool(resolved.get("show_filtered", False)),
                 }
         return {
             "enabled": False,

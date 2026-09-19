@@ -16,7 +16,12 @@ from .view_overlay_state import (
     normalize_cursor_placement,
     normalize_remarks,
 )
-from .view_state import ChannelKey, ViewState
+from .view_state import (
+    ChannelKey,
+    ViewState,
+    default_time_filter,
+    normalize_time_filter,
+)
 
 
 def capture_axis_opts(window) -> dict[str, Any]:
@@ -69,6 +74,29 @@ def capture_axis_opts(window) -> dict[str, Any]:
     return axis_opts
 
 
+def capture_time_filter(window) -> dict[str, Any]:
+    """Capture the Inspector filter panel as View-owned time-domain intent."""
+    panel = getattr(getattr(window, "inspector", None), "filter_panel", None)
+    getter = getattr(panel, "capture_payload", None)
+    if callable(getter):
+        return normalize_time_filter(getter())
+    if panel is None:
+        return default_time_filter()
+    spec = {}
+    spec_getter = getattr(panel, "filter_spec", None)
+    if callable(spec_getter):
+        spec_obj = spec_getter()
+        to_dict = getattr(spec_obj, "to_dict", None)
+        if callable(to_dict):
+            spec = to_dict()
+    return normalize_time_filter({
+        "enabled": bool(getattr(panel, "is_enabled", lambda: False)()),
+        "spec": spec,
+        "show_original": bool(getattr(panel, "show_original", lambda: True)()),
+        "show_filtered": bool(getattr(panel, "show_filtered", lambda: True)()),
+    })
+
+
 def capture_view(window) -> ViewState:
     """Aggregate the current interactive time-domain screen state."""
     navigator = window.navigator
@@ -106,26 +134,52 @@ def capture_view(window) -> ViewState:
         cursor_placement=normalize_cursor_placement(
             live_placement, cursor_mode=cursor_mode
         ),
+        time_filter=capture_time_filter(window),
     )
+
+
+def _canvas_owns_shared_projection(window, canvas) -> bool:
+    """True when ``canvas`` is the pane currently shown on shared widgets.
+
+    Navigator, Inspector filter, and axis-option controls are a single
+    projection of the focused time pane. Capturing or restoring those
+    widgets into a different pane's View would stamp the focused filter
+    onto the compare View.
+    """
+    if canvas is None:
+        return True
+    chart_stack = getattr(window, "chart_stack", None)
+    if chart_stack is None:
+        return True
+    focused = getattr(chart_stack, "focused_canvas", None)
+    if callable(focused):
+        current = focused()
+        if current is not None:
+            return current is canvas
+    primary = getattr(chart_stack, "canvas_time", None)
+    return primary is None or canvas is primary
 
 
 def capture_controls_into(state: ViewState, window, canvas=None) -> None:
     """Capture widget/control state into ``state`` for the given time pane.
 
-    Ordinary inspector fields and the current View's effective axis-group
-    projection are refreshed from live widgets.  Historic native tick fields
-    are intentionally not carried forward.
+    Shared navigator/inspector fields are copied only when ``canvas`` is
+    the focused projection. Canvas-local plot mode, cursor, and remarks
+    always come from the bound pane. Historic native tick fields are
+    intentionally not carried forward.
     """
-    fresh = capture_view(window)
-    state.attached_file_ids = fresh.attached_file_ids
-    state.checked = fresh.checked
-    state.hidden_channels = fresh.hidden_channels
-    state.colors = fresh.colors
-    state.overlay_primary = fresh.overlay_primary
-    state.axis_opts = dict(fresh.axis_opts)
-
     chart_stack = window.chart_stack
     target = canvas if canvas is not None else chart_stack.canvas_time
+    if _canvas_owns_shared_projection(window, target):
+        fresh = capture_view(window)
+        state.attached_file_ids = fresh.attached_file_ids
+        state.checked = fresh.checked
+        state.hidden_channels = fresh.hidden_channels
+        state.colors = fresh.colors
+        state.overlay_primary = fresh.overlay_primary
+        state.axis_opts = dict(fresh.axis_opts)
+        state.time_filter = normalize_time_filter(fresh.time_filter)
+
     plot_for_canvas = getattr(chart_stack, "plot_mode_for_canvas", None)
     if callable(plot_for_canvas):
         state.plot_mode = plot_for_canvas(target)
@@ -190,7 +244,13 @@ def apply_controls_from_state(state: ViewState, window, canvas=None) -> None:
     with _signals_blocked(navigator), _signals_blocked(chart_stack):
         with _channel_projection_batch(navigator):
             navigator.set_attached_file_ids(state.attached_file_ids)
-            navigator.set_channel_colors(state.colors)
+            restore_colors = getattr(
+                navigator, "restore_channel_color_overrides", None,
+            )
+            if callable(restore_colors):
+                restore_colors(state.colors)
+            else:
+                navigator.set_channel_colors(state.colors)
             navigator.set_checked_channels(state.checked)
             navigator.set_hidden_channels(state.hidden_channels)
             plot_setter = getattr(chart_stack, "set_plot_mode_for_canvas", None)
@@ -220,6 +280,10 @@ def apply_controls_from_state(state: ViewState, window, canvas=None) -> None:
     )
     if callable(restore_bound_x):
         restore_bound_x(state)
+    if _canvas_owns_shared_projection(window, target):
+        restore_filter = getattr(window, "_restore_view_time_filter", None)
+        if callable(restore_filter):
+            restore_filter(getattr(state, "time_filter", None))
 
 
 def apply_view(state: ViewState, window) -> None:
@@ -235,6 +299,12 @@ def restore_axes(state: ViewState, window) -> None:
 
 
 def _capture_colors(navigator, checked_rows: Iterable[Any]) -> dict[ChannelKey, str]:
+    overrides = getattr(navigator, "get_channel_color_overrides", None)
+    if callable(overrides):
+        return {
+            _channel_key(key): str(color)
+            for key, color in (overrides() or {}).items()
+        }
     checked_keys = {_channel_key(row) for row in checked_rows}
     getter = getattr(navigator, "get_channel_colors", None)
     if callable(getter):

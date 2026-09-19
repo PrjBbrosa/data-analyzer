@@ -252,6 +252,7 @@ lesson by default.
 | [Candidate Metadata Matches Qt Storage](pyqt-ui/2026-09-16-candidate-metadata-matches-qt-storage.md) | QComboBox candidate no-op comparisons with None, empty labels, or QVariant values. | `tests/ui/test_searchable_combo.py` |
 | [Overlay Paint Is Not Content Invalidation](overlay-paint-is-not-content-invalidation.md) | A translucent Qt overlay composites over a live chart, or a page-transition / cover widget watches the target's `QEvent.Paint`. | See lesson |
 | [Layout-Derived X Titles Are Auto Origin](layout-derived-x-titles-are-auto-origin.md) | Constructing `CustomXAxisSpec` in a file or layout importer, especially WWT/WinWert ordinary channel X. | See lesson |
+| [Time-domain drawing intent belongs only to ViewState](view-state-isolation-no-session-truth.md) | Changing time-domain co-axis merge/split, filter intent, channel color | See lesson |
 
 ## Selection Rules
 

@@ -13,7 +13,7 @@ Field inventory
 ---------------
 Stable top-level keys (exactly :data:`PROJECT_PAYLOAD_KEYS`):
 
-* ``schema_version`` — codec version (currently 3); not user content.
+* ``schema_version`` — codec version (currently 4); not user content.
 * ``active_file`` — navigator active fid.
 * ``current_mode`` — persisted chart mode (``time`` / analysis sections;
   UltraView is not a source workspace and falls back to ``time`` on load).
@@ -24,16 +24,20 @@ Stable top-level keys (exactly :data:`PROJECT_PAYLOAD_KEYS`):
 * ``views`` — TimeDomain ``ViewState.to_dict()`` rows (name, tab_color,
   view_id, attached_file_ids, checked, hidden_channels, colors, plot_mode,
   cursor_mode, xlim, ylims, overlay_primary, axis_opts, remarks,
-  cursor_placement, curve_bindings, hidden_curve_binding_ids). Retired WWT
-  display keys ``x_viewport_intent`` / ``native_ticks`` are stripped.
+  cursor_placement, curve_bindings, hidden_curve_binding_ids, time_filter,
+  chart_appearance). Retired WWT display keys
+  ``x_viewport_intent`` / ``native_ticks`` are stripped. ``time_filter`` is
+  the authority for time-domain filter intent. ``chart_appearance`` holds
+  View-local chart-options title / Y label / log / grid and filter-companion
+  colors.
 * ``view_manager`` — ``{active, split_pairs}``.
 * ``analysis_views`` — per section ``{active, views: AnalysisViewState.to_dict()}``
   (schema, name, tab_color, view_id, attached_file_ids, panes, params,
   compare). Pane rows persist sources / rpm / FRF io / time_range / xlim /
   ylim / ylims / effective_time_range / cursor_mode / remarks /
   cursor_placement. ``PaneState.source_time_view_id`` is **not** written.
-* ``filter`` — Inspector filter panel: ``enabled``, ``spec`` (FilterSpec),
-  ``show_original``, ``show_filtered``. Absent in schema v1.
+* ``filter`` — compatibility input for schema 1–3 (project-level Inspector
+  filter). Schema 4 writes ``null``; time-domain Views own ``time_filter``.
 * ``ultraview`` — ``workspace_to_payload`` Board/workspace blob (schema,
   workspace.{active_board_id, show_card_actions, boards}, optional
   ``preview_sidecar`` descriptor). Preview **pixels** live in a sidecar
@@ -57,9 +61,14 @@ from collections.abc import Mapping
 
 from .time_xaxis import CustomXAxisSpec, EXACT_SOURCE, PER_SOURCE_NAME
 from .view_overlay_state import remap_remarks
+from .view_state import (
+    default_time_filter,
+    normalize_time_filter,
+    remap_chart_appearance,
+)
 
-SCHEMA_VERSION = 3
-SUPPORTED_SCHEMA_VERSIONS = {1, 2, 3}
+SCHEMA_VERSION = 4
+SUPPORTED_SCHEMA_VERSIONS = {1, 2, 3, 4}
 _SOURCE_MODES = frozenset({"time", "fft", "fft_time", "frf", "order"})
 
 # Top-level keys of the object ``save_project_to_json`` writes. List order
@@ -77,8 +86,9 @@ PROJECT_PAYLOAD_KEYS = (
 )
 
 # Keys that are session/runtime and must never appear in the canonical
-# payload (top-level or nested). ``filter`` is a stable top-level project
-# field; it is intentionally absent from this set.
+# payload (top-level or nested). Top-level ``filter`` remains in the
+# payload for codec compatibility (schema 4 writes null) and is
+# intentionally absent from this set.
 PROJECT_RUNTIME_ONLY_KEYS = frozenset({
     "selection",
     "selected",
@@ -362,17 +372,23 @@ def load_project_from_json(path) -> ProjectDocument:
     uv_payload = raw.get("ultraview")
     if uv_payload is not None and not isinstance(uv_payload, dict):
         uv_payload = None
+    legacy_filter = raw.get("filter") if version >= 2 else None
+    views = _apply_time_filter_codec(
+        [
+            _retire_view_display_fields(view)
+            for view in raw.get("views", [])
+        ],
+        legacy_filter,
+        version,
+    )
     return ProjectDocument(
         active_file=raw.get("active_file"),
         current_mode=mode,
         files=files,
-        views=[
-            _retire_view_display_fields(view)
-            for view in raw.get("views", [])
-        ],
+        views=views,
         view_manager=dict(raw.get("view_manager", {})),
         analysis_views=dict(raw.get("analysis_views", {})),
-        filter=raw.get("filter") if version >= 2 else None,
+        filter=legacy_filter,
         ultraview=uv_payload,
     )
 
@@ -434,6 +450,24 @@ def resolve_dbc_paths(ref: ProjectFileRef, project_path) -> list[str]:
 def _encode_channel_key(fid: str, channel: str) -> str:
     # Matches ui.view_state._encode_channel_key exactly.
     return json.dumps([fid, channel], ensure_ascii=False, separators=(",", ":"))
+
+
+def _apply_time_filter_codec(views, legacy_filter, version):
+    """Attach View-owned time_filter; copy schema 1–3 top-level filter once."""
+    out = []
+    for view in views:
+        if not isinstance(view, dict):
+            out.append(view)
+            continue
+        row = dict(view)
+        if "time_filter" in row and row["time_filter"] is not None:
+            row["time_filter"] = normalize_time_filter(row.get("time_filter"))
+        elif version < 4 and legacy_filter:
+            row["time_filter"] = normalize_time_filter(legacy_filter)
+        else:
+            row["time_filter"] = default_time_filter()
+        out.append(row)
+    return out
 
 
 def _retire_view_display_fields(view):
@@ -593,6 +627,9 @@ def remap_view_fids(views: list, fid_map: dict) -> list:
         ]
         v["hidden_curve_binding_ids"] = prune_hidden_curve_binding_ids(
             view.get("hidden_curve_binding_ids"), bindings,
+        )
+        v["chart_appearance"] = remap_chart_appearance(
+            view.get("chart_appearance"), fid_map,
         )
 
         out.append(v)

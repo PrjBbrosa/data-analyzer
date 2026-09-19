@@ -3707,12 +3707,20 @@ class MainWindow(
         focused = self.chart_stack.focused_canvas()
         idx = self._view_index_for_canvas(focused)
         if idx is not None and 0 <= idx < len(self.view_manager.views):
-            self._view_bridge.capture_canvas_ranges_into(
-                self.view_manager.get(idx), focused
+            state = self.view_manager.get(idx)
+            prev_groups = dict(
+                (state.axis_opts or {}).get("channel_axis_groups") or {}
             )
-            self._view_bridge.capture_controls_into(
-                self.view_manager.get(idx), self, focused
+            self._view_bridge.capture_canvas_ranges_into(state, focused)
+            self._view_bridge.capture_controls_into(state, self, focused)
+            new_groups = dict(
+                (state.axis_opts or {}).get("channel_axis_groups") or {}
             )
+            inherit = getattr(
+                self, "_inherit_chart_appearance_after_groups_changed", None,
+            )
+            if callable(inherit):
+                inherit(state, prev_groups, new_groups)
             self._note_user_project_mutation()
         if self.files and self.chart_stack.current_mode() == "time":
             self._replot_canvas_for_view(idx, focused)
@@ -3830,39 +3838,49 @@ class MainWindow(
         return seen
 
     def _on_show_original_toggled(self, visible):
-        """显示原始 live toggle: hide/show the solid originals on the built
+        """显示原始 live toggle: hide/show the solid originals on the bound
         chart WITHOUT a re-plot. Falls back to a full plot only if nothing was
         toggled (e.g. nothing plotted yet) so the chart still appears."""
+        if getattr(self, "_applying_view", False):
+            return
+        sync = getattr(self, "_sync_focused_view_time_filter", None)
+        if callable(sync):
+            sync()
         self._note_user_project_mutation()
         if self.chart_stack.current_mode() != 'time':
             return
-        any_toggled = False
-        for c in self._time_canvases():
-            setter = getattr(c, "set_original_lines_visible", None)
-            if callable(setter) and setter(visible):
-                any_toggled = True
-        if not any_toggled and self.files:
+        canvas = self.chart_stack.focused_canvas()
+        setter = getattr(canvas, "set_original_lines_visible", None)
+        if callable(setter) and setter(visible):
+            return
+        if self.files:
             self.plot_time()
 
     def _on_show_filtered_toggled(self, visible):
         """显示滤波后 live toggle: hide/show the dashed filtered companions on
-        the built chart WITHOUT a re-plot. If no companion exists yet (filter
+        the bound chart WITHOUT a re-plot. If no companion exists yet (filter
         just enabled but not plotted), fall back to a full plot so the overlay
         appears."""
+        if getattr(self, "_applying_view", False):
+            return
+        sync = getattr(self, "_sync_focused_view_time_filter", None)
+        if callable(sync):
+            sync()
         self._note_user_project_mutation()
         if self.chart_stack.current_mode() != 'time':
             return
-        any_toggled = False
-        for c in self._time_canvases():
-            setter = getattr(c, "set_companion_lines_visible", None)
-            if callable(setter) and setter(visible):
-                any_toggled = True
-        if not any_toggled and visible and self.files:
+        canvas = self.chart_stack.focused_canvas()
+        setter = getattr(canvas, "set_companion_lines_visible", None)
+        if callable(setter) and setter(visible):
+            return
+        if visible and self.files:
             # Turning the filtered overlay ON with no companion bound yet →
             # need a real plot to compute + bind the dashed traces.
             self.plot_time()
 
-    def _estimate_current_time_overlay_risk(self, mode: str, checked) -> PlotRisk:
+    def _estimate_current_time_overlay_risk(
+        self, mode: str, checked, *, time_filter=None,
+    ) -> PlotRisk:
         if self.inspector.top.range_enabled():
             time_range = self.inspector.top.range_values()
         else:
@@ -3871,11 +3889,19 @@ class MainWindow(
         filter_enabled = False
         show_original = True
         show_filtered = False
-        fp = getattr(self.inspector, "filter_panel", None)
-        if fp is not None and fp.is_enabled():
-            spec = fp.filter_spec()
-            show_original = fp.show_original()
-            show_filtered = fp.show_filtered()
+        cfg = time_filter
+        if not isinstance(cfg, dict):
+            getter = getattr(self, "_time_filter_config_for_view", None)
+            idx = getattr(self, "_focused_view_idx", None)
+            if idx is None:
+                idx = getattr(self.view_manager, "active", None)
+            cfg = getter(idx) if callable(getter) else None
+        if isinstance(cfg, dict) and cfg.get("enabled"):
+            from ...signal.filters import FilterSpec
+
+            spec = FilterSpec.from_dict(cfg.get("spec"))
+            show_original = bool(cfg.get("show_original", True))
+            show_filtered = bool(cfg.get("show_filtered", True))
             filter_enabled = (spec.cutoff > 0) or (
                 spec.cutoff_lo > 0 and spec.cutoff_hi > 0
             )
@@ -3946,20 +3972,25 @@ class MainWindow(
             out.insert(0, out.pop(primary_idx))
         return out
 
-    def _active_time_curve_bindings(self):
-        """Return ``curve_bindings`` for the active TimeDomain View.
+    def _active_time_curve_bindings(self, idx=None):
+        """Return ``curve_bindings`` for a TimeDomain View.
 
         Record-only Y (``y_ref.kind == "wwt_record"``) has no Navigator
         identity. Callers must parse these before treating an empty
-        checked set as "nothing to plot".
+        checked set as "nothing to plot". Split-pane plots must pass the
+        canvas-bound View index rather than assuming ``view_manager.active``.
         """
         if not hasattr(self, "view_manager"):
             return []
+        if idx is None:
+            idx = getattr(self, "_focused_view_idx", None)
+        if idx is None:
+            idx = getattr(self.view_manager, "active", None)
         try:
-            active_state = self.view_manager.get(self.view_manager.active)
+            state = self.view_manager.get(idx)
         except (IndexError, TypeError):
             return []
-        return list(getattr(active_state, "curve_bindings", None) or [])
+        return list(getattr(state, "curve_bindings", None) or [])
 
     @staticmethod
     def _bindings_include_record_only(bindings) -> bool:
@@ -3995,7 +4026,9 @@ class MainWindow(
         # U-Can View 6/7 (and synthetic record-only fixtures) are valid XY
         # with checked=[]. Parse bindings before the Navigator empty-checked
         # early return so those rows still reach _build_time_plot_data.
-        curve_bindings = self._active_time_curve_bindings()
+        curve_bindings = self._active_time_curve_bindings(
+            self._view_index_for_canvas(canvas)
+        )
         has_record_only = self._bindings_include_record_only(curve_bindings)
         if not all_checked and not has_record_only:
             self._set_time_plot_diagnostics(canvas)
@@ -4053,7 +4086,14 @@ class MainWindow(
                 canvas.invalidate_envelope_cache("plot mode changed")
             self._last_plot_mode = mode
         is_primary = update_primary_ui or user_initiated
-        risk = self._estimate_current_time_overlay_risk(mode, checked)
+        view_idx = self._view_index_for_canvas(canvas)
+        filter_getter = getattr(self, "_time_filter_config_for_canvas", None)
+        filter_cfg = filter_getter(canvas) if callable(filter_getter) else {}
+        if not isinstance(filter_cfg, dict):
+            filter_cfg = {}
+        risk = self._estimate_current_time_overlay_risk(
+            mode, checked, time_filter=filter_cfg,
+        )
         if is_primary:
             if mode == 'overlay' and risk.level is not PlotRiskLevel.OK:
                 self._show_plot_risk(risk)
@@ -4085,18 +4125,21 @@ class MainWindow(
                 canvas.invalidate_envelope_cache("range filter changed")
             self._last_range_state = cur_range_state
 
-        fp = getattr(self.inspector, "filter_panel", None)
-        if fp is not None and fp.is_enabled():
-            cur_filter_state = (True, tuple(sorted(fp.filter_spec().to_dict().items())))
+        if filter_cfg.get("enabled"):
+            cur_filter_state = (
+                True,
+                tuple(sorted((filter_cfg.get("spec") or {}).items())),
+            )
         else:
             cur_filter_state = (False,)
-        if update_primary_ui:
-            canvas_key = id(canvas)
-            last_filter_state = self._last_filter_state_by_canvas.get(canvas_key)
-            if (last_filter_state is not None
-                    and last_filter_state != cur_filter_state):
-                canvas.invalidate_envelope_cache("filter state changed")
-            self._last_filter_state_by_canvas[canvas_key] = cur_filter_state
+        canvas_key = id(canvas)
+        last_filter_state = self._last_filter_state_by_canvas.get(canvas_key)
+        if (
+            last_filter_state is not None
+            and last_filter_state != cur_filter_state
+        ):
+            canvas.invalidate_envelope_cache("filter state changed")
+        self._last_filter_state_by_canvas[canvas_key] = cur_filter_state
 
         applied_x = getattr(self, '_custom_xaxis_spec', CustomXAxisSpec())
         render_context_key = (
@@ -4196,6 +4239,8 @@ class MainWindow(
                     checked, None, range_enabled, range_lo, range_hi,
                     progress_callback=prepare_progress,
                     plot_mode=mode,
+                    time_filter=filter_cfg,
+                    view_idx=view_idx,
                 )
             self._set_time_plot_diagnostics(canvas, result)
             data = result.render_rows(mode)
@@ -4310,6 +4355,17 @@ class MainWindow(
             # A View restore owns its one final range/tick commit; this is not
             # WWT detection or a native-axis algorithm.
             if not defer_axis_finalize:
+                if (
+                    view_idx is not None
+                    and 0 <= view_idx < len(self.view_manager.views)
+                ):
+                    apply_appearance = getattr(
+                        self, "_apply_view_chart_appearance", None,
+                    )
+                    if callable(apply_appearance):
+                        apply_appearance(
+                            self.view_manager.get(view_idx), canvas,
+                        )
                 xt, yt = self.inspector.top.tick_density()
                 canvas.set_tick_density(xt, yt)
             # [perf-probe] 诊断探针，定位后移除。诊断行 + 强制同步首帧 paint
@@ -4389,7 +4445,8 @@ class MainWindow(
 
     def _build_time_plot_data(self, checked=None, custom_x=None,
                               range_enabled=None, range_lo=0.0, range_hi=0.0,
-                              progress_callback=None, *, plot_mode=None):
+                              progress_callback=None, *, plot_mode=None,
+                              time_filter=None, view_idx=None):
         """Assemble per-curve TimeDomain rows and source-level diagnostics.
 
         Pure w.r.t. ``channel_data`` — it never mutates samples. Each checked
@@ -4426,13 +4483,34 @@ class MainWindow(
             range_lo, range_hi = self.inspector.top.range_values()
         applied_x = getattr(self, '_custom_xaxis_spec', CustomXAxisSpec())
 
-        fp = getattr(self.inspector, "filter_panel", None)
+        companion_colors = {}
+        manager = getattr(self, "view_manager", None)
+        views = getattr(manager, "views", None) if manager is not None else None
+        if view_idx is not None and views is not None and 0 <= view_idx < len(views):
+            from ..view_state import (
+                _encode_channel_key as _appearance_color_key,
+                normalize_chart_appearance,
+            )
+            appearance = normalize_chart_appearance(
+                getattr(manager.get(view_idx), "chart_appearance", None)
+            )
+            companion_colors = appearance.get("companion_colors") or {}
+        else:
+            _appearance_color_key = None
+
         spec = None
         show_orig, show_filt = True, True
         filt_enabled = False
-        if fp is not None and fp.is_enabled():
-            spec = fp.filter_spec()
-            show_orig, show_filt = fp.show_original(), fp.show_filtered()
+        if not isinstance(time_filter, dict):
+            getter = getattr(self, "_time_filter_config_for_view", None)
+            idx = view_idx
+            if idx is None:
+                idx = getattr(self, "_focused_view_idx", None)
+            time_filter = getter(idx) if callable(getter) else None
+        if isinstance(time_filter, dict) and time_filter.get("enabled"):
+            spec = _filters.FilterSpec.from_dict(time_filter.get("spec"))
+            show_orig = bool(time_filter.get("show_original", True))
+            show_filt = bool(time_filter.get("show_filtered", True))
             filt_enabled = (spec.cutoff > 0) or (
                 spec.cutoff_lo > 0 and spec.cutoff_hi > 0)
 
@@ -4443,7 +4521,7 @@ class MainWindow(
         eff_groups = self.channel_list.checked_axis_groups()
         result = TimePlotBuildResult()
         binding_claimed: set[tuple[str, str]] = set()
-        bindings = self._active_time_curve_bindings()
+        bindings = self._active_time_curve_bindings(view_idx)
         if bindings:
             from ..time_curve_bindings import bound_time_plot_rows
             from ..time_xaxis import TimePlotIssue as PayloadIssue
@@ -4459,7 +4537,10 @@ class MainWindow(
                 checked_channel_keys=checked_keys,
                 channel_colors=checked_colors,
                 hidden_binding_ids=getattr(
-                    self.view_manager.get(self.view_manager.active),
+                    self.view_manager.get(
+                        view_idx if view_idx is not None
+                        else self.view_manager.active
+                    ),
                     "hidden_curve_binding_ids",
                     None,
                 ) if getattr(self, "view_manager", None) and self.view_manager.views else None,
@@ -4703,8 +4784,14 @@ class MainWindow(
                 # the SAME axis/row instead of allocating a fresh subplot row.
                 # Original 7-tuple rows are unchanged → backward compatible.
                 meta = {"companion_of": name, "dash": True}
+                companion_color = color
+                if _appearance_color_key is not None and companion_colors:
+                    companion_color = companion_colors.get(
+                        _appearance_color_key((str(fid), str(ch))), color,
+                    )
                 companion_row = (
-                    fname, show_filt, x_axis, filtered, color, unit, fid, meta
+                    fname, show_filt, x_axis, filtered, companion_color,
+                    unit, fid, meta,
                 )
                 slot_rows.append(companion_row)
                 result.rows.append(companion_row)
@@ -5222,13 +5309,15 @@ class MainWindow(
             params = {}
             if self.inspector.top.range_enabled():
                 params['time_range'] = self.inspector.top.range_values()
-            fp = getattr(self.inspector, "filter_panel", None)
-            if fp is not None:
+            getter = getattr(self, "_time_filter_config_for_view", None)
+            idx = getattr(self, "_focused_view_idx", None)
+            cfg = getter(idx) if callable(getter) else None
+            if isinstance(cfg, dict):
                 params["filter"] = {
-                    "enabled": bool(fp.is_enabled()),
-                    "spec": fp.filter_spec().to_dict(),
-                    "show_original": bool(fp.show_original()),
-                    "show_filtered": bool(fp.show_filtered()),
+                    "enabled": bool(cfg.get("enabled", False)),
+                    "spec": dict(cfg.get("spec") or {}),
+                    "show_original": bool(cfg.get("show_original", True)),
+                    "show_filtered": bool(cfg.get("show_filtered", True)),
                 }
             preset = AnalysisPreset.free_config(
                 name="当前时域",

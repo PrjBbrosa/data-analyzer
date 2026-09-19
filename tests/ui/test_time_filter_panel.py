@@ -112,6 +112,26 @@ def test_inspector_mounts_filter_panel_in_range_card(qtbot):
         anc = anc.parent()
 
 
+def test_restore_payload_keeps_zero_cutoff(qtbot):
+    p = FilterPanel()
+    qtbot.addWidget(p)
+    p.restore_payload({
+        "enabled": True,
+        "spec": {
+            "kind": "low",
+            "order": 4,
+            "cutoff": 0.0,
+            "cutoff_lo": 0.0,
+            "cutoff_hi": 0.0,
+        },
+        "show_original": True,
+        "show_filtered": True,
+    })
+    assert p.spin_cut.value() == pytest.approx(0.0)
+    assert p.spin_lo.value() == pytest.approx(0.0)
+    assert p.spin_hi.value() == pytest.approx(0.0)
+
+
 def test_inspector_filter_disabled_by_default(qtbot):
     from mf4_analyzer.ui.inspector import Inspector
     insp = Inspector(); qtbot.addWidget(insp)

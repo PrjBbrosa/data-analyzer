@@ -65,7 +65,7 @@ def test_project_save_is_same_directory_atomic_replace(tmp_path, monkeypatch):
         target = type(path)(target)
         assert source.parent == path.parent
         assert source.exists()
-        assert json.loads(source.read_text(encoding="utf-8"))["schema_version"] == 3
+        assert json.loads(source.read_text(encoding="utf-8"))["schema_version"] == 4
         replaced.append((source, target))
         return original_replace(source, target)
 
@@ -144,7 +144,7 @@ def test_load_and_resave_drop_retired_wwt_display_fields_without_schema_bump(tmp
     rewritten = tmp_path / "rewritten.tlproj"
     pio.save_project_to_json(loaded, rewritten)
     saved = json.loads(rewritten.read_text(encoding="utf-8"))
-    assert saved["schema_version"] == 3
+    assert saved["schema_version"] == 4
     assert "x_viewport_intent" not in saved["views"][0]
     assert "native_ticks" not in saved["views"][0]["axis_opts"]
 
@@ -450,7 +450,7 @@ def test_ultraview_field_is_last_and_positional_construction_unchanged():
     assert doc.active_file == "f0"
     assert doc.current_mode == "fft"
     assert doc.ultraview is None
-    assert pio.SCHEMA_VERSION == 3
+    assert pio.SCHEMA_VERSION == 4
 
 
 def test_ultraview_board_roundtrips_without_runtime_keys(tmp_path):
@@ -477,7 +477,7 @@ def test_ultraview_board_roundtrips_without_runtime_keys(tmp_path):
     doc.ultraview = payload
     pio.save_project_to_json(doc, path)
     raw = json.loads(path.read_text(encoding="utf-8"))
-    assert raw["schema_version"] == 3
+    assert raw["schema_version"] == 4
     assert raw["ultraview"]["board"]["name"] == "全局对比-A"
     forbidden = {
         "digest", "selected", "presentation", "image", "qimage",
@@ -575,7 +575,7 @@ def test_schema_v3_roundtrips_file_and_channel_order(tmp_path):
     )
     pio.save_project_to_json(doc, path)
     raw = json.loads(path.read_text(encoding="utf-8"))
-    assert raw["schema_version"] == 3
+    assert raw["schema_version"] == 4
     assert [entry["fid"] for entry in raw["files"]] == ["f1", "f0a", "f0b"]
     assert raw["files"][0]["channel_order"] == ["torque", "speed"]
     assert raw["files"][1]["channel_order"] == ["x", "y"]

@@ -81,6 +81,10 @@ def test_viewstate_defaults_are_empty():
     assert st.cursor_placement is None
     assert st.curve_bindings == []
     assert st.hidden_curve_binding_ids == []
+    assert st.time_filter["enabled"] is False
+    assert st.chart_appearance["x_scale"] == "linear"
+    assert st.chart_appearance["axes"] == {}
+    assert st.chart_appearance["companion_colors"] == {}
     assert not hasattr(st, "x_viewport_intent")
     assert isinstance(st.view_id, str) and st.view_id
 
@@ -135,6 +139,62 @@ def test_viewstate_roundtrip_preserves_per_source_name_axis_payload():
     again = ViewState.from_dict(json.loads(json.dumps(st.to_dict())))
 
     assert again.axis_opts["x_axis"] == x_axis
+
+
+def test_viewstate_chart_appearance_roundtrip_and_blank_predicate():
+    from mf4_analyzer.ui.view_state import (
+        appearance_channel_key,
+        default_chart_appearance,
+        is_reusable_blank_view,
+    )
+
+    blank = ViewState(name="View 1", tab_color="#2d7ff9")
+    assert is_reusable_blank_view(blank) is True
+
+    edited = ViewState.from_dict(blank.to_dict())
+    edited.chart_appearance = {
+        **default_chart_appearance(),
+        "x_scale": "log",
+        "axes": {
+            appearance_channel_key("f1", "torque"): {
+                "title": "扭矩",
+                "y_label": "Nm",
+                "y_scale": "log",
+                "grid": False,
+            }
+        },
+        "companion_colors": {'["f1","torque"]': "#aa00aa"},
+    }
+    payload = json.loads(json.dumps(edited.to_dict()))
+    again = ViewState.from_dict(payload)
+    assert again.chart_appearance["x_scale"] == "log"
+    spec = again.chart_appearance["axes"][appearance_channel_key("f1", "torque")]
+    assert spec["title"] == "扭矩"
+    assert spec["y_scale"] == "log"
+    assert spec["grid"] is False
+    assert again.chart_appearance["companion_colors"]['["f1","torque"]'] == "#aa00aa"
+    assert is_reusable_blank_view(edited) is False
+
+
+def test_remap_view_fids_rewrites_chart_appearance_channel_keys():
+    from mf4_analyzer.ui.view_state import appearance_channel_key
+
+    views = [{
+        "name": "v",
+        "tab_color": "#2d7ff9",
+        "chart_appearance": {
+            "x_scale": "linear",
+            "axes": {
+                appearance_channel_key("old-a", "torque"): {"title": "T"},
+            },
+            "companion_colors": {'["old-a","torque"]': "#ff00aa"},
+        },
+    }]
+    got = remap_view_fids(views, {"old-a": "f0"})
+    appearance = got[0]["chart_appearance"]
+    assert appearance_channel_key("old-a", "torque") not in appearance["axes"]
+    assert appearance["axes"][appearance_channel_key("f0", "torque")]["title"] == "T"
+    assert appearance["companion_colors"]['["f0","torque"]'] == "#ff00aa"
 
 
 def test_remap_view_fids_migrates_legacy_missing_attachments():
