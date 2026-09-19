@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TraceLab · 双游标定位与牵引方案</title>
+  <style>
+    :root {
+      color: #172338;
+      background: #edf1f6;
+      font-family: "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-width: 860px; }
+    button { color: inherit; font: inherit; }
+    button:focus-visible { outline: 2px solid #246dd9; outline-offset: 2px; }
+    .topbar {
+      height: 52px; padding: 0 24px; display: flex; align-items: center;
+      justify-content: space-between; gap: 20px; background: #fbfcfe;
+      border-bottom: 1px solid #d9e1ec;
+    }
+    .brand { display: flex; align-items: baseline; gap: 12px; }
+    .brand strong { font-size: 15px; letter-spacing: .1px; }
+    .brand span { color: #718197; font-size: 12px; }
+    .status { color: #47705d; font-size: 12px; font-variant-numeric: tabular-nums; }
+    .page { width: min(1260px, calc(100vw - 40px)); margin: 20px auto 32px; }
+    .intro { display: flex; align-items: end; justify-content: space-between; gap: 24px; margin: 0 2px 16px; }
+    h1 { margin: 0 0 6px; font-size: 20px; font-weight: 650; letter-spacing: -.25px; }
+    .intro p { max-width: 660px; margin: 0; color: #65768c; font-size: 13px; line-height: 1.55; }
+    .test-fast {
+      flex: 0 0 auto; padding: 7px 10px; border: 1px solid #b9cce6; border-radius: 6px;
+      background: #fff; color: #285d9d; font-size: 12px; cursor: pointer;
+    }
+    .test-fast:hover { background: #f2f7ff; }
+    .schemes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 12px; }
+    .scheme {
+      min-height: 66px; padding: 10px 12px; text-align: left; border: 1px solid #d4dde9;
+      border-radius: 8px; background: #f9fbfd; cursor: pointer;
+    }
+    .scheme:hover { border-color: #9dbce4; background: #f4f8ff; }
+    .scheme[aria-pressed="true"] { border-color: #4c82ce; background: #eef5ff; box-shadow: inset 0 0 0 1px #bfd7f7; }
+    .scheme strong { display: block; margin-bottom: 3px; font-size: 13px; font-weight: 650; }
+    .scheme span { display: block; color: #718197; font-size: 11px; line-height: 1.4; }
+    .scheme .recommend { color: #2265b6; }
+    .window { overflow: hidden; border: 1px solid #cbd6e4; border-radius: 10px; background: #fff; box-shadow: 0 9px 24px rgba(42, 64, 92, .08); }
+    .toolbar { height: 40px; padding: 0 13px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #dce4ee; background: #f8fafd; }
+    .toolbar-left, .toolbar-right { display: flex; align-items: center; gap: 7px; }
+    .view-name { font-size: 12px; font-weight: 600; }
+    .mode { padding: 4px 8px; border: 1px solid #b9c9dc; border-radius: 5px; background: #fff; color: #52677f; font-size: 11px; }
+    .mode.selected { border-color: #87afe5; background: #edf5ff; color: #1f63ba; }
+    .hint { color: #6e8096; font-size: 11px; }
+    .chart-shell { position: relative; height: 550px; overflow: hidden; background: #fff; }
+    .chart-svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+    .line { stroke-width: 1.25; stroke-dasharray: 5 4; }
+    .line-a { stroke: #2f70d8; }
+    .line-b { stroke: #d45e6b; }
+    .curve-one { fill: none; stroke: #5469e8; stroke-width: 2; }
+    .curve-two { fill: none; stroke: #0a9c76; stroke-width: 1.6; opacity: .85; }
+    .point { fill: #fff; stroke-width: 2; }
+    .point-a { stroke: #2f70d8; }
+    .point-b { stroke: #d45e6b; }
+    .axis-title, .tick { fill: #8894a4; font-size: 11px; }
+    .axis-title { fill: #96a3b4; font-size: 12px; }
+    .axis-rule { stroke: #a6b1c0; }
+    .grid { stroke: #e2e7ef; stroke-width: 1; }
+    .dual-label {
+      position: absolute; z-index: 5; transform: translateX(-50%); display: inline-flex;
+      min-width: max-content; min-height: 27px; align-items: center; justify-content: center;
+      padding: 0 7px; border: 1px solid #9ebce1; border-radius: 6px; background: #f3f8ff;
+      color: #17283e; box-shadow: 0 1px 2px rgba(37, 79, 131, .08); font-size: 13px;
+      font-weight: 650; line-height: 1; white-space: nowrap; touch-action: none; cursor: grab;
+      user-select: none; font-variant-numeric: tabular-nums;
+    }
+    .dual-label:active { cursor: grabbing; }
+    .dual-label.active { border-color: #397cd0; background: #e9f2ff; box-shadow: 0 0 0 2px rgba(68, 134, 222, .14); }
+    .dual-label .endpoint { margin-left: 3px; color: #d45e6b; font-size: 10px; font-weight: 700; }
+    .dual-label .endpoint.a { color: #2f70d8; }
+    .pin-panel {
+      position: absolute; z-index: 8; width: 252px; overflow: visible; border: 1px solid #afc5e0;
+      border-radius: 9px; background: rgba(255, 255, 255, .98); box-shadow: 0 6px 18px rgba(49, 76, 111, .14);
+      font-variant-numeric: tabular-nums;
+    }
+    .panel-head { height: 31px; padding: 0 9px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #e1e8f1; background: #f7faff; border-radius: 9px 9px 0 0; cursor: grab; user-select: none; }
+    .panel-head:active { cursor: grabbing; }
+    .panel-id { color: #2864b0; font-size: 11px; font-weight: 700; }
+    .panel-title { color: #1c2f48; font-size: 12px; font-weight: 650; }
+    .panel-actions { display: flex; gap: 4px; }
+    .panel-actions button { width: 17px; height: 17px; border: 1px solid #c4d0df; border-radius: 3px; background: #fff; color: #61758d; font-size: 12px; line-height: 12px; cursor: pointer; }
+    .panel-body { padding: 8px 10px 9px; }
+    .panel-facts { display: grid; grid-template-columns: 1fr auto auto; gap: 4px 9px; margin: 0; font-size: 11px; }
+    .panel-facts dt { color: #667a92; }
+    .panel-facts dd { margin: 0; text-align: right; color: #1d2c40; }
+    .panel-facts dd.value-a { color: #2f70d8; }
+    .panel-facts dd.value-b { color: #c6515e; }
+    .panel-port { position: absolute; width: 10px; height: 10px; border: 2px solid #3b76c0; border-radius: 50%; background: #fff; }
+    .panel-port.bottom { bottom: -6px; }
+    .panel-port.side { right: -6px; top: 23px; }
+    .panel-port .inner { display: none; }
+    .leader { position: absolute; z-index: 6; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+    .leader path { fill: none; stroke: #3b76c0; stroke-width: 1.2; stroke-linecap: round; stroke-linejoin: round; opacity: .76; }
+    .leader .dash { stroke-dasharray: 3.5 3; }
+    .leader circle { fill: #fff; stroke: #3b76c0; stroke-width: 1.4; }
+    .leader .quiet { stroke: #7f9fbd; opacity: .55; }
+    .callout-tail { position: absolute; z-index: 7; width: 14px; height: 14px; border-right: 1px solid #afc5e0; border-bottom: 1px solid #afc5e0; background: rgba(255,255,255,.98); transform: rotate(45deg); }
+    .connection-copy { position: absolute; right: 14px; bottom: 10px; z-index: 4; padding: 5px 7px; border-radius: 5px; background: rgba(248,250,253,.92); color: #75879d; font-size: 10px; }
+    .footer-note { padding: 10px 13px; border-top: 1px solid #dce4ee; background: #fbfcfe; color: #65778e; font-size: 12px; line-height: 1.45; }
+    .footer-note strong { color: #2864b0; }
+    .legend { display: inline-flex; align-items: center; gap: 4px; margin-left: 7px; }
+    .legend i { width: 14px; height: 0; border-top: 2px dashed currentColor; }
+    .legend.a { color: #2f70d8; } .legend.b { color: #d45e6b; }
+    @media (max-width: 900px) { .page { width: calc(100vw - 24px); } .intro { align-items: start; } }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><strong>TraceLab</strong><span>双游标 · 定位与牵引 UI 原型</span></div>
+    <div id="status" class="status" aria-live="polite">就绪</div>
+  </header>
+  <main class="page">
+    <section class="intro">
+      <div>
+        <h1>底部标签应自适应；拖放必须在松手瞬间提交</h1>
+        <p>拖动 P1 / P2 标签可直接验证快速松手；点击标签打开对应 Cursor 面板。三种方案只比较“面板与位置线如何重新建立视觉关系”，不改变 A/B 线色语义。</p>
+      </div>
+      <button id="fast-test" class="test-fast" type="button">模拟快速拖放 P2</button>
+    </section>
+    <div class="schemes" role="group" aria-label="牵引方案">
+      <button class="scheme" data-scheme="rail" aria-pressed="true" type="button">
+        <strong>方案 A · 接口牵引 <span class="recommend">推荐</span></strong>
+        <span>面板底部小接口 + 细折线，落在所属位置线上。</span>
+      </button>
+      <button class="scheme" data-scheme="spine" aria-pressed="false" type="button">
+        <strong>方案 B · 侧边脊线</strong>
+        <span>从面板侧缘引出，留出更完整的卡片下缘。</span>
+      </button>
+      <button class="scheme" data-scheme="tail" aria-pressed="false" type="button">
+        <strong>方案 C · 气泡折角</strong>
+        <span>像注释气泡直接指向位置线，识别最快但更显眼。</span>
+      </button>
+    </div>
+    <section class="window" aria-label="双游标交互演示">
+      <div class="toolbar">
+        <div class="toolbar-left"><span class="view-name">Time Domain · View 1</span><button class="mode" type="button">单游标</button><button class="mode selected" type="button">双游标</button></div>
+        <div class="toolbar-right"><span class="hint">拖标签改位置 · 点标签开面板</span></div>
+      </div>
+      <div id="chart" class="chart-shell">
+        <svg class="chart-svg" viewBox="0 0 1160 550" preserveAspectRatio="none" aria-hidden="true">
+          <g id="grid"></g>
+          <path id="curve-one" class="curve-one"></path><path id="curve-two" class="curve-two"></path>
+          <g id="cursor-lines"></g><g id="cursor-points"></g>
+          <line class="axis-rule" x1="58" y1="456" x2="1120" y2="456"></line>
+          <text x="560" y="525" class="axis-title" text-anchor="middle">Time (s)</text>
+          <g id="ticks"></g>
+        </svg>
+        <svg id="leader" class="leader" viewBox="0 0 1160 550" preserveAspectRatio="none" aria-hidden="true"></svg>
+        <div id="labels"></div><div id="panels"></div><div id="tail"></div>
+        <div class="connection-copy" id="connection-copy"></div>
+      </div>
+      <div id="footer-note" class="footer-note"></div>
+    </section>
+  </main>
+  <script>
+    (() => {
+      const chart = document.querySelector('#chart');
+      const labelsHost = document.querySelector('#labels');
+      const panelsHost = document.querySelector('#panels');
+      const leader = document.querySelector('#leader');
+      const tail = document.querySelector('#tail');
+      const status = document.querySelector('#status');
+      const footer = document.querySelector('#footer-note');
+      const connectionCopy = document.querySelector('#connection-copy');
+      const ns = 'http://www.w3.org/2000/svg';
+      const W = 1160, H = 550, left = 58, right = 1120, top = 34, bottom = 456;
+      const state = {
+        scheme: 'rail', opened: 'p2', drag: null, suppressLabelClick: false,
+        pins: {
+          p1: { id: 'P1', endpoint: 'A', x: .31, color: 'a', panel: { x: 128, y: 76 } },
+          p2: { id: 'P2', endpoint: 'B', x: .63, color: 'b', panel: { x: 732, y: 98 } },
+        },
+      };
+      const xPx = ratio => left + ratio * (right - left);
+      const yOne = ratio => 224 - Math.sin(ratio * 19) * 58 - Math.cos(ratio * 8) * 18;
+      const yTwo = ratio => 278 - Math.cos(ratio * 15 + .8) * 38;
+      const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
+      const pointFrom = event => {
+        const rect = chart.getBoundingClientRect();
+        return { x: (event.clientX - rect.left) / rect.width * W, y: (event.clientY - rect.top) / rect.height * H };
+      };
+      const updateXFromEvent = (pin, event) => { pin.x = clamp((pointFrom(event).x - left) / (right - left), .02, .98); };
+      const el = (name, attrs = {}) => { const node = document.createElementNS(ns, name); Object.entries(attrs).forEach(([key, value]) => node.setAttribute(key, value)); return node; };
+      function drawBase() {
+        const grid = document.querySelector('#grid'); const ticks = document.querySelector('#ticks');
+        for (let i = 0; i <= 10; i++) {
+          const x = left + i * (right - left) / 10;
+          grid.append(el('line', { x1: x, x2: x, y1: top, y2: bottom, class: 'grid' }));
+          const t = el('text', { x, y: 478, class: 'tick', 'text-anchor': 'middle' }); t.textContent = String(8 + i * 3); ticks.append(t);
+        }
+        for (let i = 0; i <= 5; i++) { const y = top + i * (bottom - top) / 5; grid.append(el('line', { x1: left, x2: right, y1: y, y2: y, class: 'grid' })); }
+        const points = Array.from({ length: 241 }, (_, i) => i / 240);
+        document.querySelector('#curve-one').setAttribute('d', points.map((r, i) => `${i ? 'L' : 'M'}${xPx(r).toFixed(1)},${yOne(r).toFixed(1)}`).join(' '));
+        document.querySelector('#curve-two').setAttribute('d', points.map((r, i) => `${i ? 'L' : 'M'}${xPx(r).toFixed(1)},${yTwo(r).toFixed(1)}`).join(' '));
+      }
+      function panelFor(pin) {
+        const panel = document.createElement('section'); panel.className = 'pin-panel'; panel.dataset.pin = pin.id; panel.style.left = `${pin.panel.x / W * 100}%`; panel.style.top = `${pin.panel.y / H * 100}%`;
+        panel.innerHTML = `<div class="panel-head" data-panel-drag="${pin.id}"><span><span class="panel-id">${pin.id}</span> <span class="panel-title">双游标读数</span></span><span class="panel-actions"><button type="button" aria-label="收起">−</button><button type="button" aria-label="关闭">×</button></span></div><div class="panel-body"><dl class="panel-facts"><dt>位置 ${pin.endpoint}</dt><dd class="value-${pin.color}">${(8 + pin.x * 30).toFixed(3)} s</dd><dd></dd><dt>方向盘扭矩</dt><dd class="value-a">${(19.20 + pin.x * 2.3).toFixed(3)}</dd><dd>Nm</dd><dt>电机扭矩</dt><dd class="value-b">${(7.1 - pin.x * 1.8).toFixed(3)}</dd><dd>Nm</dd></dl></div>`;
+        return panel;
+      }
+      function routePath(pin, panelRect, isOpen) {
+        if (!isOpen) return '';
+        const targetX = xPx(pin.x), targetY = top + 12;
+        const px = panelRect.x, py = panelRect.y, pw = panelRect.width, ph = panelRect.height;
+        if (state.scheme === 'rail') {
+          const sourceX = clamp(targetX, px + 22, px + pw - 22), sourceY = py + ph;
+          const bendY = Math.max(sourceY + 19, targetY + 25);
+          return `<path class="dash" d="M ${sourceX} ${sourceY} V ${bendY} H ${targetX} V ${targetY}"/><circle cx="${sourceX}" cy="${sourceY}" r="4"/><circle cx="${targetX}" cy="${targetY}" r="3.3"/>`;
+        }
+        if (state.scheme === 'spine') {
+          const sourceX = px + pw, sourceY = py + 29, railX = Math.max(sourceX + 23, targetX + 34);
+          return `<path d="M ${sourceX} ${sourceY} H ${railX} V ${targetY + 26} H ${targetX} V ${targetY}"/><circle cx="${sourceX}" cy="${sourceY}" r="4"/><circle cx="${targetX}" cy="${targetY}" r="3.3"/>`;
+        }
+        const sourceX = clamp(targetX, px + 25, px + pw - 25), sourceY = py + ph;
+        return `<path d="M ${sourceX} ${sourceY} L ${targetX} ${targetY}"/><circle cx="${targetX}" cy="${targetY}" r="3.3"/>`;
+      }
+      function render() {
+        const lines = document.querySelector('#cursor-lines'); const dots = document.querySelector('#cursor-points'); lines.replaceChildren(); dots.replaceChildren(); labelsHost.replaceChildren(); panelsHost.replaceChildren(); leader.replaceChildren(); tail.replaceChildren();
+        Object.values(state.pins).forEach(pin => {
+          const x = xPx(pin.x); const css = pin.color === 'a' ? 'line-a' : 'line-b';
+          lines.append(el('line', { x1: x, x2: x, y1: top, y2: bottom, class: `line ${css}` }));
+          dots.append(el('circle', { cx: x, cy: yOne(pin.x), r: 4.2, class: `point point-${pin.color}` }));
+          dots.append(el('circle', { cx: x, cy: yTwo(pin.x), r: 3.4, class: `point point-${pin.color}` }));
+          const label = document.createElement('button'); label.type = 'button'; label.className = `dual-label ${state.opened === pin.id.toLowerCase() ? 'active' : ''}`; label.dataset.pin = pin.id; label.style.left = `${x / W * 100}%`; label.style.top = `${462 / H * 100}%`; label.innerHTML = `<span>${pin.id}</span><span class="endpoint ${pin.color}">·${pin.endpoint}</span>`; label.title = `拖动 ${pin.id}·${pin.endpoint} 改变位置；单击打开面板`;
+          label.addEventListener('pointerdown', event => { if (event.button !== 0) return; state.drag = { kind: 'axis', pin: pin.id, pointer: event.pointerId, moved: false }; label.setPointerCapture(event.pointerId); event.preventDefault(); });
+          label.addEventListener('pointermove', event => { if (!state.drag || state.drag.pin !== pin.id || state.drag.pointer !== event.pointerId) return; state.drag.moved = true; updateXFromEvent(pin, event); status.textContent = `${pin.id}·${pin.endpoint}：预览 ${(8 + pin.x * 30).toFixed(3)} s`; render(); });
+          label.addEventListener('click', event => { if (state.suppressLabelClick) { state.suppressLabelClick = false; return; } if (event.detail && !state.drag) { state.opened = state.opened === pin.id.toLowerCase() ? null : pin.id.toLowerCase(); status.textContent = state.opened ? `已打开 ${pin.id} 面板` : `已收起 ${pin.id} 面板`; render(); } });
+          labelsHost.append(label);
+        });
+        Object.values(state.pins).forEach(pin => {
+          const open = state.opened === pin.id.toLowerCase(); if (!open) return;
+          const panel = panelFor(pin); panelsHost.append(panel);
+          const head = panel.querySelector('[data-panel-drag]');
+          head.addEventListener('pointerdown', event => { if (event.target.closest('button')) return; const p = pointFrom(event); state.drag = { kind: 'panel', pin: pin.id, pointer: event.pointerId, dx: p.x - pin.panel.x, dy: p.y - pin.panel.y }; head.setPointerCapture(event.pointerId); event.preventDefault(); });
+          head.addEventListener('pointermove', event => { if (!state.drag || state.drag.kind !== 'panel' || state.drag.pin !== pin.id || state.drag.pointer !== event.pointerId) return; const p = pointFrom(event); pin.panel.x = clamp(p.x - state.drag.dx, 6, W - 268); pin.panel.y = clamp(p.y - state.drag.dy, 8, H - 150); render(); });
+          const rect = { x: pin.panel.x, y: pin.panel.y, width: 252, height: 126 };
+          leader.insertAdjacentHTML('beforeend', routePath(pin, rect, open));
+          if (state.scheme === 'tail') {
+            const tx = clamp(xPx(pin.x), pin.panel.x + 20, pin.panel.x + 232); const ty = pin.panel.y + 119;
+            const notch = document.createElement('i'); notch.className = 'callout-tail'; notch.style.left = `${tx / W * 100}%`; notch.style.top = `${ty / H * 100}%`; tail.append(notch);
+          }
+        });
+        const descriptions = {
+          rail: '<strong>推荐：方案 A。</strong> 将“接口”限定为面板下缘一个小圆点，虚线只表达关联、不伪装成新的数据线；折线路由保持远离读数与曲线。',
+          spine: '<strong>方案 B。</strong> 侧边脊线不会吃掉卡片下缘空间，但当面板靠近右侧时线路更长，视觉重量略高。',
+          tail: '<strong>方案 C。</strong> 语义最像批注气泡；距离较远时尾巴会变成一根斜线，因此不建议作为默认。',
+        };
+        footer.innerHTML = descriptions[state.scheme];
+        connectionCopy.textContent = state.scheme === 'rail' ? '细虚线 = 面板与位置线关联' : state.scheme === 'spine' ? '脊线 = 关联路径' : '气泡尾 = 指向位置';
+      }
+      window.addEventListener('pointerup', event => {
+        const drag = state.drag;
+        if (!drag) return;
+        const pin = state.pins[drag.pin.toLowerCase()];
+        if (!pin) { state.drag = null; return; }
+        if (drag.kind === 'axis') {
+          // The label can be re-rendered during preview. Commit at window
+          // scope, so removal of its former DOM node never eats this release.
+          updateXFromEvent(pin, event);
+          state.suppressLabelClick = Boolean(drag.moved);
+          state.drag = null;
+          status.textContent = `${pin.id}·${pin.endpoint}：已在松手瞬间提交 ${(8 + pin.x * 30).toFixed(3)} s`;
+        } else if (drag.kind === 'panel') {
+          const p = pointFrom(event);
+          pin.panel.x = clamp(p.x - drag.dx, 6, W - 268);
+          pin.panel.y = clamp(p.y - drag.dy, 8, H - 150);
+          state.drag = null;
+          status.textContent = `${pin.id} 面板位置已保存，牵引线随面板更新`;
+        }
+        render();
+      });
+      window.addEventListener('pointercancel', () => { if (state.drag) { state.drag = null; status.textContent = '拖放已取消，保持上一次已提交的位置'; render(); } });
+      document.querySelectorAll('.scheme').forEach(button => button.addEventListener('click', () => { state.scheme = button.dataset.scheme; document.querySelectorAll('.scheme').forEach(item => item.setAttribute('aria-pressed', String(item === button))); status.textContent = `已切换至${button.querySelector('strong').childNodes[0].textContent.trim()}`; render(); }));
+      document.querySelector('#fast-test').addEventListener('click', () => { const pin = state.pins.p2; pin.x = pin.x > .65 ? .47 : .78; status.textContent = `P2·B：快速拖放模拟，已立即提交 ${(8 + pin.x * 30).toFixed(3)} s`; render(); });
+      drawBase(); render();
+    })();
+  </script>
+</body>
+</html>
