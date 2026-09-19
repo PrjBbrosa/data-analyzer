@@ -900,6 +900,12 @@ class PinPanelProjector(QObject):
         stack = ports.stack_widget()
         mapper = ports.map_canvas_rect_to_stack
         on_screen = bool(ports.source_on_screen(canvas))
+        collection = ports.collection_for(canvas)
+        expanded_ids = frozenset(
+            item.record_id
+            for item in getattr(collection, "records", ()) or ()
+            if getattr(item, "panel_expanded", False) is True
+        )
         state = self.state_for(key)
         wanted = {}
         if (
@@ -936,6 +942,11 @@ class PinPanelProjector(QObject):
             if not label.pointer_captured():
                 label.apply_geom(geom)
                 label.move(mapped.x(), mapped.y())
+            label.set_panel_open(
+                bool(expanded_ids.intersection(
+                    str(item) for item in geom.record_ids
+                ))
+            )
             label.setVisible(True)
             highlight = self._hover_matches(canvas, geom.record_ids)
             label.set_highlighted(highlight)

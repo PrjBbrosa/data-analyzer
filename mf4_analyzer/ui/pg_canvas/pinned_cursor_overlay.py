@@ -51,6 +51,12 @@ _A_COLOR = "#2563eb"
 _B_COLOR = "#dc2626"
 _MIN_COLOR = "#16a34a"
 _MAX_COLOR = "#dc2626"
+_LABEL_IDLE_FILL = QColor("#f1f6fd")
+_LABEL_IDLE_BORDER = QColor("#bed0e9")
+_LABEL_OPEN_FILL = QColor("#c5dbf8")
+_LABEL_OPEN_BORDER = QColor("#5b8fd4")
+_LABEL_HOVER_FILL = QColor("#dceaff")
+_LABEL_HOVER_BORDER = QColor("#729ee0")
 _FAINT_ALPHA = 110
 _HIGHLIGHT_ALPHA = 220
 
@@ -792,6 +798,7 @@ class PinnedAxisLabel(QFrame):
         self.setFocusPolicy(Qt.TabFocus)
         self._geom = None
         self._highlighted = False
+        self._panel_open = False
         self._expanded = False
         self._buttons = []
         self._member_scroll = None
@@ -840,6 +847,20 @@ class PinnedAxisLabel(QFrame):
         self._highlighted = bool(highlighted)
         self.update()
 
+    def set_panel_open(self, open_):
+        wanted = bool(open_)
+        if wanted == self._panel_open:
+            if self._geom is not None:
+                self.setToolTip(self._tooltip(self._geom))
+            return
+        self._panel_open = wanted
+        if self._geom is not None:
+            self.setToolTip(self._tooltip(self._geom))
+        self.update()
+
+    def panel_open(self):
+        return self._panel_open
+
     def record_ids(self):
         if self._geom is None:
             return ()
@@ -858,8 +879,14 @@ class PinnedAxisLabel(QFrame):
         if geom.offscreen:
             return PINNED_OFFSCREEN_TEXT
         if geom.kind == "cluster":
-            return " ".join(f"P{item}" for item in geom.ordinals)
-        return geom.text
+            names = " ".join(f"P{item}" for item in geom.ordinals)
+            if self._panel_open:
+                return f"{names} 已展开，点击成员收起"
+            return f"{names}，点击成员展开"
+        name = geom.text
+        if self._panel_open:
+            return f"点击收起 {name}"
+        return f"点击展开 {name}"
 
     def _release_size_constraint(self):
         self.setMinimumSize(0, 0)
@@ -1141,11 +1168,14 @@ class PinnedAxisLabel(QFrame):
             painter.setRenderHint(QPainter.Antialiasing, True)
             rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
             if self._highlighted:
-                painter.setBrush(QColor("#dceaff"))
-                painter.setPen(QPen(QColor("#729ee0"), 1.0))
+                painter.setBrush(_LABEL_HOVER_FILL)
+                painter.setPen(QPen(_LABEL_HOVER_BORDER, 1.0))
+            elif self._panel_open:
+                painter.setBrush(_LABEL_OPEN_FILL)
+                painter.setPen(QPen(_LABEL_OPEN_BORDER, 1.0))
             else:
-                painter.setBrush(QColor("#f1f6fd"))
-                painter.setPen(QPen(QColor("#bed0e9"), 1.0))
+                painter.setBrush(_LABEL_IDLE_FILL)
+                painter.setPen(QPen(_LABEL_IDLE_BORDER, 1.0))
             painter.drawRoundedRect(rect, 4.0, 4.0)
         finally:
             painter.end()

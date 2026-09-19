@@ -982,6 +982,29 @@ class PinnedCursorController(QObject):
 
     # ---- transaction --------------------------------------------------------
 
+    def pin_live_readout(self, canvas) -> None:
+        """Pin the value already shown on the live pill, not the P-button click."""
+        if canvas is None or not _widget_alive(canvas):
+            return
+        owner = self._owner(canvas, create=True)
+        if owner is None:
+            return
+        mode = self._host._cursor_mode_for_canvas(canvas)
+        if mode not in {"single", "dual"}:
+            return
+        if self._gesture_in_progress(canvas):
+            return
+        domain = self._domain_for(canvas)
+        if domain is None:
+            return
+        if mode == "dual":
+            self._pin_dual(owner, canvas, domain)
+            return
+        x = self._current_live_x(canvas)
+        if x is None:
+            return
+        self._pin_single(owner, canvas, domain, viewport_pos=None, x=x)
+
     def _pin_at_mouse(self, hit=None) -> None:
         if hit is None:
             hit = self._router.hit_owner()
@@ -1001,16 +1024,18 @@ class PinnedCursorController(QObject):
         else:
             self._pin_dual(owner, canvas, domain)
 
-    def _pin_single(self, owner, canvas, domain, viewport_pos) -> None:
+    def _pin_single(self, owner, canvas, domain, viewport_pos, *, x=None) -> None:
         use_reserved = (
-            owner.dual_hidden_placement is not None
+            x is None
+            and owner.dual_hidden_placement is not None
             and owner.reserved_intent is not None
             and owner.reserved_intent.mode == "single"
         )
-        if use_reserved:
-            x = _finite(owner.reserved_intent.x)
-        else:
-            x = self._physical_x(canvas, domain, viewport_pos)
+        if x is None:
+            if use_reserved:
+                x = _finite(owner.reserved_intent.x)
+            else:
+                x = self._physical_x(canvas, domain, viewport_pos)
         if x is None:
             return
         sample = self._evaluate(canvas, domain, mode="single", x=x)
@@ -1271,9 +1296,10 @@ class PinnedCursorController(QObject):
         self, canvas, domain, mode, live, *, x=None, ax=None, bx=None, sample=None,
     ):
         unit = self._x_unit(canvas, domain)
-        presentation = "full"
-        if live is not None and live.display_mode() in {"full", "mini"}:
-            presentation = live.display_mode()
+        # Live +/- is not inherited. New pins always start mini; a later +
+        # on that card is stored on the intent and reused on the next expand.
+        _ = live
+        presentation = "mini"
         payload = {
             "mode": mode,
             "domain": domain,
@@ -1463,6 +1489,30 @@ class PinnedCursorController(QObject):
             return None
         pill = fn(canvas)
         return pill if _widget_alive(pill) else None
+
+    def _current_live_x(self, canvas):
+        """Data-space X currently drawn on the live single-cursor line."""
+        cursor = getattr(canvas, "_cursor", None)
+        items = getattr(cursor, "_cursor_line_items", None) if cursor is not None else None
+        if items:
+            try:
+                value = _finite(items[0].value())
+                if value is not None:
+                    return value
+            except (RuntimeError, TypeError, AttributeError, IndexError):
+                pass
+        snap_fn = getattr(canvas, "snapshot_cursor_placement", None)
+        snap = snap_fn() if callable(snap_fn) else None
+        if not isinstance(snap, dict):
+            return None
+        value = _finite(snap.get("x"))
+        if value is not None:
+            return value
+        # FFT/FRF single stores the live frequency as ax; a leftover dual
+        # A/B pair must not masquerade as the current single readout.
+        if _finite(snap.get("bx")) is not None:
+            return None
+        return _finite(snap.get("ax"))
 
     def _canvas_belongs_to_host(self, canvas) -> bool:
         card = self._host._card_for_canvas(canvas)

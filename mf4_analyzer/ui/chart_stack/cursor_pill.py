@@ -4,7 +4,8 @@ The formatting half of this module is pure text processing: it turns the
 separator-joined HTML the canvases emit on ``cursor_info`` into the pill's
 primary line and its full and mini detail tables. It knows nothing about Qt,
 so it is unit-testable on its own. The result panel itself never attaches a
-hover tooltip; the visible face and the +/- toggle are the only readouts.
+hover tooltip on the table; the visible face, the P button, and the +/-
+toggle are the only readouts.
 """
 import logging
 import re
@@ -34,7 +35,7 @@ _PINNED_CURSOR_PILL_BG = QColor(255, 255, 255)
 _CURSOR_PILL_BORDER = QColor("#d8e0eb")
 
 # Gap kept on the toggle's right. Live and pinned share one title-action
-# reserve (P hint / pin / +/- / close) so the first pin does not jump.
+# reserve (P / +/- / close) so the first pin does not jump.
 _TOGGLE_EDGE_GAP = 4
 _ACTION_BTN = 16
 _TITLE_ACTION_COUNT = 3
@@ -60,15 +61,22 @@ QPushButton#cursorPillPin, QPushButton#cursorPillClose {
     max-width: 16px;
     max-height: 16px;
 }
+QPushButton#cursorPillPin[pinned="false"]:hover,
+QPushButton#cursorPillClose:hover {
+    background: rgba(100, 116, 139, 0.25);
+}
+QPushButton#cursorPillPin[pinned="false"]:pressed,
+QPushButton#cursorPillClose:pressed {
+    background: rgba(100, 116, 139, 0.40);
+}
 QPushButton#cursorPillPin[pinned="true"] {
     background: #427de4;
     border-color: #427de4;
     color: #ffffff;
 }
-QLabel#cursorPillPinHint {
-    color: #71839d;
-    font-size: 10px;
-    background: transparent;
+QPushButton#cursorPillPin[pinned="true"]:hover {
+    background: #3b73d4;
+    border-color: #3b73d4;
 }
 """
 
@@ -386,6 +394,7 @@ class CursorPill(QFrame):
     user can drag it anywhere inside the canvas area."""
 
     display_mode_changed = pyqtSignal(str)
+    pin_requested = pyqtSignal()
     unpin_requested = pyqtSignal()
     close_requested = pyqtSignal()
     moved = pyqtSignal()
@@ -414,7 +423,7 @@ class CursorPill(QFrame):
         self._primary.setTextFormat(Qt.RichText)
         self._primary.setTextInteractionFlags(Qt.NoTextInteraction)
         self._primary.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        # Reserve the shared title-action strip (P hint/pin + +/- + close)
+        # Reserve the shared title-action strip (P + +/- + close)
         # so live→pinned does not change the first-line width.
         self._primary.setContentsMargins(0, 0, _TITLE_ACTION_RESERVE, 0)
         self._detail = _DocumentLabel("", self)
@@ -471,20 +480,16 @@ class CursorPill(QFrame):
         self._pin_btn.setFixedSize(_ACTION_BTN, _ACTION_BTN)
         self._pin_btn.setCursor(Qt.ArrowCursor)
         self._pin_btn.setText("P")
-        self._pin_btn.setToolTip("取消固定，继续调整")
-        self._pin_btn.setProperty("pinned", "true")
-        self._pin_btn.clicked.connect(self._emit_unpin)
+        self._pin_btn.setToolTip("按 P 固定当前读数")
+        self._pin_btn.setAccessibleName("固定当前读数")
+        self._pin_btn.setProperty("pinned", "false")
+        self._pin_btn.clicked.connect(self._on_pin_clicked)
         self._close_btn = QPushButton("×", self)
         self._close_btn.setObjectName("cursorPillClose")
         self._close_btn.setFixedSize(_ACTION_BTN, _ACTION_BTN)
         self._close_btn.setCursor(Qt.ArrowCursor)
         self._close_btn.setToolTip("关闭这一张面板")
         self._close_btn.clicked.connect(self._emit_close)
-        self._pin_hint = QLabel(self)
-        self._pin_hint.setObjectName("cursorPillPinHint")
-        self._pin_hint.setFixedHeight(_ACTION_BTN)
-        self._pin_hint.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self._pin_hint.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self._pin_btn.setStyleSheet(_PIN_CHROME_QSS)
         self._close_btn.setStyleSheet(_PIN_CHROME_QSS)
         self._highlight_timer = QTimer(self)
@@ -529,7 +534,7 @@ class CursorPill(QFrame):
     def _position_title_actions(self):
         """Pack only visible title actions from the right edge.
 
-        Order: × → +/- → pin → P hint. Hidden chrome occupies no slot.
+        Order: × → +/- → P. Hidden chrome occupies no slot.
         First-line text still uses the full ``_TITLE_ACTION_RESERVE`` margin.
         """
         y = _TOGGLE_EDGE_GAP
@@ -540,16 +545,13 @@ class CursorPill(QFrame):
             widget.move(right - _ACTION_BTN, y)
             right -= _ACTION_BTN + _TOGGLE_EDGE_GAP
             widget.raise_()
-        if self._title_action_occupies_slot(self._pin_hint):
-            hint_width = max(_ACTION_BTN, self._pin_hint.sizeHint().width())
-            hint_width = min(hint_width, right)
-            self._pin_hint.setGeometry(
-                right - hint_width, y, hint_width, _ACTION_BTN,
-            )
-            self._pin_hint.raise_()
 
-    def _emit_unpin(self):
-        self.unpin_requested.emit()
+    def _on_pin_clicked(self):
+        if self._pin_role == "pinned":
+            self.unpin_requested.emit()
+            return
+        if self._live_hint:
+            self.pin_requested.emit()
 
     def _emit_close(self):
         self.close_requested.emit()
@@ -620,19 +622,20 @@ class CursorPill(QFrame):
             self._pin_chrome_syncing = False
 
     def _sync_pin_hint_geometry(self, *, force=False):
-        """Update hint text and title-action packing without role polish."""
+        """Update live/pinned P chrome and title-action packing without role polish."""
         pinned = self._pin_role == "pinned"
-        hint = self._live_hint if (not pinned) else ""
-        hint_text = "P" if hint else ""
-        hint_visible = bool(hint) and not pinned
-        token = (pinned, hint_visible, hint_text, hint)
+        live_tooltip = self._live_hint if not pinned else ""
+        pin_visible = pinned or bool(live_tooltip)
+        tooltip = "取消固定，继续调整" if pinned else live_tooltip
+        token = (pinned, pin_visible, tooltip)
         if not force and self._pin_hint_geometry_token == token:
             return
-        self._pin_btn.setVisible(pinned)
+        self._pin_btn.setVisible(pin_visible)
         self._close_btn.setVisible(pinned)
-        self._pin_hint.setText(hint_text)
-        self._pin_hint.setToolTip(hint)
-        self._pin_hint.setVisible(hint_visible)
+        self._pin_btn.setToolTip(tooltip)
+        self._pin_btn.setAccessibleName(
+            "取消固定" if pinned else ("固定当前读数" if pin_visible else "")
+        )
         self._position_title_actions()
         self._pin_hint_geometry_token = token
 

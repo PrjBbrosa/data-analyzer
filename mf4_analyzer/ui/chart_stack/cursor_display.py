@@ -804,11 +804,11 @@ def build_fft_cursor_presentation(
 
 
 def live_pin_hint_text(cursor_mode: str, *, dual_complete: bool = True) -> str:
-    """Live title chrome only. Pinned pills show a pin button instead."""
+    """Live P-button tooltip. Empty hides the control (dual still placing)."""
     if cursor_mode == "single":
-        return "P 固定"
+        return "按 P 固定当前读数"
     if cursor_mode == "dual":
-        return "P 固定此组" if dual_complete else ""
+        return "按 P 固定此组" if dual_complete else ""
     return ""
 
 

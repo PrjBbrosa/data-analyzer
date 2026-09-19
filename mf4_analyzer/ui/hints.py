@@ -517,7 +517,7 @@ _HINTS = (
     ),
     Hint(
         id="cursor.pin_single",
-        text="P 固定；点 Pn 展开或收起",
+        text="P 固定；展开默认 −；点 Pn 收起",
         surface="context",
         modes=frozenset({"time", "fft", "frf"}),
         cursor_modes=frozenset({"single"}),
@@ -525,7 +525,7 @@ _HINTS = (
     ),
     Hint(
         id="cursor.pin_dual",
-        text="先放 A/B；P 固定；点 Pn 展开",
+        text="先放 A/B；P 固定；展开默认 −",
         surface="context",
         modes=frozenset({"time", "fft", "frf"}),
         cursor_modes=frozenset({"dual"}),

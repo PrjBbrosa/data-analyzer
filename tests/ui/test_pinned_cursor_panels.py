@@ -137,16 +137,24 @@ def test_a09_full_mini_independent_drag_close_and_reuse_ordinal(qapp, qtbot):
     }
     assert set(pills) == {1, 2}
     first, second = pills[1], pills[2]
-    assert first.display_mode() == "full"
-    assert second.display_mode() == "full"
+    assert first.display_mode() == "mini"
+    assert second.display_mode() == "mini"
     second._toggle_mode()
     qapp.processEvents()
-    assert first.display_mode() == "full"
-    assert second.display_mode() == "mini"
+    assert first.display_mode() == "mini"
+    assert second.display_mode() == "full"
     cs._pill._toggle_mode()
     qapp.processEvents()
-    assert first.display_mode() == "full"
-    assert second.display_mode() == "mini"
+    assert first.display_mode() == "mini"
+    assert second.display_mode() == "full"
+
+    _click_record_label(qtbot, cs, records[1].record_id)
+    qapp.processEvents()
+    assert _panel_expansion_by_ordinal(cs)[2] is False
+    _click_record_label(qtbot, cs, records[1].record_id)
+    qapp.processEvents()
+    assert _panel_expansion_by_ordinal(cs)[2] is True
+    assert pills[2].display_mode() == "full"
 
     x_before = _records(cs)[0].x
     start = first.rect().center()
@@ -362,7 +370,11 @@ def test_live_consumed_after_single_pin_returns_on_next_move(qapp, qtbot):
     assert cs._pill.isVisible()
     assert cs._pill.pin_role() == "live"
     assert not cs._pinned_cursors.is_live_suppressed(cs.canvas_time)
-    assert live_pin_hint_text("single") == "P 固定"
+    assert live_pin_hint_text("single") == "按 P 固定当前读数"
+    assert live_pin_hint_text("dual") == "按 P 固定此组"
+    assert live_pin_hint_text("dual", dual_complete=False) == ""
+    assert cs._pill._pin_btn.isVisibleTo(cs._pill)
+    assert cs._pill._pin_btn.toolTip() == live_pin_hint_text("single")
 
 
 def test_dual_pin_hides_live_and_keeps_placement(qapp, qtbot):
@@ -405,3 +417,68 @@ def test_hidden_owner_does_not_clear_other_live_pill(qapp, qtbot):
     qapp.processEvents()
     assert cs._pill.isVisible()
     assert cs._pill.primary_text() == live_text
+
+
+def test_live_p_button_pins_current_readout_not_button_coords(qapp, qtbot):
+    cs = _make_stack(qtbot, qapp)
+    local = _aim(qtbot, cs.canvas_time, 0.3, cs._pinned_cursors)
+    domain = cs._pinned_cursors._domain_for(cs.canvas_time)
+    expected_x = cs._pinned_cursors._physical_x(cs.canvas_time, domain, local)
+    assert expected_x is not None
+    sync = getattr(cs.canvas_time, "sync_single_cursor_line", None)
+    if callable(sync):
+        sync(expected_x)
+    channel = CursorDisplayChannel(
+        identity=("fid-a", "speed"),
+        source_label="",
+        channel_label="speed",
+        current_value=1.5,
+        unit_suffix=" rpm",
+    )
+    cs.canvas_time.single_cursor_rows.emit((channel,))
+    qapp.processEvents()
+    assert cs._pill.isVisible()
+    assert cs._pill._pin_btn.isVisibleTo(cs._pill)
+    qtbot.mouseClick(cs._pill._pin_btn, Qt.LeftButton)
+    qapp.processEvents()
+    records = _records(cs)
+    assert len(records) == 1
+    assert abs(records[0].x - expected_x) < 1e-6
+    assert records[0].presentation == "mini"
+
+
+def test_dual_incomplete_hides_live_p_button(qapp, qtbot):
+    cs = _make_stack(qtbot, qapp, mode="dual")
+    cursor = cs.canvas_time._cursor
+    cursor._ax = 0.2
+    cursor._bx = None
+    cursor._emit_dual_cursor_html()
+    qapp.processEvents()
+    assert cs._pill.isVisible()
+    assert live_pin_hint_text("dual", dual_complete=False) == ""
+    assert not cs._pill._pin_btn.isVisibleTo(cs._pill)
+
+
+def test_expanded_pn_chip_has_filled_chrome_and_collapse_tooltip(qapp, qtbot):
+    cs = _make_stack(qtbot, qapp)
+    vp = _viewport(cs.canvas_time)
+    _aim(qtbot, cs.canvas_time, 0.3, cs._pinned_cursors)
+    _press_p(vp)
+    records = _records(cs)
+    label = _label_for_record(cs, records[0].record_id)
+    qapp.processEvents()
+    idle = label.grab().toImage().pixelColor(label.width() // 2, label.height() // 2)
+    assert label.panel_open() is False
+    assert "展开" in label.toolTip()
+    _click_record_label(qtbot, cs, records[0].record_id)
+    qapp.processEvents()
+    label = _label_for_record(cs, records[0].record_id)
+    assert label.panel_open() is True
+    assert "收起" in label.toolTip()
+    opened = label.grab().toImage().pixelColor(label.width() // 2, label.height() // 2)
+    assert opened != idle
+    _click_record_label(qtbot, cs, records[0].record_id)
+    qapp.processEvents()
+    label = _label_for_record(cs, records[0].record_id)
+    assert label.panel_open() is False
+    assert "展开" in label.toolTip()

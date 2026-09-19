@@ -334,6 +334,7 @@ class ChartStack(QWidget):
         self._pill.display_mode_changed.connect(
             self._on_primary_cursor_pill_display_mode_changed
         )
+        self._pill.pin_requested.connect(self._on_primary_live_pin_requested)
         self._pill_layout_refresh = QTimer(self)
         self._pill_layout_refresh.setSingleShot(True)
         self._pill_layout_refresh.setInterval(0)
@@ -1122,6 +1123,9 @@ class ChartStack(QWidget):
                         self._on_cursor_pill_display_mode_changed,
                         source=canvas,
                     )
+                )
+                self._pill_secondary.pin_requested.connect(
+                    self._on_secondary_live_pin_requested
                 )
             canvas.cursor_info.connect(
                 lambda text, c=canvas: self._on_cursor_info(text, c)
@@ -2468,6 +2472,17 @@ class ChartStack(QWidget):
         if source is None:
             source = self.canvas_time
         self._on_cursor_pill_display_mode_changed(mode, source=source)
+
+    def _on_primary_live_pin_requested(self):
+        source = getattr(self._active_cursor_card, "canvas", None)
+        if source is None:
+            source = self.canvas_time
+        self._pinned_cursors.pin_live_readout(source)
+
+    def _on_secondary_live_pin_requested(self):
+        canvas = self.secondary_canvas()
+        if canvas is not None:
+            self._pinned_cursors.pin_live_readout(canvas)
 
     def _on_cursor_pill_display_mode_changed(self, _mode, *, source):
         self._refresh_cursor_projection(source)

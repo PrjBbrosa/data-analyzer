@@ -21,6 +21,7 @@ import pytest
 
 from mf4_analyzer.ui.chart_stack import ChartStack, _CURSOR_HTML_SEP
 from mf4_analyzer.ui.chart_stack import cursor_pill
+from mf4_analyzer.ui.chart_stack.cursor_display import live_pin_hint_text
 
 
 # ---------------------------------------------------------------------------
@@ -451,6 +452,8 @@ def test_custom_x_pill_mini_keeps_direction_avg_without_hover_tooltip(qapp, qtbo
 # ---------------------------------------------------------------------------
 
 _PINNED_PIN_FILL = "#427de4"
+_LIVE_PIN_HINT = live_pin_hint_text("single")
+_LIVE_PIN_DUAL_HINT = live_pin_hint_text("dual")
 
 
 def _apply_structured_pin_update(pill, role, hint):
@@ -562,37 +565,38 @@ def _pinned_action_corner(pill, qapp):
 
 def test_identical_structured_pin_updates_do_not_repolish_role(qapp, qtbot):
     _parent, pill = _make_chrome_pill(qtbot)
-    _apply_structured_pin_update(pill, "live", "P 固定")
+    _apply_structured_pin_update(pill, "live", _LIVE_PIN_HINT)
     qapp.processEvents()
 
     with _count_pin_btn_role_polish(pill) as counts:
         for _ in range(100):
-            _apply_structured_pin_update(pill, "live", "P 固定")
+            _apply_structured_pin_update(pill, "live", _LIVE_PIN_HINT)
         qapp.processEvents()
 
     assert counts["unpolish"] == 0
     assert counts["polish"] == 0
     assert pill.pin_role() == "live"
-    assert pill._pin_hint.toolTip() == "P 固定"
+    assert pill._pin_btn.toolTip() == _LIVE_PIN_HINT
+    assert pill._pin_btn.isVisibleTo(pill)
+    assert pill._pin_btn.text() == "P"
     assert _pin_btn_fill_count(pill) == 0
 
 
 def test_hint_only_change_does_not_repolish_pin_role_style(qapp, qtbot):
     _parent, pill = _make_chrome_pill(qtbot)
-    _apply_structured_pin_update(pill, "live", "P 固定")
+    _apply_structured_pin_update(pill, "live", _LIVE_PIN_HINT)
     qapp.processEvents()
 
     with _count_pin_btn_role_polish(pill) as counts:
-        pill.set_live_hint("P 固定此组")
+        pill.set_live_hint(_LIVE_PIN_DUAL_HINT)
         qapp.processEvents()
 
     assert counts["unpolish"] == 0
     assert counts["polish"] == 0
     assert pill.pin_role() == "live"
-    assert pill._pin_hint.text() == "P"
-    assert pill._pin_hint.toolTip() == "P 固定此组"
-    assert pill._pin_hint.isVisibleTo(pill)
-    assert not pill._pin_btn.isVisibleTo(pill)
+    assert pill._pin_btn.text() == "P"
+    assert pill._pin_btn.toolTip() == _LIVE_PIN_DUAL_HINT
+    assert pill._pin_btn.isVisibleTo(pill)
     live_inset, live_top = _toggle_corner(pill, qapp)
     assert live_inset <= 6 and live_top <= 6
     assert _pin_btn_fill_count(pill) == 0
@@ -600,7 +604,7 @@ def test_hint_only_change_does_not_repolish_pin_role_style(qapp, qtbot):
 
 def test_live_pinned_role_change_polishes_once_and_keeps_action_corner(qapp, qtbot):
     _parent, pill = _make_chrome_pill(qtbot)
-    _apply_structured_pin_update(pill, "live", "P 固定")
+    _apply_structured_pin_update(pill, "live", _LIVE_PIN_HINT)
     qapp.processEvents()
     live_fill = _pin_btn_fill_count(pill)
     live_inset, live_top = _toggle_corner(pill, qapp)
@@ -623,7 +627,7 @@ def test_live_pinned_role_change_polishes_once_and_keeps_action_corner(qapp, qtb
     assert toggle_top == close_top == pin_top
 
     with _count_pin_btn_role_polish(pill) as counts:
-        _apply_structured_pin_update(pill, "live", "P 固定")
+        _apply_structured_pin_update(pill, "live", _LIVE_PIN_HINT)
         qapp.processEvents()
 
     assert counts["unpolish"] == 1
@@ -668,7 +672,7 @@ def test_full_mini_and_hide_show_keep_pin_action_corners(qapp, qtbot):
     assert _pin_btn_fill_count(pill) >= 50
 
     pill.set_pin_role("live")
-    pill.set_live_hint("P 固定")
+    pill.set_live_hint(_LIVE_PIN_HINT)
     qapp.processEvents()
     live_full_inset, live_full_top = _toggle_corner(pill, qapp)
     pill._toggle_mode()
