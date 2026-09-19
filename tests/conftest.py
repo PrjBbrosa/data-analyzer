@@ -11,7 +11,17 @@ directory-collector identity; do not add fixtures there.
 """
 from __future__ import annotations
 
+import builtins
+import sys
+
 import pytest
+
+
+def _qapplication_class():
+    widgets = sys.modules.get("PyQt5.QtWidgets")
+    if widgets is None:
+        return None
+    return getattr(widgets, "QApplication", None)
 
 
 def _snapshot_app_style(app):
@@ -47,23 +57,26 @@ def _restore_app_style_after_test(request):
     geometry contracts fail as if they were order-contaminated. See
     ``docs/analyzer/reviews/2026-08-16-codex-cursor-daily-batch-review.md`` §5.
 
-    When an item creates the first application in its test body, capture its
-    freshly constructed style as soon as ``QApplication.__init__`` returns.
-    The actual restore is deliberately deferred to this module's teardown
-    hook: pytest-qt and the UI fixtures must finish their close/deleteLater
-    work before global Qt appearance is changed.
-    """
-    try:
-        from PyQt5.QtWidgets import QApplication
-    except ImportError:
-        yield
-        return
+    Neutral items must not import Qt just to snapshot. If this item later
+    constructs the first application in its body, capture that style as soon
+    as ``QApplication.__init__`` returns. Checking ``sys.modules`` once at
+    setup is not enough — a later import still has to wrap construction.
 
-    app = QApplication.instance()
+    The actual restore is deferred to this module's teardown hook: pytest-qt
+    and the UI fixtures must finish their close/deleteLater work before
+    global Qt appearance is changed.
+    """
     original_init = None
-    if app is not None:
-        request.node._root_app_style_baseline = _snapshot_app_style(app)
-    else:
+    original_import = None
+
+    def _install_init_capture(QApplication):
+        nonlocal original_init
+        if original_init is not None:
+            return
+        app = QApplication.instance()
+        if app is not None:
+            request.node._root_app_style_baseline = _snapshot_app_style(app)
+            return
         original_init = QApplication.__init__
 
         def _capture_first_app(self, *args, **kwargs):
@@ -73,11 +86,31 @@ def _restore_app_style_after_test(request):
 
         QApplication.__init__ = _capture_first_app
 
+    QApplication = _qapplication_class()
+    if QApplication is not None:
+        _install_init_capture(QApplication)
+    else:
+        original_import = builtins.__import__
+
+        def _import(name, globals=None, locals=None, fromlist=(), level=0):
+            module = original_import(name, globals, locals, fromlist, level)
+            if original_init is None:
+                qapp_cls = _qapplication_class()
+                if qapp_cls is not None:
+                    _install_init_capture(qapp_cls)
+            return module
+
+        builtins.__import__ = _import
+
     try:
         yield
     finally:
+        if original_import is not None:
+            builtins.__import__ = original_import
         if original_init is not None:
-            QApplication.__init__ = original_init
+            qapp_cls = _qapplication_class()
+            if qapp_cls is not None:
+                qapp_cls.__init__ = original_init
 
 
 @pytest.hookimpl(wrapper=True, tryfirst=True)
@@ -87,13 +120,13 @@ def pytest_runtest_teardown(item):
         return (yield)
     finally:
         baseline = getattr(item, "_root_app_style_baseline", None)
-        if baseline is not None:
-            try:
-                from PyQt5.QtWidgets import QApplication
-            except ImportError:
-                pass
-            else:
-                app = QApplication.instance()
-                if app is not None:
-                    _restore_app_style(app, baseline)
+        if baseline is None:
+            return
+        QApplication = _qapplication_class()
+        if QApplication is None:
             delattr(item, "_root_app_style_baseline")
+            return
+        app = QApplication.instance()
+        if app is not None:
+            _restore_app_style(app, baseline)
+        delattr(item, "_root_app_style_baseline")

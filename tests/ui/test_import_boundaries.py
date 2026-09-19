@@ -23,6 +23,7 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.static_source
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PACKAGE_ROOT = REPO_ROOT / "mf4_analyzer"

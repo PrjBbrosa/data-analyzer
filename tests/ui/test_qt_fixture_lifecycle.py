@@ -98,6 +98,71 @@ def test_fixture_teardown_drains_owned_deferred_deletes_in_bounded_child():
     assert "2 passed" in result.stdout, result.stdout
 
 
+def test_static_source_ratchets_do_not_construct_qapplication(tmp_path):
+    """AST ratchets under tests/ui must not pay session qapp / ChartStack."""
+    plugin = tmp_path / "probe_plugin.py"
+    out = tmp_path / "qapp-probe.txt"
+    plugin.write_text(
+        "import os\n"
+        "from pathlib import Path\n"
+        "\n"
+        "def pytest_sessionfinish(session, exitstatus):\n"
+        "    from PyQt5.QtWidgets import QApplication\n"
+        "    app = QApplication.instance()\n"
+        "    Path(os.environ['T3_QAPP_PROBE']).write_text(\n"
+        "        'none' if app is None else 'present'\n"
+        "    )\n",
+        encoding="utf-8",
+    )
+    env = _child_env()
+    env["T3_QAPP_PROBE"] = str(out)
+    env["PYTHONPATH"] = os.pathsep.join(
+        part for part in (str(tmp_path), env.get("PYTHONPATH")) if part
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "-p",
+            "probe_plugin",
+            "tests/ui/test_main_window_state_ownership.py",
+            "tests/ui/test_no_lambda_signal_connections.py",
+            "tests/ui/test_import_boundaries.py",
+        ],
+        cwd=_REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert out.read_text(encoding="utf-8") == "none", result.stdout + result.stderr
+
+
+def test_pin_filter_registry_matches_heap_scan_after_chart_stack_item(qapp):
+    """Registry cross-check: a real ChartStack item must agree with gc.get_objects()."""
+    from PyQt5.QtCore import QCoreApplication, QEvent
+
+    from mf4_analyzer.ui.chart_stack import ChartStack
+    from tests.ui import conftest as ui_conftest
+
+    ui_conftest._ensure_pin_filter_registry()
+    stack = ChartStack()
+    try:
+        heap_r, heap_c = ui_conftest._installed_from_heap()
+        reg_r, reg_c = ui_conftest._installed_from_registry()
+        assert {id(obj) for obj in heap_r} == {id(obj) for obj in reg_r}
+        assert {id(obj) for obj in heap_c} == {id(obj) for obj in reg_c}
+    finally:
+        stack.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        qapp.processEvents()
+
+
 def test_pinned_cursor_filter_guard_surfaces_unexpected_import_failure(request):
     """F08: a broken controller import is infrastructure failure, not a pass."""
     import builtins

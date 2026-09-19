@@ -1,6 +1,7 @@
 """Shared pytest fixtures for UI tests."""
 import gc
 import os
+import weakref
 # Force offscreen Qt platform for headless CI *before* QApplication exists
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -17,6 +18,23 @@ from mf4_analyzer.render_profile import DENSE_DISCRETE_POLICY_ENABLED
 # a cache, and it must stay a module-level list so the references outlive the
 # item's own frames.
 _PINNED_TOPLEVELS = []
+
+# Pin-filter registry: item-owned objects vs session baseline.  The WeakSet is
+# the cheap path; a full ``gc.get_objects()`` scan cross-checks it on pin
+# tests and on any item that constructed a Router/controller.
+_ALL_PIN_ROUTERS = None
+_ALL_PIN_CONTROLLERS = None
+_ORIG_PIN_ROUTER_INIT = None
+_ORIG_PIN_CONTROLLER_INIT = None
+_PIN_REGISTRY_INSTALLED = False
+_CURRENT_PIN_ITEM = None
+
+
+def _is_static_source(item) -> bool:
+    getter = getattr(item, "get_closest_marker", None)
+    if getter is None:
+        return False
+    return getter("static_source") is not None
 
 
 def pytest_collection_modifyitems(config, items):
@@ -71,6 +89,8 @@ def pytest_runtest_call(item):
     recurrence by trimming allocations from a paint method; that only moves
     the threshold.
     """
+    if _is_static_source(item):
+        return (yield)
     try:
         return (yield)
     finally:
@@ -90,16 +110,15 @@ def pytest_runtest_teardown(item):
     ``_own_chartstacks``, which pumps ``processEvents()`` of its own. Releasing
     any earlier would reopen the window this guard exists to close.
 
-    *Why collect here.* ``_collect_mpl_cycles_between_tests`` runs its
-    ``gc.collect()`` while the pin is still held, so it can no longer reap the
-    test's widgets — without this call they would survive into the *next*
-    test's body. That is not hypothetical: it made 16 ``test_pg_dense_raster``
-    / ``test_pill_switch`` cases fail, because a leftover
-    ``TimeDomainCanvasPG`` still counted against the dense-raster memory caps
-    and the next canvas was refused admission. Collecting here restores the
-    original lifetime — one test's widgets are gone before the next one starts
-    — while keeping them alive for the whole danger window.
+    *Why collect here.* A single ``gc.collect()`` after DeferredDelete
+    restores the original lifetime — one test's widgets are gone before the
+    next one starts — while keeping them alive for the whole danger window.
+    Collecting earlier, while the pin is still held, cannot reap the test's
+    widgets and left ``TimeDomainCanvasPG`` instances counted against the
+    dense-raster memory caps, so the next canvas was refused admission.
     """
+    if _is_static_source(item):
+        return (yield)
     try:
         return (yield)
     finally:
@@ -119,41 +138,189 @@ def pytest_runtest_teardown(item):
         _assert_pinned_cursor_filters_not_accumulated(item)
 
 
-def _assert_pinned_cursor_filters_not_accumulated(item):
-    """F-P1-3: living app-level pin filters must not accumulate across tests.
+def _qt_wrapper_alive(obj) -> bool:
+    try:
+        return not sip.isdeleted(obj)
+    except (ReferenceError, RuntimeError, TypeError):
+        return False
 
-    After T3 the unique filter lives on ``PinKeyRouter``. The façade flag
+
+def _router_filter_installed(router) -> bool:
+    if not _qt_wrapper_alive(router):
+        return False
+    try:
+        return bool(router.application_filter_installed)
+    except (ReferenceError, RuntimeError, TypeError):
+        return False
+
+
+def _controller_filter_flag(controller) -> bool:
+    if not _qt_wrapper_alive(controller):
+        return False
+    try:
+        return bool(controller._application_filter_installed)
+    except (ReferenceError, RuntimeError, TypeError):
+        return False
+
+
+def _ensure_pin_filter_registry() -> None:
+    """Wrap Router/controller construction once per process.
+
+    The wrap is installed on the first non-static UI item, before that item's
+    body, so ChartStack-created routers are registered.  It is not installed
+    for ``static_source`` sessions, which must not import the pin stack.
+    """
+    global _ALL_PIN_ROUTERS, _ALL_PIN_CONTROLLERS
+    global _ORIG_PIN_ROUTER_INIT, _ORIG_PIN_CONTROLLER_INIT
+    global _PIN_REGISTRY_INSTALLED
+    if _PIN_REGISTRY_INSTALLED:
+        return
+    from mf4_analyzer.ui.chart_stack.pinned_cursor_controller import (
+        PinnedCursorController,
+    )
+    from mf4_analyzer.ui.chart_stack.pinning.key_router import PinKeyRouter
+
+    _ALL_PIN_ROUTERS = weakref.WeakSet()
+    _ALL_PIN_CONTROLLERS = weakref.WeakSet()
+    _ORIG_PIN_ROUTER_INIT = PinKeyRouter.__init__
+    _ORIG_PIN_CONTROLLER_INIT = PinnedCursorController.__init__
+
+    def _tracking_router_init(self, *args, **kwargs):
+        _ORIG_PIN_ROUTER_INIT(self, *args, **kwargs)
+        _ALL_PIN_ROUTERS.add(self)
+        item = _CURRENT_PIN_ITEM
+        if item is not None:
+            getattr(item, "_pin_owned_routers").append(self)
+
+    def _tracking_controller_init(self, *args, **kwargs):
+        _ORIG_PIN_CONTROLLER_INIT(self, *args, **kwargs)
+        _ALL_PIN_CONTROLLERS.add(self)
+        item = _CURRENT_PIN_ITEM
+        if item is not None:
+            getattr(item, "_pin_owned_controllers").append(self)
+
+    PinKeyRouter.__init__ = _tracking_router_init
+    PinnedCursorController.__init__ = _tracking_controller_init
+    _PIN_REGISTRY_INSTALLED = True
+
+
+def _installed_from_registry():
+    routers = [obj for obj in list(_ALL_PIN_ROUTERS or ()) if _router_filter_installed(obj)]
+    controllers = [
+        obj for obj in list(_ALL_PIN_CONTROLLERS or ()) if _controller_filter_flag(obj)
+    ]
+    return routers, controllers
+
+
+def _installed_from_heap():
+    from mf4_analyzer.ui.chart_stack.pinned_cursor_controller import (
+        PinnedCursorController,
+    )
+    from mf4_analyzer.ui.chart_stack.pinning.key_router import PinKeyRouter
+
+    routers = []
+    controllers = []
+    for obj in gc.get_objects():
+        try:
+            if type(obj) is PinnedCursorController:
+                if _controller_filter_flag(obj):
+                    controllers.append(obj)
+            elif type(obj) is PinKeyRouter and _router_filter_installed(obj):
+                routers.append(obj)
+        except (ReferenceError, RuntimeError, TypeError):
+            continue
+    return routers, controllers
+
+
+def _should_cross_check_pin_heap(item) -> bool:
+    nodeid = getattr(item, "nodeid", "")
+    if "pinned_cursor" in nodeid or "qt_fixture_lifecycle" in nodeid:
+        return True
+    if getattr(item, "_pin_owned_routers", None) or getattr(
+        item, "_pin_owned_controllers", None
+    ):
+        return True
+    return False
+
+
+def _assert_pinned_cursor_filters_not_accumulated(item):
+    """Living app-level pin filters must not accumulate across tests.
+
+    After T3 the unique filter lives on ``PinKeyRouter``. The façade
     ``PinnedCursorController._application_filter_installed`` must track that
-    real install; a leaked Router with a False façade is a failure.
+    real install.  Item-owned routers/controllers are the delta against the
+    pre-item baseline; a leaked owned filter fails even when the total is 1.
+    Session-owned baseline objects may remain.  Registry results are
+    cross-checked with a full heap scan on pin tests and on items that
+    constructed pin objects.
     """
     from mf4_analyzer.ui.chart_stack.pinned_cursor_controller import (
         PinnedCursorController,
     )
     from mf4_analyzer.ui.chart_stack.pinning.key_router import PinKeyRouter
 
-    living_controllers = 0
-    living_routers = 0
-    for obj in gc.get_objects():
-        try:
-            if type(obj) is not PinnedCursorController and type(obj) is not PinKeyRouter:
-                continue
-            if type(obj) is PinnedCursorController:
-                if getattr(obj, "_application_filter_installed", False):
-                    living_controllers += 1
-            elif getattr(obj, "application_filter_installed", False):
-                living_routers += 1
-        except (ReferenceError, RuntimeError, TypeError):
-            continue
-    if living_controllers > 1 or living_routers > 1:
+    owned_router_leaks = [
+        router
+        for router in getattr(item, "_pin_owned_routers", ())
+        if _router_filter_installed(router)
+    ]
+    owned_controller_leaks = [
+        controller
+        for controller in getattr(item, "_pin_owned_controllers", ())
+        if _controller_filter_flag(controller)
+    ]
+    if owned_router_leaks or owned_controller_leaks:
         pytest.fail(
-            f"{living_controllers} PinnedCursorController flags and "
-            f"{living_routers} PinKeyRouter app filters still installed "
-            f"after {item.nodeid}"
+            f"item-owned pin filters still installed after {item.nodeid}: "
+            f"{len(owned_router_leaks)} routers, "
+            f"{len(owned_controller_leaks)} controllers"
         )
-    if living_controllers != living_routers:
+
+    if _should_cross_check_pin_heap(item) and _PIN_REGISTRY_INSTALLED:
+        heap_routers, heap_controllers = _installed_from_heap()
+        reg_routers, reg_controllers = _installed_from_registry()
+        if {id(obj) for obj in heap_routers} != {id(obj) for obj in reg_routers}:
+            pytest.fail(
+                f"PinKeyRouter registry ({len(reg_routers)}) disagrees with "
+                f"full heap scan ({len(heap_routers)}) after {item.nodeid}"
+            )
+        if {id(obj) for obj in heap_controllers} != {
+            id(obj) for obj in reg_controllers
+        }:
+            pytest.fail(
+                f"PinnedCursorController registry ({len(reg_controllers)}) "
+                f"disagrees with full heap scan ({len(heap_controllers)}) "
+                f"after {item.nodeid}"
+            )
+    elif not _PIN_REGISTRY_INSTALLED:
+        # Keep the import-failure probe and the no-registry fallback on the
+        # heap scan; PinnedCursorController is imported above so a broken
+        # controller import still surfaces here.
+        pass
+
+    baseline_router_ids = {
+        id(ref())
+        for ref in getattr(item, "_pin_filter_baseline_routers", ())
+        if ref() is not None and _router_filter_installed(ref())
+    }
+    current_routers, current_controllers = (
+        _installed_from_registry()
+        if _PIN_REGISTRY_INSTALLED
+        else _installed_from_heap()
+    )
+    extra = [
+        router for router in current_routers if id(router) not in baseline_router_ids
+    ]
+    if extra:
         pytest.fail(
-            f"controller filter flag ({living_controllers}) does not match "
-            f"Router install ({living_routers}) after {item.nodeid}"
+            f"{len(extra)} PinKeyRouter app filters appeared during "
+            f"{item.nodeid} and survived teardown"
+        )
+
+    if len(current_controllers) != len(current_routers):
+        pytest.fail(
+            f"controller filter flag ({len(current_controllers)}) does not match "
+            f"Router install ({len(current_routers)}) after {item.nodeid}"
         )
 
 
@@ -161,7 +328,26 @@ _MODAL_EXEC_FAIL_MS = 800
 
 
 @pytest.fixture(autouse=True)
-def _fail_fast_unstubbed_modal_exec(qapp, monkeypatch, request):
+def _pin_filter_item_scope(request):
+    """Record this item's pin-filter baseline and constructed owners."""
+    global _CURRENT_PIN_ITEM
+    if _is_static_source(request.node):
+        yield
+        return
+    _ensure_pin_filter_registry()
+    routers, _controllers = _installed_from_registry()
+    request.node._pin_filter_baseline_routers = [weakref.ref(router) for router in routers]
+    request.node._pin_owned_routers = []
+    request.node._pin_owned_controllers = []
+    _CURRENT_PIN_ITEM = request.node
+    try:
+        yield
+    finally:
+        _CURRENT_PIN_ITEM = None
+
+
+@pytest.fixture(autouse=True)
+def _fail_fast_unstubbed_modal_exec(request):
     """Refuse unstubbed synchronous Qt prompts in offscreen tests.
 
     Combined UI pytest hung 2h+ at 0% CPU in
@@ -181,6 +367,11 @@ def _fail_fast_unstubbed_modal_exec(qapp, monkeypatch, request):
     static helpers or ``QMenu.exec`` because those have no reliable cleanup
     path in headless CI.
     """
+    if _is_static_source(request.node):
+        yield
+        return
+    monkeypatch = request.getfixturevalue("monkeypatch")
+    request.getfixturevalue("qapp")
     from PyQt5.QtCore import QTimer
     from PyQt5.QtWidgets import (
         QColorDialog,
@@ -282,7 +473,7 @@ def _fail_fast_unstubbed_modal_exec(qapp, monkeypatch, request):
 
 
 @pytest.fixture(autouse=True)
-def _isolate_qsettings(tmp_path, monkeypatch, request):
+def _isolate_qsettings(request):
     """Keep UI tests from polluting the real MF4Analyzer/DataAnalyzer store.
 
     Constructing a persistent UI widget (Inspector param sections,
@@ -301,6 +492,11 @@ def _isolate_qsettings(tmp_path, monkeypatch, request):
     own throwaway INI. ``setDefaultFormat`` + ``setPath`` additionally divert
     any bare ``QSettings()`` (hint bars) away from the registry.
     """
+    if _is_static_source(request.node):
+        yield
+        return
+    tmp_path = request.getfixturevalue("tmp_path")
+    monkeypatch = request.getfixturevalue("monkeypatch")
     from PyQt5.QtCore import QSettings
     import mf4_analyzer.ui.batch_settings as _batch_settings_mod
     import mf4_analyzer.ui.inspector_sections as _pkg
@@ -348,7 +544,7 @@ def qapp():
 
 
 @pytest.fixture(autouse=True)
-def _isolate_app_style(qapp, request):
+def _isolate_app_style(request):
     """Undo any application-wide style/stylesheet a test installs.
 
     ``qapp`` is session-scoped, so ``qapp.setStyleSheet(...)`` /
@@ -368,6 +564,10 @@ def _isolate_app_style(qapp, request):
     sees). Both layers are idempotent; dropping this one would lose the
     three historical leak bugs named above.
     """
+    if _is_static_source(request.node):
+        yield
+        return
+    qapp = request.getfixturevalue("qapp")
     from PyQt5.QtGui import QFont, QPalette
 
     request.node._ui_app_style_baseline = (
@@ -408,8 +608,12 @@ def _restore_qsettings_default_format(item) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _own_chartstacks(qapp, monkeypatch):
+def _own_chartstacks(monkeypatch, request):
     """Keep unowned ChartStack widgets alive until queued layout callbacks drain."""
+    if _is_static_source(request.node):
+        yield
+        return
+    qapp = request.getfixturevalue("qapp")
     from mf4_analyzer.ui.chart_stack import ChartStack
 
     created = []
@@ -430,7 +634,7 @@ def _own_chartstacks(qapp, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _auto_discard_unsaved_project_on_close():
+def _auto_discard_unsaved_project_on_close(request):
     """Shown MainWindow teardown must not block on the Save/Discard/Cancel box.
 
     Instance-level monkeypatches in dirty-guard tests still win. Unshown
@@ -439,6 +643,9 @@ def _auto_discard_unsaved_project_on_close():
     test's shared ``monkeypatch`` fixture: ``monkeypatch.undo()`` must not tear
     down the suite-level discard guard before a shown window closes.
     """
+    if _is_static_source(request.node):
+        yield
+        return
     from mf4_analyzer.ui.main_window._project_io_mixin import ProjectIOMixin
 
     with pytest.MonkeyPatch.context() as mp:
@@ -467,19 +674,6 @@ def _auto_discard_unsaved_project_on_close():
             )
             widget.close()
         app.processEvents()
-
-
-@pytest.fixture(autouse=True)
-def _collect_mpl_cycles_between_tests():
-    # matplotlib Figure/FigureCanvasQTAgg hold strong reference cycles
-    # (figure.canvas <-> canvas.figure plus mpl_connect lambdas capturing
-    # self). Tests that don't register widgets with qtbot leave zombies
-    # behind; once enough accumulate, a subsequent paintEvent allocation
-    # trips Python's cyclic GC mid-QPainter.drawImage and segfaults on
-    # Windows. Forcing a collection between tests keeps the heap clean so
-    # no collection fires inside a live paint path.
-    yield
-    gc.collect()
 
 
 @pytest.fixture

@@ -109,3 +109,93 @@ def test_root_style_fixture_restores_app_created_during_prior_item(tmp_path):
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "2 passed" in result.stdout, result.stdout
+
+
+def _write_neutral_then_create_child(path: Path) -> None:
+    path.write_text(
+        textwrap.dedent(
+            """
+            import sys
+
+
+            APP = None
+            ORIGINAL = None
+
+
+            def test_neutral_item_does_not_import_qt():
+                assert "PyQt5.QtWidgets" not in sys.modules
+
+
+            def test_body_creates_and_mutates_application():
+                global APP, ORIGINAL
+                from PyQt5.QtGui import QColor, QFont, QPalette
+                from PyQt5.QtWidgets import QApplication, QStyleFactory
+
+                APP = QApplication.instance() or QApplication([])
+                ORIGINAL = (
+                    APP.styleSheet(),
+                    APP.style().objectName(),
+                    QPalette(APP.palette()),
+                    QFont(APP.font()),
+                )
+                alternate = next(
+                    key for key in QStyleFactory.keys()
+                    if key.lower() != ORIGINAL[1].lower()
+                )
+                APP.setStyle(alternate)
+                palette = QPalette(APP.palette())
+                palette.setColor(QPalette.Window, QColor("#325a88"))
+                APP.setPalette(palette)
+                font = QFont(APP.font())
+                font.setPointSize(max(1, font.pointSize() + 2))
+                APP.setFont(font)
+                APP.setStyleSheet("QWidget { background: #325a88; }")
+                assert APP.styleSheet() != ORIGINAL[0]
+                assert APP.style().objectName() != ORIGINAL[1]
+
+
+            def test_later_item_sees_restored_style():
+                from PyQt5.QtWidgets import QApplication
+
+                assert APP is not None and ORIGINAL is not None
+                sheet, style_name, palette, font = ORIGINAL
+                app = QApplication.instance()
+                assert app is APP
+                assert app.styleSheet() == sheet
+                assert app.style().objectName() == style_name
+                assert app.palette() == palette
+                assert app.font() == font
+            """
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_root_style_fixture_does_not_import_qt_until_body_creates_app(tmp_path):
+    """Neutral items must not pay a Qt import; a later body-created app still restores."""
+    child = tmp_path / "test_style_lazy_child.py"
+    _write_neutral_then_create_child(child)
+    env = _child_env()
+    env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "-p",
+            "conftest",
+            str(child),
+        ],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "3 passed" in result.stdout, result.stdout

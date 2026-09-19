@@ -51,6 +51,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.static_source
+
 MAIN_WINDOW_ROOT = (
     Path(__file__).resolve().parents[2] / "mf4_analyzer" / "ui" / "main_window"
 )
