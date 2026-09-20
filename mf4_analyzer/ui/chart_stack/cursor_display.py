@@ -813,11 +813,22 @@ def live_pin_hint_text(cursor_mode: str, *, dual_complete: bool = True) -> str:
 
 
 def pin_status_primary_html(intent, status_text) -> str:
-    return f'<span style="color:#64748b;">{escape(str(status_text))}</span>'
+    tag = (
+        f'<span style="color:#416faa;">P{intent.ordinal}</span>'
+        '<span style="color:#cbd5e1;">  &nbsp;│&nbsp;  </span>'
+    )
+    return (
+        tag
+        + f'<span style="color:#64748b;">{escape(str(status_text))}</span>'
+    )
 
 
 def pin_primary_html(intent) -> str:
-    return pin_coord_html(intent)
+    tag = (
+        f'<span style="color:#416faa;">P{intent.ordinal}</span>'
+        '<span style="color:#cbd5e1;">  &nbsp;│&nbsp;  </span>'
+    )
+    return tag + pin_coord_html(intent)
 
 
 def pin_live_primary_html(domain, mode, sample) -> str:

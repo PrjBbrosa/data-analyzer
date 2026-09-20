@@ -476,69 +476,12 @@ def test_view_switch_does_not_carry_p1(qapp, qtbot, loaded_csv):
     assert restored[0].x == pytest.approx(0.35)
 
 
-def test_title_menu_closes_on_view_switch_without_stale_scope_callback(
-    qapp, qtbot, loaded_csv,
-):
-    from tests.ui.test_view_switch_integration import (
-        _fid, _make_loaded_window, _set_checked,
-    )
-
-    w = _make_loaded_window(qtbot, qapp, loaded_csv)
-    _set_checked(w, "speed")
-    w.plot_time()
-    _flush(qapp)
-    fid = _fid(w)
-    pins = _single_pins(fid=fid, channel="speed", x=0.35)
-    cs = w.chart_stack
-    canvas = w.canvas_time
-    cs.set_pinned_cursors_for_canvas(canvas, pins)
-    _flush(qapp)
-    record = cs.pinned_cursors_for_canvas(canvas).records[0]
-    old_id = record.record_id
-    cs._pinned_cursors.toggle_record_panel(canvas, old_id)
-    _flush(qapp)
-    pills = [pill for pill in cs._pinned_cursors.pills_for(canvas) if pill.isVisible()]
-    assert pills
-    pill = pills[0]
-    opener = getattr(pill, "_on_title_menu_clicked", None)
-    assert callable(opener)
-    opener()
-    _flush(qapp)
-    menu = pill._title_menu
-    assert menu is not None
-    old_actions = list(menu.actions())
-    w._on_view_new()
-    _flush(qapp)
-    assert sip.isdeleted(menu) or not menu.isVisible()
-    for action in old_actions:
-        if sip.isdeleted(action):
-            continue
-        action.trigger()
-    _flush(qapp)
-    assert cs.pinned_cursors_for_canvas(canvas).records == ()
-    w._switch_view(0)
-    _flush(qapp)
-    restored = cs.pinned_cursors_for_canvas(canvas).records
-    assert len(restored) == 1
-    assert restored[0].record_id == old_id
-    assert restored[0].ordinal == 1
-
-
-def test_title_menu_closes_when_source_channel_disappears(qapp, qtbot):
+def test_source_channel_disappearance_keeps_pin_and_marks_unavailable(qapp, qtbot):
     cs = _make_stack(qtbot, qapp)
     records = _install_pins(cs, _single_pins(fid="fid-a", channel="speed"))
     record_id = records[0].record_id
     cs._pinned_cursors.toggle_record_panel(cs.canvas_time, record_id)
     _flush(qapp)
-    pills = [pill for pill in cs._pinned_cursors.pills_for(cs.canvas_time) if pill.isVisible()]
-    assert pills
-    pill = pills[0]
-    opener = getattr(pill, "_on_title_menu_clicked", None)
-    assert callable(opener)
-    opener()
-    _flush(qapp)
-    menu = pill._title_menu
-    assert menu is not None
     t = _t()
     cs.canvas_time.plot_channels(
         [
@@ -550,7 +493,6 @@ def test_title_menu_closes_when_source_channel_disappears(qapp, qtbot):
         mode="overlay",
     )
     _flush(qapp)
-    assert sip.isdeleted(menu) or not menu.isVisible()
     assert cs.pinned_cursors_for_canvas(cs.canvas_time).records[0].record_id == (
         record_id
     )

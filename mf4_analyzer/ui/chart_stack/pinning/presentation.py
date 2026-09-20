@@ -299,9 +299,6 @@ class PinPanelProjector(QObject):
         if not _widget_alive(pill):
             return
         pill.hide()
-        dismiss = getattr(pill, "dismiss_title_menu", None)
-        if callable(dismiss):
-            dismiss()
         pill.setParent(None)
         pill.deleteLater()
 
@@ -417,12 +414,6 @@ class PinPanelProjector(QObject):
             pill.close_requested.connect(
                 partial(ports.on_close, canvas, intent.record_id)
             )
-            pill.collapse_requested.connect(
-                partial(ports.on_collapse_panel, canvas, intent.record_id)
-            )
-            pill.title_menu_active_changed.connect(
-                partial(self._on_title_menu_active, canvas, intent.record_id)
-            )
             pill.moved.connect(
                 partial(self._on_pinned_moved, key, canvas, intent.record_id)
             )
@@ -436,10 +427,6 @@ class PinPanelProjector(QObject):
         pill.set_ordinal(intent.ordinal)
         pill.set_pin_role("pinned")
         pill.set_live_hint("")
-        if status != PIN_STATUS_READY:
-            dismiss = getattr(pill, "dismiss_title_menu", None)
-            if callable(dismiss):
-                dismiss()
         card = ports.card_for_canvas(canvas)
         ports.sync_pill_safe_rect(pill, card)
         primary, projection = self.pill_content(intent, sample, status)
@@ -1095,15 +1082,6 @@ class PinPanelProjector(QObject):
         if state is not None:
             state.hover_target = None if target in (None, "", (), []) else target
         self._publish_highlight(canvas)
-
-    def _on_title_menu_active(self, canvas, record_id, active=False) -> None:
-        if not _widget_alive(canvas):
-            return
-        if active:
-            self._begin_capture(canvas, record_id)
-            return
-        pill = self.pill_for(id(canvas), record_id)
-        self._end_capture(canvas, pill, record_id)
 
     def _begin_capture(self, canvas, record_id) -> None:
         state = self._states.get(id(canvas))

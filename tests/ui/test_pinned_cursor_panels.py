@@ -14,10 +14,7 @@ from mf4_analyzer.ui.pinned_cursor_state import (
     DEFAULT_ANCHOR,
     collection_from_dict,
     collection_to_dict,
-    empty_collection,
-    next_record,
 )
-from mf4_analyzer.ui_kit.popup_shell import POPUP_SHELL_FLAGS
 
 
 def _plot_speed(canvas):
@@ -137,26 +134,6 @@ def _pinned_pill_for_ordinal(cs, ordinal, canvas=None):
     raise AssertionError(f"missing pinned pill P{ordinal}")
 
 
-def _open_title_menu(pill, qapp):
-    opener = getattr(pill, "_on_title_menu_clicked", None)
-    assert callable(opener)
-    opener()
-    qapp.processEvents()
-    menu = getattr(pill, "_title_menu", None)
-    assert menu is not None
-    assert not sip.isdeleted(menu)
-    return menu
-
-
-def _title_menu_action(menu, text):
-    for action in menu.actions():
-        if action.text() == text:
-            return action
-    raise AssertionError(
-        f"missing {text!r}: {[action.text() for action in menu.actions()]}"
-    )
-
-
 def _is_descendant_of(widget, ancestor):
     while widget is not None:
         if widget is ancestor:
@@ -242,7 +219,7 @@ def test_a09_full_mini_independent_drag_close_and_reuse_ordinal(qapp, qtbot):
     closed_ordinal = _records(cs)[1].ordinal
     heard = []
     cs.pin_feedback.connect(heard.append)
-    second.close_requested.emit()
+    qtbot.mouseClick(second._close_btn, Qt.LeftButton)
     qapp.processEvents()
     assert len(_records(cs)) == 1
     assert closed_id not in {item.record_id for item in _records(cs)}
@@ -600,7 +577,7 @@ def test_expanded_pn_chip_has_filled_chrome_and_collapse_tooltip(qapp, qtbot):
     assert "展开" in label.toolTip()
 
 
-def test_pinned_title_uses_menu_not_duplicate_html_or_pin_button(qapp, qtbot):
+def test_pinned_title_keeps_identity_html_and_original_close(qapp, qtbot):
     cs = _make_stack(qtbot, qapp)
     _aim(qtbot, cs.canvas_time, 0.35, cs._pinned_cursors)
     _press_p(_viewport(cs.canvas_time))
@@ -608,31 +585,23 @@ def test_pinned_title_uses_menu_not_duplicate_html_or_pin_button(qapp, qtbot):
     _click_record_label(qtbot, cs, record.record_id)
     qapp.processEvents()
     pill = _pinned_pill_for_ordinal(cs, record.ordinal)
-    menu_btn = pill._title_menu_btn
-    assert menu_btn.isVisibleTo(pill)
-    assert menu_btn.text() == f"P{record.ordinal} ▾"
+    assert getattr(pill, "_title_menu_btn", None) is None
     assert not pill._pin_btn.isVisibleTo(pill)
+    assert pill._pin_btn.toolTip() == ""
     assert pill._close_btn.isVisibleTo(pill)
-    assert pill._close_btn.toolTip() == f"删除 P{record.ordinal}"
-    assert pill._close_btn.accessibleName() == f"删除 P{record.ordinal}"
+    assert pill._close_btn.toolTip() == "删除这一张 Pin"
+    assert pill._close_btn.accessibleName() == "删除这一张 Pin"
     primary = pill.primary_text()
-    assert f"P{record.ordinal}" not in primary
+    assert f"P{record.ordinal}" in primary
     assert "t=" in primary
-    leading = pill._title_leading_chrome_width()
-    trailing = pill._title_trailing_chrome_width()
-    assert leading > 0
-    assert pill._title_chrome_width() == leading + trailing
-    assert pill._primary.contentsMargins().left() == leading
-    menu_rect = menu_btn.geometry()
+    assert pill._title_leading_chrome_width() == 0
+    assert pill._primary.contentsMargins().left() == 0
     close_rect = pill._close_btn.geometry()
     mode_rect = pill._mode_control.geometry()
-    assert menu_rect.left() >= 0
-    assert not menu_rect.intersects(close_rect)
-    assert not menu_rect.intersects(mode_rect)
     assert not close_rect.intersects(mode_rect)
 
 
-def test_title_menu_collapse_only_keeps_pin_and_reopens_from_pn(qapp, qtbot):
+def test_collapse_record_panel_is_idempotent_and_pn_reopens(qapp, qtbot):
     cs = _make_stack(qtbot, qapp)
     canvas = cs.canvas_time
     _aim(qtbot, canvas, 0.3, cs._pinned_cursors)
@@ -641,15 +610,7 @@ def test_title_menu_collapse_only_keeps_pin_and_reopens_from_pn(qapp, qtbot):
     record_id = record.record_id
     _click_record_label(qtbot, cs, record_id)
     qapp.processEvents()
-    pill = _pinned_pill_for_ordinal(cs, 1)
-    menu = _open_title_menu(pill, qapp)
-    assert menu.parent() is pill
-    assert menu.testAttribute(Qt.WA_TranslucentBackground)
-    assert (menu.windowFlags() & POPUP_SHELL_FLAGS) == POPUP_SHELL_FLAGS
-    labels = [action.text() for action in menu.actions() if action.text()]
-    assert labels[:2] == ["收起面板，保留 Pin", "取消固定，继续调整"]
-    assert f"删除 P{record.ordinal}" in labels
-    _title_menu_action(menu, "收起面板，保留 Pin").trigger()
+    cs._pinned_cursors.collapse_record_panel(canvas, record_id)
     qapp.processEvents()
     assert _panel_expansion_by_ordinal(cs)[1] is False
     assert record_id in {item.record_id for item in _records(cs)}
@@ -666,7 +627,7 @@ def test_title_menu_collapse_only_keeps_pin_and_reopens_from_pn(qapp, qtbot):
     assert 1 in _visible_pinned_ordinals(cs)
 
 
-def test_title_menu_unpin_restores_live_and_reuses_ordinal(qapp, qtbot):
+def test_unpin_signal_restores_restores_live_and_reuses_ordinal(qapp, qtbot):
     cs = _make_stack(qtbot, qapp)
     vp = _viewport(cs.canvas_time)
     _aim(qtbot, cs.canvas_time, 0.32, cs._pinned_cursors)
@@ -675,8 +636,7 @@ def test_title_menu_unpin_restores_live_and_reuses_ordinal(qapp, qtbot):
     _click_record_label(qtbot, cs, record.record_id)
     qapp.processEvents()
     pill = _pinned_pill_for_ordinal(cs, 1)
-    menu = _open_title_menu(pill, qapp)
-    _title_menu_action(menu, "取消固定，继续调整").trigger()
+    pill.unpin_requested.emit()
     qapp.processEvents()
     assert _records(cs) == ()
     assert cs._pill.isVisible()
@@ -689,7 +649,7 @@ def test_title_menu_unpin_restores_live_and_reuses_ordinal(qapp, qtbot):
     assert reused[0].ordinal == 1
 
 
-def test_title_menu_unpin_restores_dual_and_reuses_ordinal(qapp, qtbot):
+def test_unpin_signal_restores_dual_and_reuses_ordinal(qapp, qtbot):
     cs = _make_stack(qtbot, qapp, mode="dual")
     cursor = cs.canvas_time._cursor
     cursor._ax = 0.2
@@ -703,8 +663,7 @@ def test_title_menu_unpin_restores_dual_and_reuses_ordinal(qapp, qtbot):
     cs._pinned_cursors.toggle_record_panel(cs.canvas_time, record.record_id)
     qapp.processEvents()
     pill = _pinned_pill_for_ordinal(cs, 1)
-    menu = _open_title_menu(pill, qapp)
-    _title_menu_action(menu, "取消固定，继续调整").trigger()
+    pill.unpin_requested.emit()
     qapp.processEvents()
     assert _records(cs) == ()
     assert cs._pill.isVisible()
@@ -716,9 +675,7 @@ def test_title_menu_unpin_restores_dual_and_reuses_ordinal(qapp, qtbot):
     assert _records(cs)[0].ordinal == 1
 
 
-def test_close_button_and_menu_delete_clear_projections_without_live_restore(
-    qapp, qtbot,
-):
+def test_close_button_clears_projections_without_live_restore(qapp, qtbot):
     cs = _make_stack(qtbot, qapp)
     canvas = cs.canvas_time
     vp = _viewport(canvas)
@@ -743,8 +700,7 @@ def test_close_button_and_menu_delete_clear_projections_without_live_restore(
     assert not cs._pill.isVisible()
 
     second_pill = _pinned_pill_for_ordinal(cs, 2)
-    menu = _open_title_menu(second_pill, qapp)
-    _title_menu_action(menu, "删除 P2").trigger()
+    qtbot.mouseClick(second_pill._close_btn, Qt.LeftButton)
     qapp.processEvents()
     assert _records(cs) == ()
     assert canvas._pinned_overlay.records() == ()
@@ -761,7 +717,6 @@ def test_title_chrome_child_clicks_do_not_drag_pinned_panel(qapp, qtbot):
     _click_record_label(qtbot, cs, record.record_id)
     qapp.processEvents()
     pill = _pinned_pill_for_ordinal(cs, 1)
-    origin = QPoint(pill.pos())
     start = pill.rect().center()
     qtbot.mousePress(pill, Qt.LeftButton, pos=start)
     qtbot.mouseMove(pill, start + QPoint(-24, 16))
@@ -770,7 +725,7 @@ def test_title_chrome_child_clicks_do_not_drag_pinned_panel(qapp, qtbot):
     assert pill.is_user_placed()
     origin = QPoint(pill.pos())
     for widget in (
-        pill._title_menu_btn,
+        pill._mode_control,
         pill._mode_control.button_for("mini"),
         pill._close_btn,
     ):
@@ -782,71 +737,6 @@ def test_title_chrome_child_clicks_do_not_drag_pinned_panel(qapp, qtbot):
         assert pill.pos() == origin
         qtbot.mouseRelease(widget, Qt.LeftButton, pos=widget.rect().center())
         qapp.processEvents()
-        dismiss = getattr(pill, "dismiss_title_menu", None)
-        if callable(dismiss):
-            dismiss()
-            qapp.processEvents()
         if sip.isdeleted(pill):
             break
         origin = QPoint(pill.pos())
-
-
-def test_title_menu_closes_on_pin_replacement_without_old_scope_callback(
-    qapp, qtbot,
-):
-    cs = _make_stack(qtbot, qapp)
-    canvas = cs.canvas_time
-    _aim(qtbot, canvas, 0.3, cs._pinned_cursors)
-    _press_p(_viewport(canvas))
-    old = _records(cs)[0]
-    _click_record_label(qtbot, cs, old.record_id)
-    qapp.processEvents()
-    pill = _pinned_pill_for_ordinal(cs, 1)
-    menu = _open_title_menu(pill, qapp)
-    old_actions = list(menu.actions())
-    replacement, _intent = next_record(empty_collection(), {
-        "mode": "single",
-        "domain": "time",
-        "x": 0.8,
-        "x_unit": "s",
-        "bindings": [{"fid": "fid-a", "channel": "speed"}],
-        "presentation": "full",
-        "panel_expanded": True,
-    })
-    cs.set_pinned_cursors_for_canvas(canvas, replacement)
-    qapp.processEvents()
-    assert sip.isdeleted(menu) or not menu.isVisible()
-    for action in old_actions:
-        if sip.isdeleted(action):
-            continue
-        action.trigger()
-    qapp.processEvents()
-    live = _records(cs)
-    assert len(live) == 1
-    assert live[0].record_id != old.record_id
-    assert live[0].ordinal == 1
-    assert abs(live[0].x - 0.8) < 1e-6
-    new_pill = _pinned_pill_for_ordinal(cs, 1)
-    assert new_pill is not pill
-    assert sip.isdeleted(pill) or not pill.isVisible()
-
-
-def test_title_menu_highlight_holds_while_open(qapp, qtbot):
-    cs = _make_stack(qtbot, qapp)
-    canvas = cs.canvas_time
-    _aim(qtbot, canvas, 0.4, cs._pinned_cursors)
-    _press_p(_viewport(canvas))
-    record = _records(cs)[0]
-    _click_record_label(qtbot, cs, record.record_id)
-    qapp.processEvents()
-    pill = _pinned_pill_for_ordinal(cs, 1)
-    overlay = canvas._pinned_overlay
-    QApplication.sendEvent(pill, QEvent(QEvent.Enter))
-    qapp.processEvents()
-    _open_title_menu(pill, qapp)
-    QApplication.sendEvent(pill, QEvent(QEvent.Leave))
-    qapp.processEvents()
-    assert overlay.highlight_id() == record.record_id
-    pill.dismiss_title_menu()
-    qapp.processEvents()
-

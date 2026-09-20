@@ -260,6 +260,7 @@ lesson by default.
 | [Empty Pin Replacement Must Clear Every Projection](empty-pin-replacement-must-clear-overlay.md) | Replacing a Pin collection, restoring a View/pane, or checking Pin cleanup. | See lesson |
 | [Pin Consume Hides Live Items And Keeps Placement](pin-consume-hides-live-items-keep-placement.md) | Changing live-cursor consume after a successful Pin, `consume_live_cursor_pill`, or `_cursor_visible` / live InfiniteLine visibility. | See lesson |
 | [Popup Trigger Hover Must Bind Each Entry](popup-trigger-hover-must-bind-each-entry.md) | Adding or changing a button that opens `QMenu.exec_`, `QMenu.popup`, | See lesson |
+| [Cursor Close Chrome Needs Sibling Polish](cursor-close-chrome-needs-sibling-polish.md) | Changing cursor title actions, their role transitions, or button styling. | See lesson |
 
 ## Selection Rules
 

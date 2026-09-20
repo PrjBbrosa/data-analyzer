@@ -14,18 +14,16 @@ from math import ceil
 
 from PyQt5.QtCore import QEvent, QRect, QSize, QTimer, Qt, pyqtSignal
 from PyQt5.QtGui import (
-    QColor, QFont, QFontMetrics, QPainter, QPen, QTextDocument, QTextOption,
+    QColor, QFont, QFontMetrics, QPainter, QPen, QTextBlockFormat, QTextCursor, QTextDocument, QTextOption,
 )
 from PyQt5 import sip
 from PyQt5.QtWidgets import (
-    QButtonGroup, QFrame, QHBoxLayout, QLabel, QMenu, QPushButton, QSizePolicy,
+    QButtonGroup, QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy,
     QWIDGETSIZE_MAX, QVBoxLayout,
 )
 
 from PyQt5.QtCore import QRectF, QSizeF
 
-from ...ui_kit.menus import apply_rounded_menu_chrome
-from ...ui_kit.popup_trigger import bind_popup_trigger
 from ._helpers import _format_mini_html
 from .cursor_table_layout import choose_table_layout, compute_wcap
 
@@ -120,35 +118,6 @@ QPushButton#cursorPillPin[pinned="true"] {
 QPushButton#cursorPillPin[pinned="true"]:hover {
     background: #3b73d4;
     border-color: #3b73d4;
-}
-"""
-_TITLE_MENU_QSS = """
-QPushButton#cursorPillTitleMenu {
-    background: rgba(33, 103, 199, 0.12);
-    border-width: 1px;
-    border-style: solid;
-    border-color: rgba(33, 103, 199, 0.35);
-    border-radius: 3px;
-    color: #164878;
-    font-size: 10px;
-    font-weight: 700;
-    padding-top: 0px;
-    padding-bottom: 0px;
-    padding-left: 5px;
-    padding-right: 5px;
-    min-height: 16px;
-    max-height: 16px;
-}
-QPushButton#cursorPillTitleMenu:hover {
-    background: rgba(33, 103, 199, 0.20);
-}
-QPushButton#cursorPillTitleMenu:pressed {
-    background: rgba(33, 103, 199, 0.28);
-}
-QPushButton#cursorPillTitleMenu:focus {
-    border-width: 1px;
-    border-style: solid;
-    border-color: #2167C7;
 }
 """
 
@@ -587,36 +556,6 @@ class _CursorDisplayModeControl(QFrame):
         return super().sizeHint()
 
 
-class _TitleMenuButton(QPushButton):
-    """Pinned ``Pn ▾`` trigger. Clicks stay on this child, not the pill drag."""
-
-    def mousePressEvent(self, event):
-        super().mousePressEvent(event)
-        event.accept()
-
-    def mouseMoveEvent(self, event):
-        event.accept()
-
-    def mouseReleaseEvent(self, event):
-        super().mouseReleaseEvent(event)
-        event.accept()
-
-    def changeEvent(self, event):
-        super().changeEvent(event)
-        if event.type() in _PIN_CHROME_INVALIDATE_EVENTS:
-            parent = self.parentWidget()
-            if (
-                parent is None
-                or sip.isdeleted(parent)
-                or not getattr(parent, "_title_chrome_ready", False)
-                or getattr(parent, "_title_chrome_updating", False)
-            ):
-                return
-            invalidate = getattr(parent, "_invalidate_title_chrome_width", None)
-            if callable(invalidate):
-                invalidate()
-
-
 class CursorPill(QFrame):
     """Draggable floating pill with a primary line (time / A·B / ΔT) and an
     optional detail block (per-channel Min/Max/Avg/△ as RichText). The
@@ -626,8 +565,6 @@ class CursorPill(QFrame):
     pin_requested = pyqtSignal()
     unpin_requested = pyqtSignal()
     close_requested = pyqtSignal()
-    collapse_requested = pyqtSignal()
-    title_menu_active_changed = pyqtSignal(bool)
     moved = pyqtSignal()
 
     def __init__(self, parent=None):
@@ -718,20 +655,9 @@ class CursorPill(QFrame):
         self._close_btn.setObjectName("cursorPillClose")
         self._close_btn.setFixedSize(_ACTION_BTN, _ACTION_BTN)
         self._close_btn.setCursor(Qt.ArrowCursor)
-        self._close_btn.setToolTip("删除 Pin")
-        self._close_btn.setAccessibleName("删除 Pin")
+        self._close_btn.setToolTip("删除这一张 Pin")
+        self._close_btn.setAccessibleName("删除这一张 Pin")
         self._close_btn.clicked.connect(self._emit_close)
-        self._title_menu_btn = _TitleMenuButton(self)
-        self._title_menu_btn.setObjectName("cursorPillTitleMenu")
-        self._title_menu_btn.setCursor(Qt.ArrowCursor)
-        self._title_menu_btn.setFocusPolicy(Qt.TabFocus)
-        self._title_menu_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        self._title_menu_btn.setStyleSheet(_TITLE_MENU_QSS)
-        self._title_menu_btn.clicked.connect(self._on_title_menu_clicked)
-        self._title_menu_btn.hide()
-        self._title_menu = None
-        self._title_menu_open = False
-        self._title_menu_close_action = None
         self._pin_btn.setStyleSheet(_PIN_CHROME_QSS)
         self._close_btn.setStyleSheet(_PIN_CHROME_QSS)
         self._mode_control = _CursorDisplayModeControl(self)
@@ -785,9 +711,8 @@ class CursorPill(QFrame):
         return widget.isVisibleTo(self)
 
     def _title_leading_widgets(self):
-        """Left-side title chrome: pinned ``Pn ▾`` menu trigger."""
-        widget = getattr(self, "_title_menu_btn", None)
-        return (widget,) if widget is not None else ()
+        """Left-side title chrome. Identity lives in the primary HTML."""
+        return ()
 
     def _title_trailing_widgets(self):
         return tuple(
@@ -870,7 +795,7 @@ class CursorPill(QFrame):
         return self._measure_title_chrome()[1]
 
     def _title_chrome_width(self):
-        """Packed width of all title chrome, including the T3 leading slot."""
+        """Packed width of all title chrome."""
         leading, trailing = self._measure_title_chrome()
         return leading + trailing
 
@@ -891,26 +816,32 @@ class CursorPill(QFrame):
 
     def _sync_title_action_margins(self):
         leading, trailing = self._measure_title_chrome()
+        if self._pin_role == "pinned" and self._display_projection is not None:
+            # Only the first document block reserves the title actions.
+            leading = trailing = 0
         self._primary.setContentsMargins(leading, 0, trailing, 0)
 
     def _position_title_actions(self):
         """Pack visible title chrome from both edges.
 
-        Leading: ``Pn ▾``. Trailing: × → 数值/完整 → live P. Hidden chrome
-        occupies no slot. First-line text uses ``_title_chrome_width()``.
+        Trailing: × → 数值/完整 → P. Hidden chrome occupies no slot.
+        First-line text uses ``_title_chrome_width()``.
         """
         self._title_chrome_parts = None
         self._title_chrome_token = None
         if not getattr(self, "_title_chrome_ready", False):
             return
         y = _TOGGLE_EDGE_GAP
+        actions = self._title_leading_widgets() + self._title_trailing_widgets()
+        row_height = max((self._chrome_pack_size(widget)[1] for widget in actions
+                          if self._title_action_occupies_slot(widget)), default=0)
         left = _TOGGLE_EDGE_GAP
         for widget in self._title_leading_widgets():
             if not self._title_action_occupies_slot(widget):
                 continue
             width, height = self._chrome_pack_size(widget)
             widget.resize(width, height)
-            widget.move(left, y)
+            widget.move(left, y + (row_height - height) // 2)
             left += width + _TOGGLE_EDGE_GAP
             widget.raise_()
         right = self.width() - _TOGGLE_EDGE_GAP
@@ -919,7 +850,7 @@ class CursorPill(QFrame):
                 continue
             width, height = self._chrome_pack_size(widget)
             widget.resize(width, height)
-            widget.move(right - width, y)
+            widget.move(right - width, y + (row_height - height) // 2)
             right -= width + _TOGGLE_EDGE_GAP
             widget.raise_()
         self._sync_title_action_margins()
@@ -931,100 +862,7 @@ class CursorPill(QFrame):
             self.pin_requested.emit()
 
     def _emit_close(self, _checked=False):
-        self.dismiss_title_menu()
         self.close_requested.emit()
-
-    def _emit_unpin(self, _checked=False):
-        self.dismiss_title_menu()
-        self.unpin_requested.emit()
-
-    def _emit_collapse(self, _checked=False):
-        self.dismiss_title_menu()
-        self.collapse_requested.emit()
-
-    def _pin_label(self):
-        return f"P{self._ordinal}" if self._ordinal else "P"
-
-    def _delete_action_text(self):
-        return f"删除 {self._pin_label()}"
-
-    def hideEvent(self, event):
-        self.dismiss_title_menu()
-        super().hideEvent(event)
-
-    def dismiss_title_menu(self):
-        menu = getattr(self, "_title_menu", None)
-        self._title_menu = None
-        self._title_menu_close_action = None
-        if menu is not None:
-            try:
-                if not sip.isdeleted(menu):
-                    menu.close()
-                    menu.deleteLater()
-            except RuntimeError:
-                pass
-        if getattr(self, "_title_menu_open", False):
-            self._title_menu_open = False
-            self.title_menu_active_changed.emit(False)
-
-    def _on_title_menu_clicked(self, _checked=False):
-        if self._pin_role != "pinned":
-            return
-        self.dismiss_title_menu()
-        menu = apply_rounded_menu_chrome(QMenu(self))
-        bind_popup_trigger(menu, self._title_menu_btn)
-        collapse = menu.addAction("收起面板，保留 Pin")
-        collapse.triggered.connect(self._emit_collapse)
-        unpin = menu.addAction("取消固定，继续调整")
-        unpin.triggered.connect(self._emit_unpin)
-        menu.addSeparator()
-        close = menu.addAction(self._delete_action_text())
-        close.triggered.connect(self._emit_close)
-        self._title_menu_close_action = close
-        menu.aboutToShow.connect(self._on_title_menu_about_to_show)
-        menu.aboutToHide.connect(self._on_title_menu_about_to_hide)
-        self._title_menu = menu
-        self._title_menu_open = True
-        self.title_menu_active_changed.emit(True)
-        pos = self._title_menu_btn.mapToGlobal(
-            self._title_menu_btn.rect().bottomLeft()
-        )
-        menu.popup(pos)
-
-    def _on_title_menu_about_to_show(self):
-        self._refresh_title_menu_actions()
-        if self._title_menu_open:
-            return
-        self._title_menu_open = True
-        self.title_menu_active_changed.emit(True)
-
-    def _on_title_menu_about_to_hide(self):
-        if not self._title_menu_open:
-            return
-        self._title_menu_open = False
-        self.title_menu_active_changed.emit(False)
-
-    def _refresh_title_menu_actions(self):
-        menu = getattr(self, "_title_menu", None)
-        if menu is None:
-            return
-        try:
-            if sip.isdeleted(menu):
-                return
-        except RuntimeError:
-            return
-        enabled = self._pin_role == "pinned" and int(self._ordinal or 0) > 0
-        close = getattr(self, "_title_menu_close_action", None)
-        if close is not None:
-            try:
-                if not sip.isdeleted(close):
-                    close.setText(self._delete_action_text())
-            except RuntimeError:
-                close = None
-        for action in menu.actions():
-            if action.isSeparator():
-                continue
-            action.setEnabled(enabled)
 
     def pin_role(self):
         return self._pin_role
@@ -1033,16 +871,10 @@ class CursorPill(QFrame):
         return self._ordinal
 
     def set_ordinal(self, ordinal):
-        next_ordinal = int(ordinal or 0)
-        if next_ordinal == self._ordinal:
-            return
-        self._ordinal = next_ordinal
-        self._sync_pin_hint_geometry(force=True)
+        self._ordinal = int(ordinal or 0)
 
     def set_pin_role(self, role):
         next_role = "pinned" if role == "pinned" else "live"
-        if next_role != "pinned":
-            self.dismiss_title_menu()
         role_changed = next_role != self._pin_role
         self._pin_role = next_role
         if role_changed:
@@ -1094,34 +926,29 @@ class CursorPill(QFrame):
             self._pin_btn.setProperty("pinned", token)
             self._pin_btn.style().unpolish(self._pin_btn)
             self._pin_btn.style().polish(self._pin_btn)
+            # Cocoa can retain the native circular close-button paint until
+            # this sibling is polished too. Resolve its QSS before measuring.
+            self._close_btn.style().unpolish(self._close_btn)
+            self._close_btn.style().polish(self._close_btn)
             self._pin_role_style_token = token
         finally:
             self._pin_chrome_syncing = False
 
     def _sync_pin_hint_geometry(self, *, force=False):
-        """Update live P / pinned Pn menu chrome and title-action packing."""
+        """Update live/pinned P chrome and title-action packing without role polish."""
         pinned = self._pin_role == "pinned"
         live_tooltip = self._live_hint if not pinned else ""
         pin_visible = (not pinned) and bool(live_tooltip)
-        label = self._pin_label()
-        menu_text = f"{label} ▾"
-        close_tip = self._delete_action_text()
         tooltip = live_tooltip
-        token = (pinned, pin_visible, tooltip, self._ordinal, menu_text, close_tip)
+        token = (pinned, pin_visible, tooltip)
         if not force and self._pin_hint_geometry_token == token:
             return
         self._pin_btn.setVisible(pin_visible)
         self._close_btn.setVisible(pinned)
-        self._title_menu_btn.setVisible(pinned)
         self._pin_btn.setToolTip(tooltip)
-        self._pin_btn.setAccessibleName("固定当前读数" if pin_visible else "")
-        if pinned:
-            self._title_menu_btn.setText(menu_text)
-            self._title_menu_btn.setToolTip(f"{label} 面板操作")
-            self._title_menu_btn.setAccessibleName(f"{label} 操作菜单")
-            self._close_btn.setToolTip(close_tip)
-            self._close_btn.setAccessibleName(close_tip)
-            self._refresh_title_menu_actions()
+        self._pin_btn.setAccessibleName(
+            "固定当前读数" if pin_visible else ""
+        )
         self._invalidate_title_chrome_width()
         self._position_title_actions()
         self._pin_hint_geometry_token = token
@@ -1192,6 +1019,10 @@ class CursorPill(QFrame):
         text = self._primary_original
         self._primary.setVisible(bool(text))
         reserve = self._title_chrome_width()
+        if (budget > 0 and self._pin_role == "pinned"
+                and self._display_projection is not None):
+            self._apply_pinned_primary_layout(text, budget, reserve)
+            return
         if budget > 0:
             text = self._primary_for_budget(text, max(1, budget - reserve))
         if budget > 0:
@@ -1208,6 +1039,34 @@ class CursorPill(QFrame):
         else:
             self._primary.setWordWrap(False)
             self._primary.setMaximumWidth(16777215)
+
+    def _apply_pinned_primary_layout(self, text, budget, reserve):
+        """Reserve controls on the header only; subsequent rows use full width."""
+        fragments = [part for part in text.split(_CURSOR_HTML_SEP) if part]
+        first = ""
+        if fragments and self._primary_html_width(fragments[0]) <= budget - reserve:
+            first = fragments.pop(0)
+        rows = []
+        for fragment in fragments:
+            joined = _CURSOR_HTML_SEP.join((rows[-1], fragment)) if rows else fragment
+            if rows and self._primary_html_width(joined) <= budget:
+                rows[-1] = joined
+            else:
+                rows.append(fragment)
+        html = "".join(f'<p style="margin:0;">{row or "&nbsp;"}</p>'
+                       for row in [first] + rows)
+        self._primary.setContentsMargins(0, 0, 0, 0)
+        self._primary.set_document_html(html, budget)
+        cursor = QTextCursor(self._primary.document.begin())
+        block_format = cursor.blockFormat()
+        block_format.setRightMargin(reserve)
+        row_height = max((self._chrome_pack_size(widget)[1]
+                          for widget in self._title_trailing_widgets()
+                          if self._title_action_occupies_slot(widget)), default=0)
+        block_format.setLineHeight(row_height, QTextBlockFormat.MinimumHeight)
+        cursor.setBlockFormat(block_format)
+        self._primary.setMaximumWidth(ceil(budget))
+        self._primary.updateGeometry()
 
     def _primary_for_budget(self, text, budget):
         """Regroup the separator-delimited primary into whole fragments (R7).
@@ -1638,6 +1497,8 @@ class CursorPill(QFrame):
         # made every panel expand to Wcap and created the large blank slabs in
         # the cursor screenshots.  The layout plan's shared column sum is the
         # width contract; use it as the settled content width instead.
+        # Title chrome overlays the first line and must not stretch this grid,
+        # or the table grows a blank right slab under 数值/完整.
         table_width = (
             min(content, max((self._signal_width(block, projection)
                               for block in projection.blocks), default=1.0))
@@ -1646,16 +1507,24 @@ class CursorPill(QFrame):
                 max(1.0, plan.required_width + _TABLE_EDGE_CLEARANCE),
             )
         )
-        primary_fragments = [part for part in self._primary_original.split(_CURSOR_HTML_SEP) if part]
-        primary_min = max((self._primary_html_width(part)
-                           for part in primary_fragments), default=0.0)
-        table_width = min(content + _TABLE_EDGE_CLEARANCE,
-                          max(table_width, min(primary_min + self._title_chrome_width(),
-                                               compute_wcap(safe.width()) - 20)))
+        # Give the title enough room for its widest indivisible fragment plus
+        # actions, independently of the numeric grid's intrinsic width.
+        fragments = [part for part in self._primary_original.split(_CURSOR_HTML_SEP)
+                     if part]
+        primary_min = max((self._primary_html_width(part) for part in fragments),
+                          default=0.0)
+        if self._pin_role == "pinned":
+            # The first fragment (normally Pn) shares the controls row only
+            # when it fits. Other fragments never pay the controls' width.
+            pane = max(table_width, ceil(primary_min), self._title_chrome_width())
+        else:
+            pane = max(table_width, ceil(primary_min) + self._title_chrome_width())
+        pane = min(wcap - _PILL_LEFT_MARGIN - _PILL_RIGHT_MARGIN, pane)
+
         self._pane_content_width = table_width
         self._detail.setMaximumWidth(int(ceil(table_width)))
-        self._apply_primary_layout(table_width)
-        primary_h = self._primary_doc_size(table_width).height()
+        self._apply_primary_layout(pane)
+        primary_h = self._primary_doc_size(pane).height()
         available = max(
             0.0,
             safe.height()
@@ -1682,7 +1551,7 @@ class CursorPill(QFrame):
         _measured_w, detail_h = self._measure_html(final_html, table_width)
         # ``setTextWidth`` makes documentSize().width() equal its constraint,
         # so it is intentionally not used to choose frame width here.
-        frame_w = int(ceil(table_width)) + _PILL_LEFT_MARGIN + _PILL_RIGHT_MARGIN
+        frame_w = int(ceil(pane)) + _PILL_LEFT_MARGIN + _PILL_RIGHT_MARGIN
         frame_h = int(
             primary_h + 2.0 + detail_h
         ) + _PILL_TOP_MARGIN + _PILL_BOTTOM_MARGIN

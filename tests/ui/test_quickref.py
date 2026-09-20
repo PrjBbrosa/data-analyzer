@@ -246,8 +246,8 @@ def test_quickref_documents_chart_pin_not_board_pen():
     assert pin_row.keys == (quickref._sc("pin_cursor"),)
     for phrase in (
         "单游标", "双游标", "A、B", "默认收起", "图底 Pn", "展开/收起",
-        "拖动", "焦点", "←/→", "Shift", "关游标", "不隐藏", "编号菜单",
-        "取消固定", "原地", "×", "删除", "数值", "完整",
+        "拖动", "焦点", "←/→", "Shift", "关游标", "不隐藏", "不显示 P 按钮",
+        "×", "删除", "收起", "数值", "完整",
     ):
         assert phrase in pin_row.sub, phrase
     assert "撤销" not in pin_row.sub

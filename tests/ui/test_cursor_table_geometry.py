@@ -370,6 +370,28 @@ def test_full_table_uses_its_measured_content_width_not_the_whole_cap(qapp, qtbo
     assert pill.width() < budget - 20
 
 
+def test_pinned_title_chrome_does_not_stretch_the_numeric_grid(
+        qapp, qtbot, production_style):
+    from mf4_analyzer.ui.chart_stack.cursor_pill import _TABLE_EDGE_CLEARANCE
+
+    parent, pill = make_pill(qtbot, 900)
+    pill.set_primary('t=29.2437s')
+    pill.set_live_hint('按 P 固定当前读数')
+    pill.set_display_projection(projection())
+    pill.show()
+    qapp.processEvents()
+    live_grid = pill._pane_content_width
+    pill.set_pin_role('pinned')
+    pill.set_display_projection(projection())
+    qapp.processEvents()
+    assert pill._title_leading_chrome_width() == 0
+    assert abs(pill._pane_content_width - live_grid) <= 1
+    required = pill._table_plan.required_width
+    assert pill._pane_content_width <= required + _TABLE_EDGE_CLEARANCE + 1
+    assert last_painted_column_right(pill) <= pill._detail.width() + 1
+    assert_painted_glyphs_contained(pill)
+
+
 def test_split_pills_budget_against_their_own_canvas(qapp, qtbot, tmp_path):
     """A narrow split pane must not borrow width from its sibling pane."""
     from mf4_analyzer.ui.chart_stack import ChartStack
@@ -842,12 +864,9 @@ def test_title_chrome_budget_follows_measured_width_without_overlap(
     assert_painted_glyphs_contained(pill)
     pill.set_pin_role('pinned')
     qapp.processEvents()
-    assert pill._title_leading_chrome_width() > 0
-    assert pill._title_chrome_width() == (
-        pill._title_leading_chrome_width() + _measured_trailing_pack_width(pill)
-    )
+    assert pill._title_leading_chrome_width() == 0
+    assert pill._title_chrome_width() == _measured_trailing_pack_width(pill)
     assert pill._close_btn.isVisibleTo(pill)
-    assert pill._title_menu_btn.isVisibleTo(pill)
     assert not pill._pin_btn.isVisibleTo(pill)
     assert_title_actions_fit_without_overlap(pill)
     assert pill.safe_rect().contains(pill.geometry()) or pill.awaiting_space()
@@ -877,12 +896,86 @@ def test_font_and_role_changes_invalidate_title_chrome_width(
     pill.set_pin_role('pinned')
     qapp.processEvents()
     pinned_width = pill._title_chrome_width()
-    assert pinned_width > live_width
-    assert pinned_width == (
-        pill._title_leading_chrome_width() + _measured_trailing_pack_width(pill)
-    )
-    assert pill._title_leading_chrome_width() > 0
+    assert pinned_width <= larger_width
+    assert pinned_width == _measured_trailing_pack_width(pill)
+    assert pill._title_leading_chrome_width() == 0
     assert_title_actions_fit_without_overlap(pill)
     if not pill.awaiting_space():
         assert last_painted_column_right(pill) <= pill._detail.width() + 1
         assert_painted_glyphs_contained(pill)
+
+@pytest.mark.parametrize("mini", [False, True])
+def test_compact_pinned_dual_keeps_time_fragments(qapp, qtbot, production_style, mini):
+    from mf4_analyzer.ui.chart_stack.cursor_pill import _CURSOR_HTML_SEP
+    parent, pill = make_pill(qtbot, 900)
+    pill.set_pin_role("pinned")
+    fragments = ["P1 A <b>1.2345 s</b>", "B <b>2.3456 s</b>",
+                 "ΔT <b>1.1111 s</b>", "1/ΔT <b>0.9000 Hz</b>"]
+    pill.set_primary(_CURSOR_HTML_SEP.join(fragments))
+    pill.set_display_projection(build_cursor_presentation(
+        CHANNELS[:1], CursorDisplayOptions(), cursor_mode="dual",
+        x_mode="time", mini=mini))
+    pill.show()
+    qapp.processEvents()
+    assert "空间不足" not in pill.primary_text()
+    for value in ("1.2345", "2.3456", "1.1111", "0.9000"):
+        assert value in pill._primary.document.toPlainText()
+    assert not pill._pin_btn.isVisibleTo(pill)
+    assert pill.safe_rect().contains(pill.geometry())
+    assert_painted_glyphs_contained(pill)
+
+def test_pinned_close_uses_rounded_square_fill(qapp, qtbot, production_style):
+    parent, pill = make_pill(qtbot, 900)
+    pill.set_primary("P1 t=1.2345s")
+    pill.set_pin_role("pinned")
+    pill.set_display_projection(projection())
+    pill.show()
+    qapp.processEvents()
+    image = pill.grab().toImage()
+    scale = image.devicePixelRatio()
+    button = pill._close_btn
+    # Inside the old small rounded square; outside a circular button's fill.
+    color = image.pixelColor(round((button.x() + 2) * scale),
+                             round((button.y() + 2) * scale))
+    assert color.red() < 245
+    assert color.green() < 245
+    assert color.blue() < 245
+    assert_title_actions_fit_without_overlap(pill)
+
+@pytest.mark.parametrize("width", [320, 900])
+@pytest.mark.parametrize("mini", [True, False])
+def test_pinned_header_centers_actions_and_releases_body_width(
+        qapp, qtbot, production_style, width, mini):
+    from mf4_analyzer.ui.chart_stack.cursor_pill import _CURSOR_HTML_SEP
+    from mf4_analyzer.ui.cursor_display_model import CursorDisplayBranch
+    parent, pill = make_pill(qtbot, width)
+    channels = (
+        replace(CHANNELS[0], unit_suffix="mm", diagnostic="区间内无数据"),
+        replace(CHANNELS[1], unit_suffix="mm", branches=(
+            CursorDisplayBranch("X↑", delta_value=.0029),
+            CursorDisplayBranch("X↓", delta_value=.002515))),
+    )
+    pill.set_pin_role("pinned")
+    pill.set_primary(_CURSOR_HTML_SEP.join([
+        "P1", "A <b>1.2345 s</b>", "B <b>2.3456 s</b>",
+        "ΔT <b>1.1111 s</b>", "1/ΔT <b>0.9000 Hz</b>"]))
+    pill.set_display_projection(build_cursor_presentation(
+        channels, CursorDisplayOptions(), cursor_mode="dual",
+        x_mode="custom", mini=mini))
+    pill.show()
+    qapp.processEvents()
+    mode, close = pill._mode_control, pill._close_btn
+    assert abs((mode.y() + mode.height()/2) - (close.y() + close.height()/2)) <= .5
+    assert pill.width() <= pill._detail.width() + 22
+    doc = pill._primary.document
+    block = doc.begin()
+    assert block.blockFormat().rightMargin() >= pill._title_chrome_width()
+    block = block.next()
+    assert block.isValid()
+    assert block.blockFormat().rightMargin() == 0
+    while block.isValid():
+        layout = block.layout()
+        for i in range(layout.lineCount()):
+            assert layout.lineAt(i).naturalTextWidth() <= doc.textWidth() + 1
+        block = block.next()
+    assert "空间不足" not in pill.primary_text()

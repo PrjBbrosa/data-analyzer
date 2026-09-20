@@ -556,11 +556,11 @@ def _pinned_action_corner(pill, qapp):
     qapp.processEvents()
     close = pill._close_btn
     toggle = pill._toggle_btn
-    menu = pill._title_menu_btn
+    pin = pill._pin_btn
     close_inset = pill.width() - (close.x() + close.width())
     toggle_gap = close.x() - (toggle.x() + toggle.width())
-    menu_inset = menu.x()
-    return close_inset, close.y(), toggle_gap, toggle.y(), menu_inset, menu.y()
+    pin_gap = None if pin.isHidden() else toggle.x() - (pin.x() + pin.width())
+    return close_inset, close.y(), toggle_gap, toggle.y(), pin_gap, pin.y()
 
 
 def test_identical_structured_pin_updates_do_not_repolish_role(qapp, qtbot):
@@ -616,15 +616,16 @@ def test_live_pinned_role_change_polishes_once_and_keeps_action_corner(qapp, qtb
     assert counts["unpolish"] == 1
     assert counts["polish"] == 1
     assert not pill._pin_btn.isVisibleTo(pill)
-    assert pill._title_menu_btn.isVisibleTo(pill)
     assert pill._close_btn.isVisibleTo(pill)
-    close_inset, close_top, toggle_gap, toggle_top, menu_inset, menu_top = (
+    close_inset, close_top, toggle_gap, toggle_top, pin_gap, pin_top = (
         _pinned_action_corner(pill, qapp)
     )
     assert close_inset <= 6 and close_top <= 6
     assert 0 <= toggle_gap <= 6
-    assert menu_inset <= 6
-    assert toggle_top == close_top == menu_top
+    assert pin_gap is None
+    assert abs((toggle_top + pill._mode_control.height() / 2) -
+               (close_top + pill._close_btn.height() / 2)) <= .5
+    assert pill._close_btn.toolTip() == "删除这一张 Pin"
 
     with _count_pin_btn_role_polish(pill) as counts:
         _apply_structured_pin_update(pill, "live", _LIVE_PIN_HINT)
@@ -651,15 +652,16 @@ def test_full_mini_and_hide_show_keep_pin_action_corners(qapp, qtbot):
     mini_width = pill.width()
 
     assert mini_width != full_width
-    for close_inset, close_top, toggle_gap, toggle_top, menu_inset, menu_top in (
+    for close_inset, close_top, toggle_gap, toggle_top, pin_gap, pin_top in (
         full_corner, mini_corner,
     ):
         assert close_inset <= 6 and close_top <= 6
         assert 0 <= toggle_gap <= 6
-        assert menu_inset <= 6
-        assert toggle_top == close_top == menu_top
+        assert pin_gap is None
+        assert abs((toggle_top + pill._mode_control.height() / 2) -
+               (close_top + pill._close_btn.height() / 2)) <= .5
         assert not pill._pin_btn.isVisibleTo(pill)
-        assert pill._title_menu_btn.isVisibleTo(pill)
+        assert pill._close_btn.isVisibleTo(pill)
 
     pill.hide()
     qapp.processEvents()
@@ -668,7 +670,7 @@ def test_full_mini_and_hide_show_keep_pin_action_corners(qapp, qtbot):
     shown_corner = _pinned_action_corner(pill, qapp)
     assert shown_corner[0] <= 6 and shown_corner[1] <= 6
     assert 0 <= shown_corner[2] <= 6
-    assert shown_corner[4] <= 6
+    assert shown_corner[4] is None
     assert not pill._pin_btn.isVisibleTo(pill)
 
     pill.set_pin_role("live")
@@ -702,14 +704,14 @@ def test_pin_chrome_invalidate_rebuilds_role_style_after_theme_change(qapp, qtbo
     assert counts["unpolish"] == 1
     assert counts["polish"] == 1
     assert not pill._pin_btn.isVisibleTo(pill)
-    assert pill._title_menu_btn.isVisibleTo(pill)
+    assert pill._close_btn.isVisibleTo(pill)
 
     with _count_pin_btn_role_polish(pill) as counts:
         qapp.sendEvent(pill, QEvent(QEvent.StyleChange))
         qapp.processEvents()
     assert counts["polish"] == 1
     assert not pill._pin_btn.isVisibleTo(pill)
-    assert pill._title_menu_btn.isVisibleTo(pill)
+    assert pill._close_btn.isVisibleTo(pill)
 
     font = QFont(pill.font())
     font.setPointSize(max(font.pointSize(), 12) + 2)
