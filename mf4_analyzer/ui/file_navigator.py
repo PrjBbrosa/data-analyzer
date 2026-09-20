@@ -4,7 +4,9 @@ import logging
 from contextlib import nullcontext
 
 import qtawesome as qta
-from PyQt5.QtCore import QEvent, QMimeData, QPoint, QSignalBlocker, QSize, Qt, pyqtSignal
+from PyQt5.QtCore import (
+    QEvent, QMimeData, QPoint, QSignalBlocker, QSize, QTimer, Qt, pyqtSignal,
+)
 from PyQt5.QtGui import QDrag
 from PyQt5.QtWidgets import (
     QApplication, QFrame, QHBoxLayout, QLabel, QMenu,
@@ -13,11 +15,16 @@ from PyQt5.QtWidgets import (
 
 from ..ui_kit.icons import Icons
 from ..ui_kit.menus import apply_rounded_menu_chrome
+from ..ui_kit.popup_trigger import bind_popup_trigger, sync_popup_trigger
 from .widgets import INTERNAL_FILE_FIDS_MIME, MultiFileChannelWidget
 
 logger = logging.getLogger(__name__)
 _FILE_ORDER_BEFORE = "before"
 _FILE_ORDER_AFTER = "after"
+# Lock the expanded left rail to the Inspector outer width (272 content + 16
+# chrome). Content still wins if a future font/style needs more.
+NAVIGATOR_MIN_EXPANDED_WIDTH = 288
+NAVIGATOR_DEFAULT_EXPANDED_WIDTH = 288
 
 
 class _ElidedLabel(QLabel):
@@ -379,6 +386,7 @@ class FileNavigator(QWidget):
         # facts; these fields exist solely to render file-card affordances.
         self._attachment_target = ""
         self._attachment_available = False
+        self._min_width_sync_pending = False
         lay = QVBoxLayout(self)
         lay.setContentsMargins(3, 3, 3, 3)
         lay.setSpacing(4)
@@ -437,6 +445,7 @@ class FileNavigator(QWidget):
             self._act_fill_on_mode_entry,
         ):
             act.toggled.connect(self._on_follow_action_toggled)
+        bind_popup_trigger(self._follow_menu, self.btn_auto_attach)
         self.btn_auto_attach.clicked.connect(self._open_follow_menu)
         self._sync_auto_attach_button()
         head.addWidget(self.btn_auto_attach)
@@ -530,6 +539,50 @@ class FileNavigator(QWidget):
         splitter.addWidget(self.channel_list)
         splitter.setChildrenCollapsible(False)
         splitter.setSizes([260, 520])
+        self._min_width_sync_pending = False
+        self._sync_expanded_minimum_width()
+        self._schedule_expanded_min_width_sync()
+
+    def expanded_minimum_width(self) -> int:
+        """Floor for an expanded left pane; collapsed still allows 0 width."""
+        return max(NAVIGATOR_MIN_EXPANDED_WIDTH, int(self._content_min_width()))
+
+    def default_expanded_width(self) -> int:
+        return max(NAVIGATOR_DEFAULT_EXPANDED_WIDTH, self.expanded_minimum_width())
+
+    def showEvent(self, event):  # noqa: N802
+        super().showEvent(event)
+        self._schedule_expanded_min_width_sync()
+
+    def changeEvent(self, event):  # noqa: N802
+        super().changeEvent(event)
+        if event is not None and event.type() in (
+            QEvent.FontChange, QEvent.StyleChange, QEvent.Polish,
+        ):
+            self._schedule_expanded_min_width_sync()
+
+    def _schedule_expanded_min_width_sync(self) -> None:
+        if self._min_width_sync_pending:
+            return
+        self._min_width_sync_pending = True
+        QTimer.singleShot(0, self._sync_expanded_minimum_width)
+
+    def _sync_expanded_minimum_width(self) -> None:
+        self._min_width_sync_pending = False
+        width = self.expanded_minimum_width()
+        if self.minimumWidth() != width:
+            self.setMinimumWidth(width)
+
+    def _content_min_width(self) -> int:
+        channel = getattr(self, "channel_list", None)
+        if channel is None:
+            return 0
+        inner = int(channel.uncroppable_min_width())
+        layout = self.layout()
+        if layout is None:
+            return inner
+        margins = layout.contentsMargins()
+        return inner + margins.left() + margins.right()
 
     # ---- public API used by MainWindow ----
     def add_file(self, fid, fd):
@@ -1091,17 +1144,24 @@ class FileNavigator(QWidget):
         btn = self.btn_auto_attach
         gp = btn.mapToGlobal(btn.rect().bottomLeft())
         self._follow_menu.exec_(gp)
+        sync_popup_trigger(btn, popup=self._follow_menu)
 
     def _open_kebab(self):
         menu = apply_rounded_menu_chrome(QMenu(self))
+        bind_popup_trigger(menu, self._btn_kebab)
         act = menu.addAction("全部关闭…")
         act.setEnabled(bool(self._rows))
         gp = self._btn_kebab.mapToGlobal(self._btn_kebab.rect().bottomLeft())
-        chosen = menu.exec_(gp)
-        if chosen == act:
-            # Confirm lives in MainWindow.close_all so dependency preflight
-            # and close-all share one product dialog.
-            self.close_all_requested.emit()
+        try:
+            chosen = menu.exec_(gp)
+            sync_popup_trigger(self._btn_kebab, popup=menu)
+            if chosen == act:
+                # Confirm lives in MainWindow.close_all so dependency preflight
+                # and close-all share one product dialog.
+                self.close_all_requested.emit()
+        finally:
+            menu.close()
+            menu.deleteLater()
 
     def _refresh_header(self):
         self._lbl_count.setText(str(len(self._rows)))

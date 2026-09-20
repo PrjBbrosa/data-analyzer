@@ -278,6 +278,12 @@ class SidePanelController(QObject):
 
     # ---- core dispatch ----
     def _dispatch(self, event):
+        if (
+            event == Ev.HOVER
+            and self.state == PanelState.HIDDEN
+            and not self._peek_can_fit()
+        ):
+            return
         new_state, effects = reduce_panel(self.state, event)
         self.state = new_state
         for eff in effects:
@@ -300,7 +306,10 @@ class SidePanelController(QObject):
             if self._overlay.isVisible():
                 self._overlay.take_panel()
                 self._overlay.hide()
-            self._dock_panel_into_splitter(width=self._remembered_width, visible=True)
+            self._dock_panel_into_splitter(
+                width=self._clamp_expanded_width(self._remembered_width),
+                visible=True,
+            )
         elif eff == Effect.COLLAPSE_PINNED:
             self._remember_width_if_docked()
             # Hide before zeroing the slot so minimumWidth doesn't clamp it open.
@@ -321,7 +330,7 @@ class SidePanelController(QObject):
             return  # panel not in the splitter; nothing to remember
         w = self._splitter.sizes()[idx]
         if w > self.COLLAPSE_THRESHOLD:
-            self._remembered_width = w
+            self._remembered_width = self._clamp_expanded_width(w)
 
     def _dock_panel_into_splitter(self, width, visible):
         # Re-insert if the panel was reparented out (peek), else just resize.
@@ -356,19 +365,38 @@ class SidePanelController(QObject):
     # no real width cap. PyQt5 doesn't export the constant cleanly, so inline it.
     _NO_MAX_WIDTH = (1 << 24) - 1  # 16777215
 
-    def _position_overlay(self):
-        w = self._remembered_width + self.PEEK_EXTRA_PX
-        # Floor the width for L/R symmetry (a narrow panel peeks out to at least
-        # peek_width); a wider-docked panel still peeks at its own larger width.
+    def _expanded_min_width(self):
+        getter = getattr(self._panel, "expanded_minimum_width", None)
+        if callable(getter):
+            try:
+                return max(0, int(getter()))
+            except (TypeError, ValueError):
+                pass
+        return max(0, int(self._panel.minimumWidth()))
+
+    def _clamp_expanded_width(self, width):
+        width = int(width)
+        if width <= self.COLLAPSE_THRESHOLD:
+            return width
+        return max(width, self._expanded_min_width())
+
+    def _peek_overlay_width(self):
+        min_w = self._expanded_min_width()
+        w = max(int(self._remembered_width) + self.PEEK_EXTRA_PX, min_w)
         if self._peek_width is not None:
-            w = max(w, self._peek_width)
-        # Don't let the overlay exceed the panel's own max width: width-capped
-        # panels (e.g. the inspector is pinned to a fixed width) can't stretch
-        # to fill the surplus, so it would otherwise show as a blank band of
-        # overlay background. Uncapped panels (navigator) still get the +EXTRA.
+            w = max(w, int(self._peek_width))
         max_w = self._panel.maximumWidth()
         if 0 < max_w < self._NO_MAX_WIDTH:
             w = min(w, max_w)
+        return w
+
+    def _peek_can_fit(self):
+        host_w = int(self._host.width()) if self._host is not None else 0
+        needed = int(self._peek_overlay_width()) + int(self._strip.WIDTH_PX)
+        return host_w >= needed
+
+    def _position_overlay(self):
+        w = self._peek_overlay_width()
         h = self._host.height()
         # Keep the edge strip exposed (and clickable -> pin) beside the overlay,
         # so the overlay starts just inside the strip rather than covering it.
@@ -381,8 +409,12 @@ class SidePanelController(QObject):
 
     def reposition(self):
         """Call from MainWindow.resizeEvent / moveEvent while peeking."""
-        if self.state == PanelState.PEEK:
-            self._position_overlay()
+        if self.state != PanelState.PEEK:
+            return
+        if not self._peek_can_fit():
+            self._dispatch(Ev.COLLAPSE_TIMEOUT)
+            return
+        self._position_overlay()
 
     def snapshot_persistent_state(self) -> dict:
         """Public HIDDEN/PINNED snapshot. PEEK is stored as HIDDEN."""
@@ -402,7 +434,7 @@ class SidePanelController(QObject):
         except (TypeError, ValueError):
             width = int(self._remembered_width)
         if width > self.COLLAPSE_THRESHOLD:
-            self._remembered_width = width
+            self._remembered_width = self._clamp_expanded_width(width)
         want_pinned = str(snapshot.get("state") or "HIDDEN") == "PINNED"
         if want_pinned:
             self._force_pinned()

@@ -1022,6 +1022,12 @@ def test_main_window_inspector_slot_fixed_at_288_under_qss(qapp, qtbot):
         assert w.inspector.width() == 288
         assert w.inspector.minimumWidth() == 288
         assert w.inspector.maximumWidth() == 288
+        assert 280 <= sizes[0] <= 310, (
+            f"navigator should lock near the 288px Inspector rail; got {sizes}"
+        )
+        assert abs(sizes[0] - sizes[2]) <= 16, (
+            f"left/right rails should match under production QSS; sizes={sizes}"
+        )
     finally:
         qapp.setStyleSheet(old_sheet)
 

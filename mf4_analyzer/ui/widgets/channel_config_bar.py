@@ -126,6 +126,10 @@ class ChannelConfigBar(QWidget):
 
     MANAGE_SENTINEL = "__manage_configs__"
     ACTION_WIDTH = 64
+    # Compact enough that the navigator can lock to the Inspector's 288px
+    # outer width. The 22px drop-down stays fully visible; placeholder text
+    # may elide. The popup still opens at popupMinWidth 320.
+    COMBO_MIN_WIDTH = 100
     # 28px controls + 2px host inset (channel_tree) share the 30px View rail.
     # Keep the 22px base text box and only tighten vertical padding; do not
     # drop to the 24px compact track.
@@ -153,7 +157,7 @@ class ChannelConfigBar(QWidget):
         self.combo.lineEdit().setPlaceholderText("输入关键词搜索配置")
         self.combo.setInsertPolicy(QComboBox.NoInsert)
         self.combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.combo.setMinimumWidth(132)
+        self.combo.setMinimumWidth(self.COMBO_MIN_WIDTH)
         self.combo.setFixedHeight(self.CONTROL_HEIGHT)
         self.combo.setMaxVisibleItems(8)
         self.combo.setProperty("popupStyle", "channel-config")

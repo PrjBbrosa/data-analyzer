@@ -2,7 +2,7 @@
 from functools import partial
 
 from PyQt5.QtCore import QEvent, QSettings, QSize, Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QColor, QCursor, QKeySequence
+from PyQt5.QtGui import QColor, QKeySequence
 from PyQt5.QtWidgets import (
     QAction, QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton, QSizePolicy,
     QToolButton, QVBoxLayout, QWidget,
@@ -16,6 +16,7 @@ from ...ui_kit.dialog_geometry import fit_popover
 from ...ui_kit.icons import Icons
 from ...ui_kit.message_box_buttons import fit_message_box_buttons_to_text
 from ...ui_kit.motion import MotionPolicy, POLICY_LIGHT, resolve_policy
+from ...ui_kit.popup_trigger import bind_popup_trigger
 from ...ui_kit.widgets.selection_indicator import (
     SelectionIndicator,
     SelectionIndicatorStyle,
@@ -1320,6 +1321,10 @@ class TimeChartCard(_ChartChoiceMotionMixin, _ChartCard):
         self._cursor_display_settings_btn.clicked.connect(
             self._toggle_cursor_display_popover
         )
+        bind_popup_trigger(
+            self._cursor_display_popover,
+            self._cursor_display_settings_btn,
+        )
         self._insert_right_toolbar_widget(
             loc_action, self._cursor_display_settings_btn
         )
@@ -1546,22 +1551,6 @@ class TimeChartCard(_ChartChoiceMotionMixin, _ChartCard):
 
     def _on_cursor_display_popover_visibility_changed(self, geometry):
         self.cursor_display_popover_geometry_changed.emit(geometry)
-        if geometry is not None:
-            return
-        btn = self._cursor_display_settings_btn
-        if sip.isdeleted(btn):
-            return
-        # Qt.Popup grabs the mouse and does not send Leave to the anchor
-        # on hide, so QSS :hover would stick. Clear only when the cursor
-        # is actually outside the button; underMouse() is the stale flag.
-        if btn.rect().contains(btn.mapFromGlobal(QCursor.pos())):
-            return
-        btn.setAttribute(Qt.WA_UnderMouse, False)
-        style = btn.style()
-        if style is not None:
-            style.unpolish(btn)
-            style.polish(btn)
-        btn.update()
 
     def set_channel_drop_zone(self, zone, x_rect=None):
         """Show plot-join or X-axis drop highlight; ``zone`` is plot/xaxis/''."""

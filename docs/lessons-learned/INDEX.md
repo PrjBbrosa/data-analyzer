@@ -257,6 +257,7 @@ lesson by default.
 | [Qt5 Coordinate Mapping Must Respect Widget Ancestry](qt5-mapto-descendant-native-crash.md) | Mapping QWidget coordinates into descendant widgets or QGraphicsView scenes, especially Pin geometry timers. | See lesson |
 | [Pinned Axis Labels Must Commit Release And Share Outer Geometry](pinned-axis-label-release-and-outer-geometry.md) | Changing bottom pinned-cursor labels, their drag handling, or their | See lesson |
 | [Pin layout queues current collection; tethers stay outside QWidget panels](pin-layout-queue-and-widget-tethers.md) | Changing pinned-panel layout timers, user-placed anchors, or | See lesson |
+| [Popup Trigger Hover Must Bind Each Entry](popup-trigger-hover-must-bind-each-entry.md) | Adding or changing a button that opens `QMenu.exec_`, `QMenu.popup`, | See lesson |
 
 ## Selection Rules
 

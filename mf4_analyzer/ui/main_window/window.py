@@ -482,7 +482,10 @@ class MainWindow(
         splitter.addWidget(self.navigator)
         splitter.addWidget(self.chart_stack)
         splitter.addWidget(self.inspector)
-        splitter.setSizes([250, 900, 288])
+        nav_min = self.navigator.expanded_minimum_width()
+        nav_default = self.navigator.default_expanded_width()
+        inspector_w = int(self.inspector.minimumWidth())
+        splitter.setSizes([nav_default, 900, inspector_w])
         splitter.setStretchFactor(0, 0)  # navigator: no stretch
         splitter.setStretchFactor(1, 1)  # chart_stack: absorbs all extra width
         splitter.setStretchFactor(2, 0)  # inspector: no stretch
@@ -492,7 +495,7 @@ class MainWindow(
         splitter.setCollapsible(1, False)
         splitter.setCollapsible(2, True)
         splitter.setHandleWidth(3)
-        self.navigator.setMinimumWidth(220)
+        self.navigator.setMinimumWidth(nav_min)
         self.chart_stack.setMinimumWidth(400)
         self.inspector.setMinimumWidth(self.inspector.maximumWidth())
 
@@ -518,18 +521,18 @@ class MainWindow(
         self._overlay_right = PeekOverlay(strip_row)
         # canvas=self.chart_stack -> width changes are taken from the canvas pane,
         # looked up by live index so cross-side peek doesn't drift the index.
-        # peek_width = inspector's docked width so the narrow navigator peeks out
-        # to the same width as the right pane (L/R peek symmetry).
+        # Left peek floors to the navigator's expanded minimum, which is locked
+        # to the Inspector outer width unless content needs more.
         self._panel_ctrl_left = SidePanelController(
             side=Side.LEFT, splitter=splitter, panel=self.navigator, panel_index=0,
             strip=self._strip_left, overlay=self._overlay_left, host=strip_row,
-            default_width=250, canvas=self.chart_stack,
-            peek_width=self.inspector.maximumWidth(), parent=self,
+            default_width=nav_default, canvas=self.chart_stack,
+            peek_width=nav_min, parent=self,
         )
         self._panel_ctrl_right = SidePanelController(
             side=Side.RIGHT, splitter=splitter, panel=self.inspector, panel_index=2,
             strip=self._strip_right, overlay=self._overlay_right, host=strip_row,
-            default_width=288, canvas=self.chart_stack, parent=self,
+            default_width=inspector_w, canvas=self.chart_stack, parent=self,
         )
         splitter.splitterMoved.connect(
             lambda *_: (self._panel_ctrl_left.on_splitter_moved(),

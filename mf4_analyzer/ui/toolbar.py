@@ -13,6 +13,7 @@ from .. import app_meta
 from ..ui_kit.control_style import CONTROL_COLORS
 from ..ui_kit.icons import Icons
 from ..ui_kit.menus import apply_rounded_menu_chrome
+from ..ui_kit.popup_trigger import bind_popup_trigger
 from ..ui_kit.motion import POLICY_LIGHT, resolve_policy
 from ..ui_kit.widgets.selection_indicator import (
     SelectionIndicator,
@@ -566,6 +567,7 @@ class Toolbar(QWidget):
         self.btn_save_caret.setAccessibleName("另存为")
 
         self._save_menu = apply_rounded_menu_chrome(QMenu(host))
+        bind_popup_trigger(self._save_menu, self.btn_save_caret)
         self.btn_save_project_as = self._save_menu.addAction("另存为")
         self.btn_save_project_as.setIcon(Icons.save_disk())
         self.btn_save_project_as.setToolTip("将当前会话另存为新的 .tlproj 项目")

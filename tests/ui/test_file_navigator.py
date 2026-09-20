@@ -1,8 +1,9 @@
 import json
 from pathlib import Path
 
+import pytest
 from PyQt5.QtCore import QMimeData, QPoint, QPointF, Qt
-from PyQt5.QtGui import QDragEnterEvent, QDragLeaveEvent, QDragMoveEvent, QDropEvent
+from PyQt5.QtGui import QCursor, QDragEnterEvent, QDragLeaveEvent, QDragMoveEvent, QDropEvent
 from PyQt5.QtWidgets import QApplication, QToolButton
 
 from mf4_analyzer.ui.file_navigator import FileNavigator, _FileRow
@@ -1257,3 +1258,145 @@ def test_focus_ring_is_visible_for_keyboard_focus(qapp):
     focus_block = qss[focus_idx:focus_idx + 240]
     assert "border-color:" in focus_block
     assert "border:" not in focus_block.split("{", 1)[1].split("}", 1)[0]
+
+
+def _chrome_pixel(button):
+    dpr = float(button.devicePixelRatioF() or 1.0)
+    image = button.grab().toImage()
+    x = min(image.width() - 1, max(0, round(2 * dpr)))
+    y = min(image.height() - 1, max(0, round(2 * dpr)))
+    return image.pixelColor(x, y)
+
+
+def _is_accent_wash(color):
+    return color.blue() >= color.red() + 10 and color.green() > color.red()
+
+
+def _stub_menu_exec(monkeypatch, qapp, *, away, how, pointer_on_trigger=None):
+    from PyQt5.QtTest import QTest
+    from PyQt5.QtWidgets import QMenu
+
+    def fake_exec(menu, *_args, **_kwargs):
+        if pointer_on_trigger is not None:
+            QCursor.setPos(pointer_on_trigger.mapToGlobal(pointer_on_trigger.rect().center()))
+        else:
+            QCursor.setPos(away)
+        qapp.processEvents()
+        chosen = None
+        if how == "escape":
+            QTest.keyClick(menu, Qt.Key_Escape)
+        elif how == "action":
+            actions = [action for action in menu.actions() if action.isEnabled()]
+            if actions:
+                chosen = actions[0]
+                chosen.trigger()
+        menu.hide()
+        qapp.processEvents()
+        return chosen
+
+    monkeypatch.setattr(QMenu, "exec_", fake_exec)
+    monkeypatch.setattr(QMenu, "exec", fake_exec)
+
+
+@pytest.mark.parametrize("how", ["close", "escape", "action"])
+def test_kebab_menu_dismiss_clears_stale_hover_without_mousemove(
+    qapp, qtbot, monkeypatch, how,
+):
+    from mf4_analyzer.ui_kit import load_stylesheet
+
+    old_sheet = qapp.styleSheet()
+    old_style = qapp.style().objectName()
+    try:
+        qapp.setStyle("Fusion")
+        load_stylesheet(qapp)
+        nav = FileNavigator()
+        qtbot.addWidget(nav)
+        nav.resize(320, 360)
+        nav.show()
+        qtbot.waitExposed(nav)
+        qapp.processEvents()
+        if how == "action":
+            nav.add_file("f0", FakeFd())
+
+        btn = nav._btn_kebab
+        idle = _chrome_pixel(btn)
+        btn.setAttribute(Qt.WA_UnderMouse, True)
+        away = btn.mapToGlobal(QPoint(btn.width() + 90, btn.height() // 2))
+        QCursor.setPos(away)
+        _stub_menu_exec(monkeypatch, qapp, away=away, how=how)
+        nav._open_kebab()
+        qapp.processEvents()
+
+        local = btn.mapFromGlobal(QCursor.pos())
+        assert not btn.rect().contains(local)
+        assert not btn.testAttribute(Qt.WA_UnderMouse)
+        assert not btn.underMouse()
+        assert not btn.isDown()
+        assert not btn.isChecked()
+        dismissed = _chrome_pixel(btn)
+        assert not _is_accent_wash(dismissed), dismissed.name()
+        assert abs(dismissed.red() - idle.red()) <= 24
+    finally:
+        qapp.setStyleSheet(old_sheet)
+        qapp.setStyle(old_style)
+
+
+def test_kebab_menu_keeps_hover_when_pointer_stays_on_trigger(qapp, qtbot, monkeypatch):
+    from mf4_analyzer.ui_kit import load_stylesheet
+
+    old_sheet = qapp.styleSheet()
+    try:
+        qapp.setStyle("Fusion")
+        load_stylesheet(qapp)
+        nav = FileNavigator()
+        qtbot.addWidget(nav)
+        nav.resize(320, 360)
+        nav.show()
+        qtbot.waitExposed(nav)
+        btn = nav._btn_kebab
+        btn.setAttribute(Qt.WA_UnderMouse, True)
+        away = btn.mapToGlobal(QPoint(btn.width() + 90, btn.height() // 2))
+        QCursor.setPos(btn.mapToGlobal(btn.rect().center()))
+        _stub_menu_exec(
+            monkeypatch, qapp, away=away, how="close", pointer_on_trigger=btn,
+        )
+        nav._open_kebab()
+        qapp.processEvents()
+        assert btn.rect().contains(btn.mapFromGlobal(QCursor.pos()))
+        assert btn.testAttribute(Qt.WA_UnderMouse)
+        assert not btn.isChecked()
+    finally:
+        qapp.setStyleSheet(old_sheet)
+
+
+def test_follow_menu_dismiss_does_not_clear_active_chrome(qapp, qtbot, monkeypatch):
+    from mf4_analyzer.ui.main_window.file_scope_follow import FollowPrefs
+    from mf4_analyzer.ui_kit import load_stylesheet
+
+    old_sheet = qapp.styleSheet()
+    try:
+        qapp.setStyle("Fusion")
+        load_stylesheet(qapp)
+        nav = FileNavigator()
+        qtbot.addWidget(nav)
+        nav.resize(320, 360)
+        nav.show()
+        qtbot.waitExposed(nav)
+        nav.set_follow_prefs(FollowPrefs(True, False, False))
+        qapp.processEvents()
+        btn = nav.btn_auto_attach
+        assert btn.property("active") == "true"
+        btn.setAttribute(Qt.WA_UnderMouse, True)
+        away = btn.mapToGlobal(QPoint(btn.width() + 90, btn.height() // 2))
+        QCursor.setPos(away)
+        _stub_menu_exec(monkeypatch, qapp, away=away, how="close")
+        nav._open_follow_menu()
+        qapp.processEvents()
+
+        assert btn.property("active") == "true"
+        assert not btn.isChecked()
+        assert not btn.testAttribute(Qt.WA_UnderMouse)
+        assert _is_accent_wash(_chrome_pixel(btn))
+        assert not btn.rect().contains(btn.mapFromGlobal(QCursor.pos()))
+    finally:
+        qapp.setStyleSheet(old_sheet)

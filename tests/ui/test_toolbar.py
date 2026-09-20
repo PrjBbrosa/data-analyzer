@@ -317,6 +317,34 @@ def test_toolbar_save_caret_opens_rounded_save_as_menu(qtbot, qapp):
     tb._save_menu.close()
 
 
+def test_save_caret_menu_dismiss_clears_stale_hover_on_caret(qtbot, qapp):
+    from PyQt5.QtCore import QPoint, Qt
+    from PyQt5.QtGui import QCursor
+    from mf4_analyzer.ui_kit import load_stylesheet
+
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
+    tb = Toolbar()
+    qtbot.addWidget(tb)
+    tb.set_enabled_for_mode("time", has_file=True)
+    tb.show()
+    qtbot.waitExposed(tb)
+    btn = tb.btn_save_caret
+    btn.setAttribute(Qt.WA_UnderMouse, True)
+    tb._open_save_menu()
+    qapp.processEvents()
+    assert tb._save_menu.isVisible()
+    QCursor.setPos(btn.mapToGlobal(QPoint(-80, btn.height() // 2)))
+    qapp.processEvents()
+    tb._save_menu.close()
+    qapp.processEvents()
+    qapp.processEvents()
+    assert not btn.rect().contains(btn.mapFromGlobal(QCursor.pos()))
+    assert not btn.testAttribute(Qt.WA_UnderMouse)
+    assert not btn.isDown()
+    assert not btn.isChecked()
+
+
 def _mode_buttons(tb):
     return [
         tb.btn_mode_time,

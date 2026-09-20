@@ -957,6 +957,8 @@ class MultiFileChannelWidget(QWidget):
         self.search.textChanged.connect(self._filter);
         layout.addWidget(self.search)
         bl = QHBoxLayout()
+        bl.setContentsMargins(0, 0, 0, 0)
+        bl.setSpacing(4)
         self.btn_all = QPushButton("全选")
         self.btn_all.setMaximumWidth(48)
         self.btn_all.setProperty("role", "quiet")
@@ -1046,6 +1048,7 @@ class MultiFileChannelWidget(QWidget):
         layout.addWidget(self._tree_stack_host)
         self.config_bar = ChannelConfigBar(self)
         layout.addWidget(self.config_bar)
+        self._ensure_uncroppable_control_mins()
         self._file_items = {}   # fid -> QTreeWidgetItem (flat mode: top-level; nested mode: raster node)
         self._colors = {}
         self._files = {}
@@ -1131,6 +1134,51 @@ class MultiFileChannelWidget(QWidget):
         self._projection_needs_empty_state = False
         self._sync_empty_state()
         self._sync_projection_chrome()
+
+    def uncroppable_min_width(self) -> int:
+        """Min width of non-eliding rows, including this pane's margins."""
+        self._ensure_uncroppable_control_mins()
+        layout = self.layout()
+        extra = 0
+        if layout is not None:
+            margins = layout.contentsMargins()
+            extra = margins.left() + margins.right()
+        rows = [int(self.config_bar.minimumSizeHint().width())]
+        rows.append(self._action_row_min_width())
+        return max(rows) + extra
+
+    def _ensure_uncroppable_control_mins(self) -> None:
+        edit = self.btn_edit
+        hint = int(edit.minimumSizeHint().width())
+        if hint > 0 and edit.minimumWidth() < hint:
+            edit.setMinimumWidth(hint)
+
+    def _action_row_min_width(self) -> int:
+        buttons = (
+            self.btn_all,
+            self.btn_none,
+            self.btn_selected_only,
+            self.btn_edit,
+        )
+        layout = self.layout()
+        hbox = None
+        if layout is not None:
+            for index in range(layout.count()):
+                item = layout.itemAt(index)
+                child = item.layout() if item is not None else None
+                if child is None:
+                    continue
+                if any(child.indexOf(button) >= 0 for button in buttons):
+                    hbox = child
+                    break
+        widths = [
+            max(int(button.minimumWidth()), int(button.minimumSizeHint().width()))
+            for button in buttons
+        ]
+        if hbox is None:
+            return sum(widths)
+        gaps = max(0, hbox.count() - 1)
+        return sum(widths) + int(hbox.spacing()) * gaps
 
     @contextmanager
     def channel_projection_batch(self):

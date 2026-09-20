@@ -92,16 +92,12 @@ def test_inspector_splitter_navigator_pinned_at_wide_window(qapp, qtbot):
     """Belt-and-braces using a different signal — the navigator pane is
     NOT capped by a max-width, so without setStretchFactor(0, 0) it
     grows proportionally with window size at large widths. With the
-    fix, it stays close to its 250px initial size regardless of window
-    width.
+    fix, it stays close to its 288px Inspector-matched default.
 
     On a 2400px window:
-      - pre-fix (no stretch factors): navigator ~ 2400 * 250/1510 = ~397
-      - post-fix (stretch=0,1,0):     navigator stays at ~250
-
-    This assertion catches the absence of setStretchFactor calls even
-    when the inspector slot itself happens to be capped by the
-    Inspector.setMaximumWidth propagation in some Qt builds.
+      - pre-fix (no stretch factors): navigator ~ 2400 * 288/1476 ≈ 468
+      - post-fix (stretch=0,1,0):     navigator stays near 288, with modest
+        layout slack below the proportional ~468.
     """
     win = MainWindow()
     qtbot.addWidget(win)
@@ -112,13 +108,11 @@ def test_inspector_splitter_navigator_pinned_at_wide_window(qapp, qtbot):
 
     splitter = win.findChildren(QSplitter)[0]
     sizes = splitter.sizes()
-    # Navigator must stay near its 250px initial size, NOT scale up to ~400.
-    # 320 is a safe upper bound: it's well above 250 (allowing layout slack)
-    # and well below the ~397 the pre-fix proportional growth would produce.
-    assert sizes[0] <= 320, (
+    # Navigator must stay near its 288px Inspector-matched default, NOT ~468.
+    assert 270 <= sizes[0] <= 400, (
         f"navigator splitter slot grew to {sizes[0]} at 2400px window — "
-        "expected <= 320 (i.e. close to its 250px initial size). "
+        "expected near the 288px default expanded width. "
         "Likely cause: missing splitter.setStretchFactor(0, 0). Without "
-        f"it, growth distributes proportionally (would give ~397). "
+        f"it, growth distributes proportionally (would give ~468). "
         f"sizes={sizes}"
     )

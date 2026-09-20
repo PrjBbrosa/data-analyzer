@@ -372,3 +372,95 @@ def test_persistent_snapshot_stores_peek_as_hidden_and_restores_pinned(qtbot):
     ctrl.restore_persistent_state(pinned)
     assert ctrl.state == PanelState.PINNED
     assert splitter.sizes()[0] == pinned["width"]
+
+
+def test_peek_is_refused_when_host_cannot_fit_panel_minimum(qtbot):
+    host = QWidget()
+    host.resize(80, 400)
+    host.show()
+    qtbot.addWidget(host)
+    splitter = QSplitter(Qt.Horizontal, host)
+    panel = QWidget()
+    panel.setMinimumWidth(50)
+    middle = QWidget()
+    middle.setMinimumWidth(40)
+    splitter.addWidget(panel)
+    splitter.addWidget(middle)
+    splitter.resize(80, 400)
+    splitter.setSizes([50, 30])
+    strip = SidePanelStrip(Side.LEFT, hover_delay_ms=10)
+    overlay = PeekOverlay(host)
+    ctrl = SidePanelController(
+        side=Side.LEFT, splitter=splitter, panel=panel, panel_index=0,
+        strip=strip, overlay=overlay, host=host,
+        collapse_delay_ms=20, default_width=250,
+    )
+    splitter.setSizes([0, 80])
+    ctrl.on_splitter_moved()
+    assert ctrl.state == PanelState.HIDDEN
+    strip.peek_requested.emit(Side.LEFT)
+    assert ctrl.state == PanelState.HIDDEN
+    assert overlay.isVisible() is False
+
+
+class _MinWidthPanel(QWidget):
+    def expanded_minimum_width(self):
+        return 300
+
+
+def test_restore_clamps_legacy_expanded_width_to_panel_minimum(qtbot):
+    host = QWidget()
+    host.resize(900, 600)
+    host.show()
+    qtbot.addWidget(host)
+    splitter = QSplitter(Qt.Horizontal, host)
+    panel = _MinWidthPanel()
+    panel.setMinimumWidth(300)
+    middle = QWidget()
+    middle.setMinimumWidth(400)
+    splitter.addWidget(panel)
+    splitter.addWidget(middle)
+    splitter.resize(900, 600)
+    splitter.setSizes([300, 600])
+    strip = SidePanelStrip(Side.LEFT, hover_delay_ms=10)
+    overlay = PeekOverlay(host)
+    ctrl = SidePanelController(
+        side=Side.LEFT, splitter=splitter, panel=panel, panel_index=0,
+        strip=strip, overlay=overlay, host=host,
+        collapse_delay_ms=20, default_width=250, canvas=middle,
+    )
+    ctrl.restore_persistent_state({"state": "HIDDEN", "width": 220})
+    assert ctrl.state == PanelState.HIDDEN
+    assert splitter.sizes()[0] == 0
+    ctrl.restore_persistent_state({"state": "PINNED", "width": 220})
+    assert ctrl.state == PanelState.PINNED
+    assert splitter.sizes()[0] >= 300
+    assert ctrl.snapshot_persistent_state()["width"] >= 300
+
+
+def test_peek_overlay_floors_to_panel_expanded_minimum(qtbot):
+    host = QWidget()
+    host.resize(900, 600)
+    host.show()
+    qtbot.addWidget(host)
+    splitter = QSplitter(Qt.Horizontal, host)
+    panel = _MinWidthPanel()
+    panel.setMinimumWidth(300)
+    middle = QWidget()
+    middle.setMinimumWidth(400)
+    splitter.addWidget(panel)
+    splitter.addWidget(middle)
+    splitter.resize(900, 600)
+    splitter.setSizes([300, 600])
+    strip = SidePanelStrip(Side.LEFT, hover_delay_ms=10)
+    overlay = PeekOverlay(host)
+    ctrl = SidePanelController(
+        side=Side.LEFT, splitter=splitter, panel=panel, panel_index=0,
+        strip=strip, overlay=overlay, host=host,
+        collapse_delay_ms=20, default_width=250, canvas=middle,
+    )
+    splitter.setSizes([0, 900])
+    ctrl.on_splitter_moved()
+    strip.peek_requested.emit(Side.LEFT)
+    assert ctrl.state == PanelState.PEEK
+    assert overlay.geometry().width() >= 300

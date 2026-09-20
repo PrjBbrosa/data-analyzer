@@ -1,5 +1,7 @@
 from mf4_analyzer.ui.channel_config import ChannelSelectionConfig
 from mf4_analyzer.ui.widgets.channel_config_bar import ChannelConfigBar
+import pytest
+from PyQt5.QtCore import Qt
 
 
 def fake_config(config_id, name, channels):
@@ -135,7 +137,7 @@ def test_config_actions_match_the_selector_geometry(qtbot):
 
     assert bar.btn_save.minimumWidth() == bar.btn_apply.minimumWidth() == 64
     assert bar.btn_save.maximumWidth() == bar.btn_apply.maximumWidth() == 64
-    assert bar.combo.minimumWidth() == 132
+    assert bar.combo.minimumWidth() == ChannelConfigBar.COMBO_MIN_WIDTH == 100
     assert bar.btn_save.width() == 64
     assert bar.btn_apply.width() == 64
     assert bar.combo.width() == 220
@@ -226,7 +228,7 @@ def test_config_bar_top_aligns_with_view_rail_in_navigator_width_host(qtbot):
     row.setSpacing(8)
 
     nav = FileNavigator(host)
-    nav.setFixedWidth(250)
+    nav.setFixedWidth(288)
     right = QWidget(host)
     right_lay = QVBoxLayout(right)
     right_lay.setContentsMargins(0, 0, 0, 0)
@@ -278,3 +280,147 @@ def test_unselected_config_shows_search_placeholder_from_start(qtbot):
     bar.combo.setEditText("动力")
     assert bar.combo.currentText() == "动力"
     assert bar.selected_config_id() is None
+
+
+def _widget_rect_in(host, widget):
+    from PyQt5.QtCore import QPoint, QRect
+
+    return QRect(widget.mapTo(host, QPoint(0, 0)), widget.size())
+
+
+def _combo_arrow_rect_in(host, combo):
+    from PyQt5.QtCore import QPoint, QRect
+    from PyQt5.QtWidgets import QStyle, QStyleOptionComboBox
+
+    option = QStyleOptionComboBox()
+    combo.initStyleOption(option)
+    arrow = combo.style().subControlRect(
+        QStyle.CC_ComboBox, option, QStyle.SC_ComboBoxArrow, combo,
+    )
+    return QRect(combo.mapTo(host, arrow.topLeft()), arrow.size())
+
+
+def _assert_navigator_rows_unclipped(nav):
+    from PyQt5.QtWidgets import QApplication
+
+    bar = nav.channel_list.config_bar
+    edit = nav.channel_list.btn_edit
+    save = _widget_rect_in(nav, bar.btn_save)
+    combo = _widget_rect_in(nav, bar.combo)
+    apply = _widget_rect_in(nav, bar.btn_apply)
+    arrow = _combo_arrow_rect_in(nav, bar.combo)
+    edit_rect = _widget_rect_in(nav, edit)
+
+    assert not save.intersects(combo)
+    assert not combo.intersects(apply)
+    assert not save.intersects(apply)
+    assert not arrow.isEmpty()
+    assert combo.contains(arrow.center())
+    assert not apply.intersects(arrow)
+    local_arrow = bar.combo.mapFrom(nav, arrow.center())
+    assert bar.combo.rect().contains(local_arrow)
+    assert not apply.contains(arrow.center())
+
+    hint = edit.minimumSizeHint()
+    assert edit.width() >= hint.width()
+    assert edit.height() >= hint.height()
+    fm = edit.fontMetrics()
+    text_w = fm.horizontalAdvance(edit.text())
+    icon_w = edit.iconSize().width() if not edit.icon().isNull() else 0
+    assert edit.contentsRect().width() >= text_w
+    assert edit.contentsRect().width() >= icon_w
+    assert edit_rect.right() <= nav.rect().right()
+    QApplication.processEvents()
+
+
+def _show_navigator_splitter(qtbot, qapp, requested_width, host_width=980):
+    from PyQt5.QtWidgets import QApplication, QSplitter, QWidget
+
+    from mf4_analyzer.ui.file_navigator import FileNavigator
+    from mf4_analyzer.ui_kit import load_stylesheet
+
+    load_stylesheet(qapp)
+    host = QWidget()
+    host.resize(host_width, 640)
+    splitter = QSplitter(Qt.Horizontal, host)
+    nav = FileNavigator(splitter)
+    rest = QWidget(splitter)
+    rest.setMinimumWidth(400)
+    splitter.addWidget(nav)
+    splitter.addWidget(rest)
+    splitter.setCollapsible(0, True)
+    splitter.setSizes([requested_width, max(400, host_width - requested_width)])
+    layout_host = host
+    from PyQt5.QtWidgets import QHBoxLayout
+    row = QHBoxLayout(host)
+    row.setContentsMargins(0, 0, 0, 0)
+    row.addWidget(splitter)
+    qtbot.addWidget(host)
+    host.show()
+    qtbot.waitExposed(host)
+    QApplication.processEvents()
+    QApplication.processEvents()
+    return layout_host, splitter, nav
+
+
+@pytest.mark.parametrize("requested, expected_min", [(220, 288), (250, 288), (288, 288)])
+def test_navigator_splitter_widths_keep_config_and_edit_unclipped(
+    qapp, qtbot, requested, expected_min,
+):
+    from PyQt5.QtWidgets import QApplication
+
+    from mf4_analyzer.ui.file_navigator import (
+        NAVIGATOR_DEFAULT_EXPANDED_WIDTH,
+        NAVIGATOR_MIN_EXPANDED_WIDTH,
+    )
+
+    qapp.setStyle("Fusion")
+    host, splitter, nav = _show_navigator_splitter(qtbot, qapp, requested)
+    nav_min = nav.expanded_minimum_width()
+    assert nav_min >= NAVIGATOR_MIN_EXPANDED_WIDTH
+    assert nav.default_expanded_width() == NAVIGATOR_DEFAULT_EXPANDED_WIDTH == 288
+    QApplication.processEvents()
+    actual = splitter.sizes()[0]
+    assert actual >= nav_min
+    if requested >= NAVIGATOR_DEFAULT_EXPANDED_WIDTH:
+        assert actual >= NAVIGATOR_DEFAULT_EXPANDED_WIDTH - 2
+    else:
+        assert actual >= expected_min
+    assert nav.width() >= nav_min
+    _assert_navigator_rows_unclipped(nav)
+    edit = nav.channel_list.btn_edit
+    dpr = float(nav.devicePixelRatioF() or 1.0)
+    grab = edit.grab()
+    assert grab.width() in {
+        edit.width(),
+        int(round(edit.width() * dpr)),
+        int(edit.width() * dpr),
+    }
+
+
+def test_navigator_wide_narrow_restore_keeps_controls_unclipped(qapp, qtbot):
+    from PyQt5.QtWidgets import QApplication
+
+    qapp.setStyle("Fusion")
+    host, splitter, nav = _show_navigator_splitter(qtbot, qapp, 420)
+    _assert_navigator_rows_unclipped(nav)
+    splitter.setSizes([288, 692])
+    QApplication.processEvents()
+    QApplication.processEvents()
+    assert splitter.sizes()[0] >= nav.expanded_minimum_width()
+    _assert_navigator_rows_unclipped(nav)
+    splitter.setSizes([420, 560])
+    QApplication.processEvents()
+    QApplication.processEvents()
+    _assert_navigator_rows_unclipped(nav)
+
+
+@pytest.mark.parametrize("assumed_dpr", [1.0, 1.5, 2.0])
+def test_navigator_content_budget_is_logical_pixels(qapp, qtbot, assumed_dpr):
+    qapp.setStyle("Fusion")
+    host, splitter, nav = _show_navigator_splitter(qtbot, qapp, 288)
+    edit = nav.channel_list.btn_edit
+    logical = edit.width()
+    device_budget = int(round(logical * assumed_dpr))
+    assert device_budget >= int(round(edit.minimumSizeHint().width() * assumed_dpr))
+    assert nav.width() == pytest.approx(splitter.sizes()[0], abs=1)
