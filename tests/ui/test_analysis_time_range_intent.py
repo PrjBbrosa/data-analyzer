@@ -887,14 +887,18 @@ def test_programmatic_set_range_values_does_not_apply_user_edit(qapp, qtbot):
         return real(*args, **kwargs)
 
     win._analysis_context.time_range.apply_user_edit = spy
+    edited = []
+    win.inspector.top.range_edited.connect(lambda lo, hi: edited.append((lo, hi)))
     win.inspector.top.set_range_values(1.0, 2.0)
     win.inspector.top.set_range_limits(0.0, 10.0)
     mgr = win.analysis_managers["fft"]
     state = mgr.get(mgr.active)
     assert calls == []
+    assert edited == []
     assert win._analysis_context.time_range.draft_for(
         "fft", state.view_id, 0
     ) is None
+    assert state.panes[0].time_range is None
 
 
 def test_apply_none_projects_source_display_range_not_stale_spin(qapp, qtbot):
@@ -973,10 +977,28 @@ def test_fft_preview_pan_does_not_create_draft_or_change_enabled(qapp, qtbot):
         return real(*args, **kwargs)
 
     win._analysis_context.time_range.apply_user_edit = spy
+    span_calls = []
+    value_calls = []
+    real_span = top.set_range_from_span
+    real_values = top.set_range_values
+
+    def _span(*args, **kwargs):
+        span_calls.append((args, kwargs))
+        return real_span(*args, **kwargs)
+
+    def _values(*args, **kwargs):
+        value_calls.append((args, kwargs))
+        return real_values(*args, **kwargs)
+
+    top.set_range_from_span = _span
+    top.set_range_values = _values
     handled = win._on_fft_preview_range_changed(0, 0.4, 1.1)
     assert handled is True
     assert calls == []
+    assert span_calls == []
+    assert value_calls == []
     assert top.range_values() == pytest.approx((0.2, 0.8))
+    assert top.range_enabled() is True
     assert state.panes[0].time_range == pytest.approx((0.2, 0.8))
     assert win._analysis_context.time_range.draft_for(
         "fft", state.view_id, 0
@@ -1314,6 +1336,10 @@ def test_restored_none_projects_source_full(qapp, qtbot):
     assert win._analysis_context.time_range.draft_for(
         "fft", state.view_id, 0
     ) is None
+    # Stale start/end that differ from the live source must not become 指定范围.
+    win._capture_analysis_time_range("fft", state)
+    assert state.panes[0].time_range is None
+    assert win.inspector.top.range_enabled() is False
 
 
 def test_corrupt_restored_tuple_stays_invalid_not_full(qapp, qtbot):
@@ -1408,6 +1434,27 @@ def test_serialized_views_omit_drafts_and_signatures(qapp, qtbot, monkeypatch):
     assert "source_signature" not in pane
     assert "needs_review" not in pane
     assert payload["schema"] == 11
+
+
+def test_restored_explicit_range_keeps_source_precision(qapp, qtbot):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    fid, _time = _register_span(win, "src", 10.00049, n=101)
+    _enter_fft(win, [fid])
+    mgr = win.analysis_managers["fft"]
+    state = mgr.get(mgr.active)
+    precise = (1.23456789, 8.76543210)
+    state.panes[0].sources = [(fid, "sig")]
+    state.panes[0].time_range = precise
+    payload = state.to_dict()
+    assert payload["panes"][0]["time_range"] == [precise[0], precise[1]]
+    win._apply_analysis_time_range("fft", state)
+    assert state.panes[0].time_range == precise
+    assert win.inspector.top.range_enabled() is True
+    win._capture_analysis_time_range("fft", state)
+    assert state.panes[0].time_range == precise
 
 
 def test_frf_input_output_swap_is_signature_change(qapp, qtbot, monkeypatch):
@@ -1577,8 +1624,10 @@ def test_range_intent_status_row_height_is_stable(qapp, qtbot):
     qtbot.waitExposed(top)
     qapp.processEvents()
 
-    assert top.btn_range_max.toolTip() == PersistentTop._ANALYSIS_RANGE_MAX_TIP
-    assert "草稿" in top.btn_range_max.toolTip()
+    btn = getattr(top, "btn_range_max", None)
+    if btn is not None and btn.isVisible():
+        assert btn.toolTip() == PersistentTop._ANALYSIS_RANGE_MAX_TIP
+        assert "草稿" in btn.toolTip()
     assert top._range_status_host.isVisible()
 
     host_heights = []
@@ -1600,7 +1649,8 @@ def test_range_intent_status_row_height_is_stable(qapp, qtbot):
     assert len(set(group_heights)) == 1
 
     top.checkout_range_for_mode("time")
-    assert top.btn_range_max.toolTip() == PersistentTop._TIME_RANGE_MAX_TIP
+    if btn is not None and btn.isVisible():
+        assert btn.toolTip() == PersistentTop._TIME_RANGE_MAX_TIP
     assert not top._range_status_host.isVisible()
 
 

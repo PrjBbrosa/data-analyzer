@@ -363,7 +363,9 @@ def test_quickref_fft_preview_row_matches_overlay_contract():
     assert "平移" in (row.sub or "")
     assert "设左轴" in (row.sub or "")
     assert "单通道" in (row.sub or "")
-    assert "勾选" in (row.sub or "")
+    assert "只查看" in (row.sub or "")
+    assert "不改计算范围" in (row.sub or "")
+    assert "勾选" not in (row.sub or "")
 
 
 def test_quickref_covers_batch_drawer():
@@ -527,18 +529,23 @@ def test_catalog_channel_search_restores_expand_scroll_not_checks():
 
 
 def test_catalog_view_all_frames_plotted_channels_not_longest_file():
-    """Time-domain「全部」and Home frame plotted ink; analysis「全部」goes full."""
-    row = _row_by_desc("时域「全部」")
-    assert "已绘" in row.sub
-    assert "最长文件" in row.sub or "全局" in row.sub
-    assert "勾选" in row.sub or "过滤" in row.sub
-    assert "全部" in row.gesture
-    analysis = _row_by_desc("分析页「全部」")
-    assert "取消勾选" in analysis.sub
-    assert "草稿" in analysis.sub
+    """Home frames plotted ink; dual-option 全时段/指定范围 is the next-run request."""
+    row = _row_by_desc("时域时间范围")
+    assert "全时段" in row.sub
+    assert "指定范围" in row.sub
+    assert "视窗" in row.sub
+    assert "绘图" in row.sub
+    assert "Home" in row.sub
+    assert "勾选" not in row.sub
+    assert "全时段" in (row.gesture or "") and "指定范围" in (row.gesture or "")
+    analysis = _row_by_desc("分析时间范围")
     assert "全时段" in analysis.sub
+    assert "指定" in analysis.sub
     assert "只查看" in analysis.sub
-    assert "全部" in analysis.gesture
+    assert "随视窗" not in analysis.sub
+    assert "勾选" not in analysis.sub
+    assert "待启用" not in analysis.sub
+    assert "全时段" in (analysis.gesture or "")
     home = _row_by_desc("复位视图")
     assert "已绘" in home.sub
     menu = _row_by_desc("图表右键")

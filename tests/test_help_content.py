@@ -420,7 +420,9 @@ def test_frf_guide_is_mapped_and_covers_frozen_frf_contract():
         assert keyword in text, f"FRF guide missing: {keyword}"
     assert "先复用同一签名" in text
     assert "没有时才新建" in text
-    assert "使用选定时间范围" in text
+    assert "指定范围" in text
+    assert "全时段" in text
+    assert "使用选定时间范围" not in text
     assert "取时域范围" not in text
     # D8: jitter path is auto-rebuild, not a hard block label.
     assert '>自动重建</div>' in text
@@ -506,7 +508,8 @@ def test_published_guide_removes_hidden_controls_and_explains_frf_range():
     text = PUBLISHED_GUIDE.read_text(encoding="utf-8")
     assert "去均值" not in text
     assert "取时域范围" not in text
-    assert "使用选定时间范围" in text
+    assert "全时段 | 指定范围" in text
+    assert "使用选定时间范围" not in text
 
 
 def test_cheat_sheet_matches_runtime_desktop_shortcuts():
@@ -538,8 +541,12 @@ def test_current_analysis_help_explains_time_range_draft_rules():
     current_manual, _changelog = MANUAL.read_text(encoding="utf-8").split(
         '  "changelog": [', 1,
     )
-    for phrase in ("未勾选", "全时段", "待启用", "只查看", "使用选定时间范围"):
+    for phrase in ("指定范围", "全时段", "只查看", "点计算"):
         assert phrase in current_manual, phrase
+    assert "使用选定时间范围" not in current_manual
+    assert "待启用" not in current_manual
+    assert "未勾选时用全时段" not in current_manual
+    assert "未勾选用全时段" not in current_manual
     assert "圈定要分析的时间段" not in current_manual
     assert "圈定分析时间段" not in current_manual
     for fname in (
@@ -549,8 +556,10 @@ def test_current_analysis_help_explains_time_range_draft_rules():
         "frf-guide.html",
     ):
         text = (HELP / fname).read_text(encoding="utf-8")
-        for phrase in ("未勾选", "全时段", "待启用", "只查看"):
+        for phrase in ("全时段", "指定范围", "只查看"):
             assert phrase in text, f"{fname} missing: {phrase}"
+        assert "使用选定时间范围" not in text, fname
+        assert "待启用" not in text, fname
 
 
 def test_ultraview_p3_surfaces_drop_alt_drag_copy():

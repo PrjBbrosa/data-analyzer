@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TraceLab · 时间范围交互选型</title>
+<style>
+:root{--blue:#1769e0;--ink:#253247;--muted:#687b94;--line:#d5deea;--wash:#edf5ff;--paper:#f5f7fa;--red:#b42335}
+*{box-sizing:border-box}body{margin:0;color:var(--ink);background:var(--paper);font:14px/1.55 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif}button,input{font:inherit}button{cursor:pointer;color:inherit}button:disabled{cursor:not-allowed;opacity:.45}button:focus-visible,input:focus-visible,summary:focus-visible{outline:3px solid #83b2ef;outline-offset:3px}button{transition:background .12s,border-color .12s}button:hover:not(:disabled){border-color:#83a9da}a{color:var(--blue)}.wrap{max-width:1190px;margin:auto;padding:24px 28px 60px}header{display:flex;align-items:center;gap:14px;border-bottom:1px solid var(--line);padding-bottom:16px}.brand{font-size:18px;font-weight:750;letter-spacing:-.5px}.subbrand{color:var(--muted);font-size:13px}.proto{margin-left:auto;border:1px solid var(--line);border-radius:5px;padding:2px 7px;font-size:11px;color:var(--muted)}h1{font-size:27px;letter-spacing:-.6px;line-height:1.35;margin:25px 0 9px}p{margin:0}.intro{max-width:810px;color:var(--muted)}.options{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:22px 0 16px}.option{text-align:left;padding:15px 16px;background:white;border:1px solid var(--line);border-radius:8px;min-width:0}.option[aria-pressed=true]{border-color:var(--blue);box-shadow:inset 0 0 0 1px var(--blue);background:#f7fbff}.option strong{font-size:15px}.option span{display:block;color:var(--muted);font-size:12px;margin-top:7px}.option em{font-style:normal;color:var(--blue);font-size:11px;margin-left:7px}.workbench{border:1px solid #c9d5e3;border-radius:10px;overflow:hidden;background:white}.bench-head{padding:12px 16px;background:#f8fafc;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:12px}.bench-head strong{font-size:13px}.bench-tools{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.quiet{background:white;border:1px solid var(--line);border-radius:5px;padding:5px 9px;font-size:12px}.bench-tools label{font-size:12px;color:var(--muted);display:flex;align-items:center;gap:5px}.workspace{display:grid;grid-template-columns:minmax(0,1fr) 310px;min-height:448px}.chart-area{min-width:0;padding:16px 20px 12px;display:flex;flex-direction:column}.chart-tools{display:flex;align-items:center;gap:7px;flex-wrap:wrap;font-size:12px}.view-label{font-weight:650;color:#164c92;margin-right:auto}.chart-status{font-size:12px;color:var(--muted);margin:15px 0 5px;font-variant-numeric:tabular-nums}.chartbox{position:relative;min-height:230px;flex:1;display:flex;align-items:center}.chartbox svg{width:100%;height:260px;display:block}.empty{position:absolute;inset:0;display:grid;place-content:center;text-align:center;color:var(--muted);background:#ffffffed}.empty strong{font-size:17px;font-weight:550}.empty small{margin-top:7px}.chart-foot{font-size:11px;color:var(--muted);border-top:1px solid #edf0f4;padding-top:8px}.inspector{border-left:1px solid var(--line);padding:17px 15px;background:white;display:flex;flex-direction:column;min-width:0}.inspector-title{font-size:13px;color:var(--muted);display:flex;justify-content:space-between;border-bottom:1px solid #edf0f4;padding-bottom:11px;margin-bottom:18px}.range-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}.range-head h2{font-size:17px;margin:0}.badge{background:var(--wash);color:#18569f;border:1px solid #c5d9f1;border-radius:4px;font-size:11px;padding:2px 7px}.badge.custom{background:#fff5e8;border-color:#efd0a0;color:#875319}.seg{display:flex;padding:3px;background:#f2f5f9;border:1px solid var(--line);border-radius:7px;margin-bottom:14px;gap:3px}.seg button{flex:1;border:1px solid transparent;border-radius:4px;background:transparent;padding:5px 2px;font-size:13px}.seg button[aria-pressed=true]{background:white;border-color:#b6cdee;color:#155ebc;box-shadow:0 1px 2px #2434480d}.fields{display:grid;grid-template-columns:1fr 1fr;gap:10px}.field{min-width:0;display:block;font-size:12px;color:var(--muted)}.input-box{margin-top:5px;display:flex;align-items:center;border:1px solid #ccd8e8;border-radius:7px;padding:7px 9px;gap:4px;background:white}.input-box:focus-within{border-color:var(--blue);box-shadow:0 0 0 2px #edf5ff}.input-box input{width:100%;min-width:0;border:0;outline:none;background:transparent;color:#172033;font-size:17px;font-variant-numeric:tabular-nums}.input-box:has(input:disabled){background:#f5f7fa}.input-box input:disabled{color:#8b98aa}.input-box:has(input[aria-invalid=true]){border-color:var(--red);background:#fff8f8}.input-box span{font-size:12px;color:#8390a2}.range-tools{display:flex;justify-content:space-between;gap:6px;margin:11px 0 8px}.text-button{background:transparent;color:var(--blue);border:1px solid transparent;padding:2px 0;font-size:12px}.range-help{font-size:12px;color:var(--muted);min-height:38px;line-height:1.6}.error{font-size:12px;color:var(--red);margin-top:7px}.filter{display:flex;align-items:center;justify-content:space-between;border-top:1px solid #e6ebf2;padding-top:16px;margin-top:18px;font-weight:600}.filter small{font-size:12px;color:var(--muted);font-weight:400}.action-area{margin-top:auto;padding-top:24px}.next{font-size:12px;color:var(--muted);margin-bottom:8px;font-variant-numeric:tabular-nums}.next b{color:var(--ink);font-weight:550}.primary{background:var(--blue);color:white;border:1px solid var(--blue);border-radius:7px;min-height:36px;padding:7px 12px;width:100%;font-weight:650}.secondary{background:white;border:1px solid #a9c4e6;color:#165cba;border-radius:7px;padding:7px 12px;width:100%;min-height:36px;margin-top:8px;font-weight:550}.result{border-top:1px solid var(--line);padding:11px 16px;font-size:12px;display:flex;align-items:baseline;gap:12px;background:#f8fbff}.result-label{white-space:nowrap;font-weight:650;color:#37648f}.result p{min-width:0}.count{margin-left:auto;white-space:nowrap;color:var(--muted);font-variant-numeric:tabular-nums}.review{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin:19px 0 23px}.review h3{margin:0 0 6px;font-size:14px}.review p{font-size:13px;color:var(--muted)}.test-strip{display:flex;gap:7px;align-items:center;flex-wrap:wrap;margin-bottom:11px;font-size:12px;color:var(--muted)}.test-strip span{margin-right:5px}.compare{overflow-x:auto}table{width:100%;border-collapse:collapse;background:white;font-size:12px}th,td{text-align:left;vertical-align:top;padding:11px 13px;border-bottom:1px solid #e2e8f0}th{background:#eef3f9;font-weight:600}td:first-child{color:#67778b;min-width:105px}details{margin-top:22px;border-top:1px solid var(--line);padding-top:14px;color:var(--muted);font-size:12px}summary{cursor:pointer;color:#435670;font-size:13px}.notes{max-width:880px;margin-top:12px}.notes p{margin-bottom:9px}.notes code{font-size:11px;color:#526b8b}.hidden,[hidden]{display:none!important}@media(max-width:850px){.wrap{padding:18px 16px 40px}.workspace{grid-template-columns:minmax(0,1fr) 300px}.options{gap:8px}.option{padding:12px}.chart-area{padding:14px 12px}.option strong{font-size:13px}h1{font-size:24px}.chartbox svg{height:235px}}@media(max-width:670px){.options{grid-template-columns:1fr}.option span{margin-top:3px}.workspace{grid-template-columns:1fr}.inspector{border-left:none;border-top:1px solid var(--line)}.chartbox svg{height:200px}.chartbox{min-height:200px}.review{grid-template-columns:1fr;gap:12px}.result{flex-wrap:wrap;gap:4px 10px}.count{margin-left:0}.bench-head{align-items:flex-start;flex-direction:column}.subbrand{display:none}.action-area{padding-top:18px}}@media(prefers-reduced-motion:reduce){button{transition:none}}
+</style>
+</head>
+<body><main class="wrap">
+<header><div class="brand">TraceLab</div><span class="subbrand">时间范围交互选型</span><span class="proto">可交互原型 · 未接入产品</span></header>
+<h1>输入的范围，应该用在下一次绘图。</h1>
+<p class="intro">把“用哪些数据绘图”和“把已绘曲线看全”分开。三个方案都取消“可输入，却被未勾选开关忽略”的状态；差别在于何时确定范围、在哪里执行全时段绘图。</p>
+<div class="options" role="group" aria-label="选择交互方案">
+<button class="option" data-option="A" aria-pressed="true"><strong>A · 编辑即采用</strong><em>倾向方案</em><span>直接输入范围；下方绘图明确显示将采用的范围。</span></button>
+<button class="option" data-option="B" aria-pressed="false"><strong>B · 显式切换范围</strong><span>先选全时段或指定范围；全时段下输入框只读。</span></button>
+<button class="option" data-option="C" aria-pressed="false"><strong>C · 绘图时决定</strong><span>输入框始终可编辑；下方两个绘图动作直接选范围。</span></button>
+</div>
+<div class="test-strip"><span>试用场景</span><button class="quiet" id="example">填入 12–24 s</button><button class="quiet" id="invalid">填入无效范围</button><button class="quiet" id="reset">重置本方案</button></div>
+<section class="workbench" aria-label="交互演示">
+<div class="bench-head"><strong id="scenario-title">A · 编辑即采用</strong><div class="bench-tools"><span style="font-size:12px;color:var(--muted)">演示来源：0–60 s</span><label><input id="no-data" type="checkbox">模拟无数据</label></div></div>
+<div class="workspace">
+<div class="chart-area">
+<div class="chart-tools"><span class="view-label">时域 · View 1</span><button class="quiet" id="zoom" title="只缩放视图，不改变下一次绘图范围">放大中段</button><button class="quiet" id="home" title="只适配已绘数据，不重新绘图，也不改右侧输入">适配已绘数据</button></div>
+<p class="chart-status" id="chart-status"></p>
+<div class="chartbox"><svg id="plot" viewBox="0 0 650 260" role="img" aria-label="两条模拟信号的当前绘图范围"></svg><div class="empty" id="empty" hidden><strong>没有可绘制数据</strong><small>取消“模拟无数据”以继续体验</small></div></div>
+<p class="chart-foot">模拟信号 · 右侧修改需点击绘图后才更新曲线；缩放只改变视窗。</p>
+</div>
+<aside class="inspector" aria-label="绘图参数">
+<div class="inspector-title"><span>图表设置</span><span>当前 View</span></div>
+<div class="range-head"><h2>时间范围</h2><span class="badge" id="mode-badge">全时段</span></div>
+<div class="seg" id="scope-seg" role="group" aria-label="数据范围" hidden><button data-scope="full" aria-pressed="true">全时段</button><button data-scope="custom" aria-pressed="false">指定范围</button></div>
+<div class="fields">
+<label class="field" for="start">开始<div class="input-box"><input id="start" type="text" inputmode="decimal" value="0.000" autocomplete="off" aria-describedby="range-help error"><span>s</span></div></label>
+<label class="field" for="end">结束<div class="input-box"><input id="end" type="text" inputmode="decimal" value="60.000" autocomplete="off" aria-describedby="range-help error"><span>s</span></div></label>
+</div>
+<div class="range-tools"><button class="text-button" id="use-view">取当前视窗</button><button class="text-button" id="full">恢复全时段</button></div>
+<p class="range-help" id="range-help"></p><p class="error" id="error" role="alert" hidden></p>
+<div class="filter"><span>滤波</span><small>关闭 · 沿用当前设置</small></div>
+<div class="action-area"><p class="next" id="next"></p><button class="primary" id="draw">绘图 · 全时段</button><button class="secondary" id="draw-full" hidden>全时段绘图</button></div>
+</aside>
+</div>
+<div class="result" aria-live="polite"><span class="result-label">操作反馈</span><p id="feedback">先改右侧时间，再点绘图，观察数据范围变化。</p><span class="count" id="count">已绘图 0 次</span></div>
+</section>
+<div class="review"><div><h3 id="adv-title"></h3><p id="adv"></p></div><div><h3>需要接受的取舍</h3><p id="tradeoff"></p></div></div>
+<div class="compare"><table><thead><tr><th>交互</th><th>A · 编辑即采用</th><th>B · 显式切换</th><th>C · 绘图时决定</th></tr></thead><tbody>
+<tr><td>手动输入</td><td>立即成为下一次绘图范围</td><td>先选“指定范围”再输入</td><td>始终可输入，执行时选动作</td></tr>
+<tr><td>返回全时段</td><td>恢复全时段 → 绘图</td><td>全时段 → 绘图</td><td>点击“全时段绘图”，立即执行</td></tr>
+<tr><td>输入草稿</td><td>修改后明确显示待绘制范围</td><td>全时段下不可编辑，指定值暂存</td><td>全时段绘图不清除输入，便于来回对比</td></tr>
+<tr><td>适合</td><td>频繁手输，想减少多余操作</td><td>重视模式确定性，避免误启用</td><td>经常在局部与全时段之间重绘</td></tr>
+</tbody></table></div>
+<details><summary>逻辑说明：为什么“全部”不应继续含糊地放在范围旁</summary><div class="notes">
+<p><b>先区分两个动作。</b>“全时段绘图”重新获取当前 View 所选通道的全时段数据；“适配已绘数据”只移动图表视口。已经只绘制 12–24 s 时，后者不会凭空恢复 0–60 s。三种方案均将视口动作放回图表工具条。</p>
+<p><b>当前源码。</b><code>PersistentTop</code> 允许取消勾选时编辑；时域绘图通过 <code>range_enabled()</code> 决定是否采用数值。<code>_on_time_range_max_requested</code> 在时域适配已绘数据，在分析页则清除指定范围并回到来源全时段，同一“全部”文案的效果不一致。</p>
+<p><b>A 的自动采用仅针对用户输入。</b>不是每次 valueChanged 都启用；恢复 View、切换来源、填充初始值、缩放或平移都不能伪造一次用户编辑。原型的“取当前视窗”是明确动作，只适用于横轴为时间的图；Custom-X 不能把通道数值当秒。原型有意让普通缩放不回写输入，以免覆盖手输草稿。</p>
+<p><b>范围未通过校验时，阻止相应绘图。</b>空值、非数字、开始 ≥ 结束、越界均给出就地提示，不悄悄回退全时段。C 中明确点击全时段绘图仍可执行，但保留并提示无效输入草稿。无数据时不用 0–0 s 伪装成可执行范围。</p>
+<p><b>下一步边界。</b>本页演示时域一个 View、一个具有连续 0–60 s 时间轴的来源。FFT/FRF/阶次等分析页当前具有来源范围和草稿确认机制；若采纳新设计，应另行明确每个分析 pane 的语义，不把时域设计直接覆盖过去。多来源按真实范围验证，不假定每条通道都覆盖整段时间。</p>
+<p><b>原型不是实施。</b>配色和密度贴近现有白底蓝色 Inspector；此页没有修改 PyQt 程序或项目状态。方案按钮、示例填入、绘图计数和“模拟无数据”属于试用工具，不是建议新增的产品工具栏。</p>
+</div></details>
+</main>
+<script>
+const $=s=>document.querySelector(s);
+let option='A';
+const make=()=>({scope:'full',start:'0.000',end:'60.000',last:['0.000','60.000'],applied:[0,60],view:[0,60],count:0,noData:false,message:'先改右侧时间，再点绘图，观察数据范围变化。'});
+const states={A:make(),B:make(),C:make()};
+const copy={A:{title:'A · 编辑即采用',head:'倾向 A：输入就是意图，绘图才执行',adv:'不再要求用户输入后补勾选。范围状态和绘图按钮同时变化，先配置、再执行的节奏保持一致。',trade:'恢复全时段需要再点一次绘图。自动采用必须只响应真实用户编辑；不能让缩放和程序回填悄悄启用限制。'},B:{title:'B · 显式切换范围',head:'B：状态最明确，适合谨慎操作',adv:'全时段和指定范围是互斥选择。全时段时禁用时间输入，从视觉上消除“能输入却不生效”的误导。',trade:'手动设范围前多一步切换。省掉了隐藏前提，但操作次数比 A 多；全时段和局部切换仍需点击绘图。'},C:{title:'C · 绘图时决定',head:'C：把“全时段”放到真正执行的位置',adv:'按输入范围绘图与全时段绘图是两个明确命令。全时段一键执行，输入草稿保留，便于反复对比。',trade:'下方有两个动作，占用更多高度。没有持续的“已启用范围”开关，统计、导出等后续功能需明确使用最近成功绘制范围，不能另猜。'}};
+const state=()=>states[option];
+const fmt=n=>Number(n).toFixed(3).replace(/\.000$/,'');
+const span=r=>`${fmt(r[0])}–${fmt(r[1])} s`;
+function validation(){let s=state();if(!s.start.trim()||!s.end.trim())return '请填写开始和结束时间。';if(![s.start,s.end].every(v=>/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(v.trim())))return '请输入有效的秒数。';let a=Number(s.start),b=Number(s.end);if(a>=b)return '结束时间必须大于开始时间。';if(a<0||b>60)return '可用时间为 0–60 s，请调整范围。';return '';}
+function intended(){let s=state();return option!=='C'&&s.scope==='full'?[0,60]:[Number(s.start),Number(s.end)];}
+function render(syncFields=true){let s=state(),err=validation(),custom=option==='C'||s.scope==='custom',bad=custom&&!!err,c=copy[option];
+for(let b of document.querySelectorAll('[data-option]'))b.setAttribute('aria-pressed',String(b.dataset.option===option));
+$('#scenario-title').textContent=c.title;$('#adv-title').textContent=c.head;$('#adv').textContent=c.adv;$('#tradeoff').textContent=c.trade;
+$('#scope-seg').hidden=option!=='B';for(let b of document.querySelectorAll('[data-scope]')){b.setAttribute('aria-pressed',String(b.dataset.scope===s.scope));b.disabled=s.noData;}
+$('#mode-badge').textContent=option==='C'?'绘图时选择':s.scope==='full'?'全时段':'指定范围';$('#mode-badge').classList.toggle('custom',custom);
+if(syncFields){$('#start').value=s.noData?'':s.start;$('#end').value=s.noData?'':s.end;}
+for(let input of [$('#start'),$('#end')]){input.disabled=s.noData||(option==='B'&&s.scope==='full');input.setAttribute('aria-invalid',String(bad&&!s.noData));input.placeholder=s.noData?'—':'';}
+$('#no-data').checked=s.noData;$('#example').disabled=s.noData;$('#invalid').disabled=s.noData;$('#full').hidden=option!=='A';$('#full').disabled=s.noData;$('#use-view').disabled=s.noData;$('#zoom').disabled=s.noData;$('#home').disabled=s.noData;
+$('#range-help').textContent=s.noData?'载入数据后可设置时间范围。':option==='A'?'手动修改即采用指定范围，点击绘图后更新曲线。':option==='B'?(s.scope==='full'?'使用来源全时段；选择“指定范围”后可编辑。':'已采用指定范围，点击绘图后更新曲线。'):'输入局部范围，在下方选择绘图动作。';
+$('#error').hidden=!bad||s.noData;$('#error').textContent=bad?err:'';
+$('#next').textContent=s.noData?'没有可用数据':option==='C'?(bad?'范围草稿无效；全时段绘图仍可用。':`按范围绘图将采用 ${span(intended())}`):bad?'请修正范围后再绘图。':`下次绘图：${s.scope==='full'?'全时段 ':''}${span(intended())}`;
+$('#draw').textContent=option==='C'?'按范围绘图':s.scope==='full'?'绘图 · 全时段':'绘图 · 指定范围';$('#draw').disabled=s.noData||bad;$('#draw-full').hidden=option!=='C';$('#draw-full').disabled=s.noData;
+$('#feedback').textContent=s.message;$('#count').textContent=`已绘图 ${s.count} 次`;
+$('#chart-status').textContent=s.noData?'当前没有已绘数据':`已绘数据 ${span(s.applied)}　｜　当前视窗 ${span(s.view)}`;
+$('#empty').hidden=!s.noData;plot();
+}
+function plot(){let s=state(),[a,b]=s.view;let out='';const L=43,R=636,W=R-L;for(let lane=0;lane<2;lane++){let top=22+lane*108;for(let k=0;k<=4;k++){let y=top+k*20;out+=`<line x1="${L}" y1="${y}" x2="${R}" y2="${y}" stroke="#e5eaf0"/>`;}for(let k=0;k<=6;k++){let x=L+W*k/6;out+=`<line x1="${x}" y1="${top}" x2="${x}" y2="${top+80}" stroke="#e5eaf0"/>`;if(lane===1)out+=`<text x="${x}" y="239" text-anchor="middle" font-size="11" fill="#8492a3">${fmt(a+(b-a)*k/6)}</text>`;}let d='';for(let k=0;k<=400;k++){let t=a+(b-a)*k/400;let v=lane===0?Math.sin(t*.64)*.8+Math.sin(t*2.5)*.12:Math.cos(t*.36+.4)*.65+Math.sin(t*1.6)*.2;let x=L+k*W/400,y=top+40-v*32;d+=`${k?'L':'M'}${x.toFixed(2)} ${y.toFixed(2)} `;}out+=`<path d="${d}" fill="none" stroke="${lane===0?'#2576bf':'#6851b6'}" stroke-width="1.5"/><text x="${L+6}" y="${top+13}" font-size="11" fill="${lane===0?'#2576bf':'#6851b6'}">${lane===0?'L Pa':'MOTOR Y m/s²'}</text>`;}out+='<text x="340" y="258" text-anchor="middle" font-size="10" fill="#8492a3">Time (s)</text>';$('#plot').innerHTML=out;}
+function edit(){let s=state();s.start=$('#start').value;s.end=$('#end').value;if(option==='A')s.scope='custom';s.last=[s.start,s.end];s.message='范围已修改；图表仍保留上次结果，点击绘图后应用。';render(false);}
+function full(){let s=state();if(s.scope==='custom')s.last=[s.start,s.end];s.scope='full';s.start='0.000';s.end='60.000';s.message='已选择全时段，尚未重新绘图。';render();}
+function custom(){let s=state();s.scope='custom';[s.start,s.end]=s.last;s.message='已选择指定范围，可修改开始和结束时间。';render();}
+function draw(forceFull=false){let s=state();if(s.noData||(!forceFull&&validation()&&(option==='C'||s.scope==='custom')))return;let r=forceFull?[0,60]:intended();s.applied=[...r];s.view=[...r];s.count++;s.message=`已绘制 ${span(r)}。`+(option==='C'&&forceFull?' 输入草稿保留，便于再次按范围绘图。':'');render();}
+for(let b of document.querySelectorAll('[data-option]'))b.addEventListener('click',()=>{option=b.dataset.option;render();});
+for(let b of document.querySelectorAll('[data-scope]'))b.addEventListener('click',()=>{if(state().scope!==b.dataset.scope)(b.dataset.scope==='full'?full:custom)();});
+for(let input of [$('#start'),$('#end')]){input.addEventListener('input',edit);input.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();draw();}});}
+$('#full').addEventListener('click',full);$('#draw').addEventListener('click',()=>draw());$('#draw-full').addEventListener('click',()=>draw(true));
+$('#use-view').addEventListener('click',()=>{let s=state();s.scope='custom';s.start=s.view[0].toFixed(3);s.end=s.view[1].toFixed(3);s.last=[s.start,s.end];s.message=`已取当前时间视窗 ${span(s.view)}，尚未重新绘图。`;render();});
+$('#zoom').addEventListener('click',()=>{let s=state(),[a,b]=s.view,d=(b-a)*.25;s.view=[a+d,b-d];s.message='只放大视窗；输入和下一次绘图范围没有变化。';render();});
+$('#home').addEventListener('click',()=>{let s=state();s.view=[...s.applied];s.message=`已适配当前已绘数据 ${span(s.applied)}，没有重新绘图。`;render();});
+function fill(a,b){let s=state();if(s.noData)return;s.scope='custom';s.start=a;s.end=b;s.last=[a,b];s.message='已填入演示范围，尚未绘图。';render();}
+$('#example').addEventListener('click',()=>fill('12.000','24.000'));$('#invalid').addEventListener('click',()=>fill('30.000','10.000'));
+$('#reset').addEventListener('click',()=>{states[option]=make();render();});$('#no-data').addEventListener('change',e=>{let s=state();s.noData=e.target.checked;s.message=s.noData?'模拟无数据：范围和绘图操作不可用。':'数据恢复；保留该方案原有设置。';render();});
+render();
+</script></body></html>

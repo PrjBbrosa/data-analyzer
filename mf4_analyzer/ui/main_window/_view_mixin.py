@@ -1455,15 +1455,8 @@ class ViewMixin:
             range_enabled = bool(range_opts.get('enabled', False))
             range_start = range_opts.get('start', top.spin_start.value())
             range_end = range_opts.get('end', top.spin_end.value())
-            old_chk = top.chk_range.blockSignals(True)
-            try:
-                top.chk_range.setChecked(range_enabled)
-            finally:
-                top.chk_range.blockSignals(old_chk)
+            top.set_range_enabled(range_enabled, silent=True)
             top.set_range_values(range_start, range_end)
-            update_range_rows = getattr(top, '_update_range_rows_visible', None)
-            if callable(update_range_rows):
-                update_range_rows()
 
         spec = CustomXAxisSpec.from_axis_opts(axis_opts.get('x_axis'))
         requested_mode = spec.mode

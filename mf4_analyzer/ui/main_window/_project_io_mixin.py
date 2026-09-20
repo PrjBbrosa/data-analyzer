@@ -1998,17 +1998,10 @@ class ProjectIOMixin:
 
         top = getattr(getattr(self, "inspector", None), "top", None)
         if top is not None:
-            old_chk = top.chk_range.blockSignals(True)
-            try:
-                top.chk_range.setChecked(False)
-            finally:
-                top.chk_range.blockSignals(old_chk)
+            top.set_range_enabled(False, silent=True)
             top._range_checked_by_mode = {}
             top.set_range_limits(0, 0)
             top.set_range_values(0, 0)
-            update_range_rows = getattr(top, "_update_range_rows_visible", None)
-            if callable(update_range_rows):
-                update_range_rows()
 
         filter_panel = getattr(getattr(self, "inspector", None), "filter_panel", None)
         if filter_panel is not None:

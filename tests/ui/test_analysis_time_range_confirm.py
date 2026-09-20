@@ -28,6 +28,40 @@ def _user_commit_range(top, lo, hi):
     return top.flush_pending_range_edit(emit=True)
 
 
+def _set_analysis_range_specified(top, specified):
+    """Drive 全时段/指定范围. ``chk_range`` remains the T1 compatibility truth.
+
+    After T1 a ``choice_range`` SegmentedChoice may be present; click that
+    button when it exists, then fall back to ``chk_range.setChecked``.
+    """
+    specified = bool(specified)
+    choice = getattr(top, "choice_range", None)
+    if choice is not None:
+        buttons_fn = getattr(choice, "buttons", None)
+        buttons = tuple(
+            buttons_fn() if callable(buttons_fn)
+            else (getattr(choice, "_buttons", ()) or ())
+        )
+        wanted = "指定范围" if specified else "全时段"
+        matched = None
+        for button in buttons:
+            if button is None:
+                continue
+            if wanted in "".join((button.text() or "").split()):
+                matched = button
+                break
+        if matched is None and buttons:
+            idx = 1 if specified else 0
+            if 0 <= idx < len(buttons):
+                matched = buttons[idx]
+        if matched is not None:
+            matched.click()
+            if bool(top.range_enabled()) == specified:
+                return
+    if bool(top.chk_range.isChecked()) != specified:
+        top.chk_range.setChecked(specified)
+
+
 def _user_type_invalid_minus(top):
     top.set_range_limits(-100.0, 100.0)
     top.chk_range.setChecked(False)
@@ -729,7 +763,8 @@ def test_fft_overlay_envelope_does_not_make_shared_local_valid(
     assert state.panes[0].time_range is None
 
 
-def test_uncovered_draft_checkbox_does_not_enable(qapp, qtbot):
+def test_uncovered_draft_checkbox_keeps_specified_range_with_review(qapp, qtbot):
+    """Sources exist but do not cover the draft: keep 指定范围, do not fall to full."""
     win, _fid = _fft_ready_win(qtbot)
     top = win.inspector.top
     top.set_range_limits(-100.0, 100.0)
@@ -737,14 +772,18 @@ def test_uncovered_draft_checkbox_does_not_enable(qapp, qtbot):
     top.chk_range.setChecked(True)
     mgr = win.analysis_managers["fft"]
     state = mgr.get(mgr.active)
-    assert state.panes[0].time_range is None
-    assert top.range_enabled() is False
-    draft = win._analysis_context.time_range.draft_for("fft", state.view_id, 0)
-    assert draft is not None
-    assert draft.range == pytest.approx((20.0, 30.0))
+    assert state.panes[0].time_range == pytest.approx((20.0, 30.0))
+    assert top.range_enabled() is True
+    ctrl = win._analysis_context.time_range
+    assert ctrl.draft_for("fft", state.view_id, 0) is None
+    intent = ctrl.intent_for(
+        "fft", state.view_id, 0, enabled_range=state.panes[0].time_range,
+    )
+    assert intent.needs_review is True
 
 
-def test_fft_overlay_checkbox_does_not_write_uncovered_envelope(qapp, qtbot):
+def test_fft_overlay_checkbox_keeps_uncovered_envelope_specified(qapp, qtbot):
+    """Disjoint overlay envelope stays specified with review, not silent full."""
     win, fid_a = _fft_ready_win(qtbot, hi=10.0)
     fid_b, _time = _register_span(win, "high", 10.0, n=101)
     win.files[fid_b].time_array = np.linspace(20.0, 30.0, 101)
@@ -757,8 +796,14 @@ def test_fft_overlay_checkbox_does_not_write_uncovered_envelope(qapp, qtbot):
         "fft", state.view_id, 0
     ) is None
     top.chk_range.setChecked(True)
-    assert state.panes[0].time_range is None
-    assert top.range_enabled() is False
+    pane_range = state.panes[0].time_range
+    assert pane_range is not None
+    assert pane_range[0] < pane_range[1]
+    assert top.range_enabled() is True
+    intent = win._analysis_context.time_range.intent_for(
+        "fft", state.view_id, 0, enabled_range=pane_range,
+    )
+    assert intent.needs_review is True
 
 
 def test_two_pane_second_invalid_writes_neither(qapp, qtbot):
@@ -986,3 +1031,42 @@ def test_enabled_full_precision_survives_no_edit_capture(qapp, qtbot):
     kept = time_axis[(time_axis >= lo) & (time_axis <= hi)]
     assert kept.size
     assert float(kept[-1]) == pytest.approx(float(time_axis[-1]))
+
+
+def test_specified_invalid_input_does_not_fallback_to_full_or_compute(
+    qapp, qtbot, monkeypatch,
+):
+    """指定范围下的无效输入禁算，不回退 full、不静默钳区间。"""
+    win, _fid = _fft_ready_win(qtbot)
+    top = win.inspector.top
+    mgr = win.analysis_managers["fft"]
+    state = mgr.get(mgr.active)
+    _set_analysis_range_specified(top, True)
+    qapp.processEvents()
+    assert top.range_enabled() is True
+    before = state.panes[0].time_range
+    assert before is not None
+    assert before[0] < before[1]
+
+    computed = []
+    monkeypatch.setattr(win, "do_fft", lambda *a, **k: computed.append("do_fft"))
+    monkeypatch.setattr(
+        win, "_fft_compute_arrays", lambda *a, **k: computed.append("arrays")
+    )
+    top.set_range_limits(-100.0, 100.0)
+    _emit_spin_text_edited(top.spin_start, "-")
+    top.spin_start.editingFinished.emit()
+    qapp.processEvents()
+
+    assert "-" in top.spin_start.lineEdit().text()
+    assert not top.spin_start.hasAcceptableInput()
+    assert top.range_enabled() is True
+    assert state.panes[0].time_range is not None
+    asked = []
+    monkeypatch.setattr(
+        win,
+        "_ask_use_local_time_range",
+        lambda *a, **k: asked.append((a, k)) or "local",
+    )
+    assert win._offer_analysis_time_range_before_compute("fft") is False
+    assert computed == []

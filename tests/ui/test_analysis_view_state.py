@@ -152,6 +152,18 @@ def test_none_time_range_round_trip_stays_full():
     assert AnalysisViewState.from_dict(view.to_dict()).panes[0].time_range is None
 
 
+def test_stale_start_end_fields_do_not_turn_full_into_selected():
+    """Old display start/end must not promote a full pane to an explicit span."""
+    restored = PaneState.from_dict({
+        "sources": [["f1", "sig"]],
+        "time_range": None,
+        "start": 12.0,
+        "end": 18.0,
+        "enabled": True,
+    })
+    assert restored.time_range is None
+
+
 def test_inverted_time_range_is_not_normalized_to_full():
     pane = PaneState(sources=[("f1", "sig")], time_range=(8.0, 2.0))
     payload = pane.to_dict()

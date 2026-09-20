@@ -11,6 +11,7 @@ copy regardless of base-class order — there are no name collisions.
 
 import logging
 import math
+from dataclasses import replace
 from functools import partial
 
 import numpy as np
@@ -1738,8 +1739,39 @@ class AnalysisMixin:
         )
         self._apply_analysis_time_range(section, state)
 
+    def _source_unavailable_range_coverage(self, coverage):
+        return getattr(coverage, "reason", None) in {
+            "unavailable", "no_sources", "missing",
+        }
+
+    def _keep_specified_analysis_range_with_errors(
+        self, section, state, pane_idx, *, span, signature, coverage,
+    ):
+        """Keep 指定范围 when sources exist but do not cover ``span``."""
+        pane = state.panes[pane_idx]
+        ctrl = self._analysis_context.time_range
+        pane.time_range = span
+        intent = ctrl.note_enabled(
+            section, state.view_id, pane_idx, span, signature,
+            needs_review=True,
+        )
+        extra = tuple(getattr(coverage, "errors", ()) or ())
+        if extra:
+            intent = replace(
+                intent,
+                errors=tuple(intent.errors or ()) + extra,
+            )
+        self._project_top_from_time_range_intent(
+            section, intent, enabled=True,
+        )
+
     def _enable_focused_analysis_time_range(self, section, state, pane_idx):
-        """Checkbox on: valid draft, else exact source full. Invalid stays draft."""
+        """指定范围: valid draft, else exact source full. Invalid stays draft.
+
+        Unavailable sources refuse the selection. A parseable span that the
+        current sources do not cover stays specified with errors so the UI
+        cannot show 指定范围 while the model silently falls back to full.
+        """
         self._flush_pending_analysis_range_edit(
             section, state=state, pane_idx=pane_idx,
         )
@@ -1769,16 +1801,24 @@ class AnalysisMixin:
                 bounds_errors=bounds.errors,
             )
             if not coverage.ok:
-                self._set_top_range_enabled_silently(False, mode=section)
-                intent = ctrl.intent_for(
-                    section,
-                    view_id,
-                    pane_idx,
-                    enabled_range=pane.time_range,
-                    source_signature=draft.source_signature,
-                )
-                self._project_top_from_time_range_intent(
-                    section, intent, enabled=False,
+                if self._source_unavailable_range_coverage(coverage):
+                    self._set_top_range_enabled_silently(False, mode=section)
+                    intent = ctrl.intent_for(
+                        section,
+                        view_id,
+                        pane_idx,
+                        enabled_range=pane.time_range,
+                        source_signature=draft.source_signature,
+                    )
+                    self._project_top_from_time_range_intent(
+                        section, intent, enabled=False,
+                    )
+                    return
+                self._keep_specified_analysis_range_with_errors(
+                    section, state, pane_idx,
+                    span=draft.range,
+                    signature=draft.source_signature,
+                    coverage=coverage,
                 )
                 return
             pane.time_range = draft.range
@@ -1813,17 +1853,25 @@ class AnalysisMixin:
                 bounds_status=bounds.status,
                 bounds_errors=bounds.errors,
             )
-            if not coverage.ok:
-                self._set_top_range_enabled_silently(False, mode=section)
-                intent = ctrl.intent_for(section, view_id, pane_idx)
-                self._project_top_from_time_range_intent(
-                    section, intent, enabled=False,
-                )
-                return
-            pane.time_range = parsed
             signature = self._analysis_source_signature_for_pane(
                 section, pane, state
             )
+            if not coverage.ok:
+                if self._source_unavailable_range_coverage(coverage):
+                    self._set_top_range_enabled_silently(False, mode=section)
+                    intent = ctrl.intent_for(section, view_id, pane_idx)
+                    self._project_top_from_time_range_intent(
+                        section, intent, enabled=False,
+                    )
+                    return
+                self._keep_specified_analysis_range_with_errors(
+                    section, state, pane_idx,
+                    span=parsed,
+                    signature=signature,
+                    coverage=coverage,
+                )
+                return
+            pane.time_range = parsed
             intent = ctrl.note_enabled(
                 section, view_id, pane_idx, parsed, signature,
             )
@@ -1879,14 +1927,7 @@ class AnalysisMixin:
         # restores the right state as the shared group is reparented.
         if target_mode != top._range_mode:
             return
-        old = top.chk_range.blockSignals(True)
-        try:
-            top.chk_range.setChecked(bool(enabled))
-        finally:
-            top.chk_range.blockSignals(old)
-        update = getattr(top, "_update_range_rows_visible", None)
-        if callable(update):
-            update()
+        top.set_range_enabled(enabled, silent=True)
 
     def _sync_analysis_time_range_after_sources(
         self, section, state, pane_idx=None, *, project=True,

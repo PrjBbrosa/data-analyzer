@@ -2360,6 +2360,21 @@ Inspector QWidget#inspectorPairField {
     border: none;
 }
 
+/* Time-range full mode keeps the start/end editors readable (copy +
+ * programmatic projection) without looking disabled. Longhand border
+ * properties so the shared 7px radius is not zeroed. */
+Inspector QDoubleSpinBox#timeRangeStart:read-only,
+Inspector QDoubleSpinBox#timeRangeEnd:read-only {
+    background-color: #f3f6fa;
+    border-color: #d5deea;
+    color: #253247;
+}
+Inspector QDoubleSpinBox#timeRangeStart:read-only QLineEdit,
+Inspector QDoubleSpinBox#timeRangeEnd:read-only QLineEdit {
+    background-color: transparent;
+    color: #253247;
+}
+
 /* 2026-06-13 分析信号/谱参数 split: each analysis contextual is now a
  * transparent host for two stacked, full-width cards — the white
  * analysis-signal card (sig_card) on top and the white parameter card

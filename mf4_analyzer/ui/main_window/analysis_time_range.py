@@ -457,11 +457,18 @@ class AnalysisTimeRangeController:
         self._drafts.pop(self._key(section, view_id, pane_index), None)
         return self.intent_for(section, view_id, pane_index)
 
-    def note_enabled(self, section, view_id, pane_index, span, source_signature=None):
-        """Caller wrote ``PaneState.time_range``. Consume any draft; do not clamp."""
+    def note_enabled(
+        self, section, view_id, pane_index, span, source_signature=None,
+        *, needs_review=False,
+    ):
+        """Caller wrote ``PaneState.time_range``. Consume any draft; do not clamp.
+
+        ``needs_review=True`` keeps an uncovered but specified span armed so
+        the UI cannot show 指定范围 while the model silently falls back to full.
+        """
         key = self._key(section, view_id, pane_index)
         self._drafts.pop(key, None)
-        self._review[key] = False
+        self._review[key] = bool(needs_review)
         if source_signature is not None:
             self._signatures[key] = source_signature
         return self.intent_for(

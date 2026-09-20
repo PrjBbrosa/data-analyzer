@@ -189,10 +189,17 @@ _HINTS = (
     ),
     Hint(
         id="analysis.range_invalid_keep",
-        text="非法范围需改回或点全部",
+        text="非法范围需改回，不退全时段",
         surface="discovery",
         modes=frozenset({"fft", "fft_time", "frf", "order"}),
         priority=27,
+    ),
+    Hint(
+        id="time.time_range_mode",
+        text="全时段完整；数字仍随视窗",
+        surface="discovery",
+        modes=frozenset({"time"}),
+        priority=24,
     ),
     Hint(
         id="channel.searchable_combo",
@@ -754,7 +761,7 @@ _HINTS = (
     ),
     Hint(
         id="analysis.time_range_confirm",
-        text="改起止待启用；计算前才问",
+        text="指定范围后点计算才执行",
         surface="context",
         tier="A",
         modes=frozenset({"fft", "fft_time", "order", "frf"}),
@@ -762,7 +769,7 @@ _HINTS = (
     ),
     Hint(
         id="analysis.time_range_all",
-        text="未勾选或点全部，用全时段",
+        text="全时段或指定范围，点计算才用",
         surface="context",
         tier="A",
         modes=frozenset({"fft", "fft_time", "order", "frf"}),

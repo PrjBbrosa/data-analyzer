@@ -1268,6 +1268,8 @@ def test_shared_analysis_time_range_aligns_checkbox_and_equal_editors(
     """All modes reuse one range group with a single left field datum."""
     from PyQt5.QtCore import QPoint
 
+    from tests.ui.test_time_range_segment_control import time_range_choice
+
     inspector = Inspector()
     qtbot.addWidget(inspector)
     inspector.resize(540, 900)
@@ -1278,11 +1280,16 @@ def test_shared_analysis_time_range_aligns_checkbox_and_equal_editors(
 
     top = inspector.top
     group = top._range_group
-    checkbox_left = top.chk_range.mapTo(group, QPoint(0, 0)).x()
+    choice = time_range_choice(top)
+    choice_left = choice.mapTo(group, QPoint(0, 0)).x()
     start_left = top.spin_start.mapTo(group, QPoint(0, 0)).x()
-    assert abs(checkbox_left - start_left) <= 1
+    assert abs(choice_left - start_left) <= 1
     assert top.spin_start.width() == top.spin_end.width()
     assert top.spin_start.height() == top.spin_end.height()
+    assert not top.spin_start.isHidden()
+    assert not top.spin_end.isHidden()
+    assert top.chk_range.isHidden()
+    assert top.btn_range_max.isHidden()
 
 
 @pytest.mark.parametrize(
@@ -2366,21 +2373,37 @@ def test_persistent_top_xaxis_channel_row_hidden_when_auto(qapp):
 
 
 def test_persistent_top_range_rows_stay_visible_when_unchecked(qapp):
-    """The time-range fields stay visible; the checkbox only gates filtering."""
+    """全时段 / 指定范围 never hide the start/end row; 全时段 is readonly."""
     from mf4_analyzer.ui.inspector_sections import PersistentTop
+    from tests.ui.test_time_range_segment_control import (
+        select_time_range_mode,
+        time_range_choice,
+    )
+
     pt = PersistentTop()
     pt.show()
     try:
-        # Default state: unchecked means "do not filter", not "hide fields".
-        assert not pt.chk_range.isChecked()
+        choice = time_range_choice(pt)
+        assert not pt.range_enabled()
+        assert choice.currentIndex() == 0
+        assert pt.spin_start.isReadOnly()
+        assert pt.spin_end.isReadOnly()
+        assert pt.spin_start.isEnabled()
+        assert pt.spin_end.isEnabled()
         assert not pt.spin_start.isHidden()
         assert not pt.spin_end.isHidden()
-        # Toggle on → row visible.
-        pt.chk_range.setChecked(True)
+
+        select_time_range_mode(pt, True)
+        assert pt.range_enabled()
+        assert not pt.spin_start.isReadOnly()
+        assert not pt.spin_end.isReadOnly()
         assert not pt.spin_start.isHidden()
         assert not pt.spin_end.isHidden()
-        # Toggle off keeps the current values visible for reference.
-        pt.chk_range.setChecked(False)
+
+        select_time_range_mode(pt, False)
+        assert not pt.range_enabled()
+        assert pt.spin_start.isReadOnly()
+        assert pt.spin_end.isReadOnly()
         assert not pt.spin_start.isHidden()
         assert not pt.spin_end.isHidden()
     finally:
@@ -2558,7 +2581,8 @@ def test_persistent_top_collapser_toggle_reveals_groups(qapp):
     pt = PersistentTop()
     # Programmatic access works regardless of visibility — preserves contract.
     for attr in (
-        "spin_xt", "spin_yt", "chk_range", "spin_start", "spin_end",
+        "spin_xt", "spin_yt", "chk_range", "choice_range",
+        "spin_start", "spin_end",
         "combo_xaxis", "choice_xaxis", "_combo_xaxis_ch", "edit_xlabel",
         "btn_apply_xaxis",
     ):
@@ -2577,6 +2601,9 @@ def test_persistent_top_collapser_toggle_reveals_groups(qapp):
         # of the Inspector even when the body is expanded.
         assert pt.choice_xaxis.isVisible() is True
         assert pt.combo_xaxis.isHidden() is True
+        assert pt.choice_range.isVisible() is True
+        assert pt.chk_range.isHidden() is True
+        assert pt.btn_range_max.isHidden() is True
         assert pt.spin_start.isVisible() is True
         assert pt.spin_xt.isHidden() is True
         assert pt.spin_yt.isHidden() is True
@@ -4414,6 +4441,8 @@ def test_fft_preview_span_does_not_leak_chk_range_into_time(qapp):
     """Explicit set_range_from_span in FFT must enable the range while FFT is
     active, but switching back to time must restore time's own unchecked
     state."""
+    from tests.ui.test_time_range_segment_control import time_range_choice
+
     insp = Inspector()
     top = insp.top
 
@@ -4426,6 +4455,8 @@ def test_fft_preview_span_does_not_leak_chk_range_into_time(qapp):
     top.set_range_from_span(2.0, 4.0)
     assert top.range_enabled()
     assert top.range_values() == (2.0, 4.0)
+    assert time_range_choice(top).currentIndex() == 1
+    assert not top.spin_start.isReadOnly()
 
     # Switch back to time-domain: the shared checkbox must NOT carry the FFT
     # arming state's checked flag. This is the bug under regression.
@@ -4433,6 +4464,8 @@ def test_fft_preview_span_does_not_leak_chk_range_into_time(qapp):
     assert not top.range_enabled(), (
         "FFT set_range_from_span leaked chk_range into Time-Domain mode"
     )
+    assert time_range_choice(top).currentIndex() == 0
+    assert top.spin_start.isReadOnly()
     # On this branch the 开始/结束 row is unconditionally visible; the
     # per-mode checkout must not break that (the spin row stays shown).
     assert not top.spin_start.isHidden()
@@ -4441,43 +4474,58 @@ def test_fft_preview_span_does_not_leak_chk_range_into_time(qapp):
     # Returning to FFT restores FFT's own (checked) intent.
     insp.set_mode('fft')
     assert top.range_enabled()
+    assert time_range_choice(top).currentIndex() == 1
+    assert not top.spin_start.isReadOnly()
     assert not top.spin_start.isHidden()
 
 
 def test_time_domain_chk_range_survives_round_trip_through_fft(qapp):
-    """If the user explicitly checks the box in Time-Domain, that intent must
+    """If the user explicitly selects 指定范围 in Time-Domain, that intent must
     survive a round-trip through FFT mode (where FFT has its own state)."""
+    from tests.ui.test_time_range_segment_control import (
+        select_time_range_mode,
+        time_range_choice,
+    )
+
     insp = Inspector()
     top = insp.top
 
     insp.set_mode('time')
-    top.chk_range.setChecked(True)
+    select_time_range_mode(top, True)
     top.set_range_values(1.0, 3.0)
     assert top.range_enabled()
+    assert time_range_choice(top).currentIndex() == 1
+    assert not top.spin_start.isReadOnly()
 
     # FFT mode starts from its own (unchecked) state, independent of time.
     insp.set_mode('fft')
     assert not top.range_enabled()
+    assert time_range_choice(top).currentIndex() == 0
+    assert top.spin_start.isReadOnly()
 
-    # Back to time: the user's original checked intent is preserved.
+    # Back to time: the user's original 指定范围 intent is preserved.
     insp.set_mode('time')
     assert top.range_enabled()
+    assert time_range_choice(top).currentIndex() == 1
+    assert not top.spin_start.isReadOnly()
     assert top.range_values() == (1.0, 3.0)
 
 
 def test_main_window_fft_preview_path_does_not_auto_check(qapp, qtbot):
-    """Preview pan/zoom is viewport-only: it must not write start/end, arm
-    the checkbox, or create a draft. Switching back to time stays unchecked."""
+    """Preview pan/zoom is viewport-only: it must not write start/end, select
+    指定范围, or create a draft. Switching back to time stays 全时段."""
     from mf4_analyzer.ui.main_window import MainWindow
+    from tests.ui.test_time_range_segment_control import time_range_choice
 
     win = MainWindow()
     qtbot.addWidget(win)
 
     top = win.inspector.top
-    # Baseline: time mode, box unchecked.
+    # Baseline: time mode, 全时段.
     win.chart_stack.set_mode('time')
     win.inspector.set_mode('time')
     assert not top.range_enabled()
+    assert time_range_choice(top).currentIndex() == 0
 
     # Enter FFT mode on both the chart stack (gating) and the inspector
     # (range-group reparent + per-mode checkout).
@@ -4494,19 +4542,22 @@ def test_main_window_fft_preview_path_does_not_auto_check(qapp, qtbot):
     assert handled is True
     assert top.range_values() == (1.0, 2.0)
     assert not top.range_enabled(), (
-        "FFT preview zoom must not auto-check「使用选定时间范围」"
+        "FFT preview zoom must not auto-select「指定范围」"
     )
+    assert time_range_choice(top).currentIndex() == 0
+    assert top.spin_start.isReadOnly()
     assert state.panes[pane_idx].time_range is None
     assert win._analysis_context.time_range.draft_for(
         "fft", state.view_id, pane_idx
     ) is None
 
-    # Switch back to time-domain: the shared checkbox must not be checked.
+    # Switch back to time-domain: the shared range intent must stay 全时段.
     win.chart_stack.set_mode('time')
     win.inspector.set_mode('time')
     assert not top.range_enabled(), (
         "live FFT-preview path leaked chk_range into Time-Domain mode"
     )
+    assert time_range_choice(top).currentIndex() == 0
 
 
 def test_fft_preview_zoom_does_not_update_pane_time_range_when_checked(
@@ -4514,6 +4565,7 @@ def test_fft_preview_zoom_does_not_update_pane_time_range_when_checked(
 ):
     """Armed compute range stays put when the FFT time preview pans/zooms."""
     from mf4_analyzer.ui.main_window import MainWindow
+    from tests.ui.test_time_range_segment_control import time_range_choice
 
     win = MainWindow()
     qtbot.addWidget(win)
@@ -4530,10 +4582,13 @@ def test_fft_preview_zoom_does_not_update_pane_time_range_when_checked(
     top.set_range_from_span(1.0, 2.0)
     win._capture_analysis_time_range('fft', state, pane_idx=pane_idx)
     assert state.panes[pane_idx].time_range == (1.0, 2.0)
+    assert time_range_choice(top).currentIndex() == 1
+    assert not top.spin_start.isReadOnly()
 
     handled = win._on_fft_preview_range_changed(pane_idx, 3.0, 5.0)
     assert handled is True
     assert top.range_enabled()
+    assert time_range_choice(top).currentIndex() == 1
     assert top.range_values() == (1.0, 2.0)
     assert state.panes[pane_idx].time_range == (1.0, 2.0)
     assert win._analysis_context.time_range.draft_for(
@@ -4542,9 +4597,16 @@ def test_fft_preview_zoom_does_not_update_pane_time_range_when_checked(
 
 
 def test_fft_uncheck_range_clears_pane_and_refreshes_preview(qapp, qtbot):
-    """Unchecking in FFT clears pane.time_range and refreshes the time
-    preview (full span), then resets the preview X to data extents."""
+    """Switching FFT to 全时段 clears pane.time_range and may refresh the
+    preview, but must not Home the preview camera.
+
+    T3 owns the no-Home path; this assertion is allowed to fail until then.
+    """
     from mf4_analyzer.ui.main_window import MainWindow
+    from tests.ui.test_time_range_segment_control import (
+        select_time_range_mode,
+        time_range_choice,
+    )
 
     win = MainWindow()
     qtbot.addWidget(win)
@@ -4561,6 +4623,7 @@ def test_fft_uncheck_range_clears_pane_and_refreshes_preview(qapp, qtbot):
     top.set_range_from_span(2.0, 4.0)
     win._capture_analysis_time_range('fft', state, pane_idx=pane_idx)
     assert state.panes[pane_idx].time_range == (2.0, 4.0)
+    assert time_range_choice(top).currentIndex() == 1
 
     refresh_calls = []
     reset_calls = []
@@ -4571,22 +4634,24 @@ def test_fft_uncheck_range_clears_pane_and_refreshes_preview(qapp, qtbot):
         lambda: reset_calls.append(True)
     )
 
-    # Drive the live toggled path (not blockSignals).
-    top.chk_range.setChecked(False)
+    # User path: 指定范围 → 全时段. Do not Home the preview camera.
+    select_time_range_mode(top, False)
     qapp.processEvents()
 
     assert not top.range_enabled()
+    assert time_range_choice(top).currentIndex() == 0
     assert state.panes[pane_idx].time_range is None
     assert refresh_calls == [False]
-    assert reset_calls == [True]
+    assert reset_calls == [], (
+        "switching to 全时段 must not call _reset_time_preview_to_extents"
+    )
 
 
-# ---- 「全部」 (view-all time axis) button ----
+# ---- 「全部」 compatibility button (hidden) ----
 #
-# A flat 「全部」 button sits on the right of the 「使用选定时间范围」 row.
-# Clicking it drafts 开始/结束 to the longest data extent and resets the
-# visible X axis — without checking the range checkbox. The widget itself
-# only emits ``max_range_requested``; MainWindow owns the view-all apply.
+# The visible mode row is SegmentedChoice 全时段 | 指定范围. The old
+# 「全部」 QToolButton may remain hidden and still emit
+# ``max_range_requested`` for compatibility. MainWindow owns the apply.
 
 
 def test_max_range_button_fills_full_extent_without_enabling(qapp, qtbot):
@@ -4696,34 +4761,37 @@ def test_max_range_button_emits_signal(qapp):
 
 
 def test_max_range_button_lives_on_chk_range_row(qapp):
-    """The 「全部」 button shares the host row with chk_range; the checkbox row
-    itself stays visible regardless of checked state, and the button carries
-    the exact spec'd label + tooltip."""
+    """「全部」 is hidden compatibility chrome; the visible row is
+    SegmentedChoice 全时段 | 指定范围."""
     from mf4_analyzer.ui.inspector_sections import PersistentTop
+    from tests.ui.test_time_range_segment_control import time_range_choice
 
     top = PersistentTop()
+    choice = time_range_choice(top)
+    assert [button.text() for button in choice.buttons()] == ["全时段", "指定范围"]
+    assert not choice.isHidden()
+    assert top.chk_range.isHidden()
+    assert top.btn_range_max.isHidden()
     assert top.btn_range_max.text() == "全部"
-    assert top.btn_range_max.toolTip() == (
-        "查看全部：X 轴回到图面已绘制通道的最长全程"
-        "（不启用「使用选定时间范围」）"
-    )
-    # chk_range and btn_range_max share the same host parent.
-    assert top.btn_range_max.parentWidget() is top.chk_range.parentWidget()
-    # The checkbox row stays visible even when unchecked.
-    top.chk_range.setChecked(False)
-    assert not top.chk_range.isHidden()
+    # Hidden compat widgets remain clickable signal sources.
+    fired = []
+    top.max_range_requested.connect(lambda: fired.append(True))
+    top.btn_range_max.click()
+    assert fired == [True]
 
 
 def test_time_range_toggle_row_background_tracks_parent_panel(qapp, qtbot):
     """The range toggle row must not repaint the generic QWidget page grey.
 
     This uses a deliberately high-contrast stylesheet: all generic QWidget
-    children are grey, while QGroupBox panels are green. The blank stretch
-    between the checkbox label and 「全部」 should sample the panel color.
+    children are grey, while QGroupBox panels are green. Sample the panel
+    in the empty label column left of the segmented field — not a gap
+    between a checkbox and 「全部」.
     """
     from PyQt5.QtCore import QPoint
     from PyQt5.QtWidgets import QLabel
     from mf4_analyzer.ui.inspector_sections import PersistentTop
+    from tests.ui.test_time_range_segment_control import time_range_choice
 
     old_sheet = qapp.styleSheet()
     try:
@@ -4752,17 +4820,16 @@ def test_time_range_toggle_row_background_tracks_parent_panel(qapp, qtbot):
         qtbot.waitExposed(top)
         qapp.processEvents()
 
-        host = top._chk_range_host
+        choice = time_range_choice(top)
+        host = getattr(top, "_chk_range_host", None)
+        if host is None:
+            host = choice.parentWidget()
+        assert host is not None
         assert host.objectName() == "timeRangeToggleRow"
-        checkbox_right = top.chk_range.mapTo(
-            host, QPoint(top.chk_range.width(), 0)
-        ).x()
-        button_left = top.btn_range_max.mapTo(host, QPoint(0, 0)).x()
-        if button_left - checkbox_right > 8:
-            sample_x = (checkbox_right + button_left) // 2
-        else:
-            sample_x = max(4, host.width() - 8)
-        point = host.mapTo(top, QPoint(sample_x, host.height() // 2))
+        group = top._range_group
+        field_left = host.mapTo(group, QPoint(0, host.height() // 2))
+        sample = QPoint(max(4, field_left.x() - 6), field_left.y())
+        point = group.mapTo(top, sample)
 
         color = top.grab().toImage().pixelColor(point)
         assert color.name().lower() == "#e9fbf2", (

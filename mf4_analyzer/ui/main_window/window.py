@@ -2674,6 +2674,12 @@ class MainWindow(
                 reset()
 
     def _on_time_range_enabled_changed(self, enabled):
+        """Range intent only: capture/project, do not plot, Home, or compute.
+
+        Time-domain writes ``range_filter`` from the focused camera. Analysis
+        arms or clears the focused pane. Execution stays on Plot / compute.
+        Dual-option 全时段 must not call ``_on_time_range_max_requested``.
+        """
         mode = self.chart_stack.current_mode()
         if mode in self.analysis_managers:
             manager = self.analysis_managers[mode]
@@ -2692,29 +2698,20 @@ class MainWindow(
                 self._dirty_frf_pane(state, pane_idx, clear_effective=True)
             if mode == 'fft':
                 self._refresh_fft_time_preview(clear_spectrum=False)
-                if not enabled:
-                    canvas = page.pane_canvas(pane_idx)
-                    reset = getattr(
-                        canvas, '_reset_time_preview_to_extents', None)
-                    if callable(reset):
-                        reset()
             return
         canvas = self.chart_stack.focused_canvas()
         xaxis_draft = self._snapshot_xaxis_controls()
         try:
-            if enabled:
-                xlim = None
-                get_xlim = getattr(canvas, 'get_visible_xlim', None)
-                if callable(get_xlim):
-                    xlim = get_xlim()
-                self._sync_time_range_inputs_from_visible_xlim(xlim)
+            xlim = None
+            get_xlim = getattr(canvas, 'get_visible_xlim', None)
+            if callable(get_xlim):
+                xlim = get_xlim()
+            self._sync_time_range_inputs_from_visible_xlim(xlim)
             idx = self._view_index_for_canvas(canvas)
             if idx is not None and 0 <= idx < len(self.view_manager.views):
                 self._capture_range_change_into_view(
                     self.view_manager.get(idx), canvas
                 )
-            if self.files and self.navigator.get_checked_channels():
-                self._replot_canvas_for_view(idx, canvas)
         finally:
             self._restore_xaxis_controls_snapshot(xaxis_draft)
 

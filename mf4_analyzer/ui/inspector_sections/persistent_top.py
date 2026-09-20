@@ -91,6 +91,14 @@ class PersistentTop(QWidget):
     _ANALYSIS_RANGE_MAX_TIP = (
         "取消勾选、清除待启用草稿，显示当前来源全时段"
     )
+    _TIME_RANGE_FULL_TIP = (
+        "全时段使用当前来源的完整数据；这里的起止值仍随当前时域视窗变化，"
+        "切到指定范围时采用。"
+    )
+    _ANALYSIS_RANGE_FULL_TIP = (
+        "全时段使用当前分析来源的完整数据；起止值来自当前来源的物理时间边界。"
+    )
+    _RANGE_SELECTED_TIP = "使用下方起止时间。"
     _RANGE_STATUS_TEXT = {
         "full": "",
         "enabled": "",
@@ -214,12 +222,14 @@ class PersistentTop(QWidget):
         fl = QFormLayout(g)
         _configure_form(fl)
         self._range_form = fl
-        self.chk_range = QCheckBox("使用选定时间范围")
+        # Hidden boolean compatibility owner. Visible chrome is SegmentedChoice
+        # bound to combo_range; range_enabled() still reads this checkbox.
+        self.chk_range = QCheckBox("使用选定时间范围", self)
         self.chk_range.setToolTip(
             "勾选后，只使用开始到结束之间的数据；取消勾选则使用全时段。"
         )
-        # 「全部」停靠在勾选框这一行右端：查看全部（已绘制通道最长），不启用过滤。
-        # 用扁平 QToolButton 复用 inspectorCollapser 的轻量观感。
+        self.chk_range.hide()
+        # Hidden Home / full-conversion trigger. Tests and window still click it.
         self.btn_range_max = QToolButton(self)
         self.btn_range_max.setObjectName("inspectorRangeMax")
         self.btn_range_max.setText("全部")
@@ -233,28 +243,40 @@ class PersistentTop(QWidget):
             "}"
             "QToolButton#inspectorRangeMax:hover { background: #eef2f7; }"
         )
-        # Host row: [chk_range][stretch][全部].
+        self.btn_range_max.hide()
+        self.combo_range = QComboBox(self)
+        self.combo_range.addItem("全时段")
+        self.combo_range.addItem("指定范围")
+        self.combo_range.setItemData(0, self._TIME_RANGE_FULL_TIP, Qt.ToolTipRole)
+        self.combo_range.setItemData(1, self._RANGE_SELECTED_TIP, Qt.ToolTipRole)
+        self.choice_range = SegmentedChoice()
+        self.choice_range.bind(self.combo_range)
+        self.choice_range.set_motion_policy(POLICY_LIGHT)
+        # Host row: visible 全时段 | 指定范围. Hidden chk_range / 全部 stay
+        # parented on PersistentTop so they occupy no layout space.
         self._chk_range_host = QWidget()
         self._chk_range_host.setObjectName("timeRangeToggleRow")
         self._chk_range_host.setAutoFillBackground(False)
         self._chk_range_host.setAttribute(Qt.WA_StyledBackground, False)
         _chk_host_lay = QHBoxLayout(self._chk_range_host)
         _chk_host_lay.setContentsMargins(0, 0, 0, 0)
-        _chk_host_lay.setSpacing(6)
-        _chk_host_lay.addWidget(self.chk_range)
-        _chk_host_lay.addStretch(1)
-        _chk_host_lay.addWidget(self.btn_range_max)
+        _chk_host_lay.setSpacing(0)
+        _chk_host_lay.addWidget(
+            _fit_field(self.choice_range, align_right=False), 1,
+        )
         # Use the regular field column, rather than a spanning row, so the
-        # checkbox border begins on the same x-coordinate as the start/end
+        # dual-choice track begins on the same x-coordinate as the start/end
         # editors in every mode that reparents this shared range group.
         fl.addRow("", self._chk_range_host)
         # 紧凑化【1】: 开始 / 结束 share one form row.
         self.spin_start = _no_buttons(CompactDoubleSpinBox())
+        self.spin_start.setObjectName("timeRangeStart")
         self.spin_start.setDecimals(3)
         self.spin_start.setSuffix(" s")
         self.spin_start.setRange(0, 1e9)
         self.spin_start.setToolTip("时间范围起点，单位为秒。")
         self.spin_end = _no_buttons(CompactDoubleSpinBox())
+        self.spin_end.setObjectName("timeRangeEnd")
         self.spin_end.setDecimals(3)
         self.spin_end.setSuffix(" s")
         self.spin_end.setRange(0, 1e9)
@@ -307,13 +329,14 @@ class PersistentTop(QWidget):
         self.spin_yt.setToolTip("Y 轴主刻度的大致数量，范围 3–20。")
         self.spin_yt.hide()
 
-        # Per-mode range-checkbox state. ``chk_range`` is a SINGLE QCheckBox
-        # instance reparented across time/fft/fft_time/order modes by
-        # inspector._place_range_group_for_mode. Its checked state must NOT
-        # leak between modes (e.g. an FFT time-window drag force-checking the
-        # box must not arrive checked when the user switches back to
-        # Time-Domain). We snapshot/restore the checked flag per mode so each
-        # mode keeps its own intent. Defaults to unchecked for every mode.
+        # Per-mode range-checkbox state. ``chk_range`` is a SINGLE hidden
+        # QCheckBox on PersistentTop; the visible range group (including
+        # SegmentedChoice) is reparented across time/fft/fft_time/order/frf
+        # by inspector._place_range_group_for_mode. Checked state must NOT
+        # leak between modes (e.g. an FFT time-window arming must not arrive
+        # checked when the user switches back to Time-Domain). We
+        # snapshot/restore the flag per mode so each mode keeps its own
+        # intent. Defaults to unchecked (全时段 / readonly) for every mode.
         self._range_mode = 'time'
         self._range_checked_by_mode = {}
         self._range_silent = False
@@ -357,7 +380,10 @@ class PersistentTop(QWidget):
             sp.setMaximumWidth(_SHORT_FIELD_MAX_WIDTH)
         # Long-text fields: xaxis source combo + label LineEdit may host
         # representative text; keep a generous (but not unbounded) cap.
-        for w in (self.choice_xaxis, self._combo_xaxis_ch, self.edit_xlabel):
+        for w in (
+            self.choice_xaxis, self.choice_range,
+            self._combo_xaxis_ch, self.edit_xlabel,
+        ):
             w.setMaximumWidth(_LONG_FIELD_MAX_WIDTH)
 
     def _wire(self):
@@ -369,7 +395,11 @@ class PersistentTop(QWidget):
             self._update_xaxis_channel_row_visible
         )
         self.chk_range.toggled.connect(self._update_range_rows_visible)
-        # 「全部」只转发信号；MainWindow 负责按当前模式复位视口。
+        self.combo_range.currentIndexChanged.connect(
+            self._on_range_mode_combo_changed
+        )
+        # 「全部」只转发信号；MainWindow 负责按当前模式复位视口。隐藏后仍可被
+        # 测试 / Home 方法链点击。
         self.btn_range_max.clicked.connect(self.max_range_requested)
         self.spin_start.editingFinished.connect(self._on_range_editing_finished)
         self.spin_end.editingFinished.connect(self._on_range_editing_finished)
@@ -495,6 +525,12 @@ class PersistentTop(QWidget):
         self.btn_range_max.setToolTip(
             self._ANALYSIS_RANGE_MAX_TIP if analysis else self._TIME_RANGE_MAX_TIP
         )
+        full_tip = (
+            self._ANALYSIS_RANGE_FULL_TIP if analysis else self._TIME_RANGE_FULL_TIP
+        )
+        self.combo_range.setItemData(0, full_tip, Qt.ToolTipRole)
+        self.combo_range.setItemData(1, self._RANGE_SELECTED_TIP, Qt.ToolTipRole)
+        self.choice_range.refresh_from_bound_combo()
         _set_form_row_visible(
             self._range_form, self._range_status_host, analysis,
         )
@@ -561,8 +597,45 @@ class PersistentTop(QWidget):
     def _update_xaxis_channel_row_visible(self, index):
         _set_form_row_visible(self._xaxis_form, self._combo_xaxis_ch, index == 1)
 
+    def _on_range_mode_combo_changed(self, index):
+        """User segment click: write the compatibility checkbox once."""
+        enabled = int(index) == 1
+        if self.chk_range.isChecked() != enabled:
+            self.chk_range.setChecked(enabled)
+            return
+        self._project_range_mode_from_checkbox()
+
     def _update_range_rows_visible(self):
         _set_form_row_visible(self._range_form, self._range_row_host, True)
+        self._project_range_mode_from_checkbox()
+
+    def _project_range_mode_from_checkbox(self):
+        """Project combo index and spin readonly from chk_range truth."""
+        enabled = bool(self.chk_range.isChecked())
+        want = 1 if enabled else 0
+        old = self.combo_range.blockSignals(True)
+        try:
+            self.combo_range.setCurrentIndex(want)
+        finally:
+            self.combo_range.blockSignals(old)
+        self.choice_range.sync_from_bound_combo()
+        self._apply_range_fields_readonly(readonly=not enabled)
+
+    def _apply_range_fields_readonly(self, *, readonly):
+        readonly = bool(readonly)
+        for spin in (self.spin_start, self.spin_end):
+            if spin.isReadOnly() != readonly:
+                spin.setReadOnly(readonly)
+            style = spin.style()
+            if style is None:
+                continue
+            style.unpolish(spin)
+            style.polish(spin)
+            edit = spin.lineEdit()
+            if edit is not None:
+                style.unpolish(edit)
+                style.polish(edit)
+            spin.update()
 
     def _emit_ticks(self):
         self.tick_density_changed.emit(self.spin_xt.value(), self.spin_yt.value())
@@ -672,6 +745,28 @@ class PersistentTop(QWidget):
 
     def range_enabled(self):
         return self.chk_range.isChecked()
+
+    def set_range_enabled(self, enabled, *, silent=False):
+        """Set full vs selected range. Checkbox is truth; combo/readonly project.
+
+        ``silent=True`` blocks user ``toggled`` and explicitly syncs checkbox,
+        combo, and spinbox readonly. Callers that restore or project must use
+        silent mode so window._on_time_range_enabled_changed does not fire.
+        """
+        enabled = bool(enabled)
+        self._range_checked_by_mode[self._range_mode] = enabled
+        if silent:
+            old = self.chk_range.blockSignals(True)
+            try:
+                self.chk_range.setChecked(enabled)
+            finally:
+                self.chk_range.blockSignals(old)
+            self._project_range_mode_from_checkbox()
+            return
+        if self.chk_range.isChecked() != enabled:
+            self.chk_range.setChecked(enabled)
+            return
+        self._project_range_mode_from_checkbox()
 
     def range_values(self):
         return (self.spin_start.value(), self.spin_end.value())
@@ -895,13 +990,7 @@ class PersistentTop(QWidget):
         # that persist analysis intent must ``note_enabled`` themselves.
         # Preview pan/zoom must not call this or ``set_range_values``.
         self.set_range_values(xmin, xmax)
-        old = self.chk_range.blockSignals(True)
-        try:
-            self.chk_range.setChecked(True)
-        finally:
-            self.chk_range.blockSignals(old)
-        self._range_checked_by_mode[self._range_mode] = True
-        self._update_range_rows_visible()
+        self.set_range_enabled(True, silent=True)
 
     def checkout_range_for_mode(self, mode):
         """Snapshot the outgoing mode's range-checkbox state and restore the
@@ -909,9 +998,9 @@ class PersistentTop(QWidget):
         every mode switch so the SINGLE shared ``chk_range`` instance carries
         per-mode intent instead of leaking a force-checked state across modes.
 
-        Restoring is done with signals blocked: the mode switch drives its own
-        replot pipeline, and main_window wires ``chk_range.toggled`` to a
-        replot slot that must not fire spuriously here.
+        Restoring is silent: the mode switch drives its own replot pipeline,
+        and main_window wires ``chk_range.toggled`` to a replot slot that must
+        not fire spuriously here.
         """
         if mode == self._range_mode:
             return
@@ -921,13 +1010,8 @@ class PersistentTop(QWidget):
         # displayed previous checkbox value.
         self._range_checked_by_mode[self._range_mode] = self.chk_range.isChecked()
         target = bool(self._range_checked_by_mode.get(mode, False))
-        old = self.chk_range.blockSignals(True)
-        try:
-            self.chk_range.setChecked(target)
-        finally:
-            self.chk_range.blockSignals(old)
         self._range_mode = mode
-        self._update_range_rows_visible()
+        self.set_range_enabled(target, silent=True)
         self._sync_range_mode_chrome()
 
     def set_range_limits(self, lo, hi):

@@ -2770,8 +2770,12 @@ def test_channel_selection_change_preserves_xlim(qapp, qtbot, loaded_csv):
 def test_max_range_button_sets_full_extent_without_arming_time_mode(
     qapp, qtbot, loaded_csv
 ):
-    """「全部」 in time mode: drafts [0, 全程], leaves the range filter off,
-    and resets the visible X axis without error."""
+    """Time-domain Home still frames plotted extent and leaves the filter off.
+
+    The product no longer shows a dedicated 「全部」 control on the range row.
+    ``max_range_requested`` / ``_on_time_range_max_requested`` remain Home;
+    the dual selector must not bind this command.
+    """
     import pytest
 
     w, fid = _load_time_window_with_checked(qapp, qtbot, loaded_csv, ("speed",))
@@ -2790,15 +2794,16 @@ def test_max_range_button_sets_full_extent_without_arming_time_mode(
     data_hi = float(w.files[fid].time_array[-1])
     assert data_hi > data_lo  # data extent is available after load
 
-    # Simulate stale/narrow spinbox limits. The button must fill the data
+    # Simulate stale/narrow spinbox limits. Home must fill the data
     # extent directly, not merely echo whatever limits happen to be installed.
     stale_hi = data_hi / 2.0
     top.set_range_limits(data_lo, stale_hi)
     top.set_range_values(0.1, stale_hi)
     assert top.spin_end.maximum() == pytest.approx(stale_hi, abs=1e-6)
 
-    # Drive the live signal path the button uses.
-    top.max_range_requested.emit()
+    # Drive the handler the old button used to emit. Do not require the
+    # control to stay visible.
+    w._on_time_range_max_requested()
     qapp.processEvents()
 
     rlo, rhi = top.range_values()
@@ -2806,7 +2811,7 @@ def test_max_range_button_sets_full_extent_without_arming_time_mode(
     assert rhi == pytest.approx(data_hi, abs=1e-6)
     assert top.spin_end.maximum() == pytest.approx(data_hi, abs=1e-6)
     assert top.range_enabled() is False
-    # A replot must have produced a live primary axis (no exception raised).
+    # Home must have produced a live primary axis (no exception raised).
     assert w.canvas_time._primary_xaxis_ax is not None
     xlim = w.canvas_time._primary_xaxis_ax.get_xlim()
     assert xlim[0] == pytest.approx(data_lo, abs=1e-3)
@@ -2814,8 +2819,8 @@ def test_max_range_button_sets_full_extent_without_arming_time_mode(
 
 
 def test_max_range_button_noops_without_data_extent(qapp, qtbot):
-    """With no file loaded, the spinbox extent is degenerate; emitting
-    ``max_range_requested`` must be a safe no-op (no replot, no exception)."""
+    """With no file loaded, the spinbox extent is degenerate; invoking
+    time-domain Home must be a safe no-op (no replot, no exception)."""
     from mf4_analyzer.ui.main_window import MainWindow
 
     w = MainWindow()
@@ -2827,7 +2832,7 @@ def test_max_range_button_noops_without_data_extent(qapp, qtbot):
     top.set_range_limits(0, 0)  # degenerate extent (mirrors close-file reset)
     top.chk_range.setChecked(False)
     # Should not raise and should not enable the range filter.
-    top.max_range_requested.emit()
+    w._on_time_range_max_requested()
     assert top.range_enabled() is False
 
 
@@ -2852,10 +2857,23 @@ def test_time_range_fields_track_current_visible_xlim_when_unchecked(
 def test_checking_time_range_uses_current_visible_xlim_without_manual_entry(
     qapp, qtbot, loaded_csv
 ):
+    """Arming 指定范围 adopts the visible window; ``plot_time`` applies it.
+
+    Switching the range intent must not crop ``channel_data`` or Home. The
+    existing plot entry is the execution gate.
+    """
     import pytest
 
-    w, _fid = _load_time_window_with_checked(qapp, qtbot, loaded_csv, ("speed",))
+    w, fid = _load_time_window_with_checked(qapp, qtbot, loaded_csv, ("speed",))
     w.inspector.top.chk_range.setChecked(False)
+    source = w.files[fid].time_array
+    name = next(
+        name for name in w.canvas_time.channel_data if name.endswith("speed")
+    )
+
+    def _plotted_time():
+        t, _sig, _color, _unit = w.canvas_time.channel_data[name]
+        return t
 
     primary = w.canvas_time._primary_xaxis_ax
     primary.set_xlim(0.2, 0.6)
@@ -2865,25 +2883,64 @@ def test_checking_time_range_uses_current_visible_xlim_without_manual_entry(
     w.inspector.top.chk_range.setChecked(True)
     qapp.processEvents()
 
-    name = next(name for name in w.canvas_time.channel_data if name.endswith("speed"))
-    t, _sig, _color, _unit = w.canvas_time.channel_data[name]
-    assert float(t.min()) >= 0.2 - 1e-6
-    assert float(t.max()) <= 0.6 + 1e-6
+    assert w.inspector.top.range_enabled() is True
+    rlo, rhi = w.inspector.top.range_values()
+    assert rlo == pytest.approx(0.2, abs=1e-6)
+    assert rhi == pytest.approx(0.6, abs=1e-6)
+
+    t = _plotted_time()
+    assert len(t) == len(source)
+    assert float(t.min()) == pytest.approx(float(source.min()), abs=1e-6)
+    assert float(t.max()) == pytest.approx(float(source.max()), abs=1e-6)
 
     nlo, nhi = w.canvas_time._primary_xaxis_ax.get_xlim()
     assert nlo == pytest.approx(0.2, abs=1e-6)
     assert nhi == pytest.approx(0.6, abs=1e-6)
 
+    w.plot_time()
+    qapp.processEvents()
+
+    t = _plotted_time()
+    assert float(t.min()) >= 0.2 - 1e-6
+    assert float(t.max()) <= 0.6 + 1e-6
+    assert len(t) < len(source)
+
     w.inspector.top.chk_range.setChecked(False)
     qapp.processEvents()
 
-    t, _sig, _color, _unit = w.canvas_time.channel_data[name]
-    assert len(t) == len(w.files[next(iter(w.files))].time_array)
+    assert w.inspector.top.range_enabled() is False
+    t = _plotted_time()
+    assert float(t.min()) >= 0.2 - 1e-6
+    assert float(t.max()) <= 0.6 + 1e-6
+    assert len(t) < len(source)
+    nlo, nhi = w.canvas_time._primary_xaxis_ax.get_xlim()
+    full_lo = float(source.min())
+    full_hi = float(source.max())
+    assert not (
+        nlo == pytest.approx(full_lo, abs=1e-3)
+        and nhi == pytest.approx(full_hi, abs=1e-3)
+    )
+
+    w.plot_time()
+    qapp.processEvents()
+
+    t = _plotted_time()
+    assert len(t) == len(source)
+    assert float(t.min()) == pytest.approx(float(source.min()), abs=1e-6)
+    assert float(t.max()) == pytest.approx(float(source.max()), abs=1e-6)
 
 
 def test_time_range_toggle_preserves_unapplied_xaxis_channel_draft(
     qapp, qtbot, loaded_csv
 ):
+    """Range-intent changes must not submit an unapplied Custom-X draft.
+
+    Switching 全时段/指定范围 is configuration only: it must keep the
+    channel-X dropdown draft and must not execute ``plot_time`` or
+    ``_replot_canvas_for_view``.
+    """
+    from unittest.mock import patch
+
     w, fid = _load_time_window_with_checked(qapp, qtbot, loaded_csv, ("speed",))
     top = w.inspector.top
 
@@ -2901,8 +2958,13 @@ def test_time_range_toggle_preserves_unapplied_xaxis_channel_draft(
     assert w._custom_xaxis_fid is None
     assert w._custom_xaxis_ch is None
 
-    top.chk_range.setChecked(True)
-    qapp.processEvents()
+    with patch.object(w, "_replot_canvas_for_view") as replot, patch.object(
+        w, "plot_time"
+    ) as plot:
+        top.chk_range.setChecked(True)
+        qapp.processEvents()
+        replot.assert_not_called()
+        plot.assert_not_called()
 
     assert top.xaxis_mode() == "channel"
     assert combo.currentData() == ('per_source_name', None, "torque")

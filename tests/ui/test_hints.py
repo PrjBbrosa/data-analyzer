@@ -171,7 +171,8 @@ def test_batch_control_applicability_discovery_hints_stay_short():
 
 def test_hardening_interaction_discovery_hints_stay_short():
     expected = {
-        "analysis.range_invalid_keep": ("非法范围", "全部"),
+        "analysis.range_invalid_keep": ("非法范围", "全时段"),
+        "time.time_range_mode": ("全时段", "视窗"),
         "preset.target_axis_dot": ("黄点", "目标"),
         "preset.slot_source_note": ("再加载",),
     }
@@ -550,12 +551,14 @@ def test_fft_preview_hints_match_overlay_wheel_contract():
     assert "缩放" in zoom.text and "查看" in zoom.text
     confirm = by_id["analysis.time_range_confirm"]
     assert confirm.modes == frozenset({"fft", "fft_time", "order", "frf"})
-    assert "待启用" in confirm.text
+    assert "指定范围" in confirm.text
     assert "计算" in confirm.text
+    assert "待启用" not in confirm.text
     all_hint = by_id["analysis.time_range_all"]
     assert all_hint.modes == frozenset({"fft", "fft_time", "order", "frf"})
-    assert "未勾选" in all_hint.text and "全时段" in all_hint.text
-    assert "全部" in all_hint.text
+    assert "全时段" in all_hint.text and "指定范围" in all_hint.text
+    assert "未勾选" not in all_hint.text
+    assert "随视窗" not in all_hint.text
 
 
 def test_design_curated_ids_exist_in_registry():

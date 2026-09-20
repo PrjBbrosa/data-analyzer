@@ -7,6 +7,10 @@ import pytest
 
 from mf4_analyzer.io import FileData
 from mf4_analyzer.ui.main_window import MainWindow
+from tests.ui.test_analysis_time_range_confirm import (
+    _set_analysis_range_specified,
+    _user_commit_range,
+)
 
 
 def _window_with_pair(qtbot):
@@ -33,33 +37,94 @@ def _window_with_pair(qtbot):
     return win, pane
 
 
-def test_frf_range_checkbox_only_captures_its_visible_inputs(qtbot):
+def _spy_frf_home(win):
+    calls = []
+    canvas = win.chart_stack.page_frf.pane_canvas(0)
+    for name in (
+        "reset_view_to_data_extents",
+        "_reset_time_preview_to_extents",
+        "full_reset",
+    ):
+        orig = getattr(canvas, name, None)
+        if not callable(orig):
+            continue
+
+        def _wrap(*_a, _name=name, _orig=orig, **_k):
+            calls.append(_name)
+            return _orig(*_a, **_k)
+
+        setattr(canvas, name, _wrap)
+    return calls
+
+
+def test_frf_range_checkbox_only_captures_its_visible_inputs(qtbot, monkeypatch):
     win, pane = _window_with_pair(qtbot)
     top = win.inspector.top
     top.set_range_values(0.0, 1.999)
     top.spin_start.setValue(0.25)
     top.spin_end.setValue(0.75)
     top.flush_pending_range_edit(emit=True)
-    top.chk_range.setChecked(True)
+    compute = []
+    monkeypatch.setattr(win, "do_frf", lambda *a, **k: compute.append("do_frf"))
+    coordinator = getattr(win, "_frf_coordinator", None)
+    if coordinator is not None:
+        monkeypatch.setattr(
+            coordinator, "request", lambda *a, **k: compute.append("request")
+        )
+    home = _spy_frf_home(win)
+    _set_analysis_range_specified(top, True)
     win.inspector.frf_ctx.spin_t_win.setValue(0.1)
 
     assert pane.time_range == pytest.approx((0.25, 0.75))
     assert not hasattr(top, "btn_range_from_time")
-    top.chk_range.setChecked(False)
+    _set_analysis_range_specified(top, False)
     assert pane.time_range is None
     assert top.range_values() == pytest.approx((0.0, 1.999))
     assert win._analysis_context.time_range.draft_for(
         "frf", win.analysis_managers["frf"].get(0).view_id, 0
     ) is None
+    assert compute == []
+    assert home == []
 
 
-def test_frf_view_all_does_not_arm_range_or_mutate_time_view(qtbot):
+def test_frf_switching_to_full_clears_range_without_home(qtbot, monkeypatch):
+    """T3: 切全时段清 pane 范围且不 Home。不要要求「全部」按钮可见。"""
     win, pane = _window_with_pair(qtbot)
     state = win.analysis_managers["frf"].get(0)
     pane.time_range = (0.25, 0.75)
     win.inspector.top.set_range_from_span(0.25, 0.75)
     win._capture_analysis_time_range("frf", state, pane_idx=0)
     win.view_manager.get(0).time_range = (0.1, 0.3)
+    compute = []
+    monkeypatch.setattr(win, "do_frf", lambda *a, **k: compute.append("do_frf"))
+    coordinator = getattr(win, "_frf_coordinator", None)
+    if coordinator is not None:
+        monkeypatch.setattr(
+            coordinator, "request", lambda *a, **k: compute.append("request")
+        )
+    home = _spy_frf_home(win)
+    _set_analysis_range_specified(win.inspector.top, False)
+
+    assert pane.time_range is None
+    assert win.inspector.top.range_enabled() is False
+    assert win.inspector.top.range_values() == pytest.approx((0.0, 1.999))
+    assert win.view_manager.get(0).time_range == (0.1, 0.3)
+    assert win._analysis_context.time_range.draft_for(
+        "frf", state.view_id, 0
+    ) is None
+    assert compute == []
+    assert home == []
+
+
+def test_frf_max_requested_converts_to_full_without_time_home(qtbot):
+    """Compatibility path: analysis max-requested still means full, not Time Home."""
+    win, pane = _window_with_pair(qtbot)
+    state = win.analysis_managers["frf"].get(0)
+    pane.time_range = (0.25, 0.75)
+    win.inspector.top.set_range_from_span(0.25, 0.75)
+    win._capture_analysis_time_range("frf", state, pane_idx=0)
+    win.view_manager.get(0).time_range = (0.1, 0.3)
+    home = _spy_frf_home(win)
     win._on_time_range_max_requested()
 
     assert pane.time_range is None
@@ -69,6 +134,7 @@ def test_frf_view_all_does_not_arm_range_or_mutate_time_view(qtbot):
     assert win._analysis_context.time_range.draft_for(
         "frf", state.view_id, 0
     ) is None
+    assert home == []
 
 
 def test_time_domain_view_all_does_not_convert_analysis_pane_to_full(qtbot):
@@ -89,8 +155,6 @@ def test_time_domain_view_all_does_not_convert_analysis_pane_to_full(qtbot):
 
 
 def test_frf_missing_role_cannot_use_local_or_full(qtbot, monkeypatch):
-    from tests.ui.test_analysis_time_range_confirm import _user_commit_range
-
     win, pane = _window_with_pair(qtbot)
     pane.output_source = None
     win.inspector.frf_ctx.set_output_source(None)
@@ -106,8 +170,6 @@ def test_frf_missing_role_cannot_use_local_or_full(qtbot, monkeypatch):
 
 
 def test_frf_no_intersection_cannot_use_local_or_full(qtbot, monkeypatch):
-    from tests.ui.test_analysis_time_range_confirm import _user_commit_range
-
     win = MainWindow()
     qtbot.addWidget(win)
     in_t = np.linspace(0.0, 1.0, 101)
