@@ -11,6 +11,7 @@ from functools import partial
 
 from PyQt5 import sip
 from PyQt5.QtCore import QEvent, QObject, QPoint, QRect, QTimer, Qt
+from PyQt5.QtWidgets import QApplication, QWidget
 
 from ...pg_canvas.pinned_cursor_overlay import (
     PINNED_OFFSCREEN_TEXT,
@@ -56,6 +57,10 @@ _PILL_HOVER_EVENTS = frozenset({
     QEvent.FocusIn,
     QEvent.FocusOut,
 })
+_PILL_CAPTURE_EVENTS = frozenset({
+    QEvent.MouseButtonPress,
+    QEvent.MouseButtonRelease,
+})
 _PILL_GEOMETRY_EVENTS = frozenset({
     QEvent.Move,
     QEvent.Resize,
@@ -73,6 +78,48 @@ def _widget_alive(widget):
         return False
 
 
+def _target_includes(target, record_id) -> bool:
+    if target in (None, "", (), []):
+        return False
+    wanted = str(record_id)
+    if isinstance(target, (tuple, list, set, frozenset)):
+        return wanted in {str(item) for item in target}
+    return str(target) == wanted
+
+
+def _pointer_over_widget(widget) -> bool:
+    if not _widget_alive(widget):
+        return False
+    try:
+        if widget.underMouse():
+            return True
+        for child in widget.findChildren(QWidget):
+            if _widget_alive(child) and child.underMouse():
+                return True
+    except RuntimeError:
+        return False
+    return False
+
+
+def _widget_or_descendant_has_focus(widget) -> bool:
+    if not _widget_alive(widget):
+        return False
+    focus = QApplication.focusWidget()
+    current = focus
+    while current is not None:
+        if current is widget:
+            return True
+        try:
+            current = current.parentWidget()
+        except RuntimeError:
+            break
+    return False
+
+
+def _widget_holds_interaction(widget) -> bool:
+    return _pointer_over_widget(widget) or _widget_or_descendant_has_focus(widget)
+
+
 @dataclass
 class _PresentationState:
     canvas: object = None
@@ -88,6 +135,8 @@ class _PresentationState:
     layout_fingerprints: dict = field(default_factory=dict)
     content_revisions: dict = field(default_factory=dict)
     panel_endpoints: dict = field(default_factory=dict)
+    hover_target: object = None
+    capture_target: object = None
 
 
 class PinPanelProjector(QObject):
@@ -113,6 +162,8 @@ class PinPanelProjector(QObject):
             state.layout_token += 1
             state.pending = False
             state.pending_token = state.layout_token
+            state.hover_target = None
+            state.capture_target = None
 
     def invalidate_key(self, key) -> None:
         state = self._states.get(key)
@@ -121,6 +172,8 @@ class PinPanelProjector(QObject):
         state.layout_token += 1
         state.pending = False
         state.pending_token = state.layout_token
+        state.hover_target = None
+        state.capture_target = None
         self._pending_owners = [
             item for item in self._pending_owners if item[0] != key
         ]
@@ -222,6 +275,8 @@ class PinPanelProjector(QObject):
         state.layout_fingerprints.clear()
         state.content_revisions.clear()
         state.panel_endpoints.clear()
+        state.hover_target = None
+        state.capture_target = None
         state.pending = False
 
     def destroy_record(self, key, record_id) -> None:
@@ -234,12 +289,19 @@ class PinPanelProjector(QObject):
         state.layout_fingerprints.pop(record_id, None)
         state.content_revisions.pop(record_id, None)
         state.panel_endpoints.pop(record_id, None)
+        if _target_includes(state.capture_target, record_id):
+            state.capture_target = None
+        if _target_includes(state.hover_target, record_id):
+            state.hover_target = None
 
     @staticmethod
     def destroy_pill(pill) -> None:
         if not _widget_alive(pill):
             return
         pill.hide()
+        dismiss = getattr(pill, "dismiss_title_menu", None)
+        if callable(dismiss):
+            dismiss()
         pill.setParent(None)
         pill.deleteLater()
 
@@ -261,11 +323,11 @@ class PinPanelProjector(QObject):
         if not isinstance(watched, CursorPill):
             return False
         etype = event.type()
-        if etype in _PILL_HOVER_EVENTS:
+        if etype in _PILL_HOVER_EVENTS or etype in _PILL_CAPTURE_EVENTS:
             self._on_pinned_pill_event(watched, event)
             return False
         if etype in _PILL_GEOMETRY_EVENTS:
-            self._on_pinned_pill_geometry(watched)
+            self._on_pinned_pill_geometry(watched, event)
             return False
         return False
 
@@ -355,16 +417,29 @@ class PinPanelProjector(QObject):
             pill.close_requested.connect(
                 partial(ports.on_close, canvas, intent.record_id)
             )
+            pill.collapse_requested.connect(
+                partial(ports.on_collapse_panel, canvas, intent.record_id)
+            )
+            pill.title_menu_active_changed.connect(
+                partial(self._on_title_menu_active, canvas, intent.record_id)
+            )
             pill.moved.connect(
                 partial(self._on_pinned_moved, key, canvas, intent.record_id)
             )
             pill.display_mode_changed.connect(
                 partial(ports.on_display_mode, canvas, intent.record_id)
             )
+            pill._highlight_timer.timeout.connect(
+                partial(self._publish_highlight, canvas)
+            )
             state.pills[intent.record_id] = pill
         pill.set_ordinal(intent.ordinal)
         pill.set_pin_role("pinned")
         pill.set_live_hint("")
+        if status != PIN_STATUS_READY:
+            dismiss = getattr(pill, "dismiss_title_menu", None)
+            if callable(dismiss):
+                dismiss()
         card = ports.card_for_canvas(canvas)
         ports.sync_pill_safe_rect(pill, card)
         primary, projection = self.pill_content(intent, sample, status)
@@ -445,16 +520,7 @@ class PinPanelProjector(QObject):
         if _widget_alive(pill):
             pill.raise_()
             pill.flash_highlight()
-        overlay = getattr(canvas, "_pinned_overlay", None) if _widget_alive(canvas) else None
-        if overlay is not None:
-            overlay.set_highlight(str(record_id))
-        state = self._states.get(key)
-        if state is None:
-            return
-        for label in state.axis_labels.values():
-            if not _widget_alive(label):
-                continue
-            label.set_highlighted(str(record_id) in label.record_ids())
+        self._publish_highlight(canvas)
 
     def set_panel_endpoint(self, key, record_id, endpoint) -> None:
         """Remember only the current visual target of an expanded panel."""
@@ -491,6 +557,7 @@ class PinPanelProjector(QObject):
             )
             for record_id, _pill, rect, _record in mapped_panels
         }
+        shared_obstacles = self._tether_cover_obstacles(canvas, stack)
         for record_id, pill, mapped, record in mapped_panels:
             endpoints = tuple(str(endpoint.key) for endpoint in record.endpoints)
             active = state.panel_endpoints.get(str(record.record_id))
@@ -503,7 +570,7 @@ class PinPanelProjector(QObject):
             obstacles = tuple(
                 rect for other_id, rect in obstacles_by_id.items()
                 if other_id != record_id
-            )
+            ) + shared_obstacles
             tethers.append(PinnedPanelTether(
                 record_id=str(record.record_id),
                 endpoints=selected,
@@ -522,6 +589,52 @@ class PinPanelProjector(QObject):
                 ),
             ))
         overlay.set_tethers(tuple(tethers))
+
+    def _tether_cover_obstacles(self, canvas, stack) -> tuple:
+        """Canvas-space rects of sibling QWidgets that can hide a tether.
+
+        Live Cursor panels and the already-exposed display popover are mapped
+        the same way as Pin cards.  The DTO stores numbers only — never the
+        QWidget pointer.  Legend/UltraView connectors are not host-owned here.
+        """
+        obstacles = []
+        live = self._ports.live_pill(canvas)
+        mapped_live = self._mapped_widget_obstacle(canvas, stack, live)
+        if mapped_live is not None:
+            obstacles.append(mapped_live)
+        card = self._ports.card_for_canvas(canvas)
+        popover = getattr(card, "cursor_display_popover", lambda: None)()
+        if _widget_alive(popover) and popover.isVisible():
+            try:
+                frame = popover.frameGeometry()
+                top_left = stack.mapFromGlobal(frame.topLeft())
+                bottom_right = stack.mapFromGlobal(frame.bottomRight())
+            except RuntimeError:
+                pass
+            else:
+                mapped = self._map_stack_rect_to_canvas(
+                    canvas, stack, QRect(top_left, bottom_right).normalized(),
+                )
+                if mapped is not None and mapped.isValid():
+                    obstacles.append((
+                        float(mapped.x()), float(mapped.y()),
+                        float(mapped.width()), float(mapped.height()),
+                    ))
+        return tuple(obstacles)
+
+    def _mapped_widget_obstacle(self, canvas, stack, widget):
+        if not _widget_alive(widget) or not widget.isVisible():
+            return None
+        geo = widget.geometry()
+        if not geo.isValid() or geo.width() < 2 or geo.height() < 2:
+            return None
+        mapped = self._map_stack_rect_to_canvas(canvas, stack, geo)
+        if mapped is None or not mapped.isValid():
+            return None
+        return (
+            float(mapped.x()), float(mapped.y()),
+            float(mapped.width()), float(mapped.height()),
+        )
 
     def flash_duplicate(self, key, canvas, record_id) -> None:
         if not record_id:
@@ -901,6 +1014,7 @@ class PinPanelProjector(QObject):
         mapper = ports.map_canvas_rect_to_stack
         on_screen = bool(ports.source_on_screen(canvas))
         collection = ports.collection_for(canvas)
+        current_ids = _collection_record_ids(collection)
         expanded_ids = frozenset(
             item.record_id
             for item in getattr(collection, "records", ()) or ()
@@ -915,6 +1029,8 @@ class PinPanelProjector(QObject):
             and callable(mapper)
         ):
             for geom in layout.items:
+                if not _layout_item_in_collection(geom, current_ids):
+                    continue
                 mapped = mapper(canvas, QRect(*geom.canvas_rect))
                 if mapped is None or not mapped.isValid():
                     continue
@@ -938,6 +1054,15 @@ class PinPanelProjector(QObject):
                 label.edit_cancelled.connect(partial(ports.on_edit_cancelled, canvas))
                 label.nudge_requested.connect(partial(ports.on_nudge, canvas))
                 label.hover_changed.connect(partial(self.set_hover, canvas))
+                label.edit_started.connect(
+                    partial(self._on_label_capture_started, canvas)
+                )
+                label.edit_committed.connect(
+                    partial(self._on_label_capture_finished, canvas)
+                )
+                label.edit_cancelled.connect(
+                    partial(self._on_label_capture_finished, canvas)
+                )
                 state.axis_labels[label_key] = label
             if not label.pointer_captured():
                 label.apply_geom(geom)
@@ -945,7 +1070,8 @@ class PinPanelProjector(QObject):
             label.set_panel_open(
                 bool(expanded_ids.intersection(
                     str(item) for item in geom.record_ids
-                ))
+                )),
+                expanded_ids.intersection(str(item) for item in geom.record_ids),
             )
             label.setVisible(True)
             highlight = self._hover_matches(canvas, geom.record_ids)
@@ -965,8 +1091,83 @@ class PinPanelProjector(QObject):
             pill.setToolTip(PINNED_OFFSCREEN_TEXT if away else "")
 
     def set_hover(self, canvas, target) -> None:
-        key = id(canvas)
+        state = self._states.get(id(canvas))
+        if state is not None:
+            state.hover_target = None if target in (None, "", (), []) else target
+        self._publish_highlight(canvas)
+
+    def _on_title_menu_active(self, canvas, record_id, active=False) -> None:
+        if not _widget_alive(canvas):
+            return
+        if active:
+            self._begin_capture(canvas, record_id)
+            return
+        pill = self.pill_for(id(canvas), record_id)
+        self._end_capture(canvas, pill, record_id)
+
+    def _begin_capture(self, canvas, record_id) -> None:
+        state = self._states.get(id(canvas))
+        if state is None or not record_id:
+            return
+        if state.capture_target == record_id:
+            return
+        state.capture_target = record_id
+        if state.hover_target in (None, "", (), []):
+            state.hover_target = record_id
+        self._publish_highlight(canvas)
+
+    def _end_capture(self, canvas, pill, record_id) -> None:
+        state = self._states.get(id(canvas))
+        if state is None:
+            return
+        if not _target_includes(state.capture_target, record_id):
+            return
+        state.capture_target = None
+        state.hover_target = self._resynthesize_hover(canvas, pill, record_id)
+        self._publish_highlight(canvas)
+
+    def _resynthesize_hover(self, canvas, widget, record_id):
+        if _widget_holds_interaction(widget):
+            return record_id
+        state = self._states.get(id(canvas))
+        if state is None:
+            return None
+        for label in state.axis_labels.values():
+            if not _widget_holds_interaction(label):
+                continue
+            ids = label.record_ids()
+            if not ids:
+                continue
+            return ids[0] if len(ids) == 1 else ids
+        for other_id, other in state.pills.items():
+            if _widget_holds_interaction(other):
+                return other_id
+        return None
+
+    def _locate_target(self, state):
+        for record_id, pill in state.pills.items():
+            if not _widget_alive(pill):
+                continue
+            timer = getattr(pill, "_highlight_timer", None)
+            if timer is not None and timer.isActive():
+                return record_id
+        return None
+
+    def _publish_highlight(self, canvas) -> None:
         overlay = getattr(canvas, "_pinned_overlay", None) if _widget_alive(canvas) else None
+        state = self._states.get(id(canvas))
+        capture = None if state is None else state.capture_target
+        hover = None if state is None else state.hover_target
+        locate = None if state is None else self._locate_target(state)
+        if capture not in (None, "", (), []):
+            target = capture
+            stop_locate = True
+        elif hover not in (None, "", (), []):
+            target = hover
+            stop_locate = True
+        else:
+            target = locate
+            stop_locate = False
         if overlay is not None:
             overlay.set_highlight(target)
         ids = set()
@@ -974,19 +1175,20 @@ class PinPanelProjector(QObject):
             ids.update(str(item) for item in target)
         elif target:
             ids.add(str(target))
-        state = self._states.get(key)
         if state is None:
             return
         for record_id, pill in state.pills.items():
             if not _widget_alive(pill):
                 continue
-            highlighted = record_id in ids
+            timer = getattr(pill, "_highlight_timer", None)
+            interactive = record_id in ids
+            if stop_locate and interactive and timer is not None:
+                timer.stop()
+            locate_on = timer is not None and timer.isActive()
+            highlighted = interactive or locate_on
             pill._highlighted = highlighted
             if highlighted:
                 pill.raise_()
-                timer = getattr(pill, "_highlight_timer", None)
-                if timer is not None:
-                    timer.stop()
             pill.update()
         for label in state.axis_labels.values():
             if not _widget_alive(label):
@@ -1007,7 +1209,49 @@ class PinPanelProjector(QObject):
         if pill.pin_role() != "pinned":
             return
         etype = event.type()
-        if etype not in _PILL_HOVER_EVENTS:
+        key, record_id = self.canvas_and_record_for_pill(pill)
+        if key is None:
+            return
+        state = self._states.get(key)
+        canvas = state.canvas if state is not None else None
+        if not _widget_alive(canvas):
+            return
+        if etype == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
+            self.set_hover(canvas, record_id)
+            self._begin_capture(canvas, record_id)
+            return
+        if etype == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
+            self._end_capture(canvas, pill, record_id)
+            return
+        if etype in (QEvent.Enter, QEvent.FocusIn):
+            self.set_hover(canvas, record_id)
+            return
+        if state is not None and _target_includes(state.capture_target, record_id):
+            return
+        if etype in (QEvent.Leave, QEvent.FocusOut):
+            QTimer.singleShot(
+                0, partial(self._resynthesize_pill_hover, canvas, pill, record_id)
+            )
+            return
+        self.set_hover(canvas, None)
+
+    def _resynthesize_pill_hover(self, canvas, pill, record_id) -> None:
+        state = self._states.get(id(canvas))
+        if state is None:
+            return
+        if _target_includes(state.capture_target, record_id):
+            return
+        if _widget_holds_interaction(pill):
+            self.set_hover(canvas, record_id)
+            return
+        if not _target_includes(state.hover_target, record_id):
+            return
+        state.hover_target = self._resynthesize_hover(canvas, None, None)
+        self._publish_highlight(canvas)
+
+    def _on_pinned_pill_geometry(self, pill, event=None) -> None:
+        """Follow a live panel without sampling or writing the collection."""
+        if self._in_layout or pill.pin_role() != "pinned":
             return
         key, record_id = self.canvas_and_record_for_pill(pill)
         if key is None:
@@ -1016,26 +1260,28 @@ class PinPanelProjector(QObject):
         canvas = state.canvas if state is not None else None
         if not _widget_alive(canvas):
             return
-        if etype in (QEvent.Enter, QEvent.FocusIn):
-            self.set_hover(canvas, record_id)
-        else:
-            self.set_hover(canvas, None)
-
-    def _on_pinned_pill_geometry(self, pill) -> None:
-        """Follow a live panel without sampling or writing the collection."""
-        if self._in_layout or pill.pin_role() != "pinned":
-            return
-        key, _record_id = self.canvas_and_record_for_pill(pill)
-        if key is None:
-            return
-        state = self._states.get(key)
-        canvas = state.canvas if state is not None else None
-        if not _widget_alive(canvas):
-            return
+        if pill.is_dragging():
+            self._begin_capture(canvas, record_id)
+        elif event is not None and event.type() == QEvent.Hide:
+            self._end_capture(canvas, pill, record_id)
         try:
             self.sync_tethers(key, canvas)
         except RuntimeError:
             return
+
+    def _on_label_capture_started(self, canvas, record_id, *rest) -> None:
+        self._begin_capture(canvas, record_id)
+
+    def _on_label_capture_finished(self, canvas, record_id, *rest) -> None:
+        state = self._states.get(id(canvas))
+        widget = None
+        if state is not None:
+            wanted = str(record_id)
+            for label in state.axis_labels.values():
+                if _widget_alive(label) and wanted in label.record_ids():
+                    widget = label
+                    break
+        self._end_capture(canvas, widget, record_id)
 
     def _store_pending_owners(self, owners) -> None:
         self._merge_owner_keys(owners)
@@ -1258,6 +1504,21 @@ class PinPanelProjector(QObject):
             timer.stop()
         except RuntimeError:
             pass
+
+
+def _collection_record_ids(collection) -> frozenset[str]:
+    records = getattr(collection, "records", ()) or ()
+    return frozenset(str(item.record_id) for item in records)
+
+
+def _layout_item_in_collection(geom, current_ids) -> bool:
+    """Reject overlay chips whose members are not in the live collection."""
+    if not current_ids:
+        return False
+    geom_ids = tuple(str(item) for item in getattr(geom, "record_ids", ()) or ())
+    if not geom_ids:
+        return False
+    return all(record_id in current_ids for record_id in geom_ids)
 
 
 def _intent_in(collection, record_id):

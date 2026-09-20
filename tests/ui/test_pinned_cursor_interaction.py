@@ -4,11 +4,22 @@ from __future__ import annotations
 import numpy as np
 import pytest
 from PyQt5.QtCore import QEvent, QPoint, QPointF, Qt
+from PyQt5.QtGui import QFocusEvent
 from PyQt5.QtGui import QCursor, QKeyEvent, QMouseEvent
-from PyQt5.QtWidgets import QApplication, QLineEdit
+from PyQt5.QtWidgets import QApplication, QLineEdit, QPushButton
 
 from mf4_analyzer.ui.chart_stack import ChartStack
 from mf4_analyzer.ui.pinned_cursor_state import empty_collection, next_record
+
+
+@pytest.fixture
+def production_style(qapp):
+    from mf4_analyzer.ui_kit import load_stylesheet
+
+    previous = qapp.styleSheet()
+    load_stylesheet(qapp)
+    yield
+    qapp.setStyleSheet(previous)
 
 
 def _plot_speed(canvas):
@@ -763,3 +774,156 @@ def test_bottom_label_release_coordinate_wins_over_last_move(qapp, qtbot):
     )
     assert moved.x == pytest.approx(expected, abs=1e-9)
     assert moved.x != pytest.approx(moved_from_last_move, abs=1e-6)
+
+
+def test_pill_drag_keeps_tether_emphasis_across_child_leave(
+    qapp, qtbot, production_style,
+):
+    cs = _make_stack(qtbot, qapp)
+    canvas = cs.canvas_time
+    _aim(qtbot, canvas, 0.35, cs._pinned_cursors)
+    _press_p(_viewport(canvas))
+    record = _records(cs)[0]
+    controller = cs._pinned_cursors
+    controller.toggle_record_panel(canvas, record.record_id)
+    controller.flush_layout(canvas)
+    qapp.processEvents()
+    pill = controller.pills_for(canvas)[0]
+    overlay = canvas._pinned_overlay
+    assert overlay.tether_items()
+    idle_pen = overlay.tether_items()[0].pen()
+    idle_width = idle_pen.widthF()
+    idle_alpha = idle_pen.color().alpha()
+    QApplication.sendEvent(pill, QEvent(QEvent.Enter))
+    qapp.processEvents()
+    start = pill.rect().center()
+    _send_mouse(pill, QEvent.MouseButtonPress, start)
+    qapp.processEvents()
+    assert pill.is_dragging()
+    assert overlay.highlight_id() == record.record_id
+    active_pen = overlay.tether_items()[0].pen()
+    assert active_pen.widthF() > idle_width
+    assert active_pen.color().alpha() > idle_alpha
+    QApplication.sendEvent(pill, QEvent(QEvent.Leave))
+    QApplication.sendEvent(pill._pin_btn, QEvent(QEvent.Enter))
+    qapp.processEvents()
+    assert pill.is_dragging()
+    assert overlay.highlight_id() == record.record_id
+    still_active = overlay.tether_items()[0].pen()
+    assert still_active.widthF() == pytest.approx(active_pen.widthF())
+    assert still_active.color().alpha() == active_pen.color().alpha()
+    _send_mouse(pill, QEvent.MouseButtonRelease, start + QPoint(12, 8))
+    qapp.processEvents()
+
+
+def test_axis_label_capture_leave_keeps_emphasis_then_resynthesizes(
+    qapp, qtbot, production_style,
+):
+    cs = _make_stack(qtbot, qapp)
+    canvas = cs.canvas_time
+    _aim(qtbot, canvas, 0.4, cs._pinned_cursors)
+    _press_p(_viewport(canvas))
+    original = _records(cs)[0]
+    controller = cs._pinned_cursors
+    overlay = canvas._pinned_overlay
+    projector = controller._projector
+    label = _axis_label_for(cs, canvas, original.record_id, "x")
+    QApplication.sendEvent(label, QEvent(QEvent.Enter))
+    qapp.processEvents()
+    start = label.rect().center()
+    qtbot.mousePress(label, Qt.LeftButton, pos=start)
+    qapp.processEvents()
+    state = projector._states[id(canvas)]
+    assert state.capture_target == original.record_id
+    assert overlay.highlight_id() == original.record_id
+    assert label._highlighted is True
+    QApplication.sendEvent(label, QEvent(QEvent.Leave))
+    qapp.processEvents()
+    assert state.capture_target == original.record_id
+    assert overlay.highlight_id() == original.record_id
+    assert label._highlighted is True
+    release = QPoint(start.x() + _drag_delta(), start.y())
+    qtbot.mouseRelease(label, Qt.LeftButton, pos=release)
+    qapp.processEvents()
+    assert original.record_id in str(overlay.highlight_id() or "")
+    assert _records(cs)[0].panel_expanded is False
+    label.clearFocus()
+    QApplication.sendEvent(label, QFocusEvent(QEvent.FocusOut, Qt.OtherFocusReason))
+    QApplication.sendEvent(label, QEvent(QEvent.Leave))
+    qapp.processEvents()
+    qapp.processEvents()
+    assert overlay.highlight_id() in (None, "", (), [])
+    assert label._highlighted is False
+
+
+def test_axis_label_child_enter_does_not_drop_capture_emphasis(
+    qapp, qtbot, production_style,
+):
+    cs = _make_stack(qtbot, qapp)
+    canvas = cs.canvas_time
+    _aim(qtbot, canvas, 0.42, cs._pinned_cursors)
+    for frac in (0.40, 0.41, 0.42, 0.43, 0.44, 0.45, 0.46, 0.47):
+        _aim(qtbot, canvas, frac, cs._pinned_cursors)
+        _press_p(_viewport(canvas))
+    qapp.processEvents()
+    overlay = canvas._pinned_overlay
+    clusters = [
+        label for label in cs._pinned_cursors.axis_labels_for(canvas)
+        if label.geom() is not None and label.geom().kind == "cluster"
+    ]
+    assert clusters
+    cluster = clusters[0]
+    QApplication.sendEvent(cluster, QEvent(QEvent.Enter))
+    qapp.processEvents()
+    member_buttons = [
+        child for child in cluster.findChildren(QPushButton)
+        if child.objectName() == "pinnedAxisLabelMember"
+    ]
+    assert member_buttons
+    member = member_buttons[0]
+    start = member.rect().center()
+    qtbot.mousePress(member, Qt.LeftButton, pos=start)
+    qapp.processEvents()
+    highlighted = overlay.highlight_id()
+    assert highlighted not in (None, "", (), [])
+    QApplication.sendEvent(cluster, QEvent(QEvent.Leave))
+    QApplication.sendEvent(member, QEvent(QEvent.Enter))
+    qapp.processEvents()
+    assert overlay.highlight_id() == highlighted
+    assert cluster._highlighted is True
+    qtbot.mouseRelease(member, Qt.LeftButton, pos=start)
+    qapp.processEvents()
+
+
+def test_pill_mode_button_focus_does_not_drop_emphasis_after_capture(
+    qapp, qtbot, production_style,
+):
+    cs = _make_stack(qtbot, qapp)
+    canvas = cs.canvas_time
+    _aim(qtbot, canvas, 0.36, cs._pinned_cursors)
+    _press_p(_viewport(canvas))
+    record = _records(cs)[0]
+    controller = cs._pinned_cursors
+    controller.toggle_record_panel(canvas, record.record_id)
+    controller.flush_layout(canvas)
+    qapp.processEvents()
+    pill = controller.pills_for(canvas)[0]
+    overlay = canvas._pinned_overlay
+    projector = controller._projector
+    QApplication.sendEvent(pill, QEvent(QEvent.Enter))
+    start = pill.rect().center()
+    _send_mouse(pill, QEvent.MouseButtonPress, start)
+    qapp.processEvents()
+    assert overlay.highlight_id() == record.record_id
+    mode_btn = pill._mode_control.button_for("full")
+    mode_btn.setFocus(Qt.TabFocusReason)
+    QApplication.sendEvent(pill, QFocusEvent(QEvent.FocusOut, Qt.TabFocusReason))
+    qapp.processEvents()
+    qapp.processEvents()
+    assert overlay.highlight_id() == record.record_id
+    _send_mouse(pill, QEvent.MouseButtonRelease, start)
+    qapp.processEvents()
+    qapp.processEvents()
+    state = projector._states[id(canvas)]
+    assert state.capture_target in (None, "", (), [])
+    assert overlay.highlight_id() == record.record_id

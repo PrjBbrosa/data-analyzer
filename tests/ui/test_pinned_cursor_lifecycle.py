@@ -9,6 +9,7 @@ from uuid import uuid4
 
 import numpy as np
 import pytest
+from PyQt5 import sip
 from PyQt5.QtWidgets import QApplication
 
 from mf4_analyzer.ui.analysis_view_state import AnalysisViewState, PaneState
@@ -475,6 +476,89 @@ def test_view_switch_does_not_carry_p1(qapp, qtbot, loaded_csv):
     assert restored[0].x == pytest.approx(0.35)
 
 
+def test_title_menu_closes_on_view_switch_without_stale_scope_callback(
+    qapp, qtbot, loaded_csv,
+):
+    from tests.ui.test_view_switch_integration import (
+        _fid, _make_loaded_window, _set_checked,
+    )
+
+    w = _make_loaded_window(qtbot, qapp, loaded_csv)
+    _set_checked(w, "speed")
+    w.plot_time()
+    _flush(qapp)
+    fid = _fid(w)
+    pins = _single_pins(fid=fid, channel="speed", x=0.35)
+    cs = w.chart_stack
+    canvas = w.canvas_time
+    cs.set_pinned_cursors_for_canvas(canvas, pins)
+    _flush(qapp)
+    record = cs.pinned_cursors_for_canvas(canvas).records[0]
+    old_id = record.record_id
+    cs._pinned_cursors.toggle_record_panel(canvas, old_id)
+    _flush(qapp)
+    pills = [pill for pill in cs._pinned_cursors.pills_for(canvas) if pill.isVisible()]
+    assert pills
+    pill = pills[0]
+    opener = getattr(pill, "_on_title_menu_clicked", None)
+    assert callable(opener)
+    opener()
+    _flush(qapp)
+    menu = pill._title_menu
+    assert menu is not None
+    old_actions = list(menu.actions())
+    w._on_view_new()
+    _flush(qapp)
+    assert sip.isdeleted(menu) or not menu.isVisible()
+    for action in old_actions:
+        if sip.isdeleted(action):
+            continue
+        action.trigger()
+    _flush(qapp)
+    assert cs.pinned_cursors_for_canvas(canvas).records == ()
+    w._switch_view(0)
+    _flush(qapp)
+    restored = cs.pinned_cursors_for_canvas(canvas).records
+    assert len(restored) == 1
+    assert restored[0].record_id == old_id
+    assert restored[0].ordinal == 1
+
+
+def test_title_menu_closes_when_source_channel_disappears(qapp, qtbot):
+    cs = _make_stack(qtbot, qapp)
+    records = _install_pins(cs, _single_pins(fid="fid-a", channel="speed"))
+    record_id = records[0].record_id
+    cs._pinned_cursors.toggle_record_panel(cs.canvas_time, record_id)
+    _flush(qapp)
+    pills = [pill for pill in cs._pinned_cursors.pills_for(cs.canvas_time) if pill.isVisible()]
+    assert pills
+    pill = pills[0]
+    opener = getattr(pill, "_on_title_menu_clicked", None)
+    assert callable(opener)
+    opener()
+    _flush(qapp)
+    menu = pill._title_menu
+    assert menu is not None
+    t = _t()
+    cs.canvas_time.plot_channels(
+        [
+            (
+                "torque", True, t, np.cos(2 * np.pi * t),
+                "#e01769", "Nm", "fid-a",
+            ),
+        ],
+        mode="overlay",
+    )
+    _flush(qapp)
+    assert sip.isdeleted(menu) or not menu.isVisible()
+    assert cs.pinned_cursors_for_canvas(cs.canvas_time).records[0].record_id == (
+        record_id
+    )
+    assert cs._pinned_cursors.availability_for(
+        cs.canvas_time, record_id,
+    ) == PIN_STATUS_UNAVAILABLE
+
+
 def test_copy_view_does_not_share_pin_widgets(qapp, qtbot, loaded_csv):
     from tests.ui.test_view_switch_integration import (
         _fid, _make_loaded_window, _set_checked,
@@ -645,3 +729,218 @@ def test_uncheck_marks_unavailable_without_dirty_recheck_restores(qapp, qtbot):
     ) == PIN_STATUS_READY
     assert UNCHECKED_TEXT not in _pill_html(cs)
     assert controller.user_intent_revision == marked
+
+
+def _two_single_pins(
+    *,
+    fid="fid-a",
+    channel="speed",
+    xs=(0.3, 0.6),
+    domain="time",
+):
+    collection = empty_collection()
+    unit = "s" if domain == "time" else "Hz"
+    for x in xs:
+        collection, _intent = next_record(collection, {
+            "mode": "single",
+            "domain": domain,
+            "x": float(x),
+            "x_unit": unit,
+            "bindings": [{"fid": fid, "channel": channel}],
+            "presentation": "full",
+        })
+    return collection
+
+
+def _fft_pin_entries():
+    freq = np.array([1.0, 10.0, 50.0, 100.0, 200.0])
+    return [
+        {
+            "freq": freq,
+            "amp": np.array([1.0, 2.0, 3.0, 4.0, 5.0]),
+            "label": "force",
+            "channel": "force",
+            "fid": "fid-a",
+            "color": "#2563eb",
+            "time": np.linspace(0.0, 1.0, 8),
+            "signal": np.zeros(8),
+        }
+    ]
+
+
+def _prepare_pin_canvas(qtbot, qapp, kind):
+    cs = _make_stack(qtbot, qapp)
+    if kind == "fft":
+        cs.set_mode("fft")
+        qapp.processEvents()
+        canvas = cs.canvas_fft
+        cs.set_cursor_mode_for_canvas(canvas, "single")
+        canvas.plot_spectra(
+            _fft_pin_entries(),
+            xlim=(0.0, 200.0),
+            amp_label="Amplitude",
+            title="FFT",
+        )
+        qapp.processEvents()
+        pins = _two_single_pins(
+            channel="force", xs=(40.0, 120.0), domain="frequency",
+        )
+        return cs, canvas, pins
+    canvas = cs.canvas_time
+    return cs, canvas, _two_single_pins()
+
+
+def _pan_pin_canvas(canvas, kind):
+    if kind == "fft":
+        canvas._plot_amp.vb.setXRange(5.0, 180.0, padding=0)
+        return
+    canvas.set_xlim(0.15, 0.85)
+
+
+def _overlay_scene_managed_count(overlay):
+    leftover = 0
+    for item in overlay._all_managed_items():
+        try:
+            if item is None or sip.isdeleted(item):
+                continue
+            if item.scene() is not None:
+                leftover += 1
+        except RuntimeError:
+            continue
+    return leftover
+
+
+def _pin_projection_snapshot(cs, canvas):
+    collection = cs.pinned_cursors_for_canvas(canvas)
+    records = () if collection is None else collection.records
+    ctl = cs._pinned_cursors
+    overlay = canvas._pinned_overlay
+    layout = overlay.layout()
+    layout_items = 0
+    if layout is not None and not getattr(layout, "pending", False):
+        layout_items = len(getattr(layout, "items", ()) or ())
+    leftover_ids = tuple(
+        str(getattr(record, "record_id", ""))
+        for record in overlay.records()
+    )
+    return {
+        "model_records": len(records),
+        "pills": len(ctl.pills_for(canvas)),
+        "axis_labels": len(ctl.axis_labels_for(canvas)),
+        "overlay_records": len(overlay.records()),
+        "overlay_lines": len(tuple(overlay.iter_lines())),
+        "tether_items": len(overlay.tether_items()),
+        "tether_port_items": len(overlay.tether_port_items()),
+        "extrema_items": len(overlay.extrema_items()),
+        "overlay_item_owners": len(overlay._item_owners),
+        "overlay_scene_items": _overlay_scene_managed_count(overlay),
+        "overlay_layout_items": layout_items,
+        "overlay_record_ids": leftover_ids,
+    }
+
+
+def _leftover_pin_projections(snapshot):
+    return {
+        key: value
+        for key, value in snapshot.items()
+        if value not in (0, (), None)
+    }
+
+
+@pytest.mark.parametrize("kind", ["time", "fft"])
+def test_empty_collection_replacement_clears_all_projections(qapp, qtbot, kind):
+    """Empty is a full replacement. Overlay/scene/labels must not survive reflow.
+
+    ``set_collection(empty)`` currently drops pills without publishing an empty
+    overlay. A later ``reflow_visible`` rebuilds orphan P1/P2 from stale layout,
+    and ``toggle_record_panel`` finds no intent. This is the missing overlay /
+    scene / reflow coverage next to ``test_view_switch_does_not_carry_p1``.
+    """
+    cs, canvas, pins = _prepare_pin_canvas(qtbot, qapp, kind)
+    records = _install_pins(cs, pins, canvas=canvas)
+    assert len(records) == 2
+    old_ids = [item.record_id for item in records]
+    baseline = _pin_projection_snapshot(cs, canvas)
+    assert baseline["model_records"] == 2
+    assert baseline["overlay_records"] == 2
+    assert baseline["overlay_lines"] >= 2
+
+    ctl = cs._pinned_cursors
+    steps = []
+
+    cs.set_pinned_cursors_for_canvas(canvas, empty_collection())
+    _flush(qapp)
+    steps.append(("after empty+flush", _pin_projection_snapshot(cs, canvas)))
+
+    ctl.reflow_visible()
+    ctl.flush_layout()
+    _flush(qapp)
+    steps.append(("after reflow", _pin_projection_snapshot(cs, canvas)))
+
+    cs.resize(980, 500)
+    _flush(qapp)
+    steps.append(("after resize", _pin_projection_snapshot(cs, canvas)))
+
+    _pan_pin_canvas(canvas, kind)
+    _flush(qapp)
+    steps.append(("after pan", _pin_projection_snapshot(cs, canvas)))
+
+    for record_id in old_ids:
+        ctl.toggle_record_panel(canvas, record_id)
+    _flush(qapp)
+    steps.append(("after toggle old record", _pin_projection_snapshot(cs, canvas)))
+
+    failures = [
+        (step, _leftover_pin_projections(snapshot))
+        for step, snapshot in steps
+        if _leftover_pin_projections(snapshot)
+    ]
+    assert failures == [], f"empty replacement left projections: {failures}"
+    assert ctl.pills_for(canvas) == ()
+
+
+@pytest.mark.parametrize("kind", ["time", "fft"])
+def test_pending_nonempty_then_empty_does_not_resurrect_old_pins(
+    qapp, qtbot, kind,
+):
+    """A queued nonempty reproject must not outlive an empty replacement."""
+    cs, canvas, pins = _prepare_pin_canvas(qtbot, qapp, kind)
+    ctl = cs._pinned_cursors
+    cs.set_pinned_cursors_for_canvas(canvas, pins)
+    owner = ctl._owner(canvas)
+    assert owner is not None
+    old_ids = [item.record_id for item in pins.records]
+    timer = owner.reproject_timer
+    pending_before_empty = bool(
+        timer is not None and timer.isActive()
+    ) or bool(getattr(owner, "pending_epoch", 0))
+
+    cs.set_pinned_cursors_for_canvas(canvas, empty_collection())
+    _flush(qapp)
+    steps = [("after empty+flush", _pin_projection_snapshot(cs, canvas))]
+
+    ctl.reflow_visible()
+    ctl.flush_layout()
+    _flush(qapp)
+    steps.append(("after reflow", _pin_projection_snapshot(cs, canvas)))
+
+    cs.resize(1000, 520)
+    _pan_pin_canvas(canvas, kind)
+    _flush(qapp)
+    steps.append(("after pan", _pin_projection_snapshot(cs, canvas)))
+
+    for record_id in old_ids:
+        ctl.toggle_record_panel(canvas, record_id)
+    _flush(qapp)
+    steps.append(("after toggle old record", _pin_projection_snapshot(cs, canvas)))
+
+    failures = [
+        (step, _leftover_pin_projections(snapshot))
+        for step, snapshot in steps
+        if _leftover_pin_projections(snapshot)
+    ]
+    assert failures == [], (
+        f"pending→empty left projections "
+        f"(had_queued_reproject={pending_before_empty}): {failures}"
+    )
+    assert ctl.pills_for(canvas) == ()

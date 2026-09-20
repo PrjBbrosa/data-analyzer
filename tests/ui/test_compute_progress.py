@@ -159,6 +159,78 @@ def test_status_bar_single_file_can_label_is_fully_visible_under_qss(qapp, qtbot
         qapp.setStyleSheet(old_sheet)
 
 
+def _assert_sync_progress_phase_fully_visible(widget, expected):
+    """Assert one busy-phase frame without pumping layout or resizing."""
+    painted = widget.label.text()
+    hint_w = widget.sizeHint().width()
+    widget_w = widget.width()
+    contents_w = widget.label.contentsRect().width()
+    assert widget._full_label == expected, (
+        f"full={widget._full_label!r} expected={expected!r} "
+        f"sizeHint={hint_w} width={widget_w} contents={contents_w}"
+    )
+    assert "…" not in painted, (
+        f"visible text is elided: painted={painted!r} full={expected!r} "
+        f"sizeHint={hint_w} width={widget_w} contents={contents_w}"
+    )
+    assert painted == expected, (
+        f"painted={painted!r} full={expected!r} "
+        f"sizeHint={hint_w} width={widget_w} contents={contents_w}"
+    )
+    metrics = QFontMetrics(widget.label.font())
+    ink_right = widget.label.geometry().left() + metrics.horizontalAdvance(painted)
+    assert ink_right <= widget.bar.geometry().left(), (
+        f"label ink ends at {ink_right}, bar starts at "
+        f"{widget.bar.geometry().left()} (painted={painted!r} "
+        f"sizeHint={hint_w} width={widget_w} contents={contents_w})"
+    )
+
+
+def test_sync_plot_phase_updates_keep_full_label_without_event_pump(qapp, qtbot):
+    """Plot-phase updates only repaint; the new sizeHint must still be visible.
+
+    Production ``plot_time`` begins the bar, then advances 「绘图 · 准备 /
+    构建 / 应用」 with ``process_events=True`` (repaint only). Eliding against
+    the *previous* slot after ``updateGeometry()`` is the failure: a wide
+    window still shows 「绘图 · 构…」. Do not pump, activate layout, or pin
+    width from sizeHint between these updates — that washes the bug green.
+    The CAN-label test above is the *post-layout* contract (``flush_events``).
+    """
+    from mf4_analyzer.ui_kit import load_stylesheet
+
+    old_sheet = qapp.styleSheet()
+    try:
+        qapp.setStyle("Fusion")
+        load_stylesheet(qapp)
+        window = MainWindow()
+        qtbot.addWidget(window)
+        window.resize(1450, 850)
+        window.show()
+        qtbot.waitExposed(window)
+        qapp.processEvents()
+
+        token = window._begin_compute_progress("绘图", total=1000)
+        widget = window._compute_progress
+        phases = (
+            "绘图 · 准备",
+            "绘图 · 构建",
+            "绘图 · 应用",
+        )
+        for phase in phases:
+            window._update_compute_progress(
+                570,
+                1000,
+                label=phase,
+                token=token,
+                process_events=True,
+            )
+            _assert_sync_progress_phase_fully_visible(
+                widget, f"{phase} · 57%",
+            )
+    finally:
+        qapp.setStyleSheet(old_sheet)
+
+
 def test_percent_ink_stays_clear_of_bar_without_resize(qapp, qtbot):
     """Regression: full label text must not overflow onto the bar when width is pinned.
 

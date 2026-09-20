@@ -435,6 +435,40 @@ def painted_document(pill):
     return doc
 
 
+def _title_action_widgets(pill):
+    widgets = []
+    for widget in pill._title_leading_widgets() + (
+        pill._close_btn, pill._mode_control, pill._pin_btn,
+    ):
+        if widget is not None and widget.isVisibleTo(pill):
+            widgets.append(widget)
+    return tuple(widgets)
+
+
+def _measured_trailing_pack_width(pill):
+    return pill._packed_chrome_width(pill._title_trailing_widgets())
+
+
+def assert_title_actions_fit_without_overlap(pill):
+    widgets = _title_action_widgets(pill)
+    rects = [widget.geometry() for widget in widgets]
+    for widget, rect in zip(widgets, rects):
+        packed_w, _packed_h = pill._chrome_pack_size(widget)
+        assert rect.left() >= 0, widget
+        assert rect.right() <= pill.width(), (widget, rect, pill.width())
+        assert widget.isEnabled()
+        assert rect.width() >= packed_w - 1
+    for index, left in enumerate(rects):
+        for right in rects[index + 1:]:
+            assert not left.intersects(right), (left, right)
+
+
+def last_painted_column_right(pill):
+    _doc, columns = value_column_right_edges(pill)
+    assert columns, pill._detail.document.toPlainText()
+    return max(columns[-1])
+
+
 def assert_painted_glyphs_contained(pill):
     doc = painted_document(pill)
     doc.size()
@@ -588,10 +622,7 @@ def test_long_underscore_name_uses_two_lines_before_elision(qapp, qtbot, product
 
 @pytest.mark.parametrize('width', [360, 500, 800])
 def test_primary_paint_bounds_reserve_actual_toggle_margin(qapp, qtbot, production_style, width):
-    from mf4_analyzer.ui.chart_stack.cursor_pill import (
-        _CURSOR_HTML_SEP,
-        _TITLE_ACTION_RESERVE,
-    )
+    from mf4_analyzer.ui.chart_stack.cursor_pill import _CURSOR_HTML_SEP
     parent, pill = make_pill(qtbot, width)
     fields = ('A=28.2041s', 'B=24.7643s', 'ΔT=-3.4399s', '1/ΔT=0.29Hz')
     pill.set_primary(_CURSOR_HTML_SEP.join(fields))
@@ -599,7 +630,11 @@ def test_primary_paint_bounds_reserve_actual_toggle_margin(qapp, qtbot, producti
     pill.show()
     qapp.processEvents()
     doc = pill._primary.document
-    assert pill._primary.contentsMargins().right() == _TITLE_ACTION_RESERVE
+    trailing = pill._title_trailing_chrome_width()
+    assert pill._title_leading_chrome_width() == 0
+    assert pill._title_chrome_width() == trailing
+    assert pill._primary.contentsMargins().right() == trailing
+    assert trailing == _measured_trailing_pack_width(pill)
     assert doc.size().width() <= pill._primary.contentsRect().width()
     block = doc.begin()
     while block.isValid():
@@ -781,3 +816,73 @@ def test_dual_mini_hides_names_reclaims_width_and_restores_full(
         assert_painted_glyphs_contained(pill)
     assert widths[1] < widths[0]
     assert widths[2] == widths[0]
+
+
+@pytest.mark.parametrize('width', [320, 500, 800])
+@pytest.mark.parametrize('mini', [False, True])
+def test_title_chrome_budget_follows_measured_width_without_overlap(
+        qapp, qtbot, production_style, width, mini):
+    parent, pill = make_pill(qtbot, width)
+    long_name = 'Rte_RackPosCorrPlausi_wSteeringAngle_xds16_extra_identity'
+    channels = tuple(replace(ch, channel_label=long_name) for ch in CHANNELS[:2])
+    pill.set_primary('t=29.2437s')
+    pill.set_live_hint('按 P 固定当前读数')
+    pill.set_display_projection(build_cursor_presentation(
+        channels, CursorDisplayOptions(), cursor_mode='dual', x_mode='time', mini=mini,
+    ))
+    pill.show()
+    qapp.processEvents()
+    assert pill._title_chrome_width() == _measured_trailing_pack_width(pill)
+    assert pill._primary.contentsMargins().right() == pill._title_trailing_chrome_width()
+    assert_title_actions_fit_without_overlap(pill)
+    if pill._table_plan is not None and pill._table_plan.kind != 'identity':
+        last_right = last_painted_column_right(pill)
+        assert last_right <= pill._detail.width() + 1
+        assert last_right <= painted_document(pill).size().width() + 1
+    assert_painted_glyphs_contained(pill)
+    pill.set_pin_role('pinned')
+    qapp.processEvents()
+    assert pill._title_leading_chrome_width() > 0
+    assert pill._title_chrome_width() == (
+        pill._title_leading_chrome_width() + _measured_trailing_pack_width(pill)
+    )
+    assert pill._close_btn.isVisibleTo(pill)
+    assert pill._title_menu_btn.isVisibleTo(pill)
+    assert not pill._pin_btn.isVisibleTo(pill)
+    assert_title_actions_fit_without_overlap(pill)
+    assert pill.safe_rect().contains(pill.geometry()) or pill.awaiting_space()
+
+
+def test_font_and_role_changes_invalidate_title_chrome_width(
+        qapp, qtbot, production_style):
+    parent, pill = make_pill(qtbot, 640)
+    pill.set_live_hint('按 P 固定当前读数')
+    pill.set_display_projection(projection())
+    pill.show()
+    qapp.processEvents()
+    live_width = pill._title_chrome_width()
+    font = pill._mode_control.font()
+    font.setPointSize(max(font.pointSize(), 10) + 8)
+    pill._mode_control.setFont(font)
+    for button in (pill._mode_control.button_for('mini'),
+                   pill._mode_control.button_for('full')):
+        button.setFont(font)
+    pill.invalidate_pin_chrome()
+    pill.adjustSize()
+    qapp.processEvents()
+    larger_width = pill._title_chrome_width()
+    assert larger_width >= live_width
+    assert pill._primary.contentsMargins().right() == pill._title_trailing_chrome_width()
+    assert_title_actions_fit_without_overlap(pill)
+    pill.set_pin_role('pinned')
+    qapp.processEvents()
+    pinned_width = pill._title_chrome_width()
+    assert pinned_width > live_width
+    assert pinned_width == (
+        pill._title_leading_chrome_width() + _measured_trailing_pack_width(pill)
+    )
+    assert pill._title_leading_chrome_width() > 0
+    assert_title_actions_fit_without_overlap(pill)
+    if not pill.awaiting_space():
+        assert last_painted_column_right(pill) <= pill._detail.width() + 1
+        assert_painted_glyphs_contained(pill)

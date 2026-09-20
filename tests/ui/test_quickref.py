@@ -246,8 +246,8 @@ def test_quickref_documents_chart_pin_not_board_pen():
     assert pin_row.keys == (quickref._sc("pin_cursor"),)
     for phrase in (
         "单游标", "双游标", "A、B", "默认收起", "图底 Pn", "展开/收起",
-        "拖动", "焦点", "←/→", "Shift", "关游标", "不隐藏", "蓝图钉",
-        "取消固定", "原地", "×", "−/+", "full/mini",
+        "拖动", "焦点", "←/→", "Shift", "关游标", "不隐藏", "编号菜单",
+        "取消固定", "原地", "×", "删除", "数值", "完整",
     ):
         assert phrase in pin_row.sub, phrase
     assert "撤销" not in pin_row.sub
@@ -268,7 +268,8 @@ def test_quickref_documents_time_cursor_display_settings():
     assert "最大值点" in row.sub
     assert "Min / Max / Avg" in row.sub
     assert "差值" in row.sub
-    assert "mini" in row.sub
+    assert "数值" in row.sub
+    assert "完整" in row.sub
     assert "不弹出 tooltip" in row.sub
     assert "全局" in row.sub
 

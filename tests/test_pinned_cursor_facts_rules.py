@@ -359,9 +359,10 @@ def test_primary_and_status_html_preserve_escaping_and_colors():
     html = _pin_html()
     intent = _intent(ordinal=3, x=1.25)
     primary = html["primary"](intent)
-    assert 'color:#416faa;">P3' in primary
+    assert "P3" not in primary
     assert "t=1.2500s" in primary
     status = html["status"](intent, "a <b> & c")
+    assert "P3" not in status
     assert "a &lt;b&gt; &amp; c" in status
     assert "color:#64748b;" in status
 

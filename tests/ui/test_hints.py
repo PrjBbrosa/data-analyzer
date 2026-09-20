@@ -204,7 +204,7 @@ def test_frf_hints_cover_cursor_display_and_time_domain_limits():
         assert phrase in joined
 
     fft_hints = {hint.id: hint.text for hint in hints.all_hints() if hint.id.startswith("fft.")}
-    assert fft_hints["fft.frequency_cursor"] == "频谱游标：−隐名称，窄时+N，放大恢复"
+    assert fft_hints["fft.frequency_cursor"] == "频谱游标：数值/完整，窄时+N，放大恢复"
 
 
 def test_time_hint_documents_cursor_display_settings_and_custom_x_single_values():
@@ -212,7 +212,8 @@ def test_time_hint_documents_cursor_display_settings_and_custom_x_single_values(
     assert "显示设置" in hint.text
     assert "极值点" in hint.text
     assert "差值" in hint.text
-    assert "mini" in hint.text
+    assert "数值" in hint.text
+    assert "完整" in hint.text
     assert "X↑/X↓" in hint.text
 
 
@@ -333,8 +334,8 @@ def test_pinned_cursor_hints_are_mode_gated_and_not_global_p():
     pin_ids = ("cursor.pin_single", "cursor.pin_dual", "cursor.pin_off")
     pin_modes = frozenset({"time", "fft", "frf"})
     for hint_id, cursor_mode, phrase in (
-        ("cursor.pin_single", "single", "P 固定；展开默认 −"),
-        ("cursor.pin_dual", "dual", "先放 A/B；P 固定；展开默认 −"),
+        ("cursor.pin_single", "single", "P 固定；数值/完整；点 Pn 开合"),
+        ("cursor.pin_dual", "dual", "先放 A/B；P 固定；数值/完整"),
         ("cursor.pin_off", "off", "不隐藏已固定"),
     ):
         hint = by_id[hint_id]

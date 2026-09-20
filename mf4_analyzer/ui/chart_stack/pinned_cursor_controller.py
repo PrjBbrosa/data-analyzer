@@ -232,6 +232,9 @@ class _PinHostPorts:
     def on_toggle_panel(self, canvas, record_id, endpoint=None):
         self._c.toggle_record_panel(canvas, record_id, endpoint=endpoint)
 
+    def on_collapse_panel(self, canvas, record_id):
+        self._c.collapse_record_panel(canvas, record_id)
+
     def on_edit_started(self, canvas, record_id, endpoint, global_pos):
         self._c.begin_axis_edit(canvas, record_id, endpoint, global_pos)
 
@@ -365,7 +368,7 @@ class PinnedCursorController(QObject):
             return
         self.cancel_axis_edit(canvas, render=False)
         self._cancel_reproject(owner)
-        self._clear_pills(owner)
+        self._projector.invalidate_key(id(owner.canvas))
         owner.collection = collection
         owner.reserved_ordinal = None
         owner.reserved_intent = None
@@ -373,9 +376,12 @@ class PinnedCursorController(QObject):
         owner.availability.clear()
         owner.projected_generation = None
         owner.skip_stale_invalidation = False
+        self._clear_pills(owner)
         if collection.records:
             self._mark_records_pending(owner)
             self._schedule_reproject(owner)
+            return
+        self._publish_empty_projection(owner)
 
     def availability_for(self, canvas, record_id: str) -> str:
         owner = self._owner(canvas)
@@ -536,6 +542,30 @@ class PinnedCursorController(QObject):
             record_id,
             endpoint if result.record.panel_expanded is True else None,
         )
+        self._project_record(
+            owner,
+            result.record,
+            owner.samples.get(record_id),
+            availability=owner.availability.get(record_id, PIN_STATUS_READY),
+        )
+        self._sync_overlay(owner)
+        self._arrange_pinned_panels(owner)
+        if result.mark_intent:
+            self._mark_user_intent()
+
+    def collapse_record_panel(self, canvas, record_id: str) -> None:
+        """Collapse an expanded panel. Already collapsed is a no-op."""
+        owner = self._owner(canvas)
+        if owner is None or owner.collection is None:
+            return
+        intent = self._intent(owner, record_id)
+        if intent is None:
+            return
+        result = self._commands.collapse_panel(owner.collection, intent)
+        if result.action != "collapse" or result.collection is None or result.record is None:
+            return
+        owner.collection = result.collection
+        self._projector.set_panel_endpoint(id(canvas), record_id, None)
         self._project_record(
             owner,
             result.record,
@@ -1644,6 +1674,16 @@ class PinnedCursorController(QObject):
             return
         self._reproject_now(owner)
 
+    def _publish_empty_projection(self, owner) -> None:
+        canvas = owner.canvas
+        overlay = (
+            getattr(canvas, "_pinned_overlay", None)
+            if _widget_alive(canvas)
+            else None
+        )
+        if overlay is not None:
+            overlay.clear()
+
     def _mark_records_pending(self, owner) -> None:
         if owner.collection is None:
             return
@@ -1659,6 +1699,10 @@ class PinnedCursorController(QObject):
     def _reproject_now(self, owner) -> None:
         canvas = owner.canvas
         if not _widget_alive(canvas) or owner.collection is None:
+            return
+        if not owner.collection.records:
+            self._publish_empty_projection(owner)
+            owner.projected_generation = None
             return
         if self._canvas_compute_pending(canvas):
             self._mark_records_pending(owner)

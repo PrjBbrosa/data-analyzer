@@ -11,7 +11,7 @@ from typing import Callable
 import pyqtgraph as pg
 from PyQt5 import sip
 from PyQt5.QtCore import QEvent, QLineF, QPoint, QPointF, QRect, QRectF, Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPen
+from PyQt5.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPen, QRegion
 from PyQt5.QtWidgets import (
     QApplication,
     QFrame,
@@ -35,6 +35,9 @@ PINNED_UNREPRESENTABLE_TEXT = "不可用"
 _LABEL_H = 16
 _LABEL_CONTENT_MARGINS = (3, 0, 3, 0)
 _LABEL_FRAME_ALLOWANCE = 1
+_LABEL_PIP = 7
+_LABEL_PIP_GAP = 4
+_LABEL_RING = 2
 _LABEL_GAP = 3
 _EDGE_PAD = 2
 _TINY_HOST_W = 40
@@ -46,17 +49,32 @@ _TETHER_Z = 795
 _TETHER_CLEARANCE = 6.0
 _TETHER_STUB = 8.0
 _TETHER_PORT_RADIUS = 2.25
+_TETHER_COLOR = "#607892"
+# White-background AA dash composites (offscreen, 2026-09-20): old idle
+# 1.0px/α118 landed at min luminance ~223 on white; 1.5px/α220 lands ~166
+# and 2.0px/α250 ~120. Keep the neutral tether hue; position lines stay
+# endpoint-coloured.
+_TETHER_IDLE_WIDTH = 1.5
+_TETHER_ACTIVE_WIDTH = 2.0
+_TETHER_IDLE_ALPHA = 220
+_TETHER_ACTIVE_ALPHA = 250
+_TETHER_IDLE_PORT_ALPHA = 200
+_TETHER_ACTIVE_PORT_ALPHA = 245
 _SINGLE_COLOR = "#54749d"
 _A_COLOR = "#2563eb"
 _B_COLOR = "#dc2626"
 _MIN_COLOR = "#16a34a"
 _MAX_COLOR = "#dc2626"
-_LABEL_IDLE_FILL = QColor("#f1f6fd")
-_LABEL_IDLE_BORDER = QColor("#bed0e9")
-_LABEL_OPEN_FILL = QColor("#c5dbf8")
-_LABEL_OPEN_BORDER = QColor("#5b8fd4")
-_LABEL_HOVER_FILL = QColor("#dceaff")
-_LABEL_HOVER_BORDER = QColor("#729ee0")
+_LABEL_COLLAPSED_FILL = "#F8FAFC"
+_LABEL_COLLAPSED_BORDER = "#AAB7C8"
+_LABEL_COLLAPSED_INK = "#56657A"
+_LABEL_OPEN_FILL = "#E5EFFF"
+_LABEL_OPEN_BORDER = "#6592CF"
+_LABEL_OPEN_INK = "#164878"
+_LABEL_ACTIVE_FILL = "#2167C7"
+_LABEL_ACTIVE_BORDER = "#174D98"
+_LABEL_ACTIVE_INK = "#FFFFFF"
+_LABEL_ACTIVE_RING = "#D3E2F7"
 _FAINT_ALPHA = 110
 _HIGHLIGHT_ALPHA = 220
 
@@ -123,9 +141,11 @@ def _leader_pen():
 
 
 def _tether_pen(highlighted=False):
-    color = QColor("#607892")
-    color.setAlpha(185 if highlighted else 118)
-    return QPen(color, 1.0, Qt.DashLine)
+    return _pen(
+        _TETHER_COLOR,
+        alpha=_TETHER_ACTIVE_ALPHA if highlighted else _TETHER_IDLE_ALPHA,
+        width=_TETHER_ACTIVE_WIDTH if highlighted else _TETHER_IDLE_WIDTH,
+    )
 
 
 def cluster_label_text(ordinals):
@@ -144,27 +164,91 @@ def cluster_label_text(ordinals):
     return f"+{len(values)}"
 
 
+def _label_layout_margins():
+    """Inner text padding plus the reserved pip and ring budget."""
+    left, top, right, bottom = _LABEL_CONTENT_MARGINS
+    return (
+        left + _LABEL_PIP + _LABEL_PIP_GAP + _LABEL_RING,
+        top + _LABEL_RING,
+        right + _LABEL_RING,
+        bottom + _LABEL_RING,
+    )
+
+
+@dataclass(frozen=True)
+class AxisLabelChrome:
+    fill: str
+    border: str
+    ink: str
+    ring: str | None
+    pip_filled: bool
+
+
+def axis_label_chrome(*, panel_open, highlighted) -> AxisLabelChrome:
+    """Compose open/closed with transient emphasis at paint time.
+
+    Collapsed chips keep a hollow pip even while hovered, focused, or dragged.
+    Only an open chip uses the solid pip; only open-and-active uses the filled
+    blue face.  Emphasis may add a ring without impersonating the open fill.
+    """
+    if panel_open and highlighted:
+        return AxisLabelChrome(
+            fill=_LABEL_ACTIVE_FILL,
+            border=_LABEL_ACTIVE_BORDER,
+            ink=_LABEL_ACTIVE_INK,
+            ring=_LABEL_ACTIVE_RING,
+            pip_filled=True,
+        )
+    if panel_open:
+        return AxisLabelChrome(
+            fill=_LABEL_OPEN_FILL,
+            border=_LABEL_OPEN_BORDER,
+            ink=_LABEL_OPEN_INK,
+            ring=None,
+            pip_filled=True,
+        )
+    if highlighted:
+        return AxisLabelChrome(
+            fill=_LABEL_COLLAPSED_FILL,
+            border=_LABEL_COLLAPSED_BORDER,
+            ink=_LABEL_COLLAPSED_INK,
+            ring=_LABEL_ACTIVE_RING,
+            pip_filled=False,
+        )
+    return AxisLabelChrome(
+        fill=_LABEL_COLLAPSED_FILL,
+        border=_LABEL_COLLAPSED_BORDER,
+        ink=_LABEL_COLLAPSED_INK,
+        ring=None,
+        pip_filled=False,
+    )
+
+
 def axis_label_outer_size(text, fm, *, content_margins=None):
     """Return the painted chip's one canonical device-independent size.
 
     ``layout_pinned_axis_labels`` and :class:`PinnedAxisLabel` must agree on
-    the *outer* rect: the caption's actual advance, the QHBoxLayout margins,
-    and the one-pixel painted frame.  ``QFontMetrics`` already reflects the
-    current logical DPI, so no second DPR scale may be applied here.
+    the *outer* rect: the caption's actual advance, the pip, the QHBoxLayout
+    margins, the one-pixel painted frame, and the reserved outer ring.
+    ``QFontMetrics`` already reflects the current logical DPI, so no second
+    DPR scale may be applied here.
     """
     left, top, right, bottom = (
-        _LABEL_CONTENT_MARGINS if content_margins is None else tuple(content_margins)
+        _label_layout_margins() if content_margins is None else tuple(content_margins)
     )
     frame = _LABEL_FRAME_ALLOWANCE * 2
     width = max(
-        18,
+        18 + _LABEL_PIP + _LABEL_PIP_GAP + _LABEL_RING * 2,
         int(fm.horizontalAdvance(str(text))) + left + right + frame,
     )
     # QLabel's single-line size hint follows line spacing rather than only the
     # glyph bounding height; reserving that leading keeps the bottom border
     # from squeezing the real painted caption on platform font substitutions.
     content_height = max(int(fm.height()), int(fm.lineSpacing()))
-    height = max(_LABEL_H, content_height + top + bottom + frame)
+    height = max(
+        _LABEL_H + _LABEL_RING * 2,
+        content_height + top + bottom + frame,
+    )
     return width, height
 
 
@@ -481,7 +565,7 @@ def layout_pinned_axis_labels(
     height = max(12, int(axis_height))
     width = right - left
     margins = (
-        _LABEL_CONTENT_MARGINS if content_margins is None else tuple(content_margins)
+        _label_layout_margins() if content_margins is None else tuple(content_margins)
     )
 
     def chip_width(text):
@@ -799,6 +883,7 @@ class PinnedAxisLabel(QFrame):
         self._geom = None
         self._highlighted = False
         self._panel_open = False
+        self._open_ids = frozenset()
         self._expanded = False
         self._buttons = []
         self._member_scroll = None
@@ -807,7 +892,7 @@ class PinnedAxisLabel(QFrame):
         self._press = None
         self._dragged = False
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(*_LABEL_CONTENT_MARGINS)
+        lay.setContentsMargins(*_label_layout_margins())
         lay.setSpacing(2)
         self._caption = QLabel(self)
         self._caption.setAttribute(Qt.WA_TransparentForMouseEvents, True)
@@ -816,6 +901,7 @@ class PinnedAxisLabel(QFrame):
         font.setPointSize(9)
         self._caption.setFont(font)
         lay.addWidget(self._caption)
+        self._sync_chrome()
 
     def apply_geom(self, geom: PinnedLabelGeom):
         # A geometry refresh must not turn a captured P1·A into whatever
@@ -841,22 +927,28 @@ class PinnedAxisLabel(QFrame):
             self._clear_members()
             self.setFixedSize(max(16, w), max(12, h))
         self.setToolTip(self._tooltip(geom))
-        self.update()
+        self._sync_chrome()
 
     def set_highlighted(self, highlighted):
         self._highlighted = bool(highlighted)
-        self.update()
+        self._sync_chrome()
 
-    def set_panel_open(self, open_):
-        wanted = bool(open_)
-        if wanted == self._panel_open:
+    def set_panel_open(self, open_, record_ids=None):
+        if record_ids is None:
+            open_ids = frozenset(self.record_ids()) if open_ else frozenset()
+            wanted = bool(open_)
+        else:
+            open_ids = frozenset(str(item) for item in record_ids)
+            wanted = bool(open_ids) if record_ids is not None else bool(open_)
+        if wanted == self._panel_open and open_ids == self._open_ids:
             if self._geom is not None:
                 self.setToolTip(self._tooltip(self._geom))
             return
         self._panel_open = wanted
+        self._open_ids = open_ids
         if self._geom is not None:
             self.setToolTip(self._tooltip(self._geom))
-        self.update()
+        self._sync_chrome()
 
     def panel_open(self):
         return self._panel_open
@@ -885,8 +977,93 @@ class PinnedAxisLabel(QFrame):
             return f"{names}，点击成员展开"
         name = geom.text
         if self._panel_open:
-            return f"点击收起 {name}"
-        return f"点击展开 {name}"
+            return f"收起 {name} 面板，保留固定读数"
+        return f"展开 {name} 面板"
+
+    def chrome(self):
+        return axis_label_chrome(
+            panel_open=self._panel_open, highlighted=self._highlighted,
+        )
+
+    def shows_ring(self):
+        return self.chrome().ring is not None
+
+    def hit_rect(self):
+        """Interactive region. The unused ring halo does not steal neighbours."""
+        rect = self.rect()
+        if self.shows_ring():
+            return QRect(rect)
+        return rect.adjusted(_LABEL_RING, _LABEL_RING, -_LABEL_RING, -_LABEL_RING)
+
+    def pip_rect(self):
+        chip = QRectF(self.rect()).adjusted(
+            _LABEL_RING, _LABEL_RING, -_LABEL_RING, -_LABEL_RING,
+        )
+        left, _top, _right, _bottom = _LABEL_CONTENT_MARGINS
+        x = chip.left() + left
+        y = chip.center().y() - _LABEL_PIP / 2.0
+        return QRectF(x, y, _LABEL_PIP, _LABEL_PIP)
+
+    def _sync_chrome(self):
+        if not _alive(self) or not _alive(self._caption):
+            return
+        spec = self.chrome()
+        self._caption.setStyleSheet(
+            f"color: {spec.ink}; background: transparent; border: none;"
+        )
+        self._sync_member_chrome()
+        self._sync_input_mask()
+        self.update()
+
+    def _sync_member_chrome(self):
+        for button in self._buttons:
+            record_id = str(button.property("record_id") or "")
+            spec = axis_label_chrome(
+                panel_open=record_id in self._open_ids,
+                highlighted=self._highlighted,
+            )
+            button.setStyleSheet(
+                "QPushButton#pinnedAxisLabelMember {"
+                f" background: {spec.fill}; color: {spec.ink};"
+                f" border: 1px solid {spec.border}; border-radius: 3px;"
+                " padding: 0 4px;"
+                "}"
+            )
+
+    def _sync_input_mask(self):
+        if not _alive(self):
+            return
+        if self.shows_ring():
+            self.clearMask()
+            return
+        inner = self.hit_rect()
+        if inner.width() <= 2 or inner.height() <= 2:
+            self.clearMask()
+            return
+        self.setMask(QRegion(inner))
+
+    def _holds_local_interaction(self):
+        if self._press is not None:
+            return True
+        try:
+            if self.underMouse():
+                return True
+        except RuntimeError:
+            pass
+        focus = QApplication.focusWidget()
+        current = focus
+        while current is not None:
+            if current is self:
+                return True
+            try:
+                current = current.parentWidget()
+            except RuntimeError:
+                break
+        return False
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._sync_input_mask()
 
     def _release_size_constraint(self):
         self.setMinimumSize(0, 0)
@@ -904,6 +1081,7 @@ class PinnedAxisLabel(QFrame):
                 button.setProperty("record_id", member[0])
                 button.setProperty("endpoint", endpoint)
                 button.setMinimumWidth(self._member_min_width(button, text))
+            self._sync_member_chrome()
             return
         self._clear_members()
         scroll = QScrollArea(self)
@@ -932,6 +1110,7 @@ class PinnedAxisLabel(QFrame):
             button.installEventFilter(self)
             members_layout.addWidget(button)
             self._buttons.append(button)
+        self._sync_member_chrome()
 
     def _clear_members(self):
         for button in self._buttons:
@@ -1076,7 +1255,7 @@ class PinnedAxisLabel(QFrame):
 
     def leaveEvent(self, event):
         super().leaveEvent(event)
-        if self._press is not None:
+        if self._press is not None or self._holds_local_interaction():
             return
         if self._expanded:
             self._expanded = False
@@ -1120,12 +1299,28 @@ class PinnedAxisLabel(QFrame):
                 return
         super().keyPressEvent(event)
 
+    def focusInEvent(self, event):
+        super().focusInEvent(event)
+        geom = self._geom
+        if geom is None:
+            return
+        ids = geom.record_ids
+        self.hover_changed.emit(ids[0] if len(ids) == 1 else ids)
+
     def focusOutEvent(self, event):
         self._cancel_pointer()
         super().focusOutEvent(event)
+        if self._holds_local_interaction():
+            return
+        self.hover_changed.emit(None)
 
     def hideEvent(self, event):
         self._cancel_pointer()
+        if _alive(self):
+            try:
+                self.clearMask()
+            except RuntimeError:
+                pass
         super().hideEvent(event)
 
     def eventFilter(self, watched, event):  # noqa: N802
@@ -1158,6 +1353,10 @@ class PinnedAxisLabel(QFrame):
                     )
                     event.accept()
                     return True
+        elif etype in (QEvent.Enter, QEvent.FocusIn):
+            record_id, _endpoint = self._target_for(watched)
+            if record_id is not None:
+                self.hover_changed.emit(record_id)
         elif etype in (QEvent.FocusOut, QEvent.Hide):
             self._cancel_pointer()
         return super().eventFilter(watched, event)
@@ -1166,17 +1365,23 @@ class PinnedAxisLabel(QFrame):
         painter = QPainter(self)
         try:
             painter.setRenderHint(QPainter.Antialiasing, True)
-            rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
-            if self._highlighted:
-                painter.setBrush(_LABEL_HOVER_FILL)
-                painter.setPen(QPen(_LABEL_HOVER_BORDER, 1.0))
-            elif self._panel_open:
-                painter.setBrush(_LABEL_OPEN_FILL)
-                painter.setPen(QPen(_LABEL_OPEN_BORDER, 1.0))
-            else:
-                painter.setBrush(_LABEL_IDLE_FILL)
-                painter.setPen(QPen(_LABEL_IDLE_BORDER, 1.0))
-            painter.drawRoundedRect(rect, 4.0, 4.0)
+            spec = self.chrome()
+            outer = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+            chip = QRectF(self.rect()).adjusted(
+                _LABEL_RING + 0.5, _LABEL_RING + 0.5,
+                -_LABEL_RING - 0.5, -_LABEL_RING - 0.5,
+            )
+            if spec.ring:
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(QColor(spec.ring))
+                painter.drawRoundedRect(outer, 6.0, 6.0)
+            painter.setBrush(QColor(spec.fill))
+            painter.setPen(QPen(QColor(spec.border), 1.0))
+            painter.drawRoundedRect(chip, 4.0, 4.0)
+            pip = self.pip_rect()
+            painter.setPen(QPen(QColor(spec.ink), 1.25))
+            painter.setBrush(QColor(spec.ink if spec.pip_filled else spec.fill))
+            painter.drawEllipse(pip)
         finally:
             painter.end()
 
@@ -1956,7 +2161,7 @@ class PinnedCursorOverlay(_CanvasBackref):
         """Return polished caption metrics and the widget's content margins."""
         probe = self._ensure_label_probe()
         font = self._label_font
-        margins = _LABEL_CONTENT_MARGINS
+        margins = _label_layout_margins()
         if probe is not None:
             try:
                 probe.ensurePolished()
@@ -2166,7 +2371,9 @@ class PinnedCursorOverlay(_CanvasBackref):
         pen = _tether_pen(highlighted)
         item.setPen(pen)
         fill = QColor(pen.color())
-        fill.setAlpha(210 if highlighted else 145)
+        fill.setAlpha(
+            _TETHER_ACTIVE_PORT_ALPHA if highlighted else _TETHER_IDLE_PORT_ALPHA
+        )
         item.setBrush(pg.mkBrush(fill))
 
     def _apply_highlight(self) -> None:
@@ -2231,6 +2438,7 @@ class PinnedCursorOverlay(_CanvasBackref):
 __all__ = [
     "PINNED_OFFSCREEN_TEXT",
     "PINNED_UNREPRESENTABLE_TEXT",
+    "AxisLabelChrome",
     "PinnedAxisLabel",
     "PinnedCursorOverlay",
     "PinnedLabelGeom",
@@ -2239,6 +2447,7 @@ __all__ = [
     "PinnedOverlayRecord",
     "PinnedPanelTether",
     "PinnedTetherPort",
+    "axis_label_chrome",
     "axis_label_member_min_width",
     "axis_label_outer_size",
     "cluster_label_text",

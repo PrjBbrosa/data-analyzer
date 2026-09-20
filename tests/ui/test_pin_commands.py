@@ -142,6 +142,14 @@ def test_toggle_expand_flips_panel_and_requests_intent():
     assert result.collection.records[0].panel_expanded is True
     collapsed = cmds.toggle_panel(result.collection, result.record)
     assert collapsed.record.panel_expanded is False
+    only_collapse = cmds.collapse_panel(result.collection, result.record)
+    assert only_collapse.action == "collapse"
+    assert only_collapse.record.panel_expanded is False
+    assert only_collapse.mark_intent is True
+    already = cmds.collapse_panel(only_collapse.collection, only_collapse.record)
+    assert already.action == "noop"
+    assert already.mark_intent is False
+    assert already.collection is None
 
 
 def test_preview_and_cancel_do_not_request_commit():

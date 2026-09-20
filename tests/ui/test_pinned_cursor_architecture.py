@@ -69,6 +69,7 @@ CONTROLLER_COMMAND_FACADE = (
     "unpin_record",
     "close_record",
     "toggle_record_panel",
+    "collapse_record_panel",
     "begin_axis_edit",
     "preview_axis_edit",
     "commit_axis_edit",

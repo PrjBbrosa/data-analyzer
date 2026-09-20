@@ -111,6 +111,7 @@ class CursorController(_CanvasBackref):
 
     _delegate_names = frozenset({
         "set_cursor_visible",
+        "hide_live_cursor_items",
         "set_dual_cursor_mode",
         "reset_cursor_state",
         "draw_idle",
@@ -406,6 +407,21 @@ class CursorController(_CanvasBackref):
             self.cursor_info.emit("")
             self.dual_cursor_info.emit("")
             self.draw_idle()
+
+    def hide_live_cursor_items(self):
+        """Hide live InfiniteLines without disabling cursor mode.
+
+        Pin consume must not call ``set_cursor_visible(False)``: that flips
+        ``_cursor_visible`` and makes ``_handle_cursor_mouse_move`` return
+        early, so the next pen move cannot restore the live candidate.
+        A/B placement and cursor_info stay so View restore and the next
+        hover still work.
+        """
+        self._hide_cursor_items(self._cursor_line_items)
+        self._hide_cursor_items(self._cursor_a_items)
+        self._hide_cursor_items(self._cursor_b_items)
+        self._hide_dual_cursor_extreme_markers()
+        self.draw_idle()
 
     def set_dual_cursor_mode(self, en):
         """Toggle dual-cursor mode.

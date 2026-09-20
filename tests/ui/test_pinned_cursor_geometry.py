@@ -12,7 +12,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 from PyQt5.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, QSettings, Qt
-from PyQt5.QtGui import QFont, QFontMetrics, QImage, QMouseEvent, QPainter
+from PyQt5.QtGui import QColor, QFont, QFontMetrics, QImage, QMouseEvent, QPainter
 from PyQt5.QtWidgets import QApplication, QPushButton, QScrollArea, QWidget
 
 from mf4_analyzer.ui.chart_stack import ChartStack
@@ -20,11 +20,13 @@ from mf4_analyzer.ui.pg_canvas.pinned_cursor_overlay import (
     PINNED_OFFSCREEN_TEXT,
     PINNED_UNREPRESENTABLE_TEXT,
     PinnedAxisLabel,
+    axis_label_chrome,
     axis_label_outer_size,
     cluster_label_text,
     layout_pinned_axis_labels,
     route_panel_tether,
     tether_candidate_ports,
+    _path_hits_rects,
 )
 from mf4_analyzer.ui.pinned_cursor_state import empty_collection, next_record
 
@@ -184,6 +186,100 @@ def _tether_points_in_panel_local(canvas, pill):
             local = pill.mapFromGlobal(viewport.mapToGlobal(view))
             points.append(local)
     return points
+
+
+def _tether_points_in_canvas(canvas):
+    overlay = canvas._pinned_overlay
+    glw = canvas._glw
+    viewport = glw.viewport()
+    points = []
+    for item in overlay.tether_items():
+        path = item.path()
+        count = path.elementCount()
+        vertices = []
+        for index in range(count):
+            element = path.elementAt(index)
+            view = glw.mapFromScene(QPointF(element.x, element.y))
+            canvas_pt = viewport.mapTo(canvas, view)
+            vertices.append((float(canvas_pt.x()), float(canvas_pt.y())))
+        for start, end in zip(vertices, vertices[1:]):
+            points.append(start)
+            for step in (0.25, 0.5, 0.75):
+                points.append((
+                    start[0] + (end[0] - start[0]) * step,
+                    start[1] + (end[1] - start[1]) * step,
+                ))
+            points.append(end)
+    return points
+
+
+def _dash_composite_stats(pen, *, background="#ffffff", grid=False):
+    image = QImage(320, 48, QImage.Format_ARGB32)
+    bg = QColor(background)
+    image.fill(bg)
+    painter = QPainter(image)
+    painter.setRenderHint(QPainter.Antialiasing, True)
+    if grid:
+        painter.setPen(QColor("#d7dee8"))
+        for x in range(0, 320, 16):
+            painter.drawLine(x, 0, x, 47)
+        for y in range(0, 48, 8):
+            painter.drawLine(0, y, 319, y)
+    painter.setPen(pen)
+    painter.drawLine(12, 24, 308, 24)
+    painter.end()
+    ink = []
+    for y in range(image.height()):
+        for x in range(image.width()):
+            color = image.pixelColor(x, y)
+            if color.red() == bg.red() and color.green() == bg.green() and color.blue() == bg.blue():
+                continue
+            lum = 0.2126 * color.red() + 0.7152 * color.green() + 0.0722 * color.blue()
+            bg_lum = 0.2126 * bg.red() + 0.7152 * bg.green() + 0.0722 * bg.blue()
+            ink.append((lum, bg_lum - lum))
+    if not ink:
+        return {"n": 0, "min_lum": 255.0, "mean_lum": 255.0, "mean_delta": 0.0}
+    lums = [item[0] for item in ink]
+    deltas = [item[1] for item in ink]
+    return {
+        "n": len(ink),
+        "min_lum": min(lums),
+        "mean_lum": sum(lums) / len(lums),
+        "mean_delta": sum(deltas) / len(deltas),
+    }
+
+
+def _sample_grab_luminance(cs, canvas):
+    image = cs.stack.grab().toImage()
+    overlay = canvas._pinned_overlay
+    glw = canvas._glw
+    viewport = glw.viewport()
+    lums = []
+    for item in overlay.tether_items():
+        path = item.path()
+        vertices = [
+            (path.elementAt(index).x, path.elementAt(index).y)
+            for index in range(path.elementCount())
+        ]
+        samples = []
+        for start, end in zip(vertices, vertices[1:]):
+            samples.append(start)
+            for step in (0.25, 0.5, 0.75):
+                samples.append((
+                    start[0] + (end[0] - start[0]) * step,
+                    start[1] + (end[1] - start[1]) * step,
+                ))
+            samples.append(end)
+        for x, y in samples:
+            view = glw.mapFromScene(QPointF(x, y))
+            stack_pt = viewport.mapTo(cs.stack, view)
+            if not image.rect().contains(stack_pt):
+                continue
+            color = image.pixelColor(stack_pt)
+            lums.append(
+                0.2126 * color.red() + 0.7152 * color.green() + 0.0722 * color.blue()
+            )
+    return lums
 
 
 def _save_pin_evidence(cs, name):
@@ -734,20 +830,23 @@ def test_same_x_cluster_hover_expands_numbers(
 
 def test_dense_axis_labels_stagger_across_finite_rows_without_losing_members(qapp):
     fm = QFontMetrics(QFont())
+    sample_w, sample_h = axis_label_outer_size("P8", fm)
+    spacing = sample_w + 8
+    axis_right = 20 + spacing * 5
     endpoints = [
         {
             "record_id": f"id-{index}",
             "ordinal": index + 1,
             "endpoint": "x",
             "text": f"P{index + 1}",
-            "canvas_x": 30.0 + index * 31.0,
+            "canvas_x": 30.0 + index * spacing,
             "offscreen": None,
         }
         for index in range(8)
     ]
     items = layout_pinned_axis_labels(
         endpoints,
-        axis_left=20, axis_right=245, axis_top=100, axis_height=16,
+        axis_left=20, axis_right=axis_right, axis_top=100, axis_height=sample_h,
         axis_floor=30, fm=fm,
     )
     assert items
@@ -760,7 +859,7 @@ def test_dense_axis_labels_stagger_across_finite_rows_without_losing_members(qap
     assert seen == {(item["record_id"], item["endpoint"]) for item in endpoints}
     rects = [QRect(*item.canvas_rect) for item in items]
     for index, rect in enumerate(rects):
-        assert rect.left() >= 20 and rect.right() <= 245
+        assert rect.left() >= 20 and rect.right() <= axis_right
         assert rect.top() >= 30
         for other in rects[index + 1:]:
             assert not rect.intersects(other)
@@ -1453,6 +1552,50 @@ def test_route_panel_tether_stays_outside_a_covering_panel():
             assert not panel.contains(QPointF(*point))
 
 
+def test_route_panel_tether_avoids_live_panel_obstacle():
+    panel = QRectF(20.0, 20.0, 90.0, 50.0)
+    live = (160.0, 30.0, 110.0, 80.0)
+    host = QRectF(0.0, 0.0, 480.0, 280.0)
+    ports = tether_candidate_ports(panel)
+    port, paths = route_panel_tether(
+        panel_rect=panel,
+        ports=ports,
+        obstacles=(live,),
+        target_xs=(220.0,),
+        host_rect=host,
+    )
+    assert port is not None
+    blocked = QRectF(*live)
+    if paths:
+        for path in paths:
+            assert not _path_hits_rects(path, (blocked,))
+    else:
+        assert port.point is not None
+        assert not blocked.contains(QPointF(*port.point))
+
+
+def test_route_panel_tether_host_edge_keeps_path_inside_or_explains():
+    panel = QRectF(6.0, 6.0, 70.0, 40.0)
+    host = QRectF(0.0, 0.0, 100.0, 55.0)
+    obstacles = ((55.0, 4.0, 42.0, 48.0),)
+    ports = tether_candidate_ports(panel)
+    port, paths = route_panel_tether(
+        panel_rect=panel,
+        ports=ports,
+        obstacles=obstacles,
+        target_xs=(96.0,),
+        host_rect=host,
+    )
+    assert port is not None
+    slack = host.adjusted(-1.5, -1.5, 1.5, 1.5)
+    for path in paths:
+        assert len(path) >= 2
+        for point in path:
+            assert slack.contains(QPointF(*point))
+    if not paths:
+        assert port.point is not None
+
+
 @pytest.mark.parametrize(
     "text",
     ("P12·A", "P12·B", "P12·A/B", "电机转矩", "P12·A/B-超长名称"),
@@ -1559,3 +1702,353 @@ def test_tether_path_leaves_the_expanded_panel_and_follows_drag(
     assert inside_drag == []
     _send_mouse(pill, QEvent.MouseButtonRelease, start + QPoint(48, 24))
     qapp.processEvents()
+
+
+def test_tether_obstacles_include_mapped_live_panel(
+    qapp, qtbot, production_style,
+):
+    cs = _make_stack(qtbot, qapp, width=1200, height=720)
+    canvas = cs.canvas_time
+    cs.set_cursor_mode_for_canvas(canvas, "single")
+    _plot_time(canvas)
+    qapp.processEvents()
+    _wait_host(qtbot, canvas)
+    record = _pin(cs, canvas, [0.22], expand=True)[0]
+    controller = cs._pinned_cursors
+    controller.flush_layout(canvas)
+    qapp.processEvents()
+    overlay = canvas._pinned_overlay
+    assert overlay._tethers
+    live = controller._live_pill(canvas)
+    assert live is not None
+    live.show()
+    safe = live.safe_rect()
+    assert safe.isValid()
+    live.move(
+        safe.center().x() - live.width() // 2,
+        safe.center().y() - live.height() // 2,
+    )
+    live.raise_()
+    qapp.processEvents()
+    controller._projector.sync_tethers(id(canvas), canvas)
+    mapped = controller._projector._mapped_widget_obstacle(
+        canvas, cs.stack, live,
+    )
+    assert mapped is not None
+    tether = overlay._tethers[0]
+    assert mapped in tether.obstacles
+    assert all(not hasattr(item, "winId") for item in tether.obstacles)
+    live_rect = QRectF(*mapped)
+    for point in _tether_points_in_canvas(canvas):
+        assert not live_rect.adjusted(1, 1, -1, -1).contains(QPointF(*point))
+
+
+def test_idle_tether_composite_is_visible_and_active_is_stronger(
+    qapp, qtbot, production_style,
+):
+    cs = _make_stack(qtbot, qapp, width=1200, height=720)
+    canvas = cs.canvas_time
+    _plot_time(canvas)
+    qapp.processEvents()
+    _wait_host(qtbot, canvas)
+    record = _pin(cs, canvas, [0.28], expand=True)[0]
+    controller = cs._pinned_cursors
+    controller.flush_layout(canvas)
+    qapp.processEvents()
+    overlay = canvas._pinned_overlay
+    assert overlay.tether_items()
+    idle_pen = overlay.tether_items()[0].pen()
+    idle_stats = _dash_composite_stats(idle_pen)
+    idle_grid = _dash_composite_stats(idle_pen, grid=True)
+    idle_grab = _sample_grab_luminance(cs, canvas)
+    controller._projector.set_hover(canvas, record.record_id)
+    qapp.processEvents()
+    active_pen = overlay.tether_items()[0].pen()
+    active_stats = _dash_composite_stats(active_pen)
+    active_grab = _sample_grab_luminance(cs, canvas)
+    assert idle_pen.color().red() == 0x60
+    assert idle_pen.color().green() == 0x78
+    assert idle_pen.color().blue() == 0x92
+    assert active_pen.color().red() == idle_pen.color().red()
+    assert idle_stats["n"] >= 400
+    assert idle_stats["min_lum"] <= 185
+    assert idle_stats["mean_delta"] >= 70
+    assert idle_grid["min_lum"] <= 175
+    assert active_pen.widthF() > idle_pen.widthF()
+    assert active_pen.color().alpha() > idle_pen.color().alpha()
+    assert active_stats["min_lum"] <= idle_stats["min_lum"] - 20
+    assert active_stats["mean_delta"] > idle_stats["mean_delta"]
+    assert idle_grab and active_grab
+    assert (
+        sum(active_grab) / len(active_grab)
+        < sum(idle_grab) / len(idle_grab) - 2
+    )
+
+
+def _standalone_axis_label(qtbot, qapp, text="P12", *, endpoint="x"):
+    host = QWidget()
+    qtbot.addWidget(host)
+    host.resize(360, 90)
+    label = PinnedAxisLabel(host)
+    label._test_host = host
+    host.show()
+    label.show()
+    qapp.processEvents()
+    metrics = QFontMetrics(label._caption.font())
+    width, height = axis_label_outer_size(text, metrics)
+    items = layout_pinned_axis_labels(
+        [{
+            "record_id": "record-12",
+            "ordinal": 12,
+            "endpoint": endpoint,
+            "text": text,
+            "canvas_x": 140.0,
+            "offscreen": None,
+        }],
+        axis_left=20,
+        axis_right=320,
+        axis_top=50,
+        axis_height=height,
+        fm=metrics,
+    )
+    assert items
+    label.apply_geom(items[0])
+    qapp.processEvents()
+    return label, items[0]
+
+
+def _render_axis_label(label):
+    image = QImage(label.size(), QImage.Format_ARGB32_Premultiplied)
+    image.fill(Qt.transparent)
+    painter = QPainter(image)
+    label.render(painter)
+    painter.end()
+    return image
+
+
+def _color_distance(left, right):
+    return (
+        abs(left.red() - right.red())
+        + abs(left.green() - right.green())
+        + abs(left.blue() - right.blue())
+    )
+
+
+def _sample_label_fill(image, label):
+    pip = label.pip_rect()
+    box = label.hit_rect()
+    x = min(int(pip.right()) + 2, box.right() - 3)
+    y = int(pip.center().y())
+    return image.pixelColor(
+        min(max(0, x), image.width() - 1),
+        min(max(0, y), image.height() - 1),
+    )
+
+
+def _pip_interior_color(image, label):
+    pip = label.pip_rect().adjusted(2, 2, -2, -2)
+    x = int(pip.center().x())
+    y = int(pip.center().y())
+    return image.pixelColor(
+        min(max(0, x), image.width() - 1),
+        min(max(0, y), image.height() - 1),
+    )
+
+
+def _mean_luma(image, rect):
+    left = max(0, int(rect.left()))
+    top = max(0, int(rect.top()))
+    right = min(image.width(), int(rect.right()) + 1)
+    bottom = min(image.height(), int(rect.bottom()) + 1)
+    values = []
+    for y in range(top, bottom):
+        for x in range(left, right):
+            color = image.pixelColor(x, y)
+            if color.alpha() < 24:
+                continue
+            values.append(
+                0.299 * color.red() + 0.587 * color.green() + 0.114 * color.blue()
+            )
+    assert values
+    return sum(values) / len(values)
+
+
+@pytest.mark.parametrize("text", ("P12", "P12·A/B", "P1"))
+def test_axis_label_tristate_colors_pip_and_collapsed_hover_stays_hollow(
+    qapp, qtbot, production_style, text,
+):
+    label, geom = _standalone_axis_label(qtbot, qapp, text)
+    true_x = geom.true_x
+    members = geom.members
+    collapsed = axis_label_chrome(panel_open=False, highlighted=False)
+    collapsed_hover = axis_label_chrome(panel_open=False, highlighted=True)
+    opened = axis_label_chrome(panel_open=True, highlighted=False)
+    active = axis_label_chrome(panel_open=True, highlighted=True)
+
+    assert collapsed.pip_filled is False
+    assert collapsed_hover.pip_filled is False
+    assert opened.pip_filled is True
+    assert active.pip_filled is True
+    assert collapsed.ring is None
+    assert opened.ring is None
+    assert active.ring == "#D3E2F7"
+    assert collapsed_hover.fill == collapsed.fill
+    assert "展开" in label.toolTip() and "面板" in label.toolTip()
+
+    image = _render_axis_label(label)
+    fill = _sample_label_fill(image, label)
+    pip = _pip_interior_color(image, label)
+    assert _color_distance(fill, QColor(collapsed.fill)) < 90
+    assert _color_distance(pip, QColor(collapsed.fill)) < _color_distance(
+        pip, QColor(collapsed.ink)
+    )
+    assert _color_distance(pip, QColor(collapsed.ink)) > 60
+
+    label.set_highlighted(True)
+    qapp.processEvents()
+    hovered = _render_axis_label(label)
+    hover_pip = _pip_interior_color(hovered, label)
+    hover_fill = _sample_label_fill(hovered, label)
+    assert _color_distance(hover_fill, QColor(collapsed.fill)) < 90
+    assert _color_distance(hover_fill, QColor(active.fill)) > 200
+    assert _color_distance(hover_pip, QColor(collapsed.fill)) < _color_distance(
+        hover_pip, QColor(collapsed.ink)
+    )
+    assert label.geom().true_x == true_x
+    assert label.geom().members == members
+
+    label.set_highlighted(False)
+    label.set_panel_open(True)
+    qapp.processEvents()
+    assert "收起" in label.toolTip() and "保留固定读数" in label.toolTip()
+    opened_img = _render_axis_label(label)
+    opened_fill = _sample_label_fill(opened_img, label)
+    opened_pip = _pip_interior_color(opened_img, label)
+    assert _color_distance(opened_fill, QColor(opened.fill)) < 90
+    assert _color_distance(opened_pip, QColor(opened.ink)) < _color_distance(
+        opened_pip, QColor(opened.fill)
+    )
+
+    label.set_highlighted(True)
+    qapp.processEvents()
+    active_img = _render_axis_label(label)
+    active_fill = _sample_label_fill(active_img, label)
+    ring = active_img.pixelColor(1, label.height() // 2)
+    assert _color_distance(active_fill, QColor(active.fill)) < 110
+    assert _color_distance(ring, QColor(active.ring)) < 140
+    assert label.geom().true_x == true_x
+    assert label.size().width() == geom.canvas_rect[2]
+    assert label.size().height() == geom.canvas_rect[3]
+
+
+@pytest.mark.parametrize("text", ("P12", "P12·A/B", "P12·A"))
+def test_axis_label_outer_size_includes_pip_ring_and_hit_rect(
+    qapp, qtbot, production_style, text,
+):
+    label, geom = _standalone_axis_label(qtbot, qapp, text)
+    metrics = QFontMetrics(label._caption.font())
+    width, height = axis_label_outer_size(text, metrics)
+    assert (width, height) == geom.canvas_rect[2:]
+    assert label.size().width() == width
+    assert label.size().height() == height
+    assert label.rect() == QRect(0, 0, width, height)
+    idle_hit = label.hit_rect()
+    assert idle_hit.width() < width
+    assert idle_hit.height() < height
+    assert label.rect().contains(idle_hit)
+    pip = label.pip_rect()
+    assert idle_hit.contains(pip.toRect())
+    assert label.rect().contains(pip.toRect())
+
+    label.set_panel_open(True)
+    label.set_highlighted(True)
+    qapp.processEvents()
+    assert label.hit_rect() == label.rect()
+    assert label.size().width() == width
+    image = _render_axis_label(label)
+    ink = [
+        (x, y)
+        for y in range(image.height())
+        for x in range(image.width())
+        if image.pixelColor(x, y).alpha() > 24
+    ]
+    assert ink
+    assert min(x for x, _y in ink) >= 0
+    assert max(x for x, _y in ink) <= width - 1
+    assert min(y for _x, y in ink) >= 0
+    assert max(y for _x, y in ink) <= height - 1
+    assert min(x for x, _y in ink) <= 1
+    assert max(x for x, _y in ink) >= width - 2
+
+
+def test_axis_label_grayscale_hollow_solid_and_fill_remain_distinct(
+    qapp, qtbot, production_style,
+):
+    collapsed, _geom = _standalone_axis_label(qtbot, qapp, "P12")
+    opened, _opened_geom = _standalone_axis_label(qtbot, qapp, "P12")
+    active, _active_geom = _standalone_axis_label(qtbot, qapp, "P12")
+    opened.set_panel_open(True)
+    active.set_panel_open(True)
+    active.set_highlighted(True)
+    qapp.processEvents()
+
+    collapsed_img = _render_axis_label(collapsed).convertToFormat(QImage.Format_Grayscale8)
+    opened_img = _render_axis_label(opened).convertToFormat(QImage.Format_Grayscale8)
+    active_img = _render_axis_label(active).convertToFormat(QImage.Format_Grayscale8)
+    collapsed_pip = _mean_luma(collapsed_img, collapsed.pip_rect().adjusted(2, 2, -2, -2))
+    opened_pip = _mean_luma(opened_img, opened.pip_rect().adjusted(2, 2, -2, -2))
+    collapsed_fill = _sample_label_fill(collapsed_img, collapsed)
+    opened_fill = _sample_label_fill(opened_img, opened)
+    active_fill = _sample_label_fill(active_img, active)
+    collapsed_fill = (
+        0.299 * collapsed_fill.red()
+        + 0.587 * collapsed_fill.green()
+        + 0.114 * collapsed_fill.blue()
+    )
+    opened_fill = (
+        0.299 * opened_fill.red()
+        + 0.587 * opened_fill.green()
+        + 0.114 * opened_fill.blue()
+    )
+    active_fill = (
+        0.299 * active_fill.red()
+        + 0.587 * active_fill.green()
+        + 0.114 * active_fill.blue()
+    )
+    assert collapsed_pip > opened_pip + 18
+    assert opened_fill < collapsed_fill - 6
+    assert active_fill < opened_fill - 25
+
+
+def test_dual_endpoint_highlight_keeps_ab_line_colors(
+    qapp, qtbot, production_style,
+):
+    cs = _make_stack(qtbot, qapp)
+    canvas = cs.canvas_time
+    _plot_time(canvas)
+    qapp.processEvents()
+    _wait_host(qtbot, canvas)
+    record = _pin(cs, canvas, [(0.32, 0.68)], mode="dual")[0]
+    overlay = canvas._pinned_overlay
+    a_line = overlay.lines_for(record.record_id, "a")[0]
+    b_line = overlay.lines_for(record.record_id, "b")[0]
+    a_idle = a_line.pen() if callable(a_line.pen) else a_line.pen
+    a_idle = a_idle.color() if hasattr(a_idle, "color") else a_idle
+    b_idle = b_line.pen() if callable(b_line.pen) else b_line.pen
+    b_idle = b_idle.color() if hasattr(b_idle, "color") else b_idle
+    cs._pinned_cursors._projector.set_hover(canvas, record.record_id)
+    qapp.processEvents()
+    a_hot = a_line.pen() if callable(a_line.pen) else a_line.pen
+    a_hot = a_hot.color() if hasattr(a_hot, "color") else a_hot
+    b_hot = b_line.pen() if callable(b_line.pen) else b_line.pen
+    b_hot = b_hot.color() if hasattr(b_hot, "color") else b_hot
+    assert a_idle.red() == a_hot.red()
+    assert a_idle.green() == a_hot.green()
+    assert a_idle.blue() == a_hot.blue()
+    assert b_idle.red() == b_hot.red()
+    assert b_idle.green() == b_hot.green()
+    assert b_idle.blue() == b_hot.blue()
+    assert a_hot.blue() > a_hot.red()
+    assert b_hot.red() > b_hot.blue()
+    assert a_hot.alpha() > a_idle.alpha()
+    assert b_hot.alpha() > b_idle.alpha()

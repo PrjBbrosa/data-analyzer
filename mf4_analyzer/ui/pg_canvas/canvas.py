@@ -3459,6 +3459,9 @@ class TimeDomainCanvasPG(QWidget):
     def set_cursor_visible(self, v):
         return CursorController.set_cursor_visible(self._cursor, v)
 
+    def hide_live_cursor_items(self):
+        return CursorController.hide_live_cursor_items(self._cursor)
+
     def set_dual_cursor_mode(self, en):
         return CursorController.set_dual_cursor_mode(self._cursor, en)
 

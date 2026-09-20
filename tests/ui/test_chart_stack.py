@@ -471,22 +471,26 @@ def test_cursor_pill_toggle_exposes_distinct_full_and_mini_states(qapp, qtbot):
 
     pill = CursorPill()
     qtbot.addWidget(pill)
+    control = pill._mode_control
 
-    assert pill._toggle_btn.text() == "−"
-    assert pill._toggle_btn.toolTip() == "收起为数值"
-    assert pill._toggle_btn.property("cursorPillMode") == "full"
-
-    pill._toggle_mode()
-
-    assert pill._toggle_btn.text() == "+"
-    assert pill._toggle_btn.toolTip() == "展开通道名"
-    assert pill._toggle_btn.property("cursorPillMode") == "mini"
+    assert control.button_for("full").isChecked()
+    assert control.button_for("full").text() == "完整"
+    assert control.button_for("mini").text() == "数值"
+    assert "完整" in control.toolTip()
+    assert control.property("cursorPillMode") == "full"
 
     pill._toggle_mode()
 
-    assert pill._toggle_btn.text() == "−"
-    assert pill._toggle_btn.toolTip() == "收起为数值"
-    assert pill._toggle_btn.property("cursorPillMode") == "full"
+    assert control.button_for("mini").isChecked()
+    assert not control.button_for("full").isChecked()
+    assert "数值" in control.toolTip()
+    assert control.property("cursorPillMode") == "mini"
+
+    pill._toggle_mode()
+
+    assert control.button_for("full").isChecked()
+    assert "完整" in control.toolTip()
+    assert control.property("cursorPillMode") == "full"
 
 
 def test_single_cursor_pill_uses_vertical_channel_readout(qapp, qtbot):
@@ -949,8 +953,8 @@ def test_cursor_pill_snapshot_restore_preserves_single_mini_variants(qapp, qtbot
 
     cs.restore_cursor_pill_snapshot(snapshot)
 
-    assert cs._pill._toggle_btn.text() == "+"
-    assert cs._pill._toggle_btn.property("cursorPillMode") == "mini"
+    assert cs._pill._mode_control.button_for("mini").isChecked()
+    assert cs._pill._mode_control.property("cursorPillMode") == "mini"
     detail = cs._pill._detail.text()
     assert "-1.841 Nm" in detail
     assert "Rte_PA_mAtMotorTorque_xds16" not in detail
@@ -960,15 +964,21 @@ def test_cursor_pill_snapshot_restore_preserves_single_mini_variants(qapp, qtbot
 
     cs._pill._toggle_mode()
 
-    assert cs._pill._toggle_btn.text() == "−"
+    assert cs._pill._mode_control.button_for("full").isChecked()
     assert "Rte_PA_mAtMotorTorque_xds16" in cs._pill._detail.text()
 
 
 def test_cursor_pill_toggle_qss_has_distinct_full_and_mini_rules():
-    qss = Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
-    assert 'QPushButton#cursorPillToggle[cursorPillMode="full"]' in qss
-    assert 'QPushButton#cursorPillToggle[cursorPillMode="mini"]' in qss
-    assert '#2563eb' in qss
+    from mf4_analyzer.ui.chart_stack.cursor_pill import _MODE_CONTROL_QSS
+
+    qss = _MODE_CONTROL_QSS
+    assert "QPushButton#cursorPillModeOption:checked" in qss
+    assert "QPushButton#cursorPillModeOption:focus" in qss
+    assert "border-width:" in qss
+    assert "border-style:" in qss
+    assert "border-color:" in qss
+    assert "#175598" in qss
+    assert "#2167C7" in qss
 
 
 def test_cursor_pill_hidden_in_fft_mode(qapp, qtbot):

@@ -15,6 +15,10 @@ class _ClippedProgressLabel(QLabel):
         # the bottom of the glyph in the 32px status pill.
         cr = self.contentsRect()
         self.setMask(QRegion(cr.adjusted(0, -2, 0, 3)))
+        parent = self.parentWidget()
+        refresh = getattr(parent, "_refresh_label_elision", None)
+        if callable(refresh):
+            refresh()
 
 
 class ComputeProgressWidget(QWidget):
@@ -44,6 +48,7 @@ class ComputeProgressWidget(QWidget):
         self.setObjectName("computeProgressWidget")
         self._label_prefix = ""
         self._full_label = ""
+        self._eliding = False
 
         self.label = _ClippedProgressLabel(self)
         self.label.setObjectName("computeProgressLabel")
@@ -137,7 +142,28 @@ class ComputeProgressWidget(QWidget):
             layout_budget = min(layout_budget, contents)
         return max(self._MIN_LABEL_WIDTH, min(max_budget, layout_budget))
 
+    def _realize_internal_slot(self) -> None:
+        """Commit this widget's layout without pumping the Qt event loop."""
+        layout = self.layout()
+        if layout is not None:
+            layout.activate()
+
+    def commit_host_slot(self) -> None:
+        """Re-elide after the host has applied our sizeHint to geometry.
+
+        ``updateGeometry()`` only queues a LayoutRequest. Plot-phase updates
+        repaint without ``processEvents``, so the status-bar owner must
+        ``layout().activate()`` first, then call this. Own-layout activate
+        covers the case where the outer width is unchanged but the label
+        contentsRect moved.
+        """
+        self._realize_internal_slot()
+        self._refresh_label_elision()
+
     def _apply_label_text(self, text: str) -> None:
+        # Order: full copy → request/realize the slot we can own → elide to
+        # the resulting contentsRect. A layout-managed parent (QStatusBar)
+        # still has to activate *its* layout; we never resize those siblings.
         self._full_label = str(text)
         self.label.setToolTip(self._full_label)
         self.updateGeometry()
@@ -153,25 +179,30 @@ class ComputeProgressWidget(QWidget):
             hint = self.sizeHint()
             if self.width() < hint.width():
                 self.resize(hint.width(), max(self.height(), hint.height()))
+        self._realize_internal_slot()
         self._refresh_label_elision()
 
     def _refresh_label_elision(self) -> None:
-        if not self._full_label:
+        if not self._full_label or self._eliding:
             return
-        metrics = QFontMetrics(self.label.font())
-        budget = max(1, self._label_text_budget())
-        full_w = metrics.horizontalAdvance(self._full_label)
-        if full_w <= 0 and self._full_label:
-            full_w = max(
-                len(self._full_label) * max(1, metrics.averageCharWidth()),
-                self._MIN_LABEL_WIDTH,
-            )
-        if full_w <= budget:
-            self.label.setText(self._full_label)
-        else:
-            self.label.setText(
-                metrics.elidedText(self._full_label, Qt.ElideRight, budget)
-            )
+        self._eliding = True
+        try:
+            metrics = QFontMetrics(self.label.font())
+            budget = max(1, self._label_text_budget())
+            full_w = metrics.horizontalAdvance(self._full_label)
+            if full_w <= 0 and self._full_label:
+                full_w = max(
+                    len(self._full_label) * max(1, metrics.averageCharWidth()),
+                    self._MIN_LABEL_WIDTH,
+                )
+            if full_w <= budget:
+                self.label.setText(self._full_label)
+            else:
+                self.label.setText(
+                    metrics.elidedText(self._full_label, Qt.ElideRight, budget)
+                )
+        finally:
+            self._eliding = False
 
     def begin(self, label: str, total: int | None = None) -> None:
         self._label_prefix = str(label)

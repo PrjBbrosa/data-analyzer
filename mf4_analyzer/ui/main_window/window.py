@@ -736,6 +736,7 @@ class MainWindow(
         active_token = token if token is not None else object()
         self._active_compute_progress_token = active_token
         self._compute_progress.begin(label, total)
+        self._commit_compute_progress_layout()
         if process_events and restore is None:
             # ExcludeUserInputEvents, never a bare processEvents(): this pump
             # exists only so the bar reaches the screen before a long
@@ -764,6 +765,7 @@ class MainWindow(
         ):
             return
         self._compute_progress.set_progress(current, total, label)
+        self._commit_compute_progress_layout()
         restore = self._restore_progress_token()
         if process_events or flush_events:
             # Default path: repaint only the tiny status-bar widget.  Draining
@@ -777,6 +779,36 @@ class MainWindow(
             return
         if flush_events:
             QApplication.processEvents(QEventLoop.ExcludeUserInputEvents)
+
+    def _commit_compute_progress_layout(self) -> None:
+        """Apply the progress sizeHint on the status bar without processEvents.
+
+        Plot-phase updates only ``repaint()``. ``updateGeometry()`` is not a
+        layout commit, so the owner of the status bar must activate that
+        layout, then let the widget elide against the final contentsRect.
+        """
+        from PyQt5 import sip
+
+        try:
+            if sip.isdeleted(self):
+                return
+        except (RuntimeError, TypeError):
+            return
+        status = getattr(self, "statusBar", None)
+        try:
+            if status is not None and not sip.isdeleted(status):
+                layout = status.layout()
+                if layout is not None:
+                    layout.activate()
+        except (RuntimeError, TypeError):
+            return
+        progress = getattr(self, "_compute_progress", None)
+        try:
+            if progress is None or sip.isdeleted(progress):
+                return
+        except (RuntimeError, TypeError):
+            return
+        progress.commit_host_slot()
 
     def _finish_compute_progress(
         self,

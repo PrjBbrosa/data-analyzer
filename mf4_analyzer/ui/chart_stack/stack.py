@@ -582,6 +582,12 @@ class ChartStack(QWidget):
         pill = self._pill_for_canvas(source)
         card = self._card_for_canvas(source)
         self._clear_cursor_pill_content(pill, card)
+        hide = getattr(source, "hide_live_cursor_items", None)
+        if not callable(hide):
+            cursor = getattr(source, "_cursor", None)
+            hide = getattr(cursor, "hide_live_cursor_items", None)
+        if callable(hide):
+            hide()
 
     def restore_live_from_pin(self, canvas, snapshot, pos, mode):
         """Unpin: the pinned pill becomes the live candidate in-place."""

@@ -4,6 +4,9 @@ from html.parser import HTMLParser
 from itertools import product
 
 import pytest
+from PyQt5.QtCore import Qt
+from PyQt5.QtTest import QSignalSpy
+from PyQt5.QtWidgets import QWidget
 
 from mf4_analyzer.ui.chart_stack.cursor_display import (
     build_cursor_presentation, render_cursor_presentation,
@@ -182,3 +185,121 @@ def test_zero_visible_channels_has_no_orphan_table_header(kind, empty_projection
         assert html == ''
     else:
         assert '+1 channels' in html
+
+
+def _make_mode_pill(qtbot, parent_width=800):
+    from mf4_analyzer.ui.chart_stack.cursor_pill import CursorPill
+
+    parent = QWidget()
+    qtbot.addWidget(parent)
+    parent.resize(parent_width, 420)
+    pill = CursorPill(parent)
+    qtbot.addWidget(pill)
+    parent.show()
+    pill.show()
+    return parent, pill
+
+
+def _click_mode(qtbot, pill, mode):
+    button = pill._mode_control.button_for(mode)
+    qtbot.mouseClick(button, Qt.LeftButton)
+
+
+def test_mode_control_idempotent_click_does_not_emit(qapp, qtbot):
+    _parent, pill = _make_mode_pill(qtbot)
+    spy = QSignalSpy(pill.display_mode_changed)
+    assert pill.display_mode() == "full"
+    assert pill._mode_control.button_for("full").isChecked()
+    assert pill._mode_control.button_for("full").text() == "完整"
+    assert pill._mode_control.button_for("mini").text() == "数值"
+
+    _click_mode(qtbot, pill, "full")
+    qapp.processEvents()
+    assert pill.display_mode() == "full"
+    assert len(spy) == 0
+
+    _click_mode(qtbot, pill, "mini")
+    qapp.processEvents()
+    assert pill.display_mode() == "mini"
+    assert list(spy) == [["mini"]]
+
+    _click_mode(qtbot, pill, "mini")
+    qapp.processEvents()
+    assert pill.display_mode() == "mini"
+    assert list(spy) == [["mini"]]
+
+
+def test_restore_snapshot_and_projection_sync_mode_without_signal(qapp, qtbot):
+    _parent, pill = _make_mode_pill(qtbot)
+    pill.set_display_mode("mini")
+    snapshot = pill.snapshot()
+    pill.set_display_mode("full")
+    spy = QSignalSpy(pill.display_mode_changed)
+
+    pill.restore_snapshot(snapshot)
+    qapp.processEvents()
+    assert pill.display_mode() == "mini"
+    assert pill._mode_control.button_for("mini").isChecked()
+    assert len(spy) == 0
+
+    projection = build_cursor_presentation(
+        (channel(),), CursorDisplayOptions(), cursor_mode="dual", x_mode="time",
+        mini=False,
+    )
+    pill.set_display_projection(projection)
+    qapp.processEvents()
+    assert pill.display_mode() == "full"
+    assert pill._mode_control.button_for("full").isChecked()
+    assert len(spy) == 0
+
+
+def test_two_cursor_pills_keep_independent_display_modes(qapp, qtbot):
+    first_parent, first = _make_mode_pill(qtbot)
+    second_parent, second = _make_mode_pill(qtbot)
+    first_spy = QSignalSpy(first.display_mode_changed)
+    second_spy = QSignalSpy(second.display_mode_changed)
+
+    _click_mode(qtbot, second, "mini")
+    qapp.processEvents()
+    assert first.display_mode() == "full"
+    assert second.display_mode() == "mini"
+    assert len(first_spy) == 0
+    assert list(second_spy) == [["mini"]]
+
+    first.set_display_mode("mini", emit_signal=False)
+    qapp.processEvents()
+    assert first.display_mode() == "mini"
+    assert second.display_mode() == "mini"
+    assert len(first_spy) == 0
+    assert list(second_spy) == [["mini"]]
+    first_parent.close()
+    second_parent.close()
+
+
+def test_mode_control_keyboard_reaches_and_activates_without_toggle_back(qapp, qtbot):
+    _parent, pill = _make_mode_pill(qtbot)
+    control = pill._mode_control
+    mini = control.button_for("mini")
+    full = control.button_for("full")
+    spy = QSignalSpy(pill.display_mode_changed)
+
+    assert mini.focusPolicy() & Qt.TabFocus
+    assert full.focusPolicy() & Qt.TabFocus
+    full.setFocus()
+    qtbot.keyClick(full, Qt.Key_Left)
+    qapp.processEvents()
+    assert pill.display_mode() == "mini"
+    assert list(spy) == [["mini"]]
+
+    qtbot.keyClick(mini, Qt.Key_Space)
+    qapp.processEvents()
+    assert pill.display_mode() == "mini"
+    assert list(spy) == [["mini"]]
+
+    qtbot.keyClick(mini, Qt.Key_Right)
+    qapp.processEvents()
+    assert pill.display_mode() == "full"
+    assert list(spy) == [["mini"], ["full"]]
+
+    assert "完整" in control.accessibleName()
+    assert "完整" in control.toolTip()

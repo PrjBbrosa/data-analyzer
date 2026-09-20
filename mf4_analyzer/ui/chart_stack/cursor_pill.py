@@ -4,8 +4,8 @@ The formatting half of this module is pure text processing: it turns the
 separator-joined HTML the canvases emit on ``cursor_info`` into the pill's
 primary line and its full and mini detail tables. It knows nothing about Qt,
 so it is unit-testable on its own. The result panel itself never attaches a
-hover tooltip on the table; the visible face, the P button, and the +/-
-toggle are the only readouts.
+hover tooltip on the table; the visible face, the P button, and the
+数值 / 完整 control are the only readouts.
 """
 import logging
 import re
@@ -16,12 +16,16 @@ from PyQt5.QtCore import QEvent, QRect, QSize, QTimer, Qt, pyqtSignal
 from PyQt5.QtGui import (
     QColor, QFont, QFontMetrics, QPainter, QPen, QTextDocument, QTextOption,
 )
+from PyQt5 import sip
 from PyQt5.QtWidgets import (
-    QFrame, QLabel, QPushButton, QVBoxLayout,
+    QButtonGroup, QFrame, QHBoxLayout, QLabel, QMenu, QPushButton, QSizePolicy,
+    QWIDGETSIZE_MAX, QVBoxLayout,
 )
 
 from PyQt5.QtCore import QRectF, QSizeF
 
+from ...ui_kit.menus import apply_rounded_menu_chrome
+from ...ui_kit.popup_trigger import bind_popup_trigger
 from ._helpers import _format_mini_html
 from .cursor_table_layout import choose_table_layout, compute_wcap
 
@@ -34,17 +38,56 @@ _CURSOR_PILL_BG = QColor(255, 255, 255, 235)
 _PINNED_CURSOR_PILL_BG = QColor(255, 255, 255)
 _CURSOR_PILL_BORDER = QColor("#d8e0eb")
 
-# Gap kept on the toggle's right. Live and pinned share one title-action
-# reserve (P / +/- / close) so the first pin does not jump.
+# Gap kept between packed title actions and the pill edge.
 _TOGGLE_EDGE_GAP = 4
 _ACTION_BTN = 16
-_TITLE_ACTION_COUNT = 3
-_TITLE_ACTION_RESERVE = (
-    _TITLE_ACTION_COUNT * _ACTION_BTN
-    + _TITLE_ACTION_COUNT * _TOGGLE_EDGE_GAP
-)
-_TOGGLE_FIRST_LINE_RESERVE = _TITLE_ACTION_RESERVE
 _CURSOR_PILL_HIGHLIGHT = QColor("#6591df")
+_MODE_OPTION_LABELS = {"mini": "数值", "full": "完整"}
+_MODE_CONTROL_QSS = """
+QFrame#cursorPillModeControl {
+    background-color: #edf1f6;
+    border-width: 0px;
+    border-style: solid;
+    border-color: transparent;
+    border-radius: 4px;
+}
+QPushButton#cursorPillModeOption {
+    background-color: transparent;
+    border-width: 1px;
+    border-style: solid;
+    border-color: transparent;
+    border-radius: 3px;
+    color: #56657A;
+    font-size: 10px;
+    font-weight: 600;
+    padding-top: 1px;
+    padding-bottom: 1px;
+    padding-left: 6px;
+    padding-right: 6px;
+    min-height: 16px;
+}
+QPushButton#cursorPillModeOption:hover:!checked {
+    background-color: rgba(255, 255, 255, 0.55);
+}
+QPushButton#cursorPillModeOption:checked {
+    background-color: #ffffff;
+    border-width: 1px;
+    border-style: solid;
+    border-color: #c3cfdd;
+    color: #175598;
+}
+QPushButton#cursorPillModeOption:focus {
+    border-width: 1px;
+    border-style: solid;
+    border-color: #2167C7;
+}
+QPushButton#cursorPillModeOption:checked:focus {
+    border-width: 1px;
+    border-style: solid;
+    border-color: #2167C7;
+    background-color: #ffffff;
+}
+"""
 _PIN_CHROME_QSS = """
 QPushButton#cursorPillPin, QPushButton#cursorPillClose {
     background: rgba(100, 116, 139, 0.15);
@@ -77,6 +120,35 @@ QPushButton#cursorPillPin[pinned="true"] {
 QPushButton#cursorPillPin[pinned="true"]:hover {
     background: #3b73d4;
     border-color: #3b73d4;
+}
+"""
+_TITLE_MENU_QSS = """
+QPushButton#cursorPillTitleMenu {
+    background: rgba(33, 103, 199, 0.12);
+    border-width: 1px;
+    border-style: solid;
+    border-color: rgba(33, 103, 199, 0.35);
+    border-radius: 3px;
+    color: #164878;
+    font-size: 10px;
+    font-weight: 700;
+    padding-top: 0px;
+    padding-bottom: 0px;
+    padding-left: 5px;
+    padding-right: 5px;
+    min-height: 16px;
+    max-height: 16px;
+}
+QPushButton#cursorPillTitleMenu:hover {
+    background: rgba(33, 103, 199, 0.20);
+}
+QPushButton#cursorPillTitleMenu:pressed {
+    background: rgba(33, 103, 199, 0.28);
+}
+QPushButton#cursorPillTitleMenu:focus {
+    border-width: 1px;
+    border-style: solid;
+    border-color: #2167C7;
 }
 """
 
@@ -388,6 +460,163 @@ class _DocumentLabel(QLabel):
             painter.end()
 
 
+class _CursorDisplayModeControl(QFrame):
+    """Exclusive 数值 / 完整 control. Internal values stay mini / full."""
+
+    mode_chosen = pyqtSignal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("cursorPillModeControl")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setCursor(Qt.ArrowCursor)
+        self.setFocusPolicy(Qt.NoFocus)
+        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.setStyleSheet(_MODE_CONTROL_QSS)
+        self._mode = "full"
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(2, 1, 2, 1)
+        layout.setSpacing(0)
+        self._group = QButtonGroup(self)
+        self._group.setExclusive(True)
+        self._mini_btn = self._make_option("mini")
+        self._full_btn = self._make_option("full")
+        self._group.addButton(self._mini_btn)
+        self._group.addButton(self._full_btn)
+        layout.addWidget(self._mini_btn)
+        layout.addWidget(self._full_btn)
+        self._group.buttonClicked.connect(self._on_button_clicked)
+        self.set_mode("full")
+
+    def _make_option(self, mode):
+        button = QPushButton(_MODE_OPTION_LABELS[mode], self)
+        button.setObjectName("cursorPillModeOption")
+        button.setCheckable(True)
+        button.setAutoExclusive(True)
+        button.setCursor(Qt.ArrowCursor)
+        button.setFocusPolicy(Qt.TabFocus)
+        button.setProperty("displayMode", mode)
+        button.setAccessibleName(_MODE_OPTION_LABELS[mode])
+        button.installEventFilter(self)
+        return button
+
+    def button_for(self, mode):
+        return self._mini_btn if mode == "mini" else self._full_btn
+
+    def current_mode(self):
+        return self._mode
+
+    def set_mode(self, mode):
+        next_mode = "mini" if mode == "mini" else "full"
+        self._mode = next_mode
+        blocked = self._group.blockSignals(True)
+        self._mini_btn.setChecked(next_mode == "mini")
+        self._full_btn.setChecked(next_mode == "full")
+        self._group.blockSignals(blocked)
+        self._refresh_mode_copy()
+        self.updateGeometry()
+
+    def _refresh_mode_copy(self):
+        if self._mode == "mini":
+            tip = "当前为数值：色点、单位和数值"
+            name = "显示模式，当前为数值"
+        else:
+            tip = "当前为完整：通道名、单位和数值"
+            name = "显示模式，当前为完整"
+        self.setToolTip(tip)
+        self.setAccessibleName(name)
+        self._mini_btn.setToolTip(tip)
+        self._full_btn.setToolTip(tip)
+
+    def _on_button_clicked(self, button):
+        mode = "mini" if button is self._mini_btn else "full"
+        if mode == self._mode:
+            self.set_mode(mode)
+            return
+        self.set_mode(mode)
+        self.mode_chosen.emit(mode)
+
+    def eventFilter(self, watched, event):
+        if (
+            event.type() == QEvent.KeyPress
+            and watched in (self._mini_btn, self._full_btn)
+        ):
+            key = event.key()
+            if key in (Qt.Key_Left, Qt.Key_Up):
+                self._activate_mode("mini")
+                self._mini_btn.setFocus(Qt.TabFocusReason)
+                return True
+            if key in (Qt.Key_Right, Qt.Key_Down):
+                self._activate_mode("full")
+                self._full_btn.setFocus(Qt.TabFocusReason)
+                return True
+        return super().eventFilter(watched, event)
+
+    def _activate_mode(self, mode):
+        if mode == self._mode:
+            self.set_mode(mode)
+            return
+        self.set_mode(mode)
+        self.mode_chosen.emit(mode)
+
+    def mousePressEvent(self, event):
+        event.accept()
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() in _PIN_CHROME_INVALIDATE_EVENTS:
+            parent = self.parentWidget()
+            if (
+                parent is None
+                or sip.isdeleted(parent)
+                or not getattr(parent, "_title_chrome_ready", False)
+                or getattr(parent, "_title_chrome_updating", False)
+            ):
+                return
+            invalidate = getattr(parent, "_invalidate_title_chrome_width", None)
+            if callable(invalidate):
+                invalidate()
+
+    def sizeHint(self):
+        self.ensurePolished()
+        for button in (self._mini_btn, self._full_btn):
+            button.ensurePolished()
+        layout = self.layout()
+        if layout is not None:
+            return layout.sizeHint().expandedTo(super().sizeHint())
+        return super().sizeHint()
+
+
+class _TitleMenuButton(QPushButton):
+    """Pinned ``Pn ▾`` trigger. Clicks stay on this child, not the pill drag."""
+
+    def mousePressEvent(self, event):
+        super().mousePressEvent(event)
+        event.accept()
+
+    def mouseMoveEvent(self, event):
+        event.accept()
+
+    def mouseReleaseEvent(self, event):
+        super().mouseReleaseEvent(event)
+        event.accept()
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() in _PIN_CHROME_INVALIDATE_EVENTS:
+            parent = self.parentWidget()
+            if (
+                parent is None
+                or sip.isdeleted(parent)
+                or not getattr(parent, "_title_chrome_ready", False)
+                or getattr(parent, "_title_chrome_updating", False)
+            ):
+                return
+            invalidate = getattr(parent, "_invalidate_title_chrome_width", None)
+            if callable(invalidate):
+                invalidate()
+
+
 class CursorPill(QFrame):
     """Draggable floating pill with a primary line (time / A·B / ΔT) and an
     optional detail block (per-channel Min/Max/Avg/△ as RichText). The
@@ -397,6 +626,8 @@ class CursorPill(QFrame):
     pin_requested = pyqtSignal()
     unpin_requested = pyqtSignal()
     close_requested = pyqtSignal()
+    collapse_requested = pyqtSignal()
+    title_menu_active_changed = pyqtSignal(bool)
     moved = pyqtSignal()
 
     def __init__(self, parent=None):
@@ -423,9 +654,9 @@ class CursorPill(QFrame):
         self._primary.setTextFormat(Qt.RichText)
         self._primary.setTextInteractionFlags(Qt.NoTextInteraction)
         self._primary.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        # Reserve the shared title-action strip (P + +/- + close)
-        # so live→pinned does not change the first-line width.
-        self._primary.setContentsMargins(0, 0, _TITLE_ACTION_RESERVE, 0)
+        # Title chrome width is measured from the real widgets; start with no
+        # static button-count reserve so live/pinned packing can diverge.
+        self._primary.setContentsMargins(0, 0, 0, 0)
         self._detail = _DocumentLabel("", self)
         self._detail.setObjectName("cursorPillDetail")
         self._detail.setTextFormat(Qt.RichText)
@@ -466,15 +697,14 @@ class CursorPill(QFrame):
         self._host_pending = False
         self._primary_original = ""
         self._text_measure_cache = {}
-        # Free-floating child pinned to the top-right corner. Repositioned from
-        # adjustSize() (every content/width change funnels through it) and
-        # resizeEvent, so it stays in the corner without depending on event
-        # delivery timing.
-        self._toggle_btn = QPushButton("−", self)
-        self._toggle_btn.setObjectName("cursorPillToggle")
-        self._toggle_btn.setFixedSize(_ACTION_BTN, _ACTION_BTN)
-        self._toggle_btn.setCursor(Qt.ArrowCursor)
-        self._toggle_btn.clicked.connect(self._toggle_mode)
+        self._title_chrome_parts = None
+        self._title_chrome_token = None
+        self._title_chrome_updating = False
+        self._title_chrome_ready = False
+        # Free-floating children pinned to the top-right corner. Repositioned
+        # from adjustSize() and resizeEvent. Create pin/close first so a
+        # StyleChange inside the mode control cannot measure missing widgets.
+        # ``_toggle_btn`` remains the packing alias.
         self._pin_btn = QPushButton(self)
         self._pin_btn.setObjectName("cursorPillPin")
         self._pin_btn.setFixedSize(_ACTION_BTN, _ACTION_BTN)
@@ -488,14 +718,30 @@ class CursorPill(QFrame):
         self._close_btn.setObjectName("cursorPillClose")
         self._close_btn.setFixedSize(_ACTION_BTN, _ACTION_BTN)
         self._close_btn.setCursor(Qt.ArrowCursor)
-        self._close_btn.setToolTip("关闭这一张面板")
+        self._close_btn.setToolTip("删除 Pin")
+        self._close_btn.setAccessibleName("删除 Pin")
         self._close_btn.clicked.connect(self._emit_close)
+        self._title_menu_btn = _TitleMenuButton(self)
+        self._title_menu_btn.setObjectName("cursorPillTitleMenu")
+        self._title_menu_btn.setCursor(Qt.ArrowCursor)
+        self._title_menu_btn.setFocusPolicy(Qt.TabFocus)
+        self._title_menu_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self._title_menu_btn.setStyleSheet(_TITLE_MENU_QSS)
+        self._title_menu_btn.clicked.connect(self._on_title_menu_clicked)
+        self._title_menu_btn.hide()
+        self._title_menu = None
+        self._title_menu_open = False
+        self._title_menu_close_action = None
         self._pin_btn.setStyleSheet(_PIN_CHROME_QSS)
         self._close_btn.setStyleSheet(_PIN_CHROME_QSS)
+        self._mode_control = _CursorDisplayModeControl(self)
+        self._toggle_btn = self._mode_control
+        self._mode_control.mode_chosen.connect(self.set_display_mode)
         self._highlight_timer = QTimer(self)
         self._highlight_timer.setSingleShot(True)
         self._highlight_timer.setInterval(900)
         self._highlight_timer.timeout.connect(self._clear_highlight)
+        self._title_chrome_ready = True
         self._update_toggle_button()
         self._sync_pin_chrome()
         self._position_title_actions()
@@ -527,34 +773,258 @@ class CursorPill(QFrame):
 
         ``QWidget.isVisible()`` is False until ancestors are shown, so packing
         uses ``isVisibleTo(self)``: hidden pin/close take no slot, and live
-        +/- still lands on the right edge during pre-show ``adjustSize()``.
+        mode chrome still lands on the right edge during pre-show ``adjustSize()``.
         """
+        if widget is None:
+            return False
+        try:
+            if sip.isdeleted(widget):
+                return False
+        except RuntimeError:
+            return False
         return widget.isVisibleTo(self)
 
-    def _position_title_actions(self):
-        """Pack only visible title actions from the right edge.
+    def _title_leading_widgets(self):
+        """Left-side title chrome: pinned ``Pn ▾`` menu trigger."""
+        widget = getattr(self, "_title_menu_btn", None)
+        return (widget,) if widget is not None else ()
 
-        Order: × → +/- → P. Hidden chrome occupies no slot.
-        First-line text still uses the full ``_TITLE_ACTION_RESERVE`` margin.
+    def _title_trailing_widgets(self):
+        return tuple(
+            widget
+            for widget in (
+                getattr(self, "_close_btn", None),
+                getattr(self, "_mode_control", None),
+                getattr(self, "_pin_btn", None),
+            )
+            if widget is not None and not sip.isdeleted(widget)
+        )
+
+    def _chrome_pack_size(self, widget):
+        """Width/height actually used when packing title chrome.
+
+        ``sizeHint`` can exceed a fixed-size button after app QSS; the
+        packed rect must respect min/max so measurement matches paint.
         """
-        y = _TOGGLE_EDGE_GAP
-        right = self.width() - _TOGGLE_EDGE_GAP
-        for widget in (self._close_btn, self._toggle_btn, self._pin_btn):
+        if widget is None or sip.isdeleted(widget):
+            return (0, 0)
+        widget.ensurePolished()
+        hint = widget.sizeHint()
+        width = max(int(hint.width()), 1)
+        height = max(int(hint.height()), 1)
+        max_w = widget.maximumWidth()
+        max_h = widget.maximumHeight()
+        if 0 < max_w < QWIDGETSIZE_MAX:
+            width = min(width, max_w)
+        if 0 < max_h < QWIDGETSIZE_MAX:
+            height = min(height, max_h)
+        width = max(width, int(widget.minimumWidth()), 1)
+        height = max(height, int(widget.minimumHeight()), 1)
+        return (width, height)
+
+    def _packed_chrome_width(self, widgets):
+        occupied = []
+        for widget in widgets:
             if not self._title_action_occupies_slot(widget):
                 continue
-            widget.move(right - _ACTION_BTN, y)
-            right -= _ACTION_BTN + _TOGGLE_EDGE_GAP
+            occupied.append(self._chrome_pack_size(widget)[0])
+        if not occupied:
+            return 0
+        return _TOGGLE_EDGE_GAP + sum(width + _TOGGLE_EDGE_GAP for width in occupied)
+
+    def _measure_title_chrome(self):
+        """Measured (leading, trailing) title-chrome widths.
+
+        This is the single budget source for margins, document width, table
+        layout and the out-of-space path. Do not count buttons by hand.
+        """
+        if not getattr(self, "_title_chrome_ready", False):
+            return (0, 0)
+        widgets = self._title_leading_widgets() + self._title_trailing_widgets()
+        token = (
+            tuple(
+                (
+                    id(widget),
+                    self._title_action_occupies_slot(widget),
+                    self._chrome_pack_size(widget),
+                    widget.font().key() if widget is not None else "",
+                )
+                for widget in widgets
+            ),
+            self._pin_role,
+            self.logicalDpiX(),
+            self.logicalDpiY(),
+        )
+        if self._title_chrome_parts is not None and self._title_chrome_token == token:
+            return self._title_chrome_parts
+        leading = self._packed_chrome_width(self._title_leading_widgets())
+        trailing = self._packed_chrome_width(self._title_trailing_widgets())
+        self._title_chrome_parts = (int(leading), int(trailing))
+        self._title_chrome_token = token
+        return self._title_chrome_parts
+
+    def _title_leading_chrome_width(self):
+        return self._measure_title_chrome()[0]
+
+    def _title_trailing_chrome_width(self):
+        return self._measure_title_chrome()[1]
+
+    def _title_chrome_width(self):
+        """Packed width of all title chrome, including the T3 leading slot."""
+        leading, trailing = self._measure_title_chrome()
+        return leading + trailing
+
+    def _invalidate_title_chrome_width(self):
+        self._title_chrome_parts = None
+        self._title_chrome_token = None
+        if (
+            not getattr(self, "_title_chrome_ready", False)
+            or getattr(self, "_title_chrome_updating", False)
+            or sip.isdeleted(self)
+        ):
+            return
+        self._title_chrome_updating = True
+        try:
+            self._sync_title_action_margins()
+        finally:
+            self._title_chrome_updating = False
+
+    def _sync_title_action_margins(self):
+        leading, trailing = self._measure_title_chrome()
+        self._primary.setContentsMargins(leading, 0, trailing, 0)
+
+    def _position_title_actions(self):
+        """Pack visible title chrome from both edges.
+
+        Leading: ``Pn ▾``. Trailing: × → 数值/完整 → live P. Hidden chrome
+        occupies no slot. First-line text uses ``_title_chrome_width()``.
+        """
+        self._title_chrome_parts = None
+        self._title_chrome_token = None
+        if not getattr(self, "_title_chrome_ready", False):
+            return
+        y = _TOGGLE_EDGE_GAP
+        left = _TOGGLE_EDGE_GAP
+        for widget in self._title_leading_widgets():
+            if not self._title_action_occupies_slot(widget):
+                continue
+            width, height = self._chrome_pack_size(widget)
+            widget.resize(width, height)
+            widget.move(left, y)
+            left += width + _TOGGLE_EDGE_GAP
             widget.raise_()
+        right = self.width() - _TOGGLE_EDGE_GAP
+        for widget in self._title_trailing_widgets():
+            if not self._title_action_occupies_slot(widget):
+                continue
+            width, height = self._chrome_pack_size(widget)
+            widget.resize(width, height)
+            widget.move(right - width, y)
+            right -= width + _TOGGLE_EDGE_GAP
+            widget.raise_()
+        self._sync_title_action_margins()
 
     def _on_pin_clicked(self):
         if self._pin_role == "pinned":
-            self.unpin_requested.emit()
             return
         if self._live_hint:
             self.pin_requested.emit()
 
-    def _emit_close(self):
+    def _emit_close(self, _checked=False):
+        self.dismiss_title_menu()
         self.close_requested.emit()
+
+    def _emit_unpin(self, _checked=False):
+        self.dismiss_title_menu()
+        self.unpin_requested.emit()
+
+    def _emit_collapse(self, _checked=False):
+        self.dismiss_title_menu()
+        self.collapse_requested.emit()
+
+    def _pin_label(self):
+        return f"P{self._ordinal}" if self._ordinal else "P"
+
+    def _delete_action_text(self):
+        return f"删除 {self._pin_label()}"
+
+    def hideEvent(self, event):
+        self.dismiss_title_menu()
+        super().hideEvent(event)
+
+    def dismiss_title_menu(self):
+        menu = getattr(self, "_title_menu", None)
+        self._title_menu = None
+        self._title_menu_close_action = None
+        if menu is not None:
+            try:
+                if not sip.isdeleted(menu):
+                    menu.close()
+                    menu.deleteLater()
+            except RuntimeError:
+                pass
+        if getattr(self, "_title_menu_open", False):
+            self._title_menu_open = False
+            self.title_menu_active_changed.emit(False)
+
+    def _on_title_menu_clicked(self, _checked=False):
+        if self._pin_role != "pinned":
+            return
+        self.dismiss_title_menu()
+        menu = apply_rounded_menu_chrome(QMenu(self))
+        bind_popup_trigger(menu, self._title_menu_btn)
+        collapse = menu.addAction("收起面板，保留 Pin")
+        collapse.triggered.connect(self._emit_collapse)
+        unpin = menu.addAction("取消固定，继续调整")
+        unpin.triggered.connect(self._emit_unpin)
+        menu.addSeparator()
+        close = menu.addAction(self._delete_action_text())
+        close.triggered.connect(self._emit_close)
+        self._title_menu_close_action = close
+        menu.aboutToShow.connect(self._on_title_menu_about_to_show)
+        menu.aboutToHide.connect(self._on_title_menu_about_to_hide)
+        self._title_menu = menu
+        self._title_menu_open = True
+        self.title_menu_active_changed.emit(True)
+        pos = self._title_menu_btn.mapToGlobal(
+            self._title_menu_btn.rect().bottomLeft()
+        )
+        menu.popup(pos)
+
+    def _on_title_menu_about_to_show(self):
+        self._refresh_title_menu_actions()
+        if self._title_menu_open:
+            return
+        self._title_menu_open = True
+        self.title_menu_active_changed.emit(True)
+
+    def _on_title_menu_about_to_hide(self):
+        if not self._title_menu_open:
+            return
+        self._title_menu_open = False
+        self.title_menu_active_changed.emit(False)
+
+    def _refresh_title_menu_actions(self):
+        menu = getattr(self, "_title_menu", None)
+        if menu is None:
+            return
+        try:
+            if sip.isdeleted(menu):
+                return
+        except RuntimeError:
+            return
+        enabled = self._pin_role == "pinned" and int(self._ordinal or 0) > 0
+        close = getattr(self, "_title_menu_close_action", None)
+        if close is not None:
+            try:
+                if not sip.isdeleted(close):
+                    close.setText(self._delete_action_text())
+            except RuntimeError:
+                close = None
+        for action in menu.actions():
+            if action.isSeparator():
+                continue
+            action.setEnabled(enabled)
 
     def pin_role(self):
         return self._pin_role
@@ -563,10 +1033,16 @@ class CursorPill(QFrame):
         return self._ordinal
 
     def set_ordinal(self, ordinal):
-        self._ordinal = int(ordinal or 0)
+        next_ordinal = int(ordinal or 0)
+        if next_ordinal == self._ordinal:
+            return
+        self._ordinal = next_ordinal
+        self._sync_pin_hint_geometry(force=True)
 
     def set_pin_role(self, role):
         next_role = "pinned" if role == "pinned" else "live"
+        if next_role != "pinned":
+            self.dismiss_title_menu()
         role_changed = next_role != self._pin_role
         self._pin_role = next_role
         if role_changed:
@@ -581,6 +1057,7 @@ class CursorPill(QFrame):
         """Rebuild pin role style and hint geometry after theme/font/style/DPR."""
         self._pin_role_style_token = None
         self._pin_hint_geometry_token = None
+        self._invalidate_title_chrome_width()
         self._sync_pin_chrome(force=True)
 
     def changeEvent(self, event):
@@ -622,20 +1099,30 @@ class CursorPill(QFrame):
             self._pin_chrome_syncing = False
 
     def _sync_pin_hint_geometry(self, *, force=False):
-        """Update live/pinned P chrome and title-action packing without role polish."""
+        """Update live P / pinned Pn menu chrome and title-action packing."""
         pinned = self._pin_role == "pinned"
         live_tooltip = self._live_hint if not pinned else ""
-        pin_visible = pinned or bool(live_tooltip)
-        tooltip = "取消固定，继续调整" if pinned else live_tooltip
-        token = (pinned, pin_visible, tooltip)
+        pin_visible = (not pinned) and bool(live_tooltip)
+        label = self._pin_label()
+        menu_text = f"{label} ▾"
+        close_tip = self._delete_action_text()
+        tooltip = live_tooltip
+        token = (pinned, pin_visible, tooltip, self._ordinal, menu_text, close_tip)
         if not force and self._pin_hint_geometry_token == token:
             return
         self._pin_btn.setVisible(pin_visible)
         self._close_btn.setVisible(pinned)
+        self._title_menu_btn.setVisible(pinned)
         self._pin_btn.setToolTip(tooltip)
-        self._pin_btn.setAccessibleName(
-            "取消固定" if pinned else ("固定当前读数" if pin_visible else "")
-        )
+        self._pin_btn.setAccessibleName("固定当前读数" if pin_visible else "")
+        if pinned:
+            self._title_menu_btn.setText(menu_text)
+            self._title_menu_btn.setToolTip(f"{label} 面板操作")
+            self._title_menu_btn.setAccessibleName(f"{label} 操作菜单")
+            self._close_btn.setToolTip(close_tip)
+            self._close_btn.setAccessibleName(close_tip)
+            self._refresh_title_menu_actions()
+        self._invalidate_title_chrome_width()
         self._position_title_actions()
         self._pin_hint_geometry_token = token
 
@@ -704,14 +1191,15 @@ class CursorPill(QFrame):
             budget = self._primary_budget()
         text = self._primary_original
         self._primary.setVisible(bool(text))
+        reserve = self._title_chrome_width()
         if budget > 0:
-            text = self._primary_for_budget(text, max(1, budget - _TITLE_ACTION_RESERVE))
+            text = self._primary_for_budget(text, max(1, budget - reserve))
         if budget > 0:
             if self._display_projection is None:
                 # Legacy full/mini details retain their intrinsic widths. The
                 # primary has a ceiling, not a permanently occupied grid.
-                budget = min(budget, self._primary_html_width(text) + _TITLE_ACTION_RESERVE)
-            self._primary.set_document_html(text, max(1, budget - _TITLE_ACTION_RESERVE))
+                budget = min(budget, self._primary_html_width(text) + reserve)
+            self._primary.set_document_html(text, max(1, budget - reserve))
         else:
             self._primary.setText(text)
         if budget > 0:
@@ -836,7 +1324,7 @@ class CursorPill(QFrame):
         self._single_full_detail = snapshot.get("single_full_detail") or ""
         self._single_mini_detail = snapshot.get("single_mini_detail") or ""
         self._single_tooltip = snapshot.get("single_tooltip") or ""
-        self._update_toggle_button()
+        self.set_display_mode(self._mode, emit_signal=False)
         if (
             self._dual_rows
             or self._frequency_dual_rows
@@ -955,8 +1443,10 @@ class CursorPill(QFrame):
         self._single_mini_detail = ""
         self._single_tooltip = ""
         self._display_projection = projection
-        self._mode = "mini" if bool(getattr(projection, "mini", False)) else "full"
-        self._update_toggle_button()
+        self.set_display_mode(
+            "mini" if bool(getattr(projection, "mini", False)) else "full",
+            emit_signal=False,
+        )
         self._clear_content_tooltip()
         self.reflow_to_parent(
             preserved_right=old_right if self._user_placed and had_geometry else None,
@@ -1160,7 +1650,7 @@ class CursorPill(QFrame):
         primary_min = max((self._primary_html_width(part)
                            for part in primary_fragments), default=0.0)
         table_width = min(content + _TABLE_EDGE_CLEARANCE,
-                          max(table_width, min(primary_min + _TITLE_ACTION_RESERVE,
+                          max(table_width, min(primary_min + self._title_chrome_width(),
                                                compute_wcap(safe.width()) - 20)))
         self._pane_content_width = table_width
         self._detail.setMaximumWidth(int(ceil(table_width)))
@@ -1204,14 +1694,15 @@ class CursorPill(QFrame):
         """Keep an unfit readout explicit without splitting a numeric token."""
         self._primary.hide()
         width = min(max(1, safe.width() - 20),
-                    ceil(self._measure_body_text(_OUT_OF_SPACE_TEXT)) + _TITLE_ACTION_RESERVE)
+                    ceil(self._measure_body_text(_OUT_OF_SPACE_TEXT)) + self._title_chrome_width())
         self._pane_content_width = width
         self._detail.setMaximumWidth(ceil(width))
         html = f'<span style="font-size:11px;color:#64748b;">{_OUT_OF_SPACE_TEXT}</span>'
         self._apply_table_html(projection, 0, html)
         height = ceil(self._detail.document.size().height()) + 15
         minimum_width = (ceil(self._measure_body_text(_OUT_OF_SPACE_TEXT))
-                         + self._toggle_btn.width() + _TOGGLE_EDGE_GAP + 20)
+                         + self._title_chrome_width()
+                         + _PILL_LEFT_MARGIN + _PILL_RIGHT_MARGIN)
         if safe.height() < height or safe.width() < minimum_width:
             self._set_space_hidden(True)
             return
@@ -1451,11 +1942,18 @@ class CursorPill(QFrame):
             return
         super().mouseReleaseEvent(e)
 
-    def _toggle_mode(self):
+    def set_display_mode(self, mode, emit_signal=True):
+        """Apply an explicit target mode. User clicks emit once; restore does not."""
+        next_mode = "mini" if mode == "mini" else "full"
+        if next_mode == self._mode:
+            self._update_toggle_button()
+            return
         old_right = self.x() + self.width()
         old_top = self.y()
-        self._mode = "mini" if self._mode == "full" else "full"
+        self._mode = next_mode
         self._update_toggle_button()
+        if not emit_signal:
+            return
         if self._display_projection is not None:
             self.display_mode_changed.emit(self._mode)
             return
@@ -1463,6 +1961,9 @@ class CursorPill(QFrame):
         self.adjustSize()
         self.move_preserving_right_edge(old_right, old_top)
         self.display_mode_changed.emit(self._mode)
+
+    def _toggle_mode(self):
+        self.set_display_mode("mini" if self._mode == "full" else "full")
 
     def move_preserving_right_edge(self, right_edge, top):
         safe = self.safe_rect()
@@ -1483,13 +1984,11 @@ class CursorPill(QFrame):
     _move_preserving_right_edge = move_preserving_right_edge
 
     def _update_toggle_button(self):
-        self._toggle_btn.setText("+" if self._mode == "mini" else "−")
-        self._toggle_btn.setToolTip(
-            "展开通道名" if self._mode == "mini" else "收起为数值"
-        )
-        self._toggle_btn.setProperty("cursorPillMode", self._mode)
-        self._toggle_btn.style().unpolish(self._toggle_btn)
-        self._toggle_btn.style().polish(self._toggle_btn)
+        self._mode_control.set_mode(self._mode)
+        self._mode_control.setProperty("cursorPillMode", self._mode)
+        self._mode_control.style().unpolish(self._mode_control)
+        self._mode_control.style().polish(self._mode_control)
+        self._invalidate_title_chrome_width()
 
     def set_dual_rows(self, rows):
         self._clear_display_projection()

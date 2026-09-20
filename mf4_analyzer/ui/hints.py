@@ -275,7 +275,7 @@ _HINTS = (
     ),
     Hint(
         id="time.custom_x_paths",
-        text="显示设置：极值点/差值；−mini隐藏名称；X↑/X↓",
+        text="显示设置：极值点/差值；数值/完整；X↑/X↓",
         surface="discovery",
         modes=frozenset({"time"}),
         retire_on="custom_x_dual_cursor",
@@ -517,7 +517,7 @@ _HINTS = (
     ),
     Hint(
         id="cursor.pin_single",
-        text="P 固定；展开默认 −；点 Pn 收起",
+        text="P 固定；数值/完整；点 Pn 开合；×删除",
         surface="context",
         modes=frozenset({"time", "fft", "frf"}),
         cursor_modes=frozenset({"single"}),
@@ -525,7 +525,7 @@ _HINTS = (
     ),
     Hint(
         id="cursor.pin_dual",
-        text="先放 A/B；P 固定；展开默认 −",
+        text="先放 A/B；P 固定；数值/完整；×删除",
         surface="context",
         modes=frozenset({"time", "fft", "frf"}),
         cursor_modes=frozenset({"dual"}),
@@ -554,7 +554,7 @@ _HINTS = (
     ),
     Hint(
         id="fft.frequency_cursor",
-        text="频谱游标：−隐名称，窄时+N，放大恢复",
+        text="频谱游标：数值/完整，窄时+N，放大恢复",
         surface="context",
         modes=frozenset({"fft"}),
         priority=120,

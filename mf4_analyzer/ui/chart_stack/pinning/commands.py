@@ -246,6 +246,26 @@ class PinCommands:
             mark_intent=True,
         )
 
+    def collapse_panel(self, collection, intent) -> PinCommandResult:
+        if collection is None or intent is None:
+            return PinCommandResult(action="reject", mark_intent=False)
+        if intent.panel_expanded is not True:
+            return PinCommandResult(action="noop", mark_intent=False)
+        updated = replace(intent, panel_expanded=False)
+        collection = replace(
+            collection,
+            records=tuple(
+                updated if item.record_id == intent.record_id else item
+                for item in collection.records
+            ),
+        )
+        return PinCommandResult(
+            action="collapse",
+            collection=collection,
+            record=updated,
+            mark_intent=True,
+        )
+
     def begin_axis_edit(
         self,
         *,

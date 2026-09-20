@@ -179,6 +179,7 @@ def test_cursor_display_state_and_live_methods_are_explicitly_declared():
     assert "set_source_label_resolver" in CursorController._delegate_names
     assert "_custom_x_path_cache" in CursorController._owned_names
     assert "invalidate_custom_x_path_cache" in CursorController._delegate_names
+    assert "hide_live_cursor_items" in CursorController._delegate_names
 
 
 def test_appearance_identity_state_is_explicitly_owned():

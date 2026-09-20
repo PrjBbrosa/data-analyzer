@@ -59,7 +59,7 @@ def _make_time_window(qapp, qtbot, monkeypatch):
     monkeypatch.setattr(
         win,
         "_estimate_current_time_overlay_risk",
-        lambda _mode, _checked: _risk(PlotRiskLevel.OK),
+        lambda _mode, _checked, **_kwargs: _risk(PlotRiskLevel.OK),
     )
     monkeypatch.setattr(win.canvas_time, "set_tick_density", lambda *_args: None)
     return win
@@ -144,7 +144,7 @@ def test_time_domain_danger_cancel_does_not_begin_progress(
     monkeypatch.setattr(
         win,
         "_estimate_current_time_overlay_risk",
-        lambda _mode, _checked: _risk(PlotRiskLevel.DANGER),
+        lambda _mode, _checked, **_kwargs: _risk(PlotRiskLevel.DANGER),
     )
     monkeypatch.setattr(
         win,
