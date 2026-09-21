@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "generation": 1,
+  "by_runtime": {
+    "rt1-0123456789abcdef0123456789abcdef": {
+      "media": {
+        "package_relpath": "C:/TraceLab/extensions/store/media/pkg",
+        "package_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      }
+    }
+  }
+}

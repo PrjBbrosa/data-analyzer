@@ -15,6 +15,15 @@ import sys
 from typing import Iterable
 
 
+COMPONENT_BASE = "base"
+COMPONENT_MEDIA = "media"
+COMPONENT_MATLAB = "matlab"
+COMPONENT_OWNERS = frozenset({COMPONENT_BASE, COMPONENT_MEDIA, COMPONENT_MATLAB})
+
+DEPENDENCY_PROFILES = frozenset({"bundled", "modular"})
+DEFAULT_DEPENDENCY_PROFILE = "bundled"
+
+
 @dataclass(frozen=True)
 class FrozenImportDependency:
     """A package required by a frozen product runtime path."""
@@ -23,6 +32,7 @@ class FrozenImportDependency:
     requirement_name: str
     extensions: tuple[str, ...]
     purpose: str
+    component: str = COMPONENT_BASE
 
 
 WINDOWS_BUILD_FLAVORS = frozenset({"full", "lite"})
@@ -38,36 +48,42 @@ FROZEN_IMPORT_DEPENDENCIES = (
         requirement_name="asammdf",
         extensions=(".mf4", ".mdf"),
         purpose="ASAM MDF reader",
+        component=COMPONENT_BASE,
     ),
     FrozenImportDependency(
         package="openpyxl",
         requirement_name="openpyxl",
         extensions=(".xlsx",),
         purpose="Office Open XML workbook reader",
+        component=COMPONENT_BASE,
     ),
     FrozenImportDependency(
         package="xlrd",
         requirement_name="xlrd",
         extensions=(".xls",),
         purpose="legacy binary Excel workbook reader",
+        component=COMPONENT_BASE,
     ),
     FrozenImportDependency(
         package="can",
         requirement_name="python-can",
         extensions=(".blf",),
         purpose="Vector BLF reader",
+        component=COMPONENT_BASE,
     ),
     FrozenImportDependency(
         package="cantools",
         requirement_name="cantools",
         extensions=(".blf",),
         purpose="BLF DBC decoder",
+        component=COMPONENT_BASE,
     ),
     FrozenImportDependency(
         package="nptdms",
         requirement_name="nptdms",
         extensions=(".tdms",),
         purpose="NI TDMS reader",
+        component=COMPONENT_BASE,
     ),
     FrozenImportDependency(
         package="av",
@@ -77,20 +93,25 @@ FROZEN_IMPORT_DEPENDENCIES = (
             ".wav", ".flac",
         ),
         purpose="audio/video reader",
+        component=COMPONENT_MEDIA,
     ),
     FrozenImportDependency(
         package="scipy",
         requirement_name="scipy",
         extensions=(".mat",),
         purpose="MATLAB v4-v7 reader (scipy.io.loadmat)",
+        component=COMPONENT_MATLAB,
     ),
     FrozenImportDependency(
         package="h5py",
         requirement_name="h5py",
         extensions=(".mat",),
         purpose="MATLAB v7.3 (HDF5) reader",
+        component=COMPONENT_MATLAB,
     ),
 )
+
+# HEAD `.hdf` stays in-tree (`head_hdf.py`) and is not an h5py/HDF5 extension.
 
 LITE_SCIPY_EXCLUDED_MODULES = (
     "scipy.optimize",
@@ -103,6 +124,17 @@ LITE_SCIPY_EXCLUDED_MODULES = (
     "scipy.fft",
     "scipy.integrate",
     "scipy.ndimage",
+)
+
+# Modular base must not only omit --collect-all. PyInstaller Analysis follows
+# function-level ``import av`` / scipy / h5py, and asammdf's export path can
+# re-pull h5py, scipy.io.savemat, and hdf5storage into the PYZ. Directory
+# absence under ``_internal`` is not proof; these excludes are the contract.
+MODULAR_EXCLUDED_MODULES = (
+    "av",
+    "scipy",
+    "h5py",
+    "hdf5storage",
 )
 
 
@@ -146,13 +178,49 @@ def dependencies_for_extension(extension: str) -> tuple[FrozenImportDependency, 
     )
 
 
-def pyinstaller_collection_args(flavor: str = "full") -> tuple[str, ...]:
+def dependencies_for_component(component: str) -> tuple[FrozenImportDependency, ...]:
+    """Return declared frozen dependencies owned by one delivery component."""
+    return tuple(
+        dependency
+        for dependency in FROZEN_IMPORT_DEPENDENCIES
+        if dependency.component == component
+    )
+
+
+def component_ownership() -> dict[str, str]:
+    """Map each declared package root to its base-or-extension owner."""
+    return {dependency.package: dependency.component for dependency in FROZEN_IMPORT_DEPENDENCIES}
+
+
+def frozen_dependencies_for_profile(profile: str) -> tuple[FrozenImportDependency, ...]:
+    """Return the unified list filtered to what a delivery profile collects.
+
+    The full declaration is never discarded: modular only omits extension-owned
+    packages from the *base* collection.  ``bundled`` still collects everything.
+    """
+    if profile not in DEPENDENCY_PROFILES:
+        raise ValueError(f"unknown dependency profile: {profile}")
+    if profile == "bundled":
+        return FROZEN_IMPORT_DEPENDENCIES
+    return tuple(
+        dependency
+        for dependency in FROZEN_IMPORT_DEPENDENCIES
+        if dependency.component == COMPONENT_BASE
+    )
+
+
+def pyinstaller_collection_args(
+    flavor: str = "full",
+    profile: str = DEFAULT_DEPENDENCY_PROFILE,
+) -> tuple[str, ...]:
     """Return PyInstaller arguments for a supported Windows build flavor."""
     if flavor not in WINDOWS_BUILD_FLAVORS:
         raise ValueError(f"unknown frozen-build flavor: {flavor}")
+    if profile not in DEPENDENCY_PROFILES:
+        raise ValueError(f"unknown dependency profile: {profile}")
 
     args: list[str] = []
-    for dependency in FROZEN_IMPORT_DEPENDENCIES:
+    for dependency in frozen_dependencies_for_profile(profile):
         if flavor == "lite" and dependency.package == "scipy":
             # Let PyInstaller trace the loadmat import graph instead of adding
             # unrelated SciPy toolkits. Its standard SciPy hook still includes
@@ -161,8 +229,11 @@ def pyinstaller_collection_args(flavor: str = "full") -> tuple[str, ...]:
             args.extend(("--hidden-import", "scipy.io.matlab"))
             continue
         args.extend(("--collect-all", dependency.package))
-    if flavor == "lite":
+    if flavor == "lite" and profile == "bundled":
         for module in LITE_SCIPY_EXCLUDED_MODULES:
+            args.extend(("--exclude-module", module))
+    if profile == "modular":
+        for module in MODULAR_EXCLUDED_MODULES:
             args.extend(("--exclude-module", module))
     return tuple(args)
 
@@ -218,6 +289,16 @@ def validate_windows_packaging_contract(
         dependency.package.split(".", 1)[0]
         for dependency in FROZEN_IMPORT_DEPENDENCIES
     }
+    owners = {
+        dependency.package.split(".", 1)[0]: dependency.component
+        for dependency in FROZEN_IMPORT_DEPENDENCIES
+    }
+    for dependency in FROZEN_IMPORT_DEPENDENCIES:
+        if dependency.component not in COMPONENT_OWNERS:
+            failures.append(
+                f"{dependency.package} 缺少合法组件归属 "
+                f"(base/media/matlab)，当前为 {dependency.component!r}"
+            )
     lazy_modules = lazy_import_dependency_roots(
         Path(requirements_path).parent / "mf4_analyzer" / "io"
     )
@@ -227,8 +308,36 @@ def validate_windows_packaging_contract(
             "io 懒导入未登记到冻结包运行依赖清单: "
             + ", ".join(undeclared)
         )
+    unowned = sorted(
+        root
+        for root in lazy_modules
+        if owners.get(root) not in COMPONENT_OWNERS
+    )
+    if unowned:
+        failures.append(
+            "io 懒导入没有 base 或扩展组件归属: " + ", ".join(unowned)
+        )
     if not FROZEN_IMPORT_DEPENDENCIES:
         failures.append("冻结包运行依赖清单不能为空")
+    modular_excludes = {
+        module.lower()
+        for module in _pyinstaller_excluded_modules(
+            pyinstaller_collection_args("full", "modular")
+        )
+    }
+    missing_modular = [
+        name for name in MODULAR_EXCLUDED_MODULES if name not in modular_excludes
+    ]
+    if missing_modular:
+        failures.append(
+            "modular profile must --exclude-module "
+            + ", ".join(missing_modular)
+            + "; Analysis follows function-level imports and asammdf re-pulls scipy/h5py"
+        )
+    if pyinstaller_collection_args("full", "modular") != pyinstaller_collection_args(
+        "lite", "modular"
+    ):
+        failures.append("modular collection args must not depend on full/lite flavor")
     return tuple(failures)
 
 

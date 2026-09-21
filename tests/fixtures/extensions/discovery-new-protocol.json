@@ -1,0 +1,30 @@
+{
+  "discovery_schema": 1,
+  "product_id": "TraceLab",
+  "exe_relpath": "TraceLabAnalyzer.exe",
+  "app_version": "v9.9.9",
+  "core_build_id": "cb1-ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+  "runtime_id": "rt1-fedcba9876543210fedcba9876543210",
+  "component_capabilities": {
+    "media": {
+      "component_api": "2",
+      "available": true
+    },
+    "matlab": {
+      "component_api": "2",
+      "available": true
+    },
+    "future_component": {
+      "component_api": "1",
+      "available": true
+    }
+  },
+  "protocol_major": 2,
+  "protocol_minor": 5,
+  "min_manager_version": "2.0.0",
+  "manager_download_page": "https://example.invalid/tracelab/extension-manager",
+  "future_inner_field": {
+    "algorithm": "not-understood-by-v1"
+  },
+  "display_subtitle": "ignored extra descriptive field"
+}

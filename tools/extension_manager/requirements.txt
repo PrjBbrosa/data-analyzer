@@ -1,0 +1,20 @@
+# Extension-manager-only pins. Do not merge these into the TraceLab app
+# requirements.txt — the installer is a separate runtime.
+#
+# Installed for local tests in .state/extension-manager-tuf/ (gitignored).
+# Snapshot date: 2026-09-21.
+#
+# Package          Version   License
+# tuf              7.0.1     Apache-2.0 OR MIT
+# securesystemslib 1.5.1     MIT
+# urllib3          2.8.0     MIT
+# cryptography     50.0.1    Apache-2.0 OR BSD-3-Clause
+# cffi             2.1.1     MIT            (cryptography transitive)
+# pycparser        3.0       BSD-3-Clause   (cryptography transitive)
+
+tuf==7.0.1
+securesystemslib==1.5.1
+urllib3==2.8.0
+cryptography==50.0.1
+cffi==2.1.1
+pycparser==3.0

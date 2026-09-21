@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "transaction_id": "txn-test-001",
+  "stage": "prepared",
+  "core_build_id": "cb1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "runtime_id": "rt1-0123456789abcdef0123456789abcdef",
+  "old_active_generation": 3,
+  "old_active_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+  "new_active_generation": 4,
+  "package_hashes": [
+    "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+  ],
+  "cleanup_pending": []
+}

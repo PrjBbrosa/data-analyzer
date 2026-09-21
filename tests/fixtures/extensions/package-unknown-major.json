@@ -1,0 +1,26 @@
+{
+  "schema": 99,
+  "component": "media",
+  "package_revision": 1,
+  "runtime_id": "rt1-0123456789abcdef0123456789abcdef",
+  "component_api": "1",
+  "min_manager_version": "1.0.0",
+  "python_tag": "cp311",
+  "platform_tag": "win_amd64",
+  "module_roots": [
+    "site-packages/av"
+  ],
+  "dll_directories": [],
+  "dependency_ownership": {
+    "av": "media"
+  },
+  "files": [
+    {
+      "relpath": "site-packages/av/__init__.py",
+      "size": 128,
+      "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    }
+  ],
+  "max_extract_bytes": 1048576,
+  "probe_type": "media_wav_mp4_v1"
+}

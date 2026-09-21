@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from mf4_analyzer.io.runtime_dependencies import (  # noqa: E402
+    DEFAULT_DEPENDENCY_PROFILE,
     pyinstaller_collection_args,
     validate_windows_packaging_contract,
 )
@@ -29,10 +30,20 @@ def main(argv=None) -> int:
     parser.add_argument("--build-script", type=Path, action="append", default=[])
     parser.add_argument("--require-installed", action="store_true")
     parser.add_argument("--flavor", choices=("full", "lite"), default="full")
+    parser.add_argument(
+        "--profile",
+        choices=("bundled", "modular"),
+        default=DEFAULT_DEPENDENCY_PROFILE,
+    )
     args = parser.parse_args(argv)
 
     if args.pyinstaller_args_json:
-        print(json.dumps(pyinstaller_collection_args(args.flavor), ensure_ascii=False))
+        print(
+            json.dumps(
+                pyinstaller_collection_args(args.flavor, args.profile),
+                ensure_ascii=False,
+            )
+        )
 
     if args.verify:
         if args.requirements is None or not args.build_script:

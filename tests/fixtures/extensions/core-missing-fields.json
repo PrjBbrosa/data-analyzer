@@ -1,0 +1,8 @@
+{
+  "discovery_schema": 1,
+  "product_id": "TraceLab",
+  "exe_relpath": "TraceLabAnalyzer.exe",
+  "runtime_id": "rt1-0123456789abcdef0123456789abcdef",
+  "protocol_major": 1,
+  "protocol_minor": 0
+}

@@ -1,0 +1,27 @@
+{
+  "recipe_version": 1,
+  "loader_contract_version": 1,
+  "match_policy": "exact",
+  "identity_fields": [
+    "recipe_version",
+    "loader_contract_version",
+    "python_implementation",
+    "python_version",
+    "python_abi",
+    "arch",
+    "numpy_version",
+    "numpy_abi",
+    "core_shared_libraries"
+  ],
+  "excluded_fields": [
+    "app_version",
+    "source_hash",
+    "build_timestamp",
+    "exe_sha256",
+    "core_build_id"
+  ],
+  "core_shared_libraries": [
+    {"name": "python", "role": "cpython_shared"},
+    {"name": "numpy", "role": "capi"}
+  ]
+}

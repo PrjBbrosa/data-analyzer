@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "files": [
+    {
+      "relpath": "TraceLabAnalyzer.exe",
+      "size": 4096,
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "relpath": "_internal/python311.dll",
+      "size": 2048,
+      "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  ]
+}

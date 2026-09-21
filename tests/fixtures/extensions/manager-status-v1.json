@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "latest_manager_version": "1.2.0",
+  "minimum_supported_manager_version": "1.0.0",
+  "reason_code": null,
+  "installer_artifact": {
+    "filename": "installer.exe",
+    "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "size": 2048000
+  },
+  "help_page": "https://example.invalid/tracelab/extension-manager"
+}

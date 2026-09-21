@@ -1,0 +1,21 @@
+{
+  "schema": "component-catalog-v1",
+  "protocol_major": 1,
+  "protocol_minor": 0,
+  "min_manager_version": "1.0.0",
+  "packages": [
+    {
+      "component": "media",
+      "package_revision": 3,
+      "runtime_id": "cpython-3.12-win-amd64-numpy-2",
+      "component_api": "media-api-1",
+      "min_manager_version": "1.0.0",
+      "python_tag": "cp312",
+      "platform_tag": "win-amd64",
+      "target": "packages/media-3.bin",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "length": 16
+    }
+  ],
+  "revoked": []
+}

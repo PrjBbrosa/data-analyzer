@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "component": "media",
+  "package_revision": 1,
+  "component_api": "1",
+  "min_manager_version": "1.0.0",
+  "python_tag": "cp311",
+  "platform_tag": "win_amd64",
+  "module_roots": [
+    "site-packages/av"
+  ],
+  "dll_directories": [],
+  "max_extract_bytes": 1048576,
+  "probe_type": "media_wav_mp4_v1"
+}

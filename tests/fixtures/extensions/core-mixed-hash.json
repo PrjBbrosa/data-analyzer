@@ -1,0 +1,19 @@
+{
+  "discovery_schema": 1,
+  "product_id": "TraceLab",
+  "exe_relpath": "TraceLabAnalyzer.exe",
+  "app_version": "v8.3.1",
+  "core_build_id": "cb1-deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+  "runtime_id": "rt1-0123456789abcdef0123456789abcdef",
+  "component_capabilities": {
+    "media": {
+      "component_api": "1",
+      "available": true
+    }
+  },
+  "protocol_major": 1,
+  "protocol_minor": 0,
+  "min_manager_version": "1.0.0",
+  "manager_download_page": "https://example.invalid/tracelab/extension-manager",
+  "exe_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+}
