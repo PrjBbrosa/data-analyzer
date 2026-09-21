@@ -8,6 +8,8 @@ under test.  The runner's own soft/hard timers are not the only bound.
 """
 from __future__ import annotations
 
+import ctypes
+from ctypes import wintypes
 import json
 import os
 import shlex
@@ -17,17 +19,23 @@ import sys
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from scripts.run_test_gate import (
     PREFLIGHT_LIMITS,
+    OwnedProcessTree,
     PhaseCommand,
     _find_pytest_in_same_checkout,
+    _list_owned_processes,
     _terminate_owned_process_group,
+    _windows_process_tree_pids,
     compose_gate_status,
+    capture_repo_snapshot,
     run_test_gate,
     windows_taskkill_command,
+    _write_json,
 )
 
 
@@ -132,7 +140,23 @@ def _phase_events(phase: dict) -> list[dict]:
     ]
 
 
+_STILL_ACTIVE = 259
+
+
 def _process_is_live(pid: int) -> bool:
+    if os.name == "nt":
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        process_query_limited_information = 0x1000
+        handle = kernel32.OpenProcess(process_query_limited_information, False, int(pid))
+        if not handle:
+            return False
+        try:
+            exit_code = wintypes.DWORD()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                return False
+            return int(exit_code.value) == _STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -170,6 +194,14 @@ def _wait_until_dead(pid: int, timeout: float = 2.0) -> None:
 
 def _reap_if_live(pid: int) -> None:
     if not _process_is_live(pid):
+        return
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/PID", str(pid), "/T", "/F"],
+            check=False,
+            capture_output=True,
+            timeout=5,
+        )
         return
     try:
         os.kill(pid, signal.SIGKILL)
@@ -620,8 +652,91 @@ def test_windows_cleanup_commands_use_pid_tree_not_image_name():
     assert "python.exe" not in joined
 
 
+class _FakeToolhelpKernel32:
+    """Deterministic CreateToolhelp32Snapshot stand-in. Not a native Windows gate."""
+
+    def __init__(
+        self,
+        rows: list[tuple[int, int]] | None = None,
+        *,
+        snapshot_failed: bool = False,
+    ) -> None:
+        self.rows = list(rows or [])
+        self.snapshot_failed = snapshot_failed
+        self._index = 0
+        self.create_calls = 0
+
+    def CreateToolhelp32Snapshot(self, flags, pid):
+        self.create_calls += 1
+        if self.snapshot_failed:
+            return wintypes.HANDLE(-1).value
+        return 1
+
+    def Process32First(self, snapshot, entry_ref):
+        self._index = 0
+        return self._write_current(entry_ref)
+
+    def Process32Next(self, snapshot, entry_ref):
+        return self._write_current(entry_ref)
+
+    def CloseHandle(self, handle):
+        return True
+
+    def _write_current(self, entry_ref) -> int:
+        if self._index >= len(self.rows):
+            return 0
+        pid, ppid = self.rows[self._index]
+        self._index += 1
+        entry = getattr(entry_ref, "_obj", None)
+        if entry is not None:
+            entry.th32ProcessID = pid
+            entry.th32ParentProcessID = ppid
+        return 1
+
+
+class _FakeWindowsJob:
+    def __init__(
+        self,
+        pids: list[int] | None = None,
+        *,
+        handle: object | None = object(),
+        query_error: str | None = None,
+    ) -> None:
+        self._pids = list(pids or [])
+        self.handle = handle
+        self.error = query_error
+        self._query_error = query_error
+
+    def pids(self) -> list[int]:
+        if self._query_error:
+            raise OSError(self._query_error)
+        return list(self._pids)
+
+
+def _install_windows_toolhelp(
+    monkeypatch,
+    rows: list[tuple[int, int]] | None = None,
+    *,
+    snapshot_failed: bool = False,
+) -> _FakeToolhelpKernel32:
+    monkeypatch.setattr(os, "name", "nt")
+    fake = _FakeToolhelpKernel32(rows=rows, snapshot_failed=snapshot_failed)
+    monkeypatch.setattr(ctypes, "WinDLL", lambda *args, **kwargs: fake)
+    return fake
+
+
+def _exited_handle(pid: int):
+    return SimpleNamespace(
+        pid=pid,
+        poll=lambda: 0,
+        wait=lambda timeout=None: 0,
+        kill=lambda: None,
+    )
+
+
 def test_windows_terminate_path_uses_owned_pid_after_parent_exit(monkeypatch):
     monkeypatch.setattr(os, "name", "nt")
+    _install_windows_toolhelp(monkeypatch, rows=[])
     calls: list[list[str]] = []
 
     def fake_run(cmd, **kwargs):
@@ -651,6 +766,101 @@ def test_windows_terminate_path_uses_owned_pid_after_parent_exit(monkeypatch):
     assert any(cmd[:3] == ["taskkill", "/PID", "4242"] and "/T" in cmd for cmd in calls)
     assert not any("/IM" in cmd for cmd in calls)
     assert "taskkill" in " ".join(actions).lower() or calls
+
+
+def test_windows_api_standin_empty_job_and_empty_snapshot_are_not_live(monkeypatch):
+    _install_windows_toolhelp(monkeypatch, rows=[])
+    owned = OwnedProcessTree(
+        kind="windows-job",
+        root_pid=4242,
+        process_group=None,
+        job=_FakeWindowsJob([], handle=object()),
+    )
+    assert _windows_process_tree_pids(4242) == []
+    assert _list_owned_processes(owned, _exited_handle(4242)) == []
+
+
+def test_windows_api_standin_root_gone_still_finds_owned_children(monkeypatch):
+    _install_windows_toolhelp(
+        monkeypatch,
+        rows=[(5101, 5000), (5102, 5101), (5999, 1)],
+    )
+    owned = OwnedProcessTree(
+        kind="windows-process-tree",
+        root_pid=5000,
+        process_group=None,
+        job=_FakeWindowsJob([], handle=object()),
+    )
+    assert _windows_process_tree_pids(5000) == [5101, 5102]
+    live = _list_owned_processes(owned, _exited_handle(5000))
+    assert [item["pid"] for item in live] == [5101, 5102]
+    assert 5000 not in [item["pid"] for item in live]
+
+
+def test_windows_api_standin_live_root_is_listed(monkeypatch):
+    _install_windows_toolhelp(monkeypatch, rows=[(7001, 1), (7002, 7001)])
+    owned = OwnedProcessTree(
+        kind="windows-process-tree",
+        root_pid=7001,
+        process_group=None,
+        job=_FakeWindowsJob([], handle=None),
+    )
+    assert _windows_process_tree_pids(7001) == [7001, 7002]
+    live = _list_owned_processes(owned, SimpleNamespace(pid=7001, poll=lambda: None))
+    assert [item["pid"] for item in live] == [7001, 7002]
+
+
+def test_windows_api_standin_job_members_win_over_empty_tree(monkeypatch):
+    _install_windows_toolhelp(monkeypatch, rows=[])
+    owned = OwnedProcessTree(
+        kind="windows-job",
+        root_pid=8001,
+        process_group=None,
+        job=_FakeWindowsJob([8001, 8002], handle=object()),
+    )
+    live = _list_owned_processes(owned, SimpleNamespace(pid=8001, poll=lambda: None))
+    assert [item["pid"] for item in live] == [8001, 8002]
+
+
+def test_windows_api_standin_job_unavailable_falls_back_to_tree(monkeypatch):
+    _install_windows_toolhelp(monkeypatch, rows=[(9102, 9101)])
+    owned = OwnedProcessTree(
+        kind="windows-process-tree",
+        root_pid=9101,
+        process_group=None,
+        job=_FakeWindowsJob([], handle=None),
+    )
+    live = _list_owned_processes(owned, _exited_handle(9101))
+    assert [item["pid"] for item in live] == [9102]
+
+
+def test_windows_api_standin_snapshot_failure_is_observable(monkeypatch):
+    fake = _install_windows_toolhelp(monkeypatch, snapshot_failed=True)
+    owned = OwnedProcessTree(
+        kind="windows-process-tree",
+        root_pid=4242,
+        process_group=None,
+        job=_FakeWindowsJob([], handle=None),
+    )
+    with pytest.raises(OSError, match="CreateToolhelp32Snapshot"):
+        _windows_process_tree_pids(4242)
+    live = _list_owned_processes(owned, _exited_handle(4242))
+    assert live, "snapshot failure must not look like a clean empty tree"
+    assert any(item.get("error") for item in live)
+    assert fake.create_calls >= 1
+
+
+def test_windows_api_standin_job_query_failure_is_observable(monkeypatch):
+    _install_windows_toolhelp(monkeypatch, snapshot_failed=True)
+    owned = OwnedProcessTree(
+        kind="windows-job",
+        root_pid=4242,
+        process_group=None,
+        job=_FakeWindowsJob(handle=object(), query_error="QueryInformationJobObject failed"),
+    )
+    live = _list_owned_processes(owned, _exited_handle(4242))
+    assert live, "job query failure must not be converted into no leftovers"
+    assert any("QueryInformationJobObject" in str(item.get("error") or "") for item in live)
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows live process-tree probe pending on this host")
@@ -917,6 +1127,86 @@ def test_two_phase_fail_then_pass_is_fail(tmp_path):
     assert result.status == "FAIL"
 
 
+def test_two_phase_clean_exit_continues_to_second_phase(tmp_path):
+    project = _project(tmp_path, "def test_ok():\n    assert True\n")
+    (project / "test_ok2.py").write_text("def test_ok():\n    assert True\n", encoding="utf-8")
+
+    result = _run_tiny_gate(
+        project,
+        phases=[
+            PhaseCommand("one", (sys.executable, "-m", "pytest", "test_tiny.py", "-q")),
+            PhaseCommand("two", (sys.executable, "-m", "pytest", "test_ok2.py", "-q")),
+        ],
+    )
+    record = _record(result)
+    assert record["phases"][0]["status"] == "PASS"
+    assert record["phases"][1]["status"] == "PASS"
+    assert record["phases"][0].get("leftover_processes") in ([], None)
+    assert record["pytest_status"] == "PASS"
+    assert result.status == "PASS"
+
+
+def test_two_phase_owned_child_triggers_cleanup_and_skips_later_phase(tmp_path):
+    project = _project(
+        tmp_path,
+        """import pathlib
+import subprocess
+import sys
+
+
+def test_parent_exits_child_keeps_running():
+    child = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import signal, time; signal.signal(signal.SIGHUP, signal.SIG_IGN); time.sleep(60)"
+            if __import__("os").name != "nt"
+            else "import time; time.sleep(60)",
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    pathlib.Path("child.pid").write_text(str(child.pid), encoding="utf-8")
+""",
+    )
+    (project / "test_ok2.py").write_text("def test_ok():\n    assert True\n", encoding="utf-8")
+
+    result = _run_with_outer_deadline(
+        lambda: _run_tiny_gate(
+            project,
+            soft_seconds=2.0,
+            hard_seconds=4.0,
+            phases=[
+                PhaseCommand("child", (sys.executable, "-m", "pytest", "test_tiny.py", "-q")),
+                PhaseCommand("two", (sys.executable, "-m", "pytest", "test_ok2.py", "-q")),
+            ],
+        ),
+        8.0,
+    )
+    child_pid = _read_pid_file(project / "child.pid")
+    try:
+        record = _record(result)
+        assert result.status == "UNVERIFIED"
+        assert record["phases"][0]["status"] == "UNVERIFIED"
+        assert len(record["phases"]) == 1
+        assert any(
+            "later phases were not started" in reason
+            for reason in record.get("unverified_reasons") or []
+        )
+        _wait_until_dead(child_pid)
+        assert not _process_is_live(child_pid)
+        leftovers = record["phases"][0].get("leftover_processes") or []
+        assert leftovers == [] or not any(
+            item.get("pid") is not None and int(item["pid"]) == child_pid
+            for item in leftovers
+        )
+        actions = record["phases"][0].get("termination_actions") or []
+        assert actions
+        assert not any("/IM" in str(action) for action in actions)
+    finally:
+        _reap_if_live(child_pid)
+
+
 def test_two_phase_pass_then_unverified_is_unverified(tmp_path):
     project = _project(tmp_path, "def test_ok():\n    assert True\n")
     (project / "test_hang.py").write_text(
@@ -1001,3 +1291,41 @@ def test_preflight_limits_document_unknown_cwd_subdirectory_and_raced_start(tmp_
     assert limits["subdirectory"] == PREFLIGHT_LIMITS["subdirectory"]
     assert limits["raced_start"] == PREFLIGHT_LIMITS["raced_start"]
     assert "mutex" in limits["raced_start"].lower() or "no checkout mutex" in limits["raced_start"].lower()
+
+
+def test_write_json_retries_replace_permission_error(tmp_path, monkeypatch):
+    path = tmp_path / "run.json"
+    calls = {"n": 0}
+    original = os.replace
+
+    def flaky(src, dst):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise PermissionError(5, "Access is denied")
+        return original(src, dst)
+
+    monkeypatch.setattr(os, "replace", flaky)
+    monkeypatch.setattr(time, "sleep", lambda _seconds: None)
+    _write_json(path, {"ok": True})
+    assert json.loads(path.read_text(encoding="utf-8")) == {"ok": True}
+    assert calls["n"] == 3
+
+
+def test_snapshot_ignores_tmp_pytest_scratch(tmp_path):
+    repo = _project(tmp_path, "def test_ok():\n    assert True\n")
+    scratch = repo / ".tmp-pytest"
+    scratch.mkdir()
+    (scratch / "a.txt").write_text("one", encoding="utf-8")
+    run_root = repo / "gate-artifacts"
+    run_root.mkdir()
+    (run_root / "ev.txt").write_text("ev", encoding="utf-8")
+    ignored = (run_root, repo / ".tmp-pytest")
+    first = capture_repo_snapshot(repo, ignored_roots=ignored)
+    (scratch / "b.txt").write_text("two", encoding="utf-8")
+    (run_root / "ev2.txt").write_text("ev2", encoding="utf-8")
+    second = capture_repo_snapshot(repo, ignored_roots=ignored)
+    assert first["available"] and second["available"]
+    assert first["dirty_fingerprint"] == second["dirty_fingerprint"]
+    (repo / "src.py").write_text("changed", encoding="utf-8")
+    third = capture_repo_snapshot(repo, ignored_roots=ignored)
+    assert third["dirty_fingerprint"] != first["dirty_fingerprint"]

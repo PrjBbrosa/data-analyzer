@@ -376,7 +376,7 @@ def test_persistent_snapshot_stores_peek_as_hidden_and_restores_pinned(qtbot):
 
 def test_peek_is_refused_when_host_cannot_fit_panel_minimum(qtbot):
     host = QWidget()
-    host.resize(80, 400)
+    host.resize(40, 400)
     host.show()
     qtbot.addWidget(host)
     splitter = QSplitter(Qt.Horizontal, host)
@@ -386,8 +386,8 @@ def test_peek_is_refused_when_host_cannot_fit_panel_minimum(qtbot):
     middle.setMinimumWidth(40)
     splitter.addWidget(panel)
     splitter.addWidget(middle)
-    splitter.resize(80, 400)
-    splitter.setSizes([50, 30])
+    splitter.resize(40, 400)
+    splitter.setSizes([0, 40])
     strip = SidePanelStrip(Side.LEFT, hover_delay_ms=10)
     overlay = PeekOverlay(host)
     ctrl = SidePanelController(
@@ -395,7 +395,6 @@ def test_peek_is_refused_when_host_cannot_fit_panel_minimum(qtbot):
         strip=strip, overlay=overlay, host=host,
         collapse_delay_ms=20, default_width=250,
     )
-    splitter.setSizes([0, 80])
     ctrl.on_splitter_moved()
     assert ctrl.state == PanelState.HIDDEN
     strip.peek_requested.emit(Side.LEFT)
@@ -404,8 +403,12 @@ def test_peek_is_refused_when_host_cannot_fit_panel_minimum(qtbot):
 
 
 class _MinWidthPanel(QWidget):
+    def __init__(self, minimum=300, parent=None):
+        super().__init__(parent)
+        self._expanded_minimum = int(minimum)
+
     def expanded_minimum_width(self):
-        return 300
+        return self._expanded_minimum
 
 
 def test_restore_clamps_legacy_expanded_width_to_panel_minimum(qtbot):
@@ -464,3 +467,128 @@ def test_peek_overlay_floors_to_panel_expanded_minimum(qtbot):
     strip.peek_requested.emit(Side.LEFT)
     assert ctrl.state == PanelState.PEEK
     assert overlay.geometry().width() >= 300
+
+
+def _make_clamped_peek_controller(qtbot, *, host_w, remembered=1298, min_w=288):
+    """Wide dock → collapse → shrink host, leaving a remembered width that
+    no longer fits. Uses a stub panel whose expanded minimum is ``min_w``."""
+    start_w = max(host_w, remembered + 200)
+    host = QWidget()
+    host.resize(start_w, 600)
+    host.show()
+    qtbot.addWidget(host)
+    splitter = QSplitter(Qt.Horizontal, host)
+    panel = _MinWidthPanel(min_w)
+    panel.setMinimumWidth(min_w)
+    middle = QWidget()
+    middle.setMinimumWidth(40)
+    splitter.addWidget(panel)
+    splitter.addWidget(middle)
+    splitter.resize(start_w, 600)
+    splitter.setSizes([remembered, start_w - remembered])
+    strip = SidePanelStrip(Side.LEFT, hover_delay_ms=10)
+    overlay = PeekOverlay(host)
+    ctrl = SidePanelController(
+        side=Side.LEFT, splitter=splitter, panel=panel, panel_index=0,
+        strip=strip, overlay=overlay, host=host,
+        collapse_delay_ms=20, default_width=remembered, canvas=middle,
+    )
+    ctrl.restore_persistent_state({"state": "PINNED", "width": remembered})
+    splitter.setSizes([0, start_w])
+    ctrl.on_splitter_moved()
+    assert ctrl.state == PanelState.HIDDEN
+    assert ctrl._remembered_width == remembered
+    host.resize(host_w, 600)
+    splitter.resize(host_w, 600)
+    return ctrl, splitter, panel, strip, overlay, host
+
+
+def _assert_peek_overlay_fits_host(overlay, host, strip, min_w):
+    geom = overlay.geometry()
+    strip_w = int(strip.WIDTH_PX)
+    host_w = int(host.width())
+    assert overlay.isVisible() is True
+    assert geom.x() == strip_w
+    assert geom.x() + geom.width() <= host_w
+    assert geom.width() >= min_w
+    assert geom.width() <= host_w - strip_w
+
+
+def test_peek_clamps_to_available_host_without_forgetting_wide_dock(qtbot):
+    # Wide dock (1298) → collapse → shrink host to 1100 → hover must PEEK
+    # at a clamped overlay, and must not overwrite the remembered dock width.
+    min_w = 288
+    remembered = 1298
+    ctrl, splitter, panel, strip, overlay, host = _make_clamped_peek_controller(
+        qtbot, host_w=1100, remembered=remembered, min_w=min_w,
+    )
+    strip.peek_requested.emit(Side.LEFT)
+    assert ctrl.state == PanelState.PEEK
+    _assert_peek_overlay_fits_host(overlay, host, strip, min_w)
+    assert ctrl._remembered_width == remembered
+    snap = ctrl.snapshot_persistent_state()
+    assert snap["state"] == "HIDDEN"
+    assert snap["width"] == remembered
+
+    host.resize(1600, 600)
+    splitter.resize(1600, 600)
+    ctrl.restore_persistent_state(snap)
+    assert ctrl.state == PanelState.HIDDEN
+    ctrl.restore_persistent_state({"state": "PINNED", "width": remembered})
+    assert ctrl.state == PanelState.PINNED
+    assert ctrl._remembered_width == remembered
+    assert splitter.sizes()[0] == remembered
+
+
+def test_peek_collapses_when_host_shrinks_below_minimum_plus_strip(qtbot):
+    min_w = 288
+    remembered = 1298
+    ctrl, splitter, panel, strip, overlay, host = _make_clamped_peek_controller(
+        qtbot, host_w=1100, remembered=remembered, min_w=min_w,
+    )
+    strip.peek_requested.emit(Side.LEFT)
+    assert ctrl.state == PanelState.PEEK
+
+    too_narrow = min_w + strip.WIDTH_PX - 1
+    host.resize(too_narrow, 600)
+    splitter.resize(too_narrow, 600)
+    ctrl.reposition()
+    assert ctrl.state == PanelState.HIDDEN
+    assert overlay.isVisible() is False
+    assert ctrl._remembered_width == remembered
+
+
+def test_peek_hover_works_again_after_host_grows(qtbot):
+    min_w = 288
+    remembered = 1298
+    ctrl, splitter, panel, strip, overlay, host = _make_clamped_peek_controller(
+        qtbot, host_w=1100, remembered=remembered, min_w=min_w,
+    )
+    strip.peek_requested.emit(Side.LEFT)
+    assert ctrl.state == PanelState.PEEK
+
+    too_narrow = min_w + strip.WIDTH_PX - 1
+    host.resize(too_narrow, 600)
+    splitter.resize(too_narrow, 600)
+    ctrl.reposition()
+    assert ctrl.state == PanelState.HIDDEN
+
+    host.resize(1100, 600)
+    splitter.resize(1100, 600)
+    strip.peek_requested.emit(Side.LEFT)
+    assert ctrl.state == PanelState.PEEK
+    _assert_peek_overlay_fits_host(overlay, host, strip, min_w)
+    assert ctrl._remembered_width == remembered
+
+
+def test_peek_stays_hidden_when_host_cannot_fit_minimum_plus_strip(qtbot):
+    min_w = 288
+    remembered = 1298
+    too_narrow = min_w + SidePanelStrip.WIDTH_PX - 1
+    ctrl, splitter, panel, strip, overlay, host = _make_clamped_peek_controller(
+        qtbot, host_w=too_narrow, remembered=remembered, min_w=min_w,
+    )
+    strip.peek_requested.emit(Side.LEFT)
+    assert ctrl.state == PanelState.HIDDEN
+    assert overlay.isVisible() is False
+    assert ctrl._remembered_width == remembered

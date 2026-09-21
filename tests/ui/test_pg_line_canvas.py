@@ -2287,6 +2287,50 @@ def test_readout_text_no_delta_for_single_curve(canvas):
     assert 'Δ' not in text
 
 
+def test_current_single_cursor_x_reads_visible_line_not_ab_placement(canvas):
+    frequencies = np.array([1.0, 10.0, 50.0, 100.0, 200.0])
+    entry = _entry()
+    entry["freq"] = frequencies
+    entry["amp"] = np.arange(1.0, 6.0)
+    canvas.plot_spectra(
+        [entry], xlim=(0.0, 200.0), amp_label="Amplitude", title="FFT",
+        y_auto=True, y_min=0.0, y_max=0.0,
+    )
+    canvas.set_cursor_mode("single")
+    assert canvas.current_single_cursor_x() is None
+    placement = canvas.snapshot_cursor_placement() or {}
+    assert placement.get("ax") is None
+
+    canvas.set_cursor_frequency(50.0)
+    assert canvas.current_single_cursor_x() == pytest.approx(50.0)
+    assert all(line.value() == pytest.approx(50.0) for line in canvas._cursor_lines)
+    assert all(line.isVisible() for line in canvas._cursor_lines)
+    placement = canvas.snapshot_cursor_placement() or {}
+    assert placement.get("ax") is None
+
+    canvas.set_cursor_frequency(100.0)
+    assert canvas.current_single_cursor_x() == pytest.approx(100.0)
+
+    canvas._plot_amp.setLogMode(x=True, y=False)
+    canvas.set_cursor_frequency(50.0)
+    assert canvas.current_single_cursor_x() == pytest.approx(50.0)
+
+    canvas.set_cursor_mode("dual")
+    canvas.set_dual_cursor_frequencies(10.0, 200.0)
+    assert canvas.current_single_cursor_x() is None
+    placement = canvas.snapshot_cursor_placement()
+    assert placement["ax"] == pytest.approx(10.0)
+    assert placement["bx"] == pytest.approx(200.0)
+
+    canvas.set_cursor_mode("single")
+    assert canvas.current_single_cursor_x() is None
+    canvas.set_cursor_frequency(50.0)
+    assert canvas.current_single_cursor_x() == pytest.approx(50.0)
+
+    canvas._clear_frequency_cursor_readout()
+    assert canvas.current_single_cursor_x() is None
+
+
 def test_frequency_single_cursor_uses_time_pill_readout_contract(canvas):
     e1, e2 = _entry('a', '#2563eb'), _entry('b', '#dc2626')
     e2 = dict(e2, amp=e2['amp'] * 0.5, signal=e2['signal'] * 0.5)

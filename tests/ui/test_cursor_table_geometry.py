@@ -457,6 +457,21 @@ def painted_document(pill):
     return doc
 
 
+def _first_primary_line_center_y(pill):
+    """Independent first-line center; packing must match this, not y=4."""
+    primary = pill._primary
+    layout = primary.document.begin().layout()
+    if layout is None or layout.lineCount() < 1:
+        return None
+    line = layout.lineAt(0)
+    return (
+        primary.y()
+        + primary.contentsRect().y()
+        + line.y()
+        + line.height() / 2.0
+    )
+
+
 def _title_action_widgets(pill):
     widgets = []
     for widget in pill._title_leading_widgets() + (
@@ -966,6 +981,9 @@ def test_pinned_header_centers_actions_and_releases_body_width(
     qapp.processEvents()
     mode, close = pill._mode_control, pill._close_btn
     assert abs((mode.y() + mode.height()/2) - (close.y() + close.height()/2)) <= .5
+    identity_center = _first_primary_line_center_y(pill)
+    assert identity_center is not None
+    assert abs((mode.y() + mode.height() / 2) - identity_center) <= 1.5
     assert pill.width() <= pill._detail.width() + 22
     doc = pill._primary.document
     block = doc.begin()

@@ -59,7 +59,6 @@ _TETHER_ACTIVE_WIDTH = 2.0
 _TETHER_IDLE_ALPHA = 220
 _TETHER_ACTIVE_ALPHA = 250
 _TETHER_IDLE_PORT_ALPHA = 200
-_TETHER_ACTIVE_PORT_ALPHA = 245
 _SINGLE_COLOR = "#54749d"
 _A_COLOR = "#2563eb"
 _B_COLOR = "#dc2626"
@@ -2363,17 +2362,17 @@ class PinnedCursorOverlay(_CanvasBackref):
         item.setPen(_tether_pen(highlighted))
 
     @staticmethod
-    def _set_tether_port(item, point, highlighted) -> None:
+    def _set_tether_port(item, point, _highlighted) -> None:
+        # Selection chrome belongs on the panel and pin button. Thickening
+        # this 2.25px port makes the joint look like a different shape.
         radius = _TETHER_PORT_RADIUS
         item.setRect(
             point.x() - radius, point.y() - radius, radius * 2, radius * 2,
         )
-        pen = _tether_pen(highlighted)
+        pen = _tether_pen(False)
         item.setPen(pen)
         fill = QColor(pen.color())
-        fill.setAlpha(
-            _TETHER_ACTIVE_PORT_ALPHA if highlighted else _TETHER_IDLE_PORT_ALPHA
-        )
+        fill.setAlpha(_TETHER_IDLE_PORT_ALPHA)
         item.setBrush(pg.mkBrush(fill))
 
     def _apply_highlight(self) -> None:

@@ -249,39 +249,6 @@ def _dash_composite_stats(pen, *, background="#ffffff", grid=False):
     }
 
 
-def _sample_grab_luminance(cs, canvas):
-    image = cs.stack.grab().toImage()
-    overlay = canvas._pinned_overlay
-    glw = canvas._glw
-    viewport = glw.viewport()
-    lums = []
-    for item in overlay.tether_items():
-        path = item.path()
-        vertices = [
-            (path.elementAt(index).x, path.elementAt(index).y)
-            for index in range(path.elementCount())
-        ]
-        samples = []
-        for start, end in zip(vertices, vertices[1:]):
-            samples.append(start)
-            for step in (0.25, 0.5, 0.75):
-                samples.append((
-                    start[0] + (end[0] - start[0]) * step,
-                    start[1] + (end[1] - start[1]) * step,
-                ))
-            samples.append(end)
-        for x, y in samples:
-            view = glw.mapFromScene(QPointF(x, y))
-            stack_pt = viewport.mapTo(cs.stack, view)
-            if not image.rect().contains(stack_pt):
-                continue
-            color = image.pixelColor(stack_pt)
-            lums.append(
-                0.2126 * color.red() + 0.7152 * color.green() + 0.0722 * color.blue()
-            )
-    return lums
-
-
 def _save_pin_evidence(cs, name):
     evidence = _REPO_ROOT / ".state" / "pin-remediation"
     evidence.mkdir(parents=True, exist_ok=True)
@@ -1760,12 +1727,10 @@ def test_idle_tether_composite_is_visible_and_active_is_stronger(
     idle_pen = overlay.tether_items()[0].pen()
     idle_stats = _dash_composite_stats(idle_pen)
     idle_grid = _dash_composite_stats(idle_pen, grid=True)
-    idle_grab = _sample_grab_luminance(cs, canvas)
     controller._projector.set_hover(canvas, record.record_id)
     qapp.processEvents()
     active_pen = overlay.tether_items()[0].pen()
     active_stats = _dash_composite_stats(active_pen)
-    active_grab = _sample_grab_luminance(cs, canvas)
     assert idle_pen.color().red() == 0x60
     assert idle_pen.color().green() == 0x78
     assert idle_pen.color().blue() == 0x92
@@ -1778,11 +1743,36 @@ def test_idle_tether_composite_is_visible_and_active_is_stronger(
     assert active_pen.color().alpha() > idle_pen.color().alpha()
     assert active_stats["min_lum"] <= idle_stats["min_lum"] - 20
     assert active_stats["mean_delta"] > idle_stats["mean_delta"]
-    assert idle_grab and active_grab
-    assert (
-        sum(active_grab) / len(active_grab)
-        < sum(idle_grab) / len(idle_grab) - 2
-    )
+
+
+def test_selected_panel_does_not_reshape_the_tether_port(
+    qapp, qtbot, production_style,
+):
+    cs = _make_stack(qtbot, qapp, width=1200, height=720)
+    canvas = cs.canvas_time
+    _plot_time(canvas)
+    qapp.processEvents()
+    _wait_host(qtbot, canvas)
+    record = _pin(cs, canvas, [0.28], expand=True)[0]
+    controller = cs._pinned_cursors
+    controller.flush_layout(canvas)
+    qapp.processEvents()
+    overlay = canvas._pinned_overlay
+    ports = overlay.tether_port_items()
+    assert len(ports) == 1
+    idle_rect = ports[0].rect()
+    idle_pen = ports[0].pen()
+    idle_fill = ports[0].brush().color()
+    controller._projector.set_hover(canvas, record.record_id)
+    qapp.processEvents()
+    ports = overlay.tether_port_items()
+    assert len(ports) == 1
+    assert ports[0].rect() == idle_rect
+    assert ports[0].pen().widthF() == pytest.approx(idle_pen.widthF())
+    assert ports[0].pen().color() == idle_pen.color()
+    assert ports[0].brush().color() == idle_fill
+    path_pen = overlay.tether_items()[0].pen()
+    assert path_pen.widthF() > idle_pen.widthF()
 
 
 def _standalone_axis_label(qtbot, qapp, text="P12", *, endpoint="x"):

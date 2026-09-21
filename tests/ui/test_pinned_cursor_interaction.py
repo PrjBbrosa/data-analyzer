@@ -513,6 +513,161 @@ def test_bottom_label_arrow_uses_custom_x_pixel_mapping(qapp, qtbot):
     assert moved.x - original.x != pytest.approx(0.001)
 
 
+def _fft_entries(frequencies=None):
+    frequencies = (
+        np.array([1.0, 10.0, 50.0, 100.0, 200.0])
+        if frequencies is None
+        else np.asarray(frequencies, dtype=float)
+    )
+    return [{
+        "freq": frequencies,
+        "amp": np.arange(1.0, 1.0 + len(frequencies)),
+        "label": "force",
+        "channel": "force",
+        "fid": "fid-a",
+        "color": "#2563eb",
+        "time": np.linspace(0.0, 1.0, 8),
+        "signal": np.zeros(8),
+    }]
+
+
+def _prepare_fft_stack(qtbot, qapp, *, frequencies=None):
+    cs = _make_stack(qtbot, qapp)
+    cs.set_mode("fft")
+    qapp.processEvents()
+    canvas = cs.canvas_fft
+    cs.set_cursor_mode_for_canvas(canvas, "single")
+    canvas.plot_spectra(
+        _fft_entries(frequencies),
+        xlim=(0.0, 200.0),
+        amp_label="Amplitude",
+        title="FFT",
+    )
+    qapp.processEvents()
+    return cs, canvas
+
+
+def _click_fft_live_pin(qtbot, qapp, cs):
+    assert cs._pill._pin_btn.isVisibleTo(cs._pill)
+    qtbot.mouseClick(cs._pill._pin_btn, Qt.LeftButton)
+    qapp.processEvents()
+
+
+def test_fft_first_single_cursor_p_button_pins_physical_hz(qapp, qtbot):
+    cs, canvas = _prepare_fft_stack(qtbot, qapp)
+    placement = canvas.snapshot_cursor_placement() or {}
+    assert placement.get("ax") is None
+    canvas.set_cursor_frequency(50.0)
+    qapp.processEvents()
+    _click_fft_live_pin(qtbot, qapp, cs)
+    records = _records(cs, canvas)
+    assert len(records) == 1
+    assert records[0].x == pytest.approx(50.0)
+    assert records[0].domain == "frequency"
+    assert _records(cs, cs.canvas_time) == ()
+
+
+def test_fft_moved_single_cursor_p_button_pins_new_hz(qapp, qtbot):
+    cs, canvas = _prepare_fft_stack(qtbot, qapp)
+    canvas.set_cursor_frequency(50.0)
+    qapp.processEvents()
+    _click_fft_live_pin(qtbot, qapp, cs)
+    canvas.set_cursor_frequency(100.0)
+    qapp.processEvents()
+    _click_fft_live_pin(qtbot, qapp, cs)
+    xs = [record.x for record in _records(cs, canvas)]
+    assert xs == pytest.approx([50.0, 100.0])
+
+
+def test_fft_dual_to_single_p_button_pins_current_hz_not_leftover_ab(qapp, qtbot):
+    cs, canvas = _prepare_fft_stack(qtbot, qapp)
+    cs.set_cursor_mode_for_canvas(canvas, "dual")
+    canvas.set_dual_cursor_frequencies(10.0, 200.0)
+    qapp.processEvents()
+    placement = canvas.snapshot_cursor_placement()
+    assert placement["ax"] == pytest.approx(10.0)
+    assert placement["bx"] == pytest.approx(200.0)
+    cs.set_cursor_mode_for_canvas(canvas, "single")
+    canvas.set_cursor_frequency(50.0)
+    qapp.processEvents()
+    _click_fft_live_pin(qtbot, qapp, cs)
+    records = _records(cs, canvas)
+    assert len(records) == 1
+    assert records[0].x == pytest.approx(50.0)
+    assert records[0].mode == "single"
+
+
+def test_fft_empty_or_cleared_cursor_p_does_not_create_record(qapp, qtbot):
+    cs, canvas = _prepare_fft_stack(qtbot, qapp)
+    canvas.set_cursor_frequency(50.0)
+    qapp.processEvents()
+    assert cs._pill.isVisible()
+    canvas._clear_frequency_cursor_readout()
+    qapp.processEvents()
+    before = _records(cs, canvas)
+    if cs._pill._pin_btn.isVisibleTo(cs._pill):
+        qtbot.mouseClick(cs._pill._pin_btn, Qt.LeftButton)
+        qapp.processEvents()
+    else:
+        cs._pinned_cursors.pin_live_readout(canvas)
+        qapp.processEvents()
+    assert _records(cs, canvas) == before
+
+    empty = _make_stack(qtbot, qapp)
+    empty.set_mode("fft")
+    qapp.processEvents()
+    empty.set_cursor_mode_for_canvas(empty.canvas_fft, "single")
+    empty._pinned_cursors.pin_live_readout(empty.canvas_fft)
+    qapp.processEvents()
+    assert _records(empty, empty.canvas_fft) == ()
+
+
+def test_fft_log_frequency_p_button_still_pins_physical_hz(qapp, qtbot):
+    cs, canvas = _prepare_fft_stack(qtbot, qapp)
+    canvas._plot_amp.setLogMode(x=True, y=False)
+    qapp.processEvents()
+    canvas.set_cursor_frequency(50.0)
+    qapp.processEvents()
+    _click_fft_live_pin(qtbot, qapp, cs)
+    records = _records(cs, canvas)
+    assert len(records) == 1
+    assert records[0].x == pytest.approx(50.0)
+    assert records[0].x != pytest.approx(np.log10(50.0))
+
+
+def test_shared_primary_pill_on_fft_pins_fft_not_last_time_card(qapp, qtbot):
+    cs = _make_stack(qtbot, qapp)
+    cs.enter_split()
+    qapp.processEvents()
+    secondary = cs.secondary_canvas()
+    _plot_speed(secondary)
+    cs.set_cursor_mode_for_canvas(secondary, "single")
+    cursor = secondary._cursor
+    cursor.sync_single_cursor_line(0.8)
+    secondary.single_cursor_rows.emit(())
+    qapp.processEvents()
+    assert cs._active_cursor_card is cs._secondary_card
+
+    cs.set_mode("fft")
+    qapp.processEvents()
+    canvas = cs.canvas_fft
+    cs.set_cursor_mode_for_canvas(canvas, "single")
+    canvas.plot_spectra(
+        _fft_entries(),
+        xlim=(0.0, 200.0),
+        amp_label="Amplitude",
+        title="FFT",
+    )
+    canvas.set_cursor_frequency(50.0)
+    qapp.processEvents()
+    _click_fft_live_pin(qtbot, qapp, cs)
+    records = _records(cs, canvas)
+    assert len(records) == 1
+    assert records[0].x == pytest.approx(50.0)
+    assert _records(cs, cs.canvas_time) == ()
+    assert _records(cs, secondary) == ()
+
+
 def test_bottom_label_arrow_uses_next_effective_fft_frequency(qapp, qtbot):
     cs = _make_stack(qtbot, qapp)
     cs.set_mode("fft")

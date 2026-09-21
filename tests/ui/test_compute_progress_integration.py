@@ -279,8 +279,17 @@ def test_fft_multi_source_progress_wraps_cache_misses_only(
 
     state = win.analysis_managers["fft"].get(win.analysis_managers["fft"].active)
     state.panes[0].sources = [("f1", "speed"), ("f2", "speed")]
-    win.files["f1"] = SimpleNamespace()
-    win.files["f2"] = SimpleNamespace()
+    t = np.arange(16, dtype=float)
+    win.files["f1"] = SimpleNamespace(
+        time_array=t,
+        fs=16.0,
+        data=_FakeFrame(speed=np.full(16, 1.0)),
+    )
+    win.files["f2"] = SimpleNamespace(
+        time_array=t,
+        fs=16.0,
+        data=_FakeFrame(speed=np.full(16, 2.0)),
+    )
 
     order = []
     token_by_label = []
@@ -323,7 +332,14 @@ def test_fft_multi_source_progress_wraps_cache_misses_only(
         lambda fid, ch, _params, _time_range: (fid, ch),
     )
 
-    def fetch(fid, _ch, time_range=None):
+    seen_params = []
+
+    def fetch(fid, _ch, time_range=None, *, params=None):
+        if params is not None:
+            assert isinstance(params, dict)
+            assert params.get("window")
+            assert "nfft" in params
+            seen_params.append(params)
         marker = 1.0 if fid == "f1" else 2.0
         return np.full(16, marker, dtype=float), 16.0
 
@@ -350,6 +366,7 @@ def test_fft_multi_source_progress_wraps_cache_misses_only(
 
     win.do_fft()
 
+    assert seen_params
     assert [item[0] for item in order] == [
         "begin",
         "compute",
@@ -1068,7 +1085,16 @@ def test_order_job_closure_passes_progress_callback_and_cancel_token(
         ),
     )
     progress_calls = []
-    fake_result = SimpleNamespace(metadata={"frames": 1})
+    fake_result = SimpleNamespace(
+        metadata={"frames": 1, "theta_max_rev": 1.0},
+        params=SimpleNamespace(
+            fs=128.0,
+            nfft=16,
+            order_res=0.5,
+            max_order=8.0,
+            samples_per_rev=16,
+        ),
+    )
 
     monkeypatch.setattr(win, "_pane_time_range_for", lambda *_args: None)
     monkeypatch.setattr(win, "_warn_if_order_speed_unsuitable", lambda _rpm: True)

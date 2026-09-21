@@ -780,12 +780,20 @@ def test_cursor_pill_pinned_close_packs_toggle_immediately_to_its_left(qapp, qtb
         toggle = pill._toggle_btn
         close_inset = pill.width() - (close.x() + close.width())
         gap = close.x() - (toggle.x() + toggle.width())
-        return close_inset, close.y(), gap, toggle.y()
+        close_center = close.y() + close.height() / 2
+        toggle_center = toggle.y() + toggle.height() / 2
+        return close_inset, close.y(), gap, close_center, toggle_center
 
-    right_inset_full, top_full, gap_full, toggle_top_full = close_corner_and_toggle_gap()
+    (
+        right_inset_full, top_full, gap_full,
+        close_center_full, toggle_center_full,
+    ) = close_corner_and_toggle_gap()
     full_width = pill.width()
     pill._toggle_mode()
-    right_inset_mini, top_mini, gap_mini, toggle_top_mini = close_corner_and_toggle_gap()
+    (
+        right_inset_mini, top_mini, gap_mini,
+        close_center_mini, toggle_center_mini,
+    ) = close_corner_and_toggle_gap()
     mini_width = pill.width()
 
     assert mini_width != full_width
@@ -793,8 +801,8 @@ def test_cursor_pill_pinned_close_packs_toggle_immediately_to_its_left(qapp, qtb
     assert right_inset_mini <= 6 and top_mini <= 6
     assert 0 <= gap_full <= 6
     assert 0 <= gap_mini <= 6
-    assert toggle_top_full == top_full
-    assert toggle_top_mini == top_mini
+    assert abs(toggle_center_full - close_center_full) <= 0.5
+    assert abs(toggle_center_mini - close_center_mini) <= 0.5
 
 
 def test_user_placed_primary_pill_preserves_right_edge_after_dual_rows_resize(

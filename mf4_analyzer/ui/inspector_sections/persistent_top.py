@@ -626,6 +626,7 @@ class PersistentTop(QWidget):
         for spin in (self.spin_start, self.spin_end):
             if spin.isReadOnly() != readonly:
                 spin.setReadOnly(readonly)
+            spin.setProperty("readOnly", readonly)
             style = spin.style()
             if style is None:
                 continue

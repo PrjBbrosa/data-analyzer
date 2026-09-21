@@ -37,14 +37,14 @@ _TOKEN_RE = re.compile(r"\{\{[A-Z0-9_]+\}\}")
 _BLOCK_RE = re.compile(r"([^{}]+)\{([^{}]*)\}", re.S)
 _STATE_PSEUDO_RE = re.compile(
     r":(?:hover|pressed|checked|disabled|focus|selected|active|enabled|"
-    r"indeterminate)\b"
+    r"indeterminate|read-only)\b"
 )
 _ATTR_RE = re.compile(r"\[[^\]]+\]")
 _BORDER_SHORTHAND_RE = re.compile(r"(?<![\w-])border\s*:\s*([^;]+)")
 _HAS_RADIUS_RE = re.compile(r"(?<![\w-])border-radius\s*:")
 _TRAILING_PSEUDO_RE = re.compile(
     r"^(.*?)(?<![:]):(?:hover|pressed|checked|disabled|focus|selected|"
-    r"active|enabled|indeterminate)$"
+    r"active|enabled|indeterminate|read-only)$"
 )
 _TRAILING_ATTR_RE = re.compile(r"^(.*)(\[[^\]]+\])$")
 _TRAILING_SUBCONTROL_RE = re.compile(

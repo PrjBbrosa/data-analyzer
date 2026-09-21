@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import pytest
 from PyQt5.QtCore import QPoint, QPointF, Qt
-from PyQt5.QtGui import QWheelEvent
+from PyQt5.QtGui import QColor, QWheelEvent
 from PyQt5.QtTest import QSignalSpy, QTest
-from PyQt5.QtWidgets import QApplication, QCheckBox
+from PyQt5.QtWidgets import QApplication, QCheckBox, QLineEdit
 
 from mf4_analyzer.ui.inspector import Inspector, _INSPECTOR_CONTENT_MAX_WIDTH
 from mf4_analyzer.ui.inspector_sections.persistent_top import (
@@ -360,3 +360,81 @@ def test_five_section_remount_keeps_segment_readonly_and_silent_checkout(
         top.set_range_values(5.0, 6.0)
         assert edited == []
         assert top.query_range_edit().status == RangeEditQuery.UNCHANGED
+
+
+def _typical_fill(widget):
+    """Interior fill, skipping dark ink so digits do not pollute the sample."""
+    image = widget.grab().toImage()
+    samples = []
+    width = max(1, image.width())
+    height = max(1, image.height())
+    points = (
+        (6, 4),
+        (8, 5),
+        (width - 10, 4),
+        (width // 2, 4),
+        (6, height // 2),
+    )
+    for x, y in points:
+        if not (0 <= x < width and 0 <= y < height):
+            continue
+        color = image.pixelColor(x, y)
+        if color.lightness() > 180:
+            samples.append(color)
+    assert samples, widget
+    return samples[0]
+
+
+def test_full_mode_start_end_use_disabled_gray_fill(qapp, qtbot):
+    """全时段 keeps the editors enabled for copy, but they must look locked.
+
+    Global QLineEdit:read-only / QDoubleSpinBox[readOnly] share the disabled
+    fill so Time / FFT / Order / FRF all get the same gray wash.
+    """
+    old_sheet = qapp.styleSheet()
+    try:
+        qapp.setStyle("Fusion")
+        from mf4_analyzer.ui_kit import load_stylesheet
+        load_stylesheet(qapp)
+
+        disabled = QLineEdit("0.004 s")
+        readonly = QLineEdit("0.004 s")
+        editable = QLineEdit("0.004 s")
+        qtbot.addWidget(disabled)
+        qtbot.addWidget(readonly)
+        qtbot.addWidget(editable)
+        disabled.setEnabled(False)
+        readonly.setReadOnly(True)
+        for field in (disabled, readonly, editable):
+            field.resize(140, 32)
+            field.show()
+        qtbot.waitExposed(editable)
+        qapp.processEvents()
+
+        disabled_fill = _typical_fill(disabled)
+        readonly_fill = _typical_fill(readonly)
+        editable_fill = _typical_fill(editable)
+        assert editable_fill.lightness() > readonly_fill.lightness() + 4
+        assert abs(readonly_fill.lightness() - disabled_fill.lightness()) <= 8
+        assert abs(readonly_fill.red() - QColor("#f5f7fb").red()) <= 18
+
+        top = PersistentTop()
+        qtbot.addWidget(top)
+        top.resize(288, 240)
+        top.show()
+        qtbot.waitExposed(top)
+        qapp.processEvents()
+
+        assert not top.range_enabled()
+        full_start = _typical_fill(top.spin_start)
+        full_end = _typical_fill(top.spin_end)
+        assert abs(full_start.lightness() - readonly_fill.lightness()) <= 12
+        assert abs(full_end.lightness() - readonly_fill.lightness()) <= 12
+
+        select_time_range_mode(top, True)
+        qapp.processEvents()
+        custom_start = _typical_fill(top.spin_start)
+        assert custom_start.lightness() > full_start.lightness() + 4
+        assert not top.spin_start.isReadOnly()
+    finally:
+        qapp.setStyleSheet(old_sheet)

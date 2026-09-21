@@ -380,20 +380,29 @@ class SidePanelController(QObject):
             return width
         return max(width, self._expanded_min_width())
 
+    def _peek_available_width(self):
+        """Host pixels left for the overlay after reserving the edge strip."""
+        host_w = int(self._host.width()) if self._host is not None else 0
+        return host_w - int(self._strip.WIDTH_PX)
+
     def _peek_overlay_width(self):
+        # Remembered dock width is a preference, not a fit requirement.
+        # Clamp into [content min, min(available host, panel max)].
         min_w = self._expanded_min_width()
-        w = max(int(self._remembered_width) + self.PEEK_EXTRA_PX, min_w)
+        available = self._peek_available_width()
+        preferred = int(self._remembered_width) + self.PEEK_EXTRA_PX
         if self._peek_width is not None:
-            w = max(w, int(self._peek_width))
+            preferred = max(preferred, int(self._peek_width))
         max_w = self._panel.maximumWidth()
+        hi = available
         if 0 < max_w < self._NO_MAX_WIDTH:
-            w = min(w, max_w)
-        return w
+            hi = min(hi, max_w)
+        return max(min_w, min(preferred, hi))
 
     def _peek_can_fit(self):
-        host_w = int(self._host.width()) if self._host is not None else 0
-        needed = int(self._peek_overlay_width()) + int(self._strip.WIDTH_PX)
-        return host_w >= needed
+        # Same budget as _position_overlay / _peek_overlay_width: refuse only
+        # when the content minimum plus the strip cannot fit in the host.
+        return self._peek_available_width() >= self._expanded_min_width()
 
     def _position_overlay(self):
         w = self._peek_overlay_width()

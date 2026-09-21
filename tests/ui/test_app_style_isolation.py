@@ -199,3 +199,157 @@ def test_root_style_fixture_does_not_import_qt_until_body_creates_app(tmp_path):
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "3 passed" in result.stdout, result.stdout
+
+
+def _run_isolated_child(tmp_path: Path, name: str, source: str) -> subprocess.CompletedProcess[str]:
+    child = tmp_path / name
+    child.write_text(textwrap.dedent(source), encoding="utf-8")
+    env = _child_env()
+    env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
+    return subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "-p",
+            "conftest",
+            str(child),
+        ],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+
+def test_teardown_failure_without_style_baseline_is_nonzero_error(tmp_path):
+    """R1: no Qt / no baseline must not swallow a fixture-finalizer assertion."""
+    result = _run_isolated_child(
+        tmp_path,
+        "test_teardown_boom_no_qt.py",
+        """
+            import pytest
+
+
+            @pytest.fixture
+            def boom():
+                yield
+                raise AssertionError("forced teardown failure")
+
+
+            def test_body_passes(boom):
+                assert True
+            """,
+    )
+    output = result.stdout + result.stderr
+    assert result.returncode != 0, output
+    assert "forced teardown failure" in output
+    assert "ERROR" in output
+
+
+def test_teardown_failure_with_style_baseline_is_nonzero_error(tmp_path):
+    """R1: Qt restore still runs, but a cleanup assertion remains an ERROR."""
+    result = _run_isolated_child(
+        tmp_path,
+        "test_teardown_boom_with_qt.py",
+        """
+            import pytest
+            from PyQt5.QtGui import QColor, QFont, QPalette
+            from PyQt5.QtWidgets import QApplication, QStyleFactory
+
+
+            APP = None
+            ORIGINAL = None
+
+
+            @pytest.fixture
+            def boom():
+                yield
+                raise AssertionError("forced cleanup failure")
+
+
+            def test_body_creates_app_then_passes(boom):
+                global APP, ORIGINAL
+                APP = QApplication.instance() or QApplication([])
+                ORIGINAL = (
+                    APP.styleSheet(),
+                    APP.style().objectName(),
+                    QPalette(APP.palette()),
+                    QFont(APP.font()),
+                )
+                alternate = next(
+                    key for key in QStyleFactory.keys()
+                    if key.lower() != ORIGINAL[1].lower()
+                )
+                APP.setStyle(alternate)
+                palette = QPalette(APP.palette())
+                palette.setColor(QPalette.Window, QColor("#325a88"))
+                APP.setPalette(palette)
+                font = QFont(APP.font())
+                font.setPointSize(max(1, font.pointSize() + 2))
+                APP.setFont(font)
+                APP.setStyleSheet("QWidget { background: #325a88; }")
+                assert True
+            """,
+    )
+    output = result.stdout + result.stderr
+    assert result.returncode != 0, output
+    assert "forced cleanup failure" in output
+    assert "ERROR" in output
+
+
+def test_style_restore_still_succeeds_when_teardown_is_clean(tmp_path):
+    """R1 control: a Qt item that mutates chrome still restores on success."""
+    result = _run_isolated_child(
+        tmp_path,
+        "test_style_restore_control.py",
+        """
+            from PyQt5.QtGui import QColor, QFont, QPalette
+            from PyQt5.QtWidgets import QApplication, QStyleFactory
+
+
+            APP = None
+            ORIGINAL = None
+
+
+            def test_style_child_creates_and_mutates_application():
+                global APP, ORIGINAL
+                APP = QApplication.instance() or QApplication([])
+                ORIGINAL = (
+                    APP.styleSheet(),
+                    APP.style().objectName(),
+                    QPalette(APP.palette()),
+                    QFont(APP.font()),
+                )
+                alternate = next(
+                    key for key in QStyleFactory.keys()
+                    if key.lower() != ORIGINAL[1].lower()
+                )
+                APP.setStyle(alternate)
+                palette = QPalette(APP.palette())
+                palette.setColor(QPalette.Window, QColor("#325a88"))
+                APP.setPalette(palette)
+                font = QFont(APP.font())
+                font.setPointSize(max(1, font.pointSize() + 2))
+                APP.setFont(font)
+                APP.setStyleSheet("QWidget { background: #325a88; }")
+                assert APP.styleSheet() != ORIGINAL[0]
+                assert APP.style().objectName() != ORIGINAL[1]
+
+
+            def test_style_child_observes_prior_item_after_full_teardown():
+                assert APP is not None and ORIGINAL is not None
+                sheet, style_name, palette, font = ORIGINAL
+                assert APP.styleSheet() == sheet
+                assert APP.style().objectName() == style_name
+                assert APP.palette() == palette
+                assert APP.font() == font
+            """,
+    )
+    output = result.stdout + result.stderr
+    assert result.returncode == 0, output
+    assert "2 passed" in result.stdout, output

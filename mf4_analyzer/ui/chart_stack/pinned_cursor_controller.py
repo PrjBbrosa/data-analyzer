@@ -1531,6 +1531,12 @@ class PinnedCursorController(QObject):
                     return value
             except (RuntimeError, TypeError, AttributeError, IndexError):
                 pass
+        query = getattr(canvas, "current_single_cursor_x", None)
+        owner_query = callable(query)
+        if owner_query:
+            value = _finite(query())
+            if value is not None:
+                return value
         snap_fn = getattr(canvas, "snapshot_cursor_placement", None)
         snap = snap_fn() if callable(snap_fn) else None
         if not isinstance(snap, dict):
@@ -1541,6 +1547,8 @@ class PinnedCursorController(QObject):
         # FFT/FRF single stores the live frequency as ax; a leftover dual
         # A/B pair must not masquerade as the current single readout.
         if _finite(snap.get("bx")) is not None:
+            return None
+        if owner_query:
             return None
         return _finite(snap.get("ax"))
 

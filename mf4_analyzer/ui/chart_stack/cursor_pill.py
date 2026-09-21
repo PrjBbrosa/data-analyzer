@@ -14,7 +14,7 @@ from math import ceil
 
 from PyQt5.QtCore import QEvent, QRect, QSize, QTimer, Qt, pyqtSignal
 from PyQt5.QtGui import (
-    QColor, QFont, QFontMetrics, QPainter, QPen, QTextBlockFormat, QTextCursor, QTextDocument, QTextOption,
+    QColor, QFont, QFontMetrics, QPainter, QPen, QTextCursor, QTextDocument, QTextOption,
 )
 from PyQt5 import sip
 from PyQt5.QtWidgets import (
@@ -825,7 +825,8 @@ class CursorPill(QFrame):
         """Pack visible title chrome from both edges.
 
         Trailing: × → 数值/完整 → P. Hidden chrome occupies no slot.
-        First-line text uses ``_title_chrome_width()``.
+        First-line text uses ``_title_chrome_width()``. Identity (P7) is
+        padded in ``_apply_pinned_primary_layout`` to this row's center.
         """
         self._title_chrome_parts = None
         self._title_chrome_token = None
@@ -1063,8 +1064,23 @@ class CursorPill(QFrame):
         row_height = max((self._chrome_pack_size(widget)[1]
                           for widget in self._title_trailing_widgets()
                           if self._title_action_occupies_slot(widget)), default=0)
-        block_format.setLineHeight(row_height, QTextBlockFormat.MinimumHeight)
+        layout = self._primary.document.begin().layout()
+        if layout is not None and layout.lineCount() > 0:
+            natural = float(layout.lineAt(0).height())
+        else:
+            natural = float(QFontMetrics(self._primary.font()).height())
+        extra = max(0.0, float(row_height) - natural)
+        # Chrome packs from _TOGGLE_EDGE_GAP; the document starts at
+        # _PILL_TOP_MARGIN. Pad the identity line so P7 shares the chrome
+        # row's vertical center instead of sitting 3px lower at the top of
+        # a MinimumHeight box.
+        chrome_center = float(_TOGGLE_EDGE_GAP) + float(row_height) / 2.0
+        primary_y = float(self._primary.y() or _PILL_TOP_MARGIN)
+        top_margin = max(0.0, chrome_center - primary_y - natural / 2.0)
+        block_format.setTopMargin(top_margin)
+        block_format.setBottomMargin(max(0.0, extra - top_margin))
         cursor.setBlockFormat(block_format)
+        self._primary.document.size()
         self._primary.setMaximumWidth(ceil(budget))
         self._primary.updateGeometry()
 

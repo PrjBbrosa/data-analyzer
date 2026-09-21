@@ -2106,6 +2106,39 @@ class ChartStack(QWidget):
             return self._pill_secondary
         return self._pill
 
+    def _canvas_for_live_pill(self, pill):
+        """Canvas whose live readout this pill currently displays.
+
+        Inverse of :meth:`_pill_for_canvas` for the clicked widget. Time split
+        keeps the primary pill on the left card even when the last readout
+        update came from the right pane. The same primary widget is reused on
+        FFT/FRF, so those sections resolve the visible-section canvas rather
+        than hard-coding the time-domain host.
+        """
+        if pill is None:
+            return None
+        if (self._pill_secondary is not None
+                and pill is self._pill_secondary
+                and self._secondary_card is not None):
+            return self._secondary_card.canvas
+        if pill is not self._pill:
+            return None
+        mode = self.current_mode()
+        if mode == "time":
+            return getattr(self._time_card, "canvas", None)
+        card = self._active_cursor_card
+        if card is not None and getattr(card, "_chart_mode", None) == mode:
+            canvas = getattr(card, "canvas", None)
+            if canvas is not None and self._pill_for_canvas(canvas) is pill:
+                return canvas
+        page = self.page_for_mode.get(mode)
+        if page is not None:
+            for section_card in getattr(page, "_cards", ()):
+                canvas = getattr(section_card, "canvas", None)
+                if canvas is not None:
+                    return canvas
+        return None
+
     def _cursor_source_on_screen(self, source):
         """True when the emitting canvas belongs to the currently visible section.
 
@@ -2480,15 +2513,14 @@ class ChartStack(QWidget):
         self._on_cursor_pill_display_mode_changed(mode, source=source)
 
     def _on_primary_live_pin_requested(self):
-        source = getattr(self._active_cursor_card, "canvas", None)
-        if source is None:
-            source = self.canvas_time
-        self._pinned_cursors.pin_live_readout(source)
+        source = self._canvas_for_live_pill(self._pill)
+        if source is not None:
+            self._pinned_cursors.pin_live_readout(source)
 
     def _on_secondary_live_pin_requested(self):
-        canvas = self.secondary_canvas()
-        if canvas is not None:
-            self._pinned_cursors.pin_live_readout(canvas)
+        source = self._canvas_for_live_pill(self._pill_secondary)
+        if source is not None:
+            self._pinned_cursors.pin_live_readout(source)
 
     def _on_cursor_pill_display_mode_changed(self, _mode, *, source):
         self._refresh_cursor_projection(source)

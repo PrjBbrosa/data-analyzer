@@ -115,18 +115,23 @@ def _restore_app_style_after_test(request):
 
 @pytest.hookimpl(wrapper=True, tryfirst=True)
 def pytest_runtest_teardown(item):
-    """Restore global appearance after pytest-qt/UI ownership cleanup."""
+    """Restore global appearance after pytest-qt/UI ownership cleanup.
+
+    Never ``return`` from ``finally``: that would swallow an in-flight
+    teardown exception and turn a real ERROR into a false pass.
+    """
     try:
         return (yield)
     finally:
         baseline = getattr(item, "_root_app_style_baseline", None)
         if baseline is None:
-            return
-        QApplication = _qapplication_class()
-        if QApplication is None:
-            delattr(item, "_root_app_style_baseline")
-            return
-        app = QApplication.instance()
-        if app is not None:
-            _restore_app_style(app, baseline)
-        delattr(item, "_root_app_style_baseline")
+            pass
+        else:
+            QApplication = _qapplication_class()
+            if QApplication is None:
+                delattr(item, "_root_app_style_baseline")
+            else:
+                app = QApplication.instance()
+                if app is not None:
+                    _restore_app_style(app, baseline)
+                delattr(item, "_root_app_style_baseline")

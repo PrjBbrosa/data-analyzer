@@ -277,7 +277,8 @@ def test_conftest_sentinel_uses_controller_filter_install_flag():
     assert "PinKeyRouter" in conftest
     assert "_assert_pinned_cursor_filters_not_accumulated" in conftest
     assert "_application_filter_installed" in conftest
-    assert "type(obj) is not PinnedCursorController" in conftest
+    assert "type(obj) is PinnedCursorController" in conftest
+    assert "type(obj) is not PinnedCursorController" not in conftest
     controller_src = CONTROLLER_PATH.read_text(encoding="utf-8")
     router_path = PINNING_ROOT / "key_router.py"
     router_src = router_path.read_text(encoding="utf-8")

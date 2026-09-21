@@ -405,7 +405,7 @@ def _change_paths(change: FileChange) -> list[str]:
 
 
 def _acceptance_command(python: str, template: str, nodes: Sequence[str] | None = None) -> str:
-    filled = template.replace("{python}", python)
+    filled = template.replace("{python}", shlex.quote(python))
     if nodes is not None:
         filled = filled.replace("{nodes}", shlex.join(nodes))
     return filled

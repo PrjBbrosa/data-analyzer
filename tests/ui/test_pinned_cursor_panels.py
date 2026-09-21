@@ -512,6 +512,109 @@ def test_hidden_owner_does_not_clear_other_live_pill(qapp, qtbot):
     assert cs._pill.primary_text() == live_text
 
 
+def _show_single_at(canvas, x, qapp):
+    cursor = canvas._cursor
+    cursor.sync_single_cursor_line(x)
+    channel = CursorDisplayChannel(
+        identity=("fid-a", "speed"),
+        source_label="",
+        channel_label="speed",
+        current_value=1.5,
+        unit_suffix=" rpm",
+    )
+    canvas.single_cursor_rows.emit((channel,))
+    qapp.processEvents()
+
+
+def _record_xs(cs, canvas):
+    return tuple(record.x for record in _records(cs, canvas))
+
+
+def _live_line_state(canvas):
+    items = tuple(canvas._cursor._cursor_line_items or ())
+    return (
+        canvas._cursor._cursor_visible,
+        tuple(item.isVisible() for item in items),
+        None if not items else items[0].value(),
+    )
+
+
+def _prepare_time_split(qtbot, qapp):
+    cs = _make_stack(qtbot, qapp)
+    cs.enter_split()
+    qapp.processEvents()
+    secondary = cs.secondary_canvas()
+    assert secondary is not None
+    _plot_speed(secondary)
+    cs.set_cursor_mode_for_canvas(secondary, "single")
+    qapp.processEvents()
+    return cs, secondary
+
+
+def test_split_left_p_pins_left_canvas_not_last_updated_right(qapp, qtbot):
+    cs, secondary = _prepare_time_split(qtbot, qapp)
+    _show_single_at(cs.canvas_time, 0.2, qapp)
+    _show_single_at(secondary, 0.8, qapp)
+    assert cs._active_cursor_card is cs._secondary_card
+    assert cs._pill._pin_btn.isVisibleTo(cs._pill)
+    right_before = _records(cs, secondary)
+    right_live = _live_line_state(secondary)
+    right_pill_visible = cs._pill_secondary.isVisible()
+
+    qtbot.mouseClick(cs._pill._pin_btn, Qt.LeftButton)
+    qapp.processEvents()
+
+    left = _records(cs, cs.canvas_time)
+    right = _records(cs, secondary)
+    assert len(left) == 1
+    assert abs(left[0].x - 0.2) < 1e-6
+    assert right == right_before
+    assert _record_xs(cs, secondary) == ()
+    assert _live_line_state(secondary) == right_live
+    assert cs._pill_secondary.isVisible() is right_pill_visible
+
+
+def test_split_right_p_pins_right_canvas_not_last_updated_left(qapp, qtbot):
+    cs, secondary = _prepare_time_split(qtbot, qapp)
+    _show_single_at(secondary, 0.8, qapp)
+    _show_single_at(cs.canvas_time, 0.2, qapp)
+    assert cs._active_cursor_card is cs._time_card
+    assert cs._pill_secondary._pin_btn.isVisibleTo(cs._pill_secondary)
+    left_before = _records(cs, cs.canvas_time)
+    left_live = _live_line_state(cs.canvas_time)
+    left_pill_visible = cs._pill.isVisible()
+
+    qtbot.mouseClick(cs._pill_secondary._pin_btn, Qt.LeftButton)
+    qapp.processEvents()
+
+    right = _records(cs, secondary)
+    left = _records(cs, cs.canvas_time)
+    assert len(right) == 1
+    assert abs(right[0].x - 0.8) < 1e-6
+    assert left == left_before
+    assert _record_xs(cs, cs.canvas_time) == ()
+    assert _live_line_state(cs.canvas_time) == left_live
+    assert cs._pill.isVisible() is left_pill_visible
+
+
+def test_primary_p_after_exit_split_pins_time_not_stale_secondary(qapp, qtbot):
+    cs, secondary = _prepare_time_split(qtbot, qapp)
+    _show_single_at(cs.canvas_time, 0.2, qapp)
+    _show_single_at(secondary, 0.8, qapp)
+    cs.exit_split()
+    qapp.processEvents()
+    _show_single_at(cs.canvas_time, 0.2, qapp)
+    assert cs._pill._pin_btn.isVisibleTo(cs._pill)
+
+    qtbot.mouseClick(cs._pill._pin_btn, Qt.LeftButton)
+    qapp.processEvents()
+
+    left = _records(cs, cs.canvas_time)
+    assert len(left) == 1
+    assert abs(left[0].x - 0.2) < 1e-6
+    assert _records(cs, secondary) == ()
+
+
 def test_live_p_button_pins_current_readout_not_button_coords(qapp, qtbot):
     cs = _make_stack(qtbot, qapp)
     local = _aim(qtbot, cs.canvas_time, 0.3, cs._pinned_cursors)

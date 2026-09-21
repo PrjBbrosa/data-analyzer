@@ -7,12 +7,14 @@ These tests never launch the repository full suite.
 from __future__ import annotations
 
 import json
+import shlex
 import subprocess
 import sys
 from pathlib import Path
 
 from scripts.select_test_gate import (
     FileChange,
+    _acceptance_command,
     discover_changes_from_git,
     format_ledger,
     load_routes,
@@ -474,3 +476,131 @@ def test_missing_test_runs_does_not_invent_slow_numbers(tmp_path):
     )
     assert report.slow_node_summary is None
     assert any("test-runs" in note for note in report.notes)
+
+
+def _write_argv_stub(directory: Path) -> Path:
+    """Harmless interpreter stand-in that records argv and exits.
+
+    Not a real pytest host: extra-gate strings can be split and launched
+    against this stub without running real-file/native/frozen suites.
+    """
+
+    directory.mkdir(parents=True, exist_ok=True)
+    stub = directory / "python"
+    stub.write_text(
+        "import json, sys\n"
+        "from pathlib import Path\n"
+        "Path(__file__).with_name('argv.json').write_text(\n"
+        "    json.dumps(sys.argv), encoding='utf-8'\n"
+        ")\n",
+        encoding="utf-8",
+    )
+    return stub
+
+
+def test_acceptance_command_quotes_python_and_nodes_round_trip():
+    """Token-boundary POSIX/shlex quoting; do not wrap the finished command."""
+
+    python = "/Users/donghang/Downloads/data analyzer/.venv/bin/python"
+    nodes = ["tests/integration/test with space.py", "tests/test_ok.py"]
+    command = _acceptance_command(
+        python,
+        "{python} -m pytest {nodes} -q",
+        nodes,
+    )
+    tokens = shlex.split(command)
+    assert tokens == [python, "-m", "pytest", *nodes, "-q"]
+    assert command.startswith(shlex.quote(python))
+    assert command != shlex.quote(
+        f"{python} -m pytest {shlex.join(nodes)} -q"
+    )
+    assert tokens[0] != "/Users/donghang/Downloads/data"
+
+
+def test_real_extra_gates_quote_spaced_interpreter_via_select_gate(tmp_path):
+    """Real routes + spaced interpreter: extra gates share focused shlex quoting."""
+
+    stub = _write_argv_stub(
+        tmp_path / "Downloads" / "data analyzer" / ".venv" / "bin"
+    )
+    python = str(stub)
+    report = select_gate(
+        [
+            FileChange("mf4_analyzer/io/loader.py", "modify"),
+            FileChange("mf4_analyzer/acquisition/preflight.py", "modify"),
+            FileChange("mf4_analyzer/batch.py", "modify"),
+            FileChange("conftest.py", "modify"),
+        ],
+        repo_root=REPO_ROOT,
+        routes_path=REAL_ROUTES,
+        include_event_summary=False,
+        python=python,
+    )
+    assert report.collect_validation is None
+    assert any(
+        reason.source == "mf4_analyzer/io/loader.py"
+        for reasons in report.reasons.values()
+        for reason in reasons
+    )
+    assert "tests/test_head_hdf.py" in report.selected
+
+    extra = {gate["id"]: gate for gate in report.suggested_extra_gates}
+    assert {"real_file", "native", "frozen", "full_integration"} <= extra.keys()
+    assert "mf4_analyzer/io/loader.py" in extra["real_file"]["why"]
+
+    routes = load_routes(REAL_ROUTES)
+    expected_tails = {
+        "real_file": [
+            "-m",
+            "pytest",
+            "tests/integration/test_head_hdf_realfile.py",
+            "tests/integration/test_t08_order_cot_e2e.py",
+            "-q",
+        ],
+        "native": [
+            "-m",
+            "pytest",
+            "tests/test_native_import_boundaries.py",
+            "tests/test_windows_runtime_dependencies.py",
+            "tests/test_windows_runtime_verifier.py",
+            "-q",
+        ],
+        "frozen": [
+            "-m",
+            "pytest",
+            "tests/test_packaging_imports.py",
+            "tests/test_windows_build_script.py",
+            "tests/test_frozen_batch_acceptance.py",
+            "tests/test_frozen_batch_render_smoke.py",
+            "-q",
+        ],
+        "full_integration": ["scripts/run_test_gate.py", "--full-suite"],
+    }
+    for gate_id, expected_tail in expected_tails.items():
+        tokens = shlex.split(extra[gate_id]["command"])
+        assert tokens[0] == python
+        assert tokens[1:] == expected_tail
+        assert tokens[0] != str(tmp_path / "Downloads" / "data")
+        raw_template = routes["acceptance_sets"][gate_id].get("command")
+        if raw_template is None:
+            raw_template = routes["acceptance_sets"][gate_id]["commands"][0]
+        assert extra[gate_id]["command"] == _acceptance_command(python, raw_template)
+
+    focused_tokens = shlex.split(report.commands[0])
+    assert focused_tokens[0] == python
+    assert focused_tokens[1:3] == ["-m", "pytest"]
+    assert focused_tokens[-1] == "-q"
+    assert report.commands[0] == shlex.join([python, "-m", "pytest", *report.selected, "-q"])
+
+    real_tokens = shlex.split(extra["real_file"]["command"])
+    completed = subprocess.run(
+        [sys.executable, *real_tokens],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert completed.returncode == 0, completed.stderr
+    recorded = json.loads((stub.with_name("argv.json")).read_text(encoding="utf-8"))
+    assert Path(recorded[0]) == stub
+    assert recorded[1:] == expected_tails["real_file"]

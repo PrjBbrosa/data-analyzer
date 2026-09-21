@@ -3778,6 +3778,25 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             cursor_mode=self._cursor_mode,
         )
 
+    def current_single_cursor_x(self):
+        """Visible single-cursor frequency in Hz, or None if none is shown.
+
+        ``set_cursor_frequency`` updates ``_cursor_lines`` only. Dual A/B
+        placement is a different owner and must not be treated as hover.
+        """
+        if self._cursor_mode != "single":
+            return None
+        for line in self._cursor_lines or ():
+            try:
+                if not line.isVisible():
+                    continue
+                value = float(line.value())
+            except (RuntimeError, TypeError, AttributeError, ValueError):
+                continue
+            if math.isfinite(value):
+                return value
+        return None
+
     def restore_cursor_placement(self, payload) -> None:
         normalized = normalize_cursor_placement(
             payload, cursor_mode=self._cursor_mode,
