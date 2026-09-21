@@ -7,9 +7,8 @@ from typing import Any, Mapping
 import numpy as np
 
 from ..batch_grouping import is_human_group
-from ._fonts import chart_font
 from ._models import BatchRenderContext
-from ._theme import RenderTheme
+from ._theme import RenderTheme, export_chart_font, export_css_px
 
 
 _DEFAULT_METHOD = {
@@ -94,16 +93,17 @@ def effective_fact_items(
 
 
 def _add_label(widget, *, row, text, color, point_size, bold=False, justify="left"):
+    font = export_chart_font(point_size)
     item = widget.addLabel(
         html.escape(str(text)),
         row=row,
         col=0,
         color=color,
-        size=f"{point_size:g}pt",
+        size=export_css_px(point_size),
         bold=bold,
         justify=justify,
     )
-    item.item.setFont(chart_font(point_size))
+    item.item.setFont(font)
     return item
 
 

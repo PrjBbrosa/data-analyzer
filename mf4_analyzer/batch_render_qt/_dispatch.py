@@ -28,6 +28,7 @@ def ensure_app() -> QApplication:
                 "QCoreApplication cannot host QWidget rendering"
             )
         _APP = instance
+        _register_drawable_cjk_fonts_if_on_app_thread(instance)
         return instance
     if threading.current_thread() is not threading.main_thread():
         raise RuntimeError(
@@ -36,7 +37,17 @@ def ensure_app() -> QApplication:
         )
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     _APP = QApplication([])
+    _register_drawable_cjk_fonts_if_on_app_thread(_APP)
     return _APP
+
+
+def _register_drawable_cjk_fonts_if_on_app_thread(app: QApplication) -> None:
+    """Load a drawable CJK font file once, only on the application thread."""
+    if QThread.currentThread() is not app.thread():
+        return
+    from mf4_analyzer.qt_chart_fonts import ensure_drawable_cjk_fonts
+
+    ensure_drawable_cjk_fonts()
 
 
 class _RenderDispatcher(QObject):
@@ -89,9 +100,14 @@ def render_on_gui_thread(fn: Callable[[], Any]):
     dispatcher = _dispatcher_for(app)
     if dispatcher.quitting:
         raise RuntimeError("Qt application is exiting; batch render rejected")
-    if QThread.currentThread() is app.thread():
+
+    def _job() -> Any:
+        _register_drawable_cjk_fonts_if_on_app_thread(app)
         return fn()
-    job: dict[str, Any] = {"fn": fn}
+
+    if QThread.currentThread() is app.thread():
+        return _job()
+    job: dict[str, Any] = {"fn": _job}
     dispatcher.request.emit(job)
     if "exception" in job:
         exc = job["exception"]

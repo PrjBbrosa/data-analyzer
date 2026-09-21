@@ -20,6 +20,10 @@ param(
 #
 # python-can / cantools are intentionally NOT excluded: the Analyzer itself uses
 # them to import BLF (Vector CAN log) files.
+# Every attempt keeps build.log, environment/argument output, PyInstaller
+# diagnostics and render-child logs/images under .state/build-evidence/lite/.
+# The final console line prints the unique run directory; share that whole
+# directory when reporting a build failure (logs may contain local paths).
 
 if (-not $AppName) {
     $AppName = "TraceLabAnalyzer$Version"
@@ -30,8 +34,153 @@ Set-StrictMode -Version Latest
 
 function Write-Step {
     param([string]$Message)
+    $script:BuildStage = $Message
     Write-Host ""
-    Write-Host "==> $Message" -ForegroundColor Cyan
+    Write-Host "==> [$(Get-Date -Format o)] $Message" -ForegroundColor Cyan
+}
+
+function Invoke-LoggedNative {
+    param([string]$Executable, [string[]]$Arguments, [switch]$CaptureStdout)
+    # Windows PowerShell 5.1 turns redirected native stderr into ErrorRecords.
+    # stderr is not failure (pip/PyInstaller use it for progress); exit code is.
+    $ErrorActionPreference = "Continue"
+    $PSNativeCommandUseErrorActionPreference = $false
+    $nativeCommand = Get-Command $Executable -CommandType Application -ErrorAction Stop
+    Write-Host "Command: $Executable $($Arguments | ConvertTo-Json -Compress)"
+    if ($CaptureStdout) {
+        # Keep machine-readable JSON separate from diagnostics.
+        $stderrPath = Join-Path $BuildEvidenceDir "dependency-args-stderr.log"
+        $stdout = & $nativeCommand.Source @Arguments 2> $stderrPath
+        $nativeExitCode = $LASTEXITCODE
+        Get-Content -LiteralPath $stderrPath -ErrorAction Stop | ForEach-Object { Write-Host $_ }
+        $stdout | ForEach-Object { Write-Host $_ }
+    } else {
+        & $nativeCommand.Source @Arguments 2>&1 | ForEach-Object { Write-Host $_.ToString() }
+        $nativeExitCode = $LASTEXITCODE
+    }
+    Write-Host "Native exit code: $nativeExitCode"
+    if ($nativeExitCode -ne 0) {
+        throw "Native command failed with exit code ${nativeExitCode}: $Executable"
+    }
+    if ($CaptureStdout) { return $stdout }
+}
+
+function ConvertTo-Win32ArgumentList {
+    param([string[]]$Arguments)
+    $parts = foreach ($Argument in @($Arguments)) {
+        if ($null -eq $Argument) { continue }
+        $text = [string]$Argument
+        if ($text -notmatch '[ \t"]') {
+            $text
+        } else {
+            '"' + ($text -replace '"', '\"') + '"'
+        }
+    }
+    return [string]($parts -join ' ')
+}
+
+function Get-PostCheckRecord {
+    param([string]$Name)
+    foreach ($item in @($script:PostCheckResults)) {
+        if ($item.Name -eq $Name) { return $item }
+    }
+    return $null
+}
+
+function Get-PostCheckStatus {
+    param([string]$Name)
+    $item = Get-PostCheckRecord $Name
+    if ($null -eq $item) { return "not_run" }
+    return [string]$item.Status
+}
+
+function Test-AllPostChecksPassed {
+    foreach ($name in @("offscreen", "windows", "importer")) {
+        if ((Get-PostCheckStatus $name) -ne "passed") { return $false }
+    }
+    return $true
+}
+
+function Write-PostCheckSummary {
+    $exeGenerated = [bool]$script:ExeGenerated
+    $off = Get-PostCheckStatus "offscreen"
+    $win = Get-PostCheckStatus "windows"
+    $imp = Get-PostCheckStatus "importer"
+    Write-Host "EXE generated: $exeGenerated"
+    Write-Host "offscreen: $off"
+    Write-Host "windows: $win"
+    Write-Host "importer: $imp"
+}
+
+function Invoke-IndependentPostCheck {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][string]$Executable,
+        [string[]]$Arguments,
+        [int]$TimeoutSeconds = 300
+    )
+    # Independent post-EXE checks must keep going after an ordinary failure.
+    # Do not throw here; the caller aggregates exit codes once.
+    $ErrorActionPreference = "Continue"
+    $PSNativeCommandUseErrorActionPreference = $false
+    $record = New-Object psobject -Property @{
+        Name = $Name
+        Status = "failed"
+        ExitCode = $null
+        TimedOut = $false
+        Error = ""
+    }
+    $process = $null
+    try {
+        $nativeCommand = Get-Command $Executable -CommandType Application -ErrorAction Stop
+        Write-Host "Post-check ${Name}: $Executable $($Arguments | ConvertTo-Json -Compress)"
+        $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+        $startInfo.FileName = $nativeCommand.Source
+        $startInfo.Arguments = ConvertTo-Win32ArgumentList -Arguments $Arguments
+        $startInfo.UseShellExecute = $false
+        $startInfo.CreateNoWindow = $true
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
+        $process = New-Object System.Diagnostics.Process
+        $process.StartInfo = $startInfo
+        [void]$process.Start()
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+            try { $process.Kill() } catch { }
+            try {
+                Get-WmiObject Win32_Process -Filter "ParentProcessId=$($process.Id)" -ErrorAction SilentlyContinue |
+                    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+            } catch { }
+            [void]$process.WaitForExit(10000)
+            $record.TimedOut = $true
+            $record.Status = "timeout"
+            $record.ExitCode = -1
+            Write-Host "Post-check ${Name} timed out after ${TimeoutSeconds}s; process terminated"
+        } else {
+            $record.ExitCode = [int]$process.ExitCode
+            if ($record.ExitCode -eq 0) {
+                $record.Status = "passed"
+            } else {
+                $record.Status = "failed"
+            }
+            Write-Host "Post-check ${Name} exit code: $($record.ExitCode)"
+        }
+        try {
+            $outText = $stdoutTask.Result
+            $errText = $stderrTask.Result
+            if ($outText) { Write-Host $outText }
+            if ($errText) { Write-Host $errText }
+        } catch { }
+    } catch {
+        $record.Status = "failed"
+        $record.Error = "$_"
+        Write-Host "Post-check ${Name} error: $_"
+        Write-Host "Native exit code: $($record.ExitCode)"
+    } finally {
+        if ($null -ne $process) { $process.Dispose() }
+        [void]$script:PostCheckResults.Add($record)
+    }
 }
 
 function Invoke-BasePython {
@@ -39,12 +188,27 @@ function Invoke-BasePython {
 
     $pyLauncher = Get-Command py -ErrorAction SilentlyContinue
     if ($pyLauncher) {
-        & $pyLauncher.Source -3 @Arguments
+        Invoke-LoggedNative -Executable $pyLauncher.Source -Arguments (@("-3") + $Arguments)
         return
     }
 
     $python = Get-Command python -ErrorAction Stop
-    & $python.Source @Arguments
+    Invoke-LoggedNative -Executable $python.Source -Arguments $Arguments
+}
+
+function Save-BuildDiagnostics {
+    # Only archive this attempt's PyInstaller files, never a previous build's.
+    if (-not $script:PyInstallerStarted) { return }
+    foreach ($DiagnosticPath in @(
+        (Join-Path $WorkDir "$AppName\warn-$AppName.txt"),
+        (Join-Path $WorkDir "$AppName\xref-$AppName.html"),
+        (Join-Path $SpecDir "$AppName.spec")
+    )) {
+        if ((Test-Path -LiteralPath $DiagnosticPath) -and
+            (Get-Item -LiteralPath $DiagnosticPath).LastWriteTime -ge $BuildStartedAt) {
+            Copy-Item -LiteralPath $DiagnosticPath -Destination $BuildEvidenceDir -Force
+        }
+    }
 }
 
 if ($env:OS -ne "Windows_NT") {
@@ -60,6 +224,7 @@ $IconsDir = Join-Path $RepoRoot "assets\icons"
 $AppIcon = Join-Path $IconsDir "tracelab.ico"
 $RuntimeDependencyTool = Join-Path $PSScriptRoot "windows_runtime_dependencies.py"
 $BatchRenderSmokeTool = Join-Path $PSScriptRoot "verify_frozen_batch_render.py"
+$ImporterSmokeTool = Join-Path $PSScriptRoot "verify_lite_importer_runtime.py"
 $VenvDir = Join-Path $RepoRoot ".venv-build-win"
 $VenvPython = Join-Path $VenvDir "Scripts\python.exe"
 $DistDir = Join-Path $RepoRoot "dist"
@@ -67,15 +232,38 @@ $WorkDir = Join-Path $RepoRoot "build\pyinstaller-lite"
 $SpecDir = Join-Path $RepoRoot "build\spec-lite"
 $OutputDir = Join-Path $DistDir $AppName
 $ExePath = Join-Path $OutputDir "$AppName.exe"
-$BuildEvidenceDir = Join-Path $RepoRoot ".state\build-evidence"
+$BuildRunId = "$(Get-Date -Format 'yyyyMMdd-HHmmss-fff')-$([guid]::NewGuid().ToString('N'))"
+$BuildEvidenceDir = Join-Path $RepoRoot ".state\build-evidence\lite\$BuildRunId"
+$BuildLog = Join-Path $BuildEvidenceDir "build.log"
+$BuildStartedAt = Get-Date
+$script:BuildStage = "Initializing"
+$script:PyInstallerStarted = $false
+$script:ExeGenerated = $false
+$script:PostCheckResults = New-Object System.Collections.ArrayList
+$BuildSucceeded = $false
+New-Item -ItemType Directory -Force -Path $BuildEvidenceDir | Out-Null
+Start-Transcript -LiteralPath $BuildLog -NoClobber | Out-Host
+try {
+# Keep the build body in this script's scope; finally closes even failed runs.
+Write-Host "Evidence: $BuildEvidenceDir"
+Write-Host "Repo: $RepoRoot"
+Write-Host "Working directory: $((Get-Location).Path)"
+Write-Host "PowerShell: $($PSVersionTable.PSVersion); OS: $([Environment]::OSVersion)"
+Write-Host "Version=$Version AppName=$AppName Console=$Console SkipInstall=$SkipInstall KeepPrevious=$KeepPrevious"
+if (Get-Command git -ErrorAction SilentlyContinue) {
+    & git -C $RepoRoot rev-parse HEAD | Out-Host
+    & git -C $RepoRoot status --short | Out-Host
+}
+Copy-Item -LiteralPath $PSCommandPath -Destination $BuildEvidenceDir
 # Default output: dist\TraceLabAnalyzer8.3.1\TraceLabAnalyzer8.3.1.exe
 # (override with -Version or -AppName)
 
-foreach ($RequiredPath in @($EntryScript, $Requirements, $StyleQss, $RuntimeDependencyTool, $BatchRenderSmokeTool)) {
+foreach ($RequiredPath in @($EntryScript, $Requirements, $StyleQss, $RuntimeDependencyTool, $BatchRenderSmokeTool, $ImporterSmokeTool)) {
     if (-not (Test-Path $RequiredPath)) {
         throw "Required file not found: $RequiredPath"
     }
 }
+Copy-Item -LiteralPath $Requirements -Destination $BuildEvidenceDir
 
 Write-Step "Preparing build environment"
 if (-not (Test-Path $VenvPython)) {
@@ -83,12 +271,18 @@ if (-not (Test-Path $VenvPython)) {
 }
 
 if (-not $SkipInstall) {
-    & $VenvPython -m pip install --upgrade pip setuptools wheel
+    Write-Step "Installing build dependencies"
+    Invoke-LoggedNative -Executable $VenvPython -Arguments @("-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel")
     # Analyzer-only: base requirements only (no acquisition extras installed).
-    & $VenvPython -m pip install -r $Requirements
-    & $VenvPython -m pip install --upgrade pyinstaller qtawesome
+    Invoke-LoggedNative -Executable $VenvPython -Arguments @("-m", "pip", "install", "-r", $Requirements)
+    Invoke-LoggedNative -Executable $VenvPython -Arguments @("-m", "pip", "install", "--upgrade", "pyinstaller", "qtawesome")
 }
 
+Write-Step "Recording Python and installed package versions"
+Invoke-LoggedNative -Executable $VenvPython -Arguments @("-c", "import sys, platform; print(sys.executable); print(sys.version); print(platform.platform()); print(platform.machine())")
+Invoke-LoggedNative -Executable $VenvPython -Arguments @("-m", "pip", "freeze", "--all")
+
+Write-Step "Preparing output directories"
 if (-not $KeepPrevious) {
     foreach ($PathToRemove in @($OutputDir, $WorkDir, $SpecDir)) {
         if (Test-Path $PathToRemove) {
@@ -100,16 +294,14 @@ if (-not $KeepPrevious) {
 New-Item -ItemType Directory -Force -Path $DistDir, $WorkDir, $SpecDir, $BuildEvidenceDir | Out-Null
 
 Write-Step "Verifying frozen import dependency contract"
-& $VenvPython $RuntimeDependencyTool --verify --require-installed --requirements $Requirements --build-script $PSCommandPath
-if ($LASTEXITCODE -ne 0) {
-    throw "Frozen import dependency contract failed"
-}
-$RuntimeDependencyArgsJson = & $VenvPython $RuntimeDependencyTool --pyinstaller-args-json --flavor lite
-if ($LASTEXITCODE -ne 0) {
-    throw "Could not resolve frozen import dependency arguments"
-}
+Invoke-LoggedNative -Executable $VenvPython -Arguments @($RuntimeDependencyTool, "--verify", "--require-installed", "--requirements", $Requirements, "--build-script", $PSCommandPath)
+$RuntimeDependencyArgsJson = Invoke-LoggedNative -Executable $VenvPython -Arguments (@($RuntimeDependencyTool) + ("--pyinstaller-args-json --flavor lite" -split " ")) -CaptureStdout
+Write-Host "Runtime dependency arguments: $RuntimeDependencyArgsJson"
 try {
-    $RuntimeDependencyArgs = @($RuntimeDependencyArgsJson | ConvertFrom-Json)
+    # PowerShell 5.1 emits the JSON array as one pipeline object. An outer @()
+    # nests it, and Invoke-LoggedNative's [string[]] then joins all flags into
+    # one argument. Convert the returned array directly to a flat string[].
+    $RuntimeDependencyArgs = [string[]](ConvertFrom-Json -InputObject $RuntimeDependencyArgsJson)
 } catch {
     throw "Frozen import dependency arguments were not valid JSON: $_"
 }
@@ -246,16 +438,16 @@ $PyInstallerArgs += $EntryScript
 
 $BatchRenderOffscreenSmokeEvidence = Join-Path $BuildEvidenceDir "$AppName-batch-render-offscreen-smoke.json"
 $BatchRenderWindowsSmokeEvidence = Join-Path $BuildEvidenceDir "$AppName-batch-render-windows-smoke.json"
-foreach ($StaleEvidencePath in @($BatchRenderOffscreenSmokeEvidence, $BatchRenderWindowsSmokeEvidence)) {
+$ImporterSmokeEvidence = Join-Path $BuildEvidenceDir "$AppName-importer-smoke.json"
+foreach ($StaleEvidencePath in @($BatchRenderOffscreenSmokeEvidence, $BatchRenderWindowsSmokeEvidence, $ImporterSmokeEvidence)) {
     if (Test-Path -LiteralPath $StaleEvidencePath) {
         Remove-Item -LiteralPath $StaleEvidencePath -Force
     }
 }
-& $VenvPython @PyInstallerArgs
-$PyInstallerExitCode = $LASTEXITCODE
-if ($PyInstallerExitCode -ne 0) {
-    throw "PyInstaller failed with exit code $PyInstallerExitCode"
-}
+Write-Host "Python: $VenvPython"
+Write-Host "PyInstaller arguments: $($PyInstallerArgs | ConvertTo-Json -Compress)"
+$script:PyInstallerStarted = $true
+Invoke-LoggedNative -Executable $VenvPython -Arguments $PyInstallerArgs
 
 if (-not (Test-Path $ExePath)) {
     throw "Build finished but exe was not found: $ExePath"
@@ -274,6 +466,7 @@ foreach ($QtPlatformPlugin in @("qoffscreen.dll", "qwindows.dll")) {
 # files.  PyInstaller nevertheless carries SciPy's one OpenBLAS payload after
 # static analysis.  Remove only that known, resolved file, and fail closed if a
 # later SciPy layout carries any other native file in this directory.
+Write-Step "Pruning the optional SciPy OpenBLAS payload"
 $SciPyLibsDir = Join-Path $OutputDir "_internal\scipy.libs"
 if (Test-Path -LiteralPath $SciPyLibsDir) {
     $SciPyOpenBlas = @(Get-ChildItem -LiteralPath $SciPyLibsDir -File -Filter "libscipy_openblas*.dll")
@@ -289,14 +482,14 @@ if (Test-Path -LiteralPath $SciPyLibsDir) {
     Remove-Item -LiteralPath $SciPyLibsDir -Force
 }
 
-Write-Step "Verifying frozen batch rendering (offscreen + windows)"
-& $VenvPython $BatchRenderSmokeTool --exe $ExePath --platform offscreen --evidence-json $BatchRenderOffscreenSmokeEvidence
-if ($LASTEXITCODE -ne 0) {
-    throw "Frozen offscreen batch render smoke failed; see $BatchRenderOffscreenSmokeEvidence"
-}
-& $VenvPython $BatchRenderSmokeTool --exe $ExePath --platform windows --evidence-json $BatchRenderWindowsSmokeEvidence
-if ($LASTEXITCODE -ne 0) {
-    throw "Frozen Windows batch render smoke failed; see $BatchRenderWindowsSmokeEvidence"
+$script:ExeGenerated = $true
+Write-Step "Verifying frozen batch rendering and importer runtime (independent post-checks)"
+Invoke-IndependentPostCheck -Name "offscreen" -Executable $VenvPython -Arguments @($BatchRenderSmokeTool, "--exe", $ExePath, "--platform", "offscreen", "--evidence-json", $BatchRenderOffscreenSmokeEvidence, "--diagnostics-dir", (Join-Path $BuildEvidenceDir "render-offscreen")) -TimeoutSeconds 300
+Invoke-IndependentPostCheck -Name "windows" -Executable $VenvPython -Arguments @($BatchRenderSmokeTool, "--exe", $ExePath, "--platform", "windows", "--evidence-json", $BatchRenderWindowsSmokeEvidence, "--diagnostics-dir", (Join-Path $BuildEvidenceDir "render-windows")) -TimeoutSeconds 300
+Invoke-IndependentPostCheck -Name "importer" -Executable $VenvPython -Arguments @($ImporterSmokeTool, "--exe", $ExePath, "--evidence-json", $ImporterSmokeEvidence, "--diagnostics-dir", (Join-Path $BuildEvidenceDir "importer-smoke")) -TimeoutSeconds 120
+Write-PostCheckSummary
+if (-not (Test-AllPostChecksPassed)) {
+    throw "Post-build checks failed; EXE generated; see evidence under $BuildEvidenceDir"
 }
 
 Write-Step "Build output"
@@ -306,3 +499,21 @@ Write-Host "Folder: $OutputDir"
 Write-Host "Exe:    $ExePath"
 Write-Host "Size:   $SizeMB MB (analyzer-only, acquisition excluded)"
 Write-Host "Run:    $ExePath"
+$BuildSucceeded = $true
+} catch {
+    Write-Host "BUILD FAILED at stage: $script:BuildStage" -ForegroundColor Red
+    Write-Host ($_ | Format-List * -Force | Out-String)
+    Write-Host $_.ScriptStackTrace
+    throw
+} finally {
+    try {
+        Save-BuildDiagnostics
+    } catch {
+        Write-Warning "Could not archive all PyInstaller diagnostics: $_"
+    }
+    $BuildElapsed = (Get-Date) - $BuildStartedAt
+    Write-PostCheckSummary
+    Write-Host "Build succeeded: $BuildSucceeded; elapsed: $BuildElapsed; last stage: $script:BuildStage"
+    Write-Host "Full build log: $BuildLog"
+    Stop-Transcript | Out-Host
+}

@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
 import json
 from pathlib import Path
 import subprocess
 import sys
+import traceback
+from tempfile import TemporaryDirectory
 import wave
 
 import av
@@ -58,46 +61,165 @@ def create_fixtures(directory: Path) -> tuple[Path, Path, Path, Path]:
     return legacy_mat, hdf5_mat, wav, mp4
 
 
-def verify(exe: Path) -> int:
-    """Run the frozen import child against all generated fixtures."""
-    from tempfile import TemporaryDirectory
+def _write_json(path: Path, payload: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    with TemporaryDirectory(prefix="tracelab-importer-smoke-") as raw_directory:
+
+def _best_effort_write(stream, text: str) -> None:
+    if stream is None:
+        return
+    try:
+        stream.write(text)
+    except Exception:
+        return
+
+
+def _evaluate_result(output: Path) -> tuple[int, dict[str, object]]:
+    try:
+        result = json.loads(output.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return 1, {"ok": False, "error": f"Importer smoke did not produce valid JSON: {exc}"}
+    records = result.get("files")
+    if not isinstance(records, list) or len(records) != 4:
+        return 1, {
+            "ok": False,
+            "error": "Importer smoke did not report all four fixtures",
+            "result": result,
+        }
+    if any(not isinstance(record, dict) or record.get("channels", 0) <= 0 for record in records):
+        return 1, {
+            "ok": False,
+            "error": "Importer smoke reported an empty channel set",
+            "result": result,
+        }
+    return 0, {"ok": True, "result": result}
+
+
+def verify(
+    exe: Path,
+    *,
+    diagnostics_dir: Path | None = None,
+    evidence_json: Path | None = None,
+    timeout: float = 60,
+) -> int:
+    """Run the frozen import child against all generated fixtures.
+
+    Probe truth is the exit code plus ``result.json``. Console streams are
+    best-effort and must not be required for a windowed executable.
+    """
+    exe = Path(exe).resolve()
+    if diagnostics_dir is not None:
+        diagnostics_dir = Path(diagnostics_dir).resolve()
+        diagnostics_dir.mkdir(parents=True, exist_ok=False)
+    workspace = (
+        nullcontext(diagnostics_dir) if diagnostics_dir is not None
+        else TemporaryDirectory(prefix="tracelab-importer-smoke-")
+    )
+    evidence: dict[str, object] = {"ok": False, "runtime": "frozen-importer-smoke"}
+    return_code = 1
+    with workspace as raw_directory:
         directory = Path(raw_directory)
-        paths = create_fixtures(directory)
+        fixtures_dir = directory / "fixtures"
+        paths = create_fixtures(fixtures_dir)
         output = directory / "result.json"
         command = [str(exe), "--importer-runtime-smoke"]
         for path in paths:
             command.extend(("--import-path", str(path)))
         command.extend(("--json", str(output)))
-        completed = subprocess.run(command, capture_output=True, text=True, timeout=60)
-        if completed.returncode != 0:
-            sys.stderr.write(completed.stdout)
-            sys.stderr.write(completed.stderr)
-            return completed.returncode or 1
+        _write_json(
+            directory / "command.json",
+            {"argv": command, "timeout_seconds": timeout},
+        )
         try:
-            result = json.loads(output.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            print(f"Importer smoke did not produce valid JSON: {exc}", file=sys.stderr)
-            return 1
-        records = result.get("files")
-        if not isinstance(records, list) or len(records) != 4:
-            print("Importer smoke did not report all four fixtures", file=sys.stderr)
-            return 1
-        if any(not isinstance(record, dict) or record.get("channels", 0) <= 0 for record in records):
-            print("Importer smoke reported an empty channel set", file=sys.stderr)
-            return 1
-        print(json.dumps(result, ensure_ascii=False))
-        return 0
+            with (directory / "stdout.log").open("wb") as stdout, (
+                directory / "stderr.log"
+            ).open("wb") as stderr:
+                completed = subprocess.run(
+                    command, stdout=stdout, stderr=stderr, timeout=timeout,
+                )
+        except subprocess.TimeoutExpired as exc:
+            _write_json(
+                directory / "timeout.json",
+                {
+                    "timed_out": True,
+                    "timeout_seconds": timeout,
+                    "command": command,
+                    "error": f"{type(exc).__name__}: {exc}",
+                },
+            )
+            evidence = {
+                "ok": False,
+                "timed_out": True,
+                "timeout_seconds": timeout,
+                "error": f"{type(exc).__name__}: {exc}",
+                "result_json": str(output),
+                "fixtures": [str(path) for path in paths],
+            }
+            return_code = 1
+        except Exception as exc:
+            evidence = {
+                "ok": False,
+                "error": f"{type(exc).__name__}: {exc}",
+                "traceback": traceback.format_exc(),
+            }
+            return_code = 1
+        else:
+            if completed.returncode != 0:
+                detail = output.read_text(encoding="utf-8") if output.is_file() else ""
+                evidence = {
+                    "ok": False,
+                    "exit_code": completed.returncode,
+                    "error": (
+                        f"frozen importer child failed ({completed.returncode}): {detail}"
+                    ),
+                    "result_json": str(output),
+                    "fixtures": [str(path) for path in paths],
+                }
+                return_code = completed.returncode or 1
+            else:
+                return_code, evidence = _evaluate_result(output)
+                evidence["exit_code"] = completed.returncode
+                evidence["result_json"] = str(output)
+                evidence["fixtures"] = [str(path) for path in paths]
+        evidence.setdefault("runtime", "frozen-importer-smoke")
+        evidence["executable"] = str(exe)
+        if evidence_json is not None:
+            _write_json(Path(evidence_json), evidence)
+        elif diagnostics_dir is not None:
+            _write_json(directory / "evidence.json", evidence)
+        if evidence.get("ok") is True:
+            _best_effort_write(
+                sys.stdout,
+                json.dumps(evidence.get("result"), ensure_ascii=False) + "\n",
+            )
+        else:
+            _best_effort_write(
+                sys.stderr,
+                f"Frozen importer verification failed: {evidence.get('error')}\n",
+            )
+        return return_code
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--exe", type=Path, required=True)
+    parser.add_argument(
+        "--diagnostics-dir",
+        type=Path,
+        help="New directory retaining fixtures, child logs, result JSON, and timeout evidence",
+    )
+    parser.add_argument("--evidence-json", type=Path)
+    parser.add_argument("--timeout", type=float, default=60)
     args = parser.parse_args(argv)
     if not args.exe.is_file():
         parser.error(f"frozen executable not found: {args.exe}")
-    return verify(args.exe)
+    return verify(
+        args.exe,
+        diagnostics_dir=args.diagnostics_dir,
+        evidence_json=args.evidence_json,
+        timeout=args.timeout,
+    )
 
 
 if __name__ == "__main__":

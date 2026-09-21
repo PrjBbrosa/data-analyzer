@@ -79,7 +79,6 @@ from ..ui_kit.ticks_math import (
 )
 from ..batch_statistics import display_x
 
-from ._fonts import apply_axis_font, chart_font
 from ._models import (
     BatchFrfFigureSpec,
     BatchFrfSeries,
@@ -91,7 +90,17 @@ from ._models import (
 )
 from ._page import add_report_footer, add_report_header
 from ._palette import slice_palette
-from ._theme import SERIES_COLORS, RenderTheme, render_theme, scaled_fonts
+from ._theme import (
+    SERIES_COLORS,
+    RenderTheme,
+    apply_export_axis_font,
+    export_chart_font,
+    export_chart_font_pt,
+    export_css_px,
+    export_reference_pt,
+    render_theme,
+    scaled_fonts,
+)
 
 
 _SUPPORTED_KINDS = frozenset({"time", "fft", "fft_time", "frf", "order_time"})
@@ -528,8 +537,8 @@ def _slice_legend_content_width(
     multiples of ``axis_font_pt`` and drift apart the moment one of them is
     edited alone.
     """
-    body = QFontMetricsF(chart_font(body_pt))
-    title_font = chart_font(title_pt)
+    body = QFontMetricsF(export_chart_font(body_pt))
+    title_font = export_chart_font(title_pt)
     title_font.setBold(True)  # the heading declares font-weight:600
     swatch = float(body.width(_SLICE_LEGEND_SWATCH_TEXT))
     rows = max(
@@ -566,10 +575,10 @@ def _slice_legend_html(
             f'{label}</td></tr>'
         )
     return (
-        f'<div style="font-size:{title_pt:.2f}pt; font-weight:600; '
+        f'<div style="font-size:{export_css_px(title_pt)}; font-weight:600; '
         f'color:#64748b; padding-bottom:3px;">{title}</div>'
         '<table cellspacing="0" cellpadding="0" '
-        f'style="font-size:{body_pt:.2f}pt; border-collapse:collapse; '
+        f'style="font-size:{export_css_px(body_pt)}; border-collapse:collapse; '
         f'color:#172033;">{"".join(rows)}</table>'
     )
 
@@ -798,7 +807,9 @@ class _StatisticsCard(pg.GraphicsObject):
         self._radius = 9.0
         self._text = QGraphicsTextItem(self)
         self._text.setDefaultTextColor(QColor(text_color))
-        self._text.setFont(chart_font(self.body_font_pt))
+        body_font = export_chart_font(self.body_font_pt)
+        self._text.setFont(body_font)
+        self._text.document().setDefaultFont(body_font)
         self._text.document().setDocumentMargin(0.0)
         self._text.setHtml(html)
         self._text.document().setTextWidth(float(content_width))
@@ -1103,16 +1114,36 @@ class BuiltBatchScene:
                 label = getattr(axis, "label", None)
                 if label is None or not str(axis.labelText or "").strip():
                     continue
-                self._shrink_label_to_fit(label, available - 2.0)
+                self._shrink_label_to_fit(axis, label, available - 2.0)
 
     @staticmethod
-    def _shrink_label_to_fit(label, available: float) -> None:
-        point_size = float(label.font().pointSizeF())
-        for _attempt in range(12):
-            if float(label.boundingRect().width()) <= available or point_size <= 6.0:
+    def _shrink_label_to_fit(axis, label, available: float) -> None:
+        min_pt = export_reference_pt(6.0)
+        font = label.font()
+        point_size = float(font.pointSizeF())
+        if point_size <= 0:
+            pixel_size = int(font.pixelSize())
+            if pixel_size <= 0:
                 return
-            point_size = max(6.0, point_size - 1.0)
-            label.setFont(chart_font(point_size))
+            point_size = export_reference_pt(pixel_size * 72.0 / 96.0)
+        for _attempt in range(12):
+            if float(label.boundingRect().width()) <= available or point_size <= min_pt:
+                return
+            point_size = max(min_pt, point_size - 1.0)
+            next_font = export_chart_font_pt(point_size)
+            label.setFont(next_font)
+            style = getattr(axis, "labelStyle", None)
+            if not isinstance(style, dict):
+                continue
+            family = str(next_font.family()).replace("'", "")
+            axis.labelStyle = {
+                **style,
+                "font-size": f"{point_size:.4f}pt",
+                "font-family": f"'{family}'" if family else "sans-serif",
+            }
+            label_string = getattr(axis, "labelString", None)
+            if callable(label_string):
+                label.setHtml(label_string())
 
     def _apply_tick_density(self) -> None:
         """Pin every value axis to the recipe's requested number of divisions.
@@ -1498,7 +1529,7 @@ class _SceneBuilder:
             axis.setTextPen(pg.mkPen(self.theme.muted))
             axis.setStyle(maxTickLevel=0)
             axis.enableAutoSIPrefix(False)
-            apply_axis_font(axis, self.theme.axis_font_pt)
+            apply_export_axis_font(axis, self.theme.axis_font_pt)
         plot.hideAxis("right")
         plot.hideAxis("top")
         self.plots.append(plot)
@@ -1506,10 +1537,9 @@ class _SceneBuilder:
 
     def _apply_legend_font(self, legend) -> None:
         """Keep legend entries on the same text scale as the axes."""
-        try:
-            legend.setLabelTextSize(f"{self.theme.axis_font_pt:g}pt")
-        except Exception:
-            pass
+        setter = getattr(legend, "setLabelTextSize", None)
+        if callable(setter):
+            setter(export_css_px(self.theme.axis_font_pt))
 
     def _apply_analysis_frame(self, plot) -> None:
         """Match the existing full neutral-axis frame."""
@@ -1634,7 +1664,7 @@ class _SceneBuilder:
                                 self.theme.plot_background.green(),
                                 self.theme.plot_background.blue(), 220),
             )
-            title_item.setFont(chart_font(self.theme.panel_title_font_pt))
+            title_item.setFont(export_chart_font(self.theme.panel_title_font_pt))
             plot.scene().addItem(title_item)
             title_item.setZValue(1000)
 
@@ -1659,7 +1689,7 @@ class _SceneBuilder:
             plot.showAxis("right")
             right_axis = plot.getAxis("right")
             right_axis.setLabel(_linear_amplitude_label(units[1]))
-            apply_axis_font(right_axis, self.theme.axis_font_pt)
+            apply_export_axis_font(right_axis, self.theme.axis_font_pt)
             right_view = pg.ViewBox(enableMenu=False)
             right_view.setMouseEnabled(x=False, y=False)
             plot.scene().addItem(right_view)
@@ -1812,10 +1842,10 @@ class _SceneBuilder:
         muted_pt = self.theme.axis_font_pt * 0.76
         if diagnostic is not None:
             text = (
-                f'<div style="font-size:{title_pt:.2f}pt; font-weight:600; color:#991b1b;">{diagnostic.title}</div>'
+                f'<div style="font-size:{export_css_px(title_pt)}; font-weight:600; color:#991b1b;">{diagnostic.title}</div>'
                 '<div style="height:4px;"></div>'
-                f'<div style="font-size:{body_pt:.2f}pt; color:#7f1d1d;">{diagnostic.message}</div>'
-                f'<div style="font-size:{muted_pt:.2f}pt; color:#b91c1c; padding-top:3px;">{diagnostic.suggestion}</div>'
+                f'<div style="font-size:{export_css_px(body_pt)}; color:#7f1d1d;">{diagnostic.message}</div>'
+                f'<div style="font-size:{export_css_px(muted_pt)}; color:#b91c1c; padding-top:3px;">{diagnostic.suggestion}</div>'
             )
             card = _StatisticsCard(
                 text,
@@ -1899,10 +1929,10 @@ class _SceneBuilder:
                     f'+{len(rows) - 6} 条</td></tr>'
                 )
             text = (
-                f'<div style="font-size:{title_pt:.2f}pt; font-weight:600; color:#172033; padding-bottom:4px;">图内统计'
-                f'<span style="font-size:{muted_pt:.2f}pt; font-weight:400; color:#64748b;">{range_fact}</span></div>'
+                f'<div style="font-size:{export_css_px(title_pt)}; font-weight:600; color:#172033; padding-bottom:4px;">图内统计'
+                f'<span style="font-size:{export_css_px(muted_pt)}; font-weight:400; color:#64748b;">{range_fact}</span></div>'
                 '<table cellspacing="0" cellpadding="0" '
-                f'style="font-size:{body_pt:.2f}pt; border-collapse:collapse; color:#172033;">'
+                f'style="font-size:{export_css_px(body_pt)}; border-collapse:collapse; color:#172033;">'
                 '<tr><th style="padding:1px 5px; text-align:left; white-space:nowrap; color:#64748b;">路径</th>'
                 f'{header_cells}'
                 '<th style="padding:1px 1px 1px 5px; text-align:right; color:#64748b;">样本数</th></tr>'
@@ -2301,6 +2331,7 @@ class _SceneBuilder:
             # Legend identity remains full-alpha even when the plotted base
             # curve is faded for low coherence.
             legend.addItem(self.frf_bright_curves[0][-1], legend_label)
+        self._apply_legend_font(legend)
 
         log_frequency = spec.frequency_scale == "log"
         for plot in plots:
@@ -2450,7 +2481,7 @@ class _SceneBuilder:
             axis.setTextPen(pg.mkPen(self.theme.muted))
             axis.enableAutoSIPrefix(False)
             axis.setStyle(maxTickLevel=0)
-            apply_axis_font(axis, self.theme.axis_font_pt)
+            apply_export_axis_font(axis, self.theme.axis_font_pt)
         # Vertical ColorBarItem pins the numeric RIGHT axis at 45 px. That
         # is the colorband's neighbour, not the colorband itself; releasing
         # and pinning it to the current tick strings is what keeps 480000

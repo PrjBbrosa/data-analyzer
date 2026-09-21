@@ -8,6 +8,7 @@ literals — see ``docs/analyzer/specs/2026-08-12-guideline-hardening-spec.md``
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
 import hashlib
 import json
 import os
@@ -24,6 +25,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from mf4_analyzer.batch_render_qt._theme import (  # noqa: E402
+    EXPORT_FONT_DPI,
+    THEMES,
+)
 from mf4_analyzer.qt_analysis_shared import (  # noqa: E402
     DEFAULT_HEATMAP_CMAP,
     _resolve_colormap,
@@ -42,6 +47,12 @@ EXPECTED_NAMES = {
     for kind in DEFAULT_CMAP_HEATMAP_KINDS
     for image_format in FORMATS
 }
+LAYOUT_ARTIFACT = "time.png"
+# Title/legend use the same floor as header_ink_proof; per-tick only needs
+# visible ink, not that phrase-sized budget.
+REGION_INK_MIN = 120
+TICK_INK_MIN = 8
+REGION_BACKGROUND_DELTA = 12
 
 
 def _endpoint_rgb(color_map: pg.ColorMap) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
@@ -77,15 +88,25 @@ def _tree_measurement(directory: Path) -> dict[str, object]:
 
 
 def _pixel_rgb_array(image: QImage) -> np.ndarray:
+    """Return an owned RGB array; never a view of a temporary QImage buffer."""
+    if image.isNull() or image.width() <= 0 or image.height() <= 0:
+        raise ValueError("cannot read pixels from an empty QImage")
     converted = image.convertToFormat(QImage.Format_RGB888)
+    if converted.isNull() or converted.width() <= 0 or converted.height() <= 0:
+        raise ValueError("cannot read pixels from an empty QImage")
     ptr = converted.bits()
+    if ptr is None:
+        raise ValueError("cannot read pixels from an empty QImage")
     ptr.setsize(converted.byteCount())
+    height = converted.height()
+    width = converted.width()
     rows = np.frombuffer(ptr, dtype=np.uint8).reshape(
-        converted.height(), converted.bytesPerLine()
+        height, converted.bytesPerLine()
     )
-    return rows[:, : converted.width() * 3].reshape(
-        converted.height(), converted.width(), 3
-    )
+    # Copy packed RGB while `converted` is alive; drop bytesPerLine padding.
+    owned = np.empty((height, width, 3), dtype=np.uint8)
+    owned.reshape(height, width * 3)[:] = rows[:, : width * 3]
+    return owned
 
 
 def _contains_rgb(
@@ -95,6 +116,145 @@ def _contains_rgb(
     wanted = np.asarray(expected, dtype=np.int16)
     delta = np.abs(pixels.astype(np.int16) - wanted)
     return int(np.count_nonzero(np.all(delta <= tolerance, axis=2)))
+
+
+def _theme_background_rgb() -> tuple[int, int, int]:
+    color = THEMES["white"].background
+    return (int(color.red()), int(color.green()), int(color.blue()))
+
+
+def _as_rect(value) -> list[float] | None:
+    if not isinstance(value, (list, tuple)) or len(value) != 4:
+        return None
+    try:
+        rect = [float(part) for part in value]
+    except (TypeError, ValueError):
+        return None
+    if any(not np.isfinite(part) for part in rect):
+        return None
+    return rect
+
+
+def _rects_overlap(rect_a: list[float], rect_b: list[float]) -> bool:
+    ax, ay, aw, ah = rect_a
+    bx, by, bw, bh = rect_b
+    left = max(ax, bx)
+    top = max(ay, by)
+    right = min(ax + aw, bx + bw)
+    bottom = min(ay + ah, by + bh)
+    return (right - left) > 0.5 and (bottom - top) > 0.5
+
+
+def same_axis_tick_overlaps(ticks: list[dict[str, object]]) -> list[list[str]]:
+    """Recompute overlaps from PNG-space tick rects; do not trust the child flag."""
+    groups: dict[tuple[object, object], list[tuple[list[float], str]]] = {}
+    for tick in ticks:
+        rect = _as_rect(tick.get("rect"))
+        if rect is None:
+            continue
+        key = (tick.get("panel", 0), tick.get("side"))
+        groups.setdefault(key, []).append((rect, str(tick.get("text") or "")))
+    overlaps: list[list[str]] = []
+    for records in groups.values():
+        for index, (rect_a, text_a) in enumerate(records):
+            for rect_b, text_b in records[index + 1 :]:
+                if _rects_overlap(rect_a, rect_b):
+                    overlaps.append([text_a, text_b])
+    return overlaps
+
+
+def _region_ink_count(
+    image: QImage,
+    rect: list[float],
+    background: tuple[int, int, int],
+) -> int:
+    pixels = _pixel_rgb_array(image)
+    x, y, width, height = (int(round(part)) for part in rect)
+    x0 = max(0, x)
+    y0 = max(0, y)
+    x1 = min(int(pixels.shape[1]), x + max(width, 0))
+    y1 = min(int(pixels.shape[0]), y + max(height, 0))
+    if x1 <= x0 or y1 <= y0:
+        return 0
+    crop = pixels[y0:y1, x0:x1]
+    wanted = np.asarray(background, dtype=np.int16)
+    delta = np.abs(crop.astype(np.int16) - wanted)
+    return int(np.count_nonzero(np.any(delta > REGION_BACKGROUND_DELTA, axis=2)))
+
+
+def verify_page_layout(
+    image: QImage, layout: dict[str, object]
+) -> dict[str, object]:
+    """Independent PNG-region endorsement of title, ticks, and legend."""
+    page = layout.get("page")
+    if not isinstance(page, dict):
+        raise RuntimeError("render child omitted page layout diagnostics")
+    if str(page.get("artifact") or "") != LAYOUT_ARTIFACT:
+        raise RuntimeError(
+            f"layout diagnostics must describe {LAYOUT_ARTIFACT}, got {page.get('artifact')!r}"
+        )
+    title = page.get("title") if isinstance(page.get("title"), dict) else {}
+    legend = page.get("legend") if isinstance(page.get("legend"), dict) else {}
+    ticks = page.get("ticks") if isinstance(page.get("ticks"), list) else []
+    title_rect = _as_rect(title.get("rect"))
+    legend_rect = _as_rect(legend.get("rect"))
+    if title_rect is None or title_rect[2] < 1 or title_rect[3] < 1:
+        raise RuntimeError("render child omitted a usable title PNG region")
+    if legend_rect is None or legend_rect[2] < 1 or legend_rect[3] < 1:
+        raise RuntimeError("render child omitted a usable legend PNG region")
+    tick_records: list[dict[str, object]] = []
+    for tick in ticks:
+        if not isinstance(tick, dict):
+            continue
+        rect = _as_rect(tick.get("rect"))
+        if rect is None:
+            continue
+        tick_records.append(tick)
+    if len(tick_records) < 2:
+        raise RuntimeError("render child omitted tick PNG regions")
+    overlaps = same_axis_tick_overlaps(tick_records)
+    adjacent = page.get("adjacent_overlaps") or []
+    overflow = page.get("overflow") or []
+    if overlaps:
+        raise RuntimeError(f"overlapping tick labels in final layout: {overlaps}")
+    if adjacent:
+        raise RuntimeError(f"adjacent panel text overlaps in final layout: {adjacent}")
+    if overflow:
+        raise RuntimeError(f"tick labels overflow the page: {overflow}")
+
+    background = _theme_background_rgb()
+    title_ink = _region_ink_count(image, title_rect, background)
+    legend_ink = _region_ink_count(image, legend_rect, background)
+    if title_ink < REGION_INK_MIN:
+        raise RuntimeError(
+            f"title PNG region has no readable text ({title_ink} ink pixels)"
+        )
+    if legend_ink < REGION_INK_MIN:
+        raise RuntimeError(
+            f"legend PNG region has no readable text ({legend_ink} ink pixels)"
+        )
+    tick_ink_total = 0
+    empty_ticks: list[str] = []
+    for tick in tick_records:
+        rect = _as_rect(tick.get("rect"))
+        ink = _region_ink_count(image, rect, background)
+        tick_ink_total += ink
+        if ink < TICK_INK_MIN:
+            empty_ticks.append(str(tick.get("text") or ""))
+    if empty_ticks:
+        raise RuntimeError(f"tick PNG regions have no readable text: {empty_ticks}")
+    if tick_ink_total < REGION_INK_MIN:
+        raise RuntimeError(
+            f"tick PNG regions together have no readable text ({tick_ink_total} ink pixels)"
+        )
+    return {
+        "title_ink_pixels": title_ink,
+        "legend_ink_pixels": legend_ink,
+        "tick_ink_pixels": tick_ink_total,
+        "tick_count": len(tick_records),
+        "same_axis_tick_overlaps": overlaps,
+        "background_rgb": list(background),
+    }
 
 
 def _contains_rgb_in_interior(
@@ -184,6 +344,26 @@ def verify_artifacts(
             }
         )
 
+    layout = child.get("layout_diagnostics")
+    if not isinstance(layout, dict) or not layout:
+        raise RuntimeError("render child omitted font/DPI/layout diagnostics")
+    try:
+        export_dpi = float(layout.get("export_font_dpi"))
+    except (TypeError, ValueError):
+        raise RuntimeError("render child omitted export_font_dpi") from None
+    if abs(export_dpi - float(EXPORT_FONT_DPI)) > 0.01:
+        raise RuntimeError(
+            f"export font DPI must be {EXPORT_FONT_DPI:g}, got {export_dpi}"
+        )
+    try:
+        logical_dpi = float(layout.get("logical_dpi_x"))
+        axis_font_px = float(layout.get("axis_font_device_px"))
+    except (TypeError, ValueError):
+        raise RuntimeError("render child omitted DPI/font size diagnostics") from None
+    if logical_dpi <= 0.0 or axis_font_px <= 0.0:
+        raise RuntimeError("render child reported non-positive DPI/font diagnostics")
+    page_proof = verify_page_layout(QImage(str(artifacts / LAYOUT_ARTIFACT)), layout)
+
     turbo_low_rgb, turbo_high_rgb = _turbo_endpoint_rgb()
     for kind in ("fft_time", "order_time"):
         image = QImage(str(artifacts / f"{kind}.png"))
@@ -215,6 +395,8 @@ def verify_artifacts(
         "qt_platform_name": qt_platform_name,
         "cjk_proof": cjk_proof,
         "cjk_font_families": child.get("cjk_font_families", []),
+        "layout_diagnostics": layout,
+        "page_layout_proof": page_proof,
         "turbo_samples": {
             "low_rgb": list(turbo_low_rgb),
             "high_rgb": list(turbo_high_rgb),
@@ -227,11 +409,21 @@ def verify_artifacts(
     }
 
 
-def verify_frozen(exe: Path, expected_platform: str) -> dict[str, object]:
+def verify_frozen(
+    exe: Path, expected_platform: str, *, diagnostics_dir: Path | None = None,
+) -> dict[str, object]:
     exe = Path(exe).resolve()
     if not exe.is_file():
         raise FileNotFoundError(f"frozen executable not found: {exe}")
-    with TemporaryDirectory(prefix="tracelab-frozen-render-") as raw_directory:
+    if diagnostics_dir is not None:
+        diagnostics_dir = Path(diagnostics_dir).resolve()
+        # A new attempt must never inherit a previous child's JSON or images.
+        diagnostics_dir.mkdir(parents=True, exist_ok=False)
+    workspace = (
+        nullcontext(diagnostics_dir) if diagnostics_dir is not None
+        else TemporaryDirectory(prefix="tracelab-frozen-render-")
+    )
+    with workspace as raw_directory:
         directory = Path(raw_directory)
         artifacts = directory / "outputs"
         child_json = directory / "child.json"
@@ -245,12 +437,17 @@ def verify_frozen(exe: Path, expected_platform: str) -> dict[str, object]:
         ]
         environment = os.environ.copy()
         environment["QT_QPA_PLATFORM"] = expected_platform
-        completed = subprocess.run(
-            command,
-            capture_output=True,
-            timeout=240,
-            env=environment,
+        (directory / "command.json").write_text(
+            json.dumps({"argv": command, "QT_QPA_PLATFORM": expected_platform}, indent=2),
+            encoding="utf-8",
         )
+        # Stream bytes to disk so crashes/timeouts retain Qt's actual stderr.
+        with (directory / "stdout.log").open("wb") as stdout, (
+            directory / "stderr.log"
+        ).open("wb") as stderr:
+            completed = subprocess.run(
+                command, stdout=stdout, stderr=stderr, timeout=240, env=environment,
+            )
         if completed.returncode != 0:
             detail = child_json.read_text(encoding="utf-8") if child_json.is_file() else ""
             raise RuntimeError(
@@ -271,6 +468,7 @@ def main(argv: list[str] | None = None) -> int:
     source.add_argument("--exe", type=Path)
     source.add_argument("--artifacts", type=Path)
     parser.add_argument("--child-json", type=Path)
+    parser.add_argument("--diagnostics-dir", type=Path, help="New directory retaining child logs and PNGs, including failures")
     parser.add_argument(
         "--platform", choices=("offscreen", "windows"), required=True
     )
@@ -278,7 +476,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.exe is not None:
-            evidence = verify_frozen(args.exe, args.platform)
+            evidence = verify_frozen(
+                args.exe, args.platform, diagnostics_dir=args.diagnostics_dir,
+            )
         else:
             if args.child_json is None:
                 parser.error("--artifacts requires --child-json")

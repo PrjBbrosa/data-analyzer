@@ -261,6 +261,10 @@ lesson by default.
 | [Pin Consume Hides Live Items And Keeps Placement](pin-consume-hides-live-items-keep-placement.md) | Changing live-cursor consume after a successful Pin, `consume_live_cursor_pill`, or `_cursor_visible` / live InfiniteLine visibility. | See lesson |
 | [Popup Trigger Hover Must Bind Each Entry](popup-trigger-hover-must-bind-each-entry.md) | Adding or changing a button that opens `QMenu.exec_`, `QMenu.popup`, | See lesson |
 | [Cursor Close Chrome Needs Sibling Polish](cursor-close-chrome-needs-sibling-polish.md) | Changing cursor title actions, their role transitions, or button styling. | See lesson |
+| [Build Logs Must Include Native And Frozen Child Diagnostics](codex-build-logs-retain-native-stderr.md) | Adding build transcripts or investigating a frozen Windows failure. | See lesson |
+| [Preserve JSON Argument Boundaries Across Typed PowerShell Helpers](codex-powershell-json-native-argv.md) | Passing JSON-generated command arguments through a PowerShell helper. | See lesson |
+| [QImage.bits() Views Are Not Stable Pixel Data](qimage-bits-numpy-view-needs-owned-copy.md) | Turning a `QImage` into a NumPy array for ink, colormap, or layout checks. | See lesson |
+| [Batch Export Fonts Must Not Follow Screen DPI](batch-export-fonts-ignore-screen-dpi.md) | Changing Qt batch report titles, ticks, legends, stats cards, colorbars, or PNG export size. | See lesson |
 
 ## Selection Rules
 

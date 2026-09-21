@@ -113,6 +113,13 @@ def _pen_signature(curve):
     return pen.color().name(), pen.style(), pen.widthF()
 
 
+def _qimage_argb_bytes(image: QImage) -> bytes:
+    converted = image.convertToFormat(QImage.Format_ARGB32)
+    ptr = converted.bits()
+    ptr.setsize(converted.byteCount())
+    return bytes(ptr)
+
+
 def test_batch_qt_public_signature_and_default_line_width():
     *_, render_batch_image, _ = _qt_api()
     assert BatchRenderOptions().line_width == pytest.approx(1.5)
@@ -161,6 +168,7 @@ def test_render_style_defaults_beat_the_pyqtgraph_adaptive_x_density(qapp):
 
 def test_recipe_tick_density_and_font_scale_reach_the_axes(qapp):
     from mf4_analyzer.batch_render_qt._builder import _axis_tick_text_records
+    from mf4_analyzer.batch_render_qt._theme import export_pt_to_px
 
     sparse = _open_scene(
         qapp,
@@ -190,7 +198,16 @@ def test_recipe_tick_density_and_font_scale_reach_the_axes(qapp):
         assert dense.theme.header_font_pt > sparse.theme.header_font_pt
         dense_tick_font = dense.plots[0].getAxis("bottom").style["tickFont"]
         sparse_tick_font = sparse.plots[0].getAxis("bottom").style["tickFont"]
-        assert dense_tick_font.pointSizeF() > sparse_tick_font.pointSizeF()
+        from mf4_analyzer.batch_render_qt._theme import export_font_device_px
+        assert export_font_device_px(dense_tick_font) > export_font_device_px(
+            sparse_tick_font
+        )
+        assert export_font_device_px(dense_tick_font) == pytest.approx(
+            export_pt_to_px(dense.theme.axis_font_pt), abs=1.0
+        )
+        assert export_font_device_px(sparse_tick_font) == pytest.approx(
+            export_pt_to_px(sparse.theme.axis_font_pt), abs=1.0
+        )
 
         assert dense.adjacent_text_overlaps() == []
     finally:
@@ -1072,6 +1089,220 @@ def test_png_exact_pixels_dpi_metadata_theme_and_no_corner_chrome(
         assert image.pixelColor(x, y) == expected
 
 
+def test_export_fonts_use_96dpi_pixel_size_not_screen_points(qapp):
+    from mf4_analyzer.batch_render_qt._theme import (
+        EXPORT_FONT_DPI,
+        export_chart_font,
+        export_css_px,
+        export_font_device_px,
+        export_font_px,
+        export_pt_to_px,
+        export_reference_pt,
+        logical_export_dpi,
+    )
+
+    assert EXPORT_FONT_DPI == pytest.approx(96.0)
+    assert export_font_px(12.0) == 16
+    assert export_font_px(9.0) == 12
+    assert export_font_px(18.0) == 24
+    assert export_font_px(9.6) == 13
+    font = export_chart_font(12.0)
+    dpi = logical_export_dpi()
+    assert font.pointSizeF() == pytest.approx(export_reference_pt(12.0), abs=0.05)
+    painted = export_font_device_px(font)
+    # Near 96 CSS-DPI the theme pt is kept; 144/192 scale onto 16 px.
+    if abs(dpi - EXPORT_FONT_DPI) <= 8.0:
+        assert font.pointSizeF() == pytest.approx(12.0, abs=0.05)
+        assert painted == pytest.approx(12.0 * dpi / 72.0, abs=0.75)
+    else:
+        assert painted == pytest.approx(export_pt_to_px(12.0), abs=0.75)
+    assert export_css_px(12.0).endswith("pt")
+    widget_dpi = qapp.primaryScreen().logicalDotsPerInchX()
+    assert widget_dpi > 0
+
+
+def test_png_dpi_metadata_72_144_300_do_not_change_layout(qapp, tmp_path):
+    *_, render_batch_image, _ = _qt_api()
+    spec = _time_spec(count=1)
+    images = {}
+    for dpi in (72, 144, 300):
+        target = tmp_path / f"dpi-{dpi}.png"
+        render_batch_image(
+            ("time", spec),
+            target,
+            options=BatchRenderOptions(
+                width_px=640, height_px=360, dpi=dpi, background="white",
+            ),
+            context=_context(),
+        )
+        image = QImage(str(target))
+        assert (image.width(), image.height()) == (640, 360)
+        assert image.dotsPerMeterX() == round(dpi / 0.0254)
+        assert image.dotsPerMeterY() == round(dpi / 0.0254)
+        images[dpi] = image
+    reference = images[144].convertToFormat(QImage.Format_ARGB32)
+    reference_bits = _qimage_argb_bytes(reference)
+    for dpi in (72, 300):
+        converted = images[dpi].convertToFormat(QImage.Format_ARGB32)
+        assert converted.size() == reference.size()
+        assert _qimage_argb_bytes(converted) == reference_bits
+
+
+def test_batch_export_does_not_mutate_existing_app_font_dpi_or_platform(
+    qapp, tmp_path,
+):
+    from PyQt5.QtGui import QFont
+    from PyQt5.QtWidgets import QWidget
+
+    *_, render_batch_image, _ = _qt_api()
+    probe = QWidget()
+    before_font = QFont(qapp.font())
+    before_dpi = int(probe.logicalDpiX())
+    before_platform = qapp.platformName()
+    target = tmp_path / "existing-app.png"
+    spec = _time_spec(count=1)
+    options = BatchRenderOptions(width_px=640, height_px=360, dpi=144)
+    render_batch_image(("time", spec), target, options=options, context=_context())
+    second = tmp_path / "existing-app-2.png"
+    render_batch_image(("time", spec), second, options=options, context=_context())
+    assert qapp.font().family() == before_font.family()
+    assert qapp.font().pointSizeF() == before_font.pointSizeF()
+    assert qapp.font().pixelSize() == before_font.pixelSize()
+    assert int(probe.logicalDpiX()) == before_dpi
+    assert qapp.platformName() == before_platform
+    first_image = QImage(str(target))
+    second_image = QImage(str(second))
+    assert first_image.size() == second_image.size()
+    assert first_image.convertToFormat(QImage.Format_ARGB32) == (
+        second_image.convertToFormat(QImage.Format_ARGB32)
+    )
+    probe.close()
+
+
+def _assert_tick_boxes_do_not_overlap(records, *, tag: str) -> None:
+    for index, (rect_a, text_a) in enumerate(records):
+        for rect_b, text_b in records[index + 1 :]:
+            intersection = rect_a.intersected(rect_b)
+            assert intersection.width() <= 0.5 or intersection.height() <= 0.5, (
+                f"{tag}: ticks {text_a!r} and {text_b!r} overlap at {intersection}"
+            )
+
+
+def test_640x360_export_ticks_do_not_overlap_or_leave_the_page(qapp):
+    from mf4_analyzer.batch_render_qt._builder import _axis_tick_text_records
+
+    scene = _open_scene(
+        qapp,
+        ("time", _time_spec(count=1)),
+        options=BatchRenderOptions(width_px=640, height_px=360),
+    )
+    try:
+        page = scene.widget.ci.sceneBoundingRect()
+        tick_font = scene.plots[0].getAxis("bottom").style["tickFont"]
+        from mf4_analyzer.batch_render_qt._theme import (
+            export_font_device_px,
+            export_pt_to_px,
+        )
+        assert export_font_device_px(tick_font) == pytest.approx(
+            export_pt_to_px(12.0), abs=1.0
+        )
+        for plot in scene.plots:
+            panel = plot.sceneBoundingRect()
+            for side in ("left", "bottom"):
+                records = _axis_tick_text_records(plot.getAxis(side))
+                assert records
+                _assert_tick_boxes_do_not_overlap(records, tag=side)
+                for rect, text in records:
+                    assert page.contains(rect.center()), (
+                        f"{side} tick {text!r} at {rect} left the page {page}"
+                    )
+                    assert panel.adjusted(-2.0, -2.0, 2.0, 2.0).intersects(rect)
+        assert scene.adjacent_text_overlaps() == []
+    finally:
+        scene.close()
+
+
+def test_export_text_geometry_is_stable_across_logical_dpi(tmp_path):
+    import json
+    import os
+    import subprocess
+    import sys
+
+    from tests.batch_render_qt_dispatch_helpers import qt_child_environment
+
+    child = (
+        Path(__file__).resolve().parent / "batch_render_export_dpi_child.py"
+    )
+    rows = []
+    for requested in (96, 144, 192):
+        settings_dir = tmp_path / f"qsettings-{requested}"
+        settings_dir.mkdir()
+        env = qt_child_environment(Path.cwd())
+        env["QT_FONT_DPI"] = str(requested)
+        env["TRACELAB_EXPORT_DPI_QSETTINGS"] = str(settings_dir)
+        completed = subprocess.run(
+            [sys.executable, str(child)],
+            cwd=Path.cwd(),
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=_BATCH_RENDER_SUBPROCESS_TIMEOUT_S,
+        )
+        assert completed.returncode == 0, (
+            f"DPI child {requested} failed: {completed.stderr[-2000:]}"
+        )
+        payload = json.loads(completed.stdout.strip().splitlines()[-1])
+        assert payload["adopted"] is True, payload
+        assert payload["axis_font_px"] == pytest.approx(16.0, abs=0.75), payload
+        rows.append(payload)
+    reference = next(row for row in rows if row["requested_dpi"] == 96)
+    for row in rows:
+        for case_id, case in row["cases"].items():
+            expected = reference["cases"][case_id]
+            assert case["tick_texts"] == expected["tick_texts"], (
+                f"{row['requested_dpi']} {case_id} tick labels drifted"
+            )
+            assert case["same_axis_tick_overlaps"] == [], (
+                f"{row['requested_dpi']} {case_id} overlapping ticks: "
+                f"{case['same_axis_tick_overlaps']}"
+            )
+            assert case["overflow"] == [], (
+                f"{row['requested_dpi']} {case_id} text left the page: "
+                f"{case['overflow']}"
+            )
+            assert case["adjacent_overlaps"] == [], (
+                f"{row['requested_dpi']} {case_id} adjacent text overlaps"
+            )
+            assert case["axis_font_px"] == pytest.approx(
+                expected["axis_font_px"], abs=0.75
+            )
+            expected_px = 24.0 if "fs15" in case_id else 16.0
+            assert case["axis_font_px"] == pytest.approx(expected_px, abs=0.75)
+            for key in ("plot_vb", "header"):
+                drift = max(
+                    abs(float(a) - float(b))
+                    for a, b in zip(case[key], expected[key])
+                )
+                assert drift <= 2.0, (
+                    f"{row['requested_dpi']} {case_id} {key} drift {drift} "
+                    f"{case[key]} vs {expected[key]}"
+                )
+            by_text = {
+                (item["panel"], item["side"], item["text"]): item["rect"]
+                for item in expected["ticks"]
+            }
+            for item in case["ticks"]:
+                expected_rect = by_text[(item["panel"], item["side"], item["text"])]
+                drift = max(
+                    abs(float(a) - float(b))
+                    for a, b in zip(item["rect"], expected_rect)
+                )
+                assert drift <= 2.0, (
+                    f"{row['requested_dpi']} {case_id} tick {item['text']!r} "
+                    f"drift {drift} {item['rect']} vs {expected_rect}"
+                )
+
+
 def test_cjk_font_support_and_header_ink_proof(qapp):
     from mf4_analyzer.batch_render_qt._fonts import (
         CJK_CONTRACT_TEXT,
@@ -1087,6 +1318,11 @@ def test_cjk_font_support_and_header_ink_proof(qapp):
     proof = header_ink_proof(font, CJK_CONTRACT_TEXT)
     assert proof["pass"] is True
     assert proof["ink_pixels"] > proof["empty_ink_pixels"] + 120
+    from mf4_analyzer.qt_chart_fonts import ASCII_CONTRACT_TEXT
+
+    ascii_proof = header_ink_proof(font, ASCII_CONTRACT_TEXT)
+    assert ascii_proof["pass"] is True
+    assert ascii_proof["ink_pixels"] > ascii_proof["empty_ink_pixels"] + 120
 
 
 def test_render_on_gui_thread_marshals_result_and_exception(qapp, request):
@@ -1550,3 +1786,254 @@ def test_batch_fft_all_invalid_db_is_empty(qapp):
         assert scene.plots[0].vb.viewRange()[1] == pytest.approx([-230., -200.])
     finally:
         scene.close()
+
+
+def test_cjk_font_discovery_does_not_hardcode_machine_paths():
+    fonts_source = (
+        Path(__file__).resolve().parents[1] / "mf4_analyzer" / "qt_chart_fonts.py"
+    ).read_text(encoding="utf-8")
+    dispatch_source = (
+        Path(__file__).resolve().parents[1]
+        / "mf4_analyzer"
+        / "batch_render_qt"
+        / "_dispatch.py"
+    ).read_text(encoding="utf-8")
+    shim_source = (
+        Path(__file__).resolve().parents[1]
+        / "mf4_analyzer"
+        / "batch_render_qt"
+        / "_fonts.py"
+    ).read_text(encoding="utf-8")
+    assert "C:\\Windows" not in fonts_source
+    assert "C:/Windows" not in fonts_source
+    assert "msyh.ttc" not in fonts_source.lower()
+    assert "QT_FONT_DPI" not in fonts_source
+    assert "QT_FONT_DPI" not in dispatch_source
+    assert "addApplicationFont" not in shim_source
+    assert "ensure_drawable_cjk_fonts" not in shim_source
+
+
+def test_ensure_app_reuses_existing_qapplication_without_setfont(qapp):
+    from PyQt5.QtGui import QFont
+
+    from mf4_analyzer.batch_render_qt._dispatch import ensure_app
+
+    before = QFont(qapp.font())
+    setfont_calls: list[str] = []
+    original_set_font = qapp.setFont
+
+    def _spy_set_font(font):
+        setfont_calls.append(font.family())
+        return original_set_font(font)
+
+    qapp.setFont = _spy_set_font
+    try:
+        app = ensure_app()
+    finally:
+        qapp.setFont = original_set_font
+    assert app is qapp
+    assert app.platformName() == qapp.platformName()
+    assert app.font().family() == before.family()
+    assert app.font().pointSizeF() == before.pointSizeF()
+    assert setfont_calls == []
+
+
+def test_ensure_app_from_worker_reuses_existing_app(qapp, request):
+    from mf4_analyzer.batch_render_qt._dispatch import ensure_app
+
+    observed = {}
+
+    def worker():
+        observed["app"] = ensure_app()
+
+    run_gui_dispatch_worker(
+        qapp,
+        request,
+        worker,
+        timeout_s=_BATCH_RENDER_GUI_DISPATCH_TIMEOUT_S,
+        name="ensure-app-existing-qapp-worker",
+    )
+    assert observed["app"] is qapp
+
+
+def test_named_family_without_font_file_then_addapplicationfont_draws_ink(tmp_path):
+    """macOS-runnable F1 regression: a listed family is not enough.
+
+    Windows frozen offscreen reports Microsoft YaHei UI + supportsCharacter
+    with zero ink until a real font file is loaded. This child hides working
+    chart families so the name-only path cannot pass, then requires
+    ``addApplicationFont`` of a machine-local file to produce CJK and ASCII ink.
+    """
+    import json
+    import subprocess
+    import sys
+
+    repo_root = Path(__file__).resolve().parents[1]
+    script = tmp_path / "named_family_vs_file.py"
+    qsettings_dir = tmp_path / "qsettings"
+    qsettings_dir.mkdir()
+    script.write_text(
+        """
+import json
+import sys
+from pathlib import Path
+
+from PyQt5.QtCore import QSettings
+from PyQt5.QtGui import QFont
+from PyQt5.QtWidgets import QApplication
+
+qsettings_dir = sys.argv[1]
+QSettings.setDefaultFormat(QSettings.IniFormat)
+QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, qsettings_dir)
+QSettings.setPath(QSettings.IniFormat, QSettings.SystemScope, qsettings_dir)
+
+from mf4_analyzer.qt_chart_fonts import (
+    ASCII_CONTRACT_TEXT,
+    CJK_CONTRACT_TEXT,
+    drawable_cjk_font_state,
+    header_ink_proof,
+    reset_drawable_cjk_font_cache,
+    resolve_cjk_font,
+)
+from mf4_analyzer.batch_render_qt._dispatch import ensure_app
+import mf4_analyzer.qt_chart_fonts as fonts
+
+reset_drawable_cjk_font_cache()
+app = QApplication([])
+named = header_ink_proof(QFont("Microsoft YaHei UI", 12), CJK_CONTRACT_TEXT)
+assert named["pass"] is False, named
+
+fonts._installed_families = lambda: {"Microsoft YaHei UI"}
+discover_calls = []
+real_discover = fonts.discover_cjk_font_files
+
+def counting_discover():
+    discover_calls.append(1)
+    return real_discover()
+
+fonts.discover_cjk_font_files = counting_discover
+
+setfont_calls = []
+_orig_set_font = QApplication.setFont
+
+def _spy_set_font(self, font):
+    setfont_calls.append(font.family())
+    return _orig_set_font(self, font)
+
+QApplication.setFont = _spy_set_font
+
+reused = ensure_app()
+first = drawable_cjk_font_state()
+font = resolve_cjk_font()
+assert reused is app
+assert font is not None, first
+cjk = header_ink_proof(font, CJK_CONTRACT_TEXT)
+ascii_proof = header_ink_proof(font, ASCII_CONTRACT_TEXT)
+ensure_app()
+second = drawable_cjk_font_state()
+print(json.dumps({
+    "platform": app.platformName(),
+    "named_pass": named["pass"],
+    "named_supports": named["supports"],
+    "named_ink": named["ink_pixels"],
+    "source": first.source if first else "",
+    "path": first.path if first else "",
+    "family": font.family(),
+    "cjk_pass": cjk["pass"],
+    "cjk_ink": cjk["ink_pixels"],
+    "ascii_pass": ascii_proof["pass"],
+    "ascii_ink": ascii_proof["ink_pixels"],
+    "discover_calls": len(discover_calls),
+    "same_state": (
+        first.source == second.source
+        and first.path == second.path
+        and first.family == second.family
+        and first.font_ids == second.font_ids
+    ),
+    "setfont_calls": setfont_calls,
+    "app_font": app.font().family(),
+    "path_is_file": bool(first.path) and Path(first.path).is_file(),
+}, ensure_ascii=False))
+""".strip(),
+        encoding="utf-8",
+    )
+    env = qt_child_environment(repo_root)
+    completed = subprocess.run(
+        [sys.executable, str(script), str(qsettings_dir)],
+        cwd=repo_root,
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=_BATCH_RENDER_SUBPROCESS_TIMEOUT_S,
+    )
+    assert completed.returncode == 0, completed.stdout + "\n" + completed.stderr
+    payload = json.loads(completed.stdout.strip().splitlines()[-1])
+    assert payload["platform"] == "offscreen"
+    assert payload["named_pass"] is False
+    assert payload["source"] == "file"
+    assert payload["path_is_file"] is True
+    assert payload["cjk_pass"] is True
+    assert payload["ascii_pass"] is True
+    assert payload["cjk_ink"] > 120
+    assert payload["ascii_ink"] > 120
+    assert payload["discover_calls"] == 1
+    assert payload["same_state"] is True
+    assert payload["setfont_calls"] == []
+
+
+def test_ensure_app_without_font_files_leaves_resolve_empty(tmp_path):
+    import json
+    import subprocess
+    import sys
+
+    repo_root = Path(__file__).resolve().parents[1]
+    script = tmp_path / "no_font_files.py"
+    qsettings_dir = tmp_path / "qsettings"
+    qsettings_dir.mkdir()
+    script.write_text(
+        """
+import json
+import sys
+from PyQt5.QtCore import QSettings
+from PyQt5.QtWidgets import QApplication
+
+qsettings_dir = sys.argv[1]
+QSettings.setDefaultFormat(QSettings.IniFormat)
+QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, qsettings_dir)
+QSettings.setPath(QSettings.IniFormat, QSettings.SystemScope, qsettings_dir)
+
+from mf4_analyzer.batch_render_qt._dispatch import ensure_app
+from mf4_analyzer.qt_chart_fonts import (
+    drawable_cjk_font_state,
+    reset_drawable_cjk_font_cache,
+    resolve_cjk_font,
+)
+import mf4_analyzer.qt_chart_fonts as fonts
+
+reset_drawable_cjk_font_cache()
+fonts._installed_families = lambda: {"Microsoft YaHei UI"}
+fonts.discover_cjk_font_files = lambda: ()
+app = ensure_app()
+state = drawable_cjk_font_state()
+print(json.dumps({
+    "platform": app.platformName(),
+    "family": "" if resolve_cjk_font() is None else resolve_cjk_font().family(),
+    "source": state.source if state else "",
+}))
+""".strip(),
+        encoding="utf-8",
+    )
+    env = qt_child_environment(repo_root)
+    completed = subprocess.run(
+        [sys.executable, str(script), str(qsettings_dir)],
+        cwd=repo_root,
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=_BATCH_RENDER_SUBPROCESS_TIMEOUT_S,
+    )
+    assert completed.returncode == 0, completed.stdout + "\n" + completed.stderr
+    payload = json.loads(completed.stdout.strip().splitlines()[-1])
+    assert payload["platform"] == "offscreen"
+    assert payload["family"] == ""
+    assert payload["source"] == "none"

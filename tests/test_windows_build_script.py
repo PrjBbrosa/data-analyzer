@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 import re
 import subprocess
 import sys
@@ -197,8 +198,8 @@ def test_windows_build_scripts_require_both_qt_platform_plugins_and_smoke_them()
         text = (ROOT / "tools" / filename).read_text(encoding="utf-8")
         for plugin in ("qoffscreen.dll", "qwindows.dll"):
             assert plugin in text
-        assert "--platform offscreen" in text
-        assert "--platform windows" in text
+        assert re.search(r'--platform(?: |", ")offscreen', text)
+        assert re.search(r'--platform(?: |", ")windows', text)
         assert "batch-render-offscreen-smoke.json" in text
         assert "batch-render-windows-smoke.json" in text
 
@@ -383,6 +384,139 @@ def test_lite_build_keeps_qtnetwork_conservatively():
     assert "PyQt5.QtNetwork" not in text
 
 
+def test_lite_build_records_each_attempt_and_checks_environment_exit_codes():
+    text = (ROOT / "tools/build_windows_folder_lite.ps1").read_text(encoding="utf-8")
+    # Logging must start before validation/install; a failed attempt is evidence too.
+    assert text.index("Start-Transcript") < text.index("foreach ($RequiredPath")
+    assert "[guid]::NewGuid()" in text
+    assert 'Join-Path $BuildEvidenceDir "build.log"' in text
+    assert "Stop-Transcript" in text
+    assert "BUILD FAILED" in text
+    assert "$_.ScriptStackTrace" in text
+    helper = text[text.index("function Invoke-LoggedNative"):text.index("function Invoke-BasePython")]
+    assert "2>&1" in helper
+    assert '$ErrorActionPreference = "Continue"' in helper
+    assert "if ($nativeExitCode -ne 0)" in helper
+    assert 'throw "Native command failed' in helper
+    # No bootstrap, installer or smoke native call may bypass the checked logger.
+    assert not re.search(r"^\s*& \$(VenvPython|pyLauncher|python)\b", text, re.MULTILINE)
+    for arguments in (
+        '@("-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel")',
+        '@("-m", "pip", "install", "-r", $Requirements)',
+        '@("-m", "pip", "install", "--upgrade", "pyinstaller", "qtawesome")',
+    ):
+        assert "Invoke-LoggedNative -Executable $VenvPython -Arguments " + arguments in text
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="requires Windows PowerShell 5.1")
+@pytest.mark.parametrize("flavor", ["lite", "full"])
+def test_windows_build_dependency_json_preserves_native_argument_boundaries(tmp_path, flavor):
+    filename = "build_windows_folder_lite.ps1" if flavor == "lite" else "build_windows_folder.ps1"
+    text = (ROOT / "tools" / filename).read_text(encoding="utf-8")
+    dependency_json = subprocess.check_output(
+        [sys.executable, str(ROOT / "tools/windows_runtime_dependencies.py"),
+         "--pyinstaller-args-json", "--flavor", flavor],
+        text=True,
+    ).strip()
+    expected = json.loads(dependency_json)
+    # Execute the actual conversion and append statements, then inspect argv in
+    # a native child. Merely testing JSON parsing misses PowerShell 5.1 nesting.
+    conversion = re.search(r"^\s*\$RuntimeDependencyArgs = .+$", text, re.MULTILINE).group()
+    append = re.search(r"^\$PyInstallerArgs \+= \$RuntimeDependencyArgs$", text, re.MULTILINE).group()
+    child = tmp_path / "record arguments.py"
+    output = tmp_path / "native argv.json"
+    entry = tmp_path / "project with spaces" / "MF4 Data Analyzer V1.py"
+    child.write_text(
+        "import json, pathlib, sys\n"
+        "pathlib.Path(sys.argv[1]).write_text(json.dumps(sys.argv[2:]), encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+    helper = ""
+    invocation = "& $VenvPython @ChildArgs"
+    if flavor == "lite":
+        helper = text[text.index("function Invoke-LoggedNative"):text.index("function Invoke-BasePython")]
+        invocation = "Invoke-LoggedNative -Executable $VenvPython -Arguments $ChildArgs"
+    probe = "\n".join([
+        '$ErrorActionPreference = "Stop"', 'Set-StrictMode -Version Latest', helper,
+        f"$VenvPython = {_powershell_literal(Path(sys.executable))}",
+        "$RuntimeDependencyArgsJson = '" + dependency_json.replace("'", "''") + "'",
+        conversion,
+        '$PyInstallerArgs = @("-m", "PyInstaller", "--collect-all", "qtawesome")',
+        append,
+        f"$PyInstallerArgs += {_powershell_literal(entry)}",
+        f"$ChildArgs = @({_powershell_literal(child)}, {_powershell_literal(output)}) + $PyInstallerArgs",
+        invocation,
+        "if ($LASTEXITCODE -ne 0) { throw 'Native argv probe failed' }",
+    ])
+    completed = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-Command", probe],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert json.loads(output.read_text(encoding="utf-8")) == [
+        "-m", "PyInstaller", "--collect-all", "qtawesome", *expected, str(entry),
+    ]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="requires Windows PowerShell 5.1")
+@pytest.mark.parametrize("exit_code,capture", [(0, False), (23, False), (0, True)])
+def test_lite_native_logger_keeps_stdout_stderr_and_exit_status(tmp_path, exit_code, capture):
+    text = (ROOT / "tools/build_windows_folder_lite.ps1").read_text(encoding="utf-8")
+    helper = text[text.index("function Invoke-LoggedNative"):text.index("function Invoke-BasePython")]
+    child = tmp_path / "native output.py"
+    child.write_text(
+        'import sys\nprint(\'["stdout-first", "stdout-last"]\', flush=True)\n'
+        'print("stderr-first\\nstderr-last", file=sys.stderr, flush=True)\n'
+        f"sys.exit({exit_code})\n", encoding="utf-8",
+    )
+    transcript = tmp_path / "build.log"
+    command = (
+        f"Invoke-LoggedNative -Executable {_powershell_literal(Path(sys.executable))} "
+        f"-Arguments @({_powershell_literal(child)})"
+    )
+    if capture:
+        command = "$json = " + command + " -CaptureStdout\n$json | ConvertFrom-Json | Out-Null"
+    probe = "\n".join([
+        '$ErrorActionPreference = "Stop"', 'Set-StrictMode -Version Latest', helper,
+        f"$BuildEvidenceDir = {_powershell_literal(tmp_path)}",
+        f"Start-Transcript -LiteralPath {_powershell_literal(transcript)} | Out-Null",
+        "try {", command, 'Write-Host "REACHED_AFTER_COMMAND"',
+        '} finally { Stop-Transcript | Out-Null }',
+    ])
+    completed = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-Command", probe],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert (completed.returncode == 0) == (exit_code == 0), completed.stderr
+    log = transcript.read_text(encoding="utf-8-sig")
+    for marker in ("stdout-first", "stdout-last", "stderr-first", "stderr-last"):
+        assert marker in log
+    assert f"Native exit code: {exit_code}" in log
+    assert ("REACHED_AFTER_COMMAND\r" in log or "REACHED_AFTER_COMMAND\n" in log) == (exit_code == 0)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="requires Windows PowerShell 5.1")
+def test_lite_early_failures_leave_separate_complete_transcripts(tmp_path):
+    # Exercise the actual script, failing before any venv/install/output mutation.
+    script = tmp_path / "tools/build_windows_folder_lite.ps1"
+    script.parent.mkdir()
+    script.write_bytes((ROOT / "tools/build_windows_folder_lite.ps1").read_bytes())
+    for _ in range(2):
+        result = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script)],
+            capture_output=True, text=True, timeout=30,
+        )
+        assert result.returncode != 0
+    logs = list((tmp_path / ".state/build-evidence/lite").glob("*/build.log"))
+    assert len(logs) == 2
+    for log in logs:
+        text = log.read_text(encoding="utf-8-sig")
+        assert "Required file not found" in text
+        assert "BUILD FAILED at stage: Initializing" in text
+        assert "Build succeeded: False" in text
+        assert "PowerShell transcript end" in text
+
+
 def test_windows_run_built_exe_wrapper_pauses_after_exit():
     wrapper = ROOT / "tools" / "run_windows_exe.bat"
 
@@ -406,10 +540,19 @@ def test_windows_builds_reject_failed_pyinstaller_before_reusing_old_exe_or_evid
 
     for filename in ("build_windows_folder.ps1", "build_windows_folder_lite.ps1"):
         text = (ROOT / "tools" / filename).read_text(encoding="utf-8")
-        invocation = text.index("& $VenvPython @PyInstallerArgs")
-        exit_capture = text.index("$PyInstallerExitCode = $LASTEXITCODE")
+        is_lite = "_lite" in filename
+        helper = ""
+        if is_lite:
+            invocation = text.index("Invoke-LoggedNative -Executable $VenvPython -Arguments $PyInstallerArgs")
+            exit_capture = invocation
+            helper = text[text.index("function Invoke-LoggedNative"):text.index("function Invoke-BasePython")]
+        else:
+            invocation = text.index("& $VenvPython @PyInstallerArgs")
+            exit_capture = text.index("$PyInstallerExitCode = $LASTEXITCODE")
         exe_check = text.index("if (-not (Test-Path $ExePath))", invocation)
         smoke_step = text.index(
+            'Write-Step "Verifying frozen batch rendering and importer runtime (independent post-checks)"'
+            if is_lite else
             'Write-Step "Verifying frozen batch rendering (offscreen + windows)"'
         )
         offscreen_evidence = text.index(
@@ -418,7 +561,7 @@ def test_windows_builds_reject_failed_pyinstaller_before_reusing_old_exe_or_evid
         windows_evidence = text.index(
             "$BatchRenderWindowsSmokeEvidence =", 0, invocation
         )
-        assert invocation < exit_capture < exe_check < smoke_step
+        assert invocation <= exit_capture < exe_check < smoke_step
         assert offscreen_evidence < invocation
         assert windows_evidence < invocation
 
@@ -447,6 +590,7 @@ def test_windows_builds_reject_failed_pyinstaller_before_reusing_old_exe_or_evid
                 f"$VenvPython = {_powershell_literal(fake_python)}",
                 "$PyInstallerArgs = @()",
                 f"$ExePath = {_powershell_literal(old_exe)}",
+                helper,
                 gate,
             )
         )
@@ -459,7 +603,7 @@ def test_windows_builds_reject_failed_pyinstaller_before_reusing_old_exe_or_evid
         )
 
         assert completed.returncode != 0
-        assert "PyInstaller failed with exit code 23" in (
+        assert "failed with exit code 23" in (
             completed.stdout + completed.stderr
         )
         assert not stale_offscreen.exists()
@@ -477,7 +621,11 @@ def test_frozen_render_smoke_runs_after_every_packaged_tree_mutation(filename):
         re.IGNORECASE,
     )
     text = (ROOT / "tools" / filename).read_text(encoding="utf-8")
-    smoke = text.index("& $VenvPython $BatchRenderSmokeTool")
+    smoke_command = (
+        'Invoke-IndependentPostCheck -Name "offscreen"'
+        if "_lite" in filename else "& $VenvPython $BatchRenderSmokeTool"
+    )
+    smoke = text.index(smoke_command)
     assert "--prune-internal" not in text
     if filename == "build_windows_folder.ps1":
         assert (
@@ -489,6 +637,11 @@ def test_frozen_render_smoke_runs_after_every_packaged_tree_mutation(filename):
             text.index("Remove-Item -LiteralPath $SciPyOpenBlas[0].FullName -Force")
             < smoke
         )
+        assert text.index('Invoke-IndependentPostCheck -Name "windows"') > smoke
+        importer = text.index('Invoke-IndependentPostCheck -Name "importer"')
+        assert importer > smoke
+        assert "verify_lite_importer_runtime.py" in text
+        assert text.index("$ImporterSmokeTool") < smoke
 
     for line in text[smoke:].splitlines()[1:]:
         match = mutation_command.match(line)
@@ -497,3 +650,132 @@ def test_frozen_render_smoke_runs_after_every_packaged_tree_mutation(filename):
                 f"{filename} mutates the finalized package after render smoke: "
                 f"{line.strip()}"
             )
+
+
+def test_lite_post_checks_are_independent_and_summarized_after_prune():
+    text = (ROOT / "tools/build_windows_folder_lite.ps1").read_text(encoding="utf-8")
+    helper = text[
+        text.index("function Invoke-IndependentPostCheck"):
+        text.index("function Invoke-BasePython")
+    ]
+    assert "aggregates exit codes" in helper
+    assert not re.search(r"^\s*throw\b", helper, re.MULTILINE)
+    assert "$process.Kill()" in helper
+    assert "WaitForExit" in helper
+    prune = text.index("Remove-Item -LiteralPath $SciPyOpenBlas[0].FullName -Force")
+    offscreen = text.index('Invoke-IndependentPostCheck -Name "offscreen"')
+    windows = text.index('Invoke-IndependentPostCheck -Name "windows"')
+    importer = text.index('Invoke-IndependentPostCheck -Name "importer"')
+    assert prune < offscreen < windows < importer
+    assert "verify_lite_importer_runtime.py" in text
+    assert "$ImporterSmokeTool" in text
+    assert 'Write-Host "EXE generated: $exeGenerated"' in text
+    assert 'Write-Host "offscreen: $off"' in text
+    assert 'Write-Host "windows: $win"' in text
+    assert 'Write-Host "importer: $imp"' in text
+    assert "Test-AllPostChecksPassed" in text
+    assert "function Invoke-LoggedNative" in text
+    assert text.index("Invoke-LoggedNative -Executable $VenvPython -Arguments $PyInstallerArgs") < offscreen
+    required = text[
+        text.index("foreach ($RequiredPath in @("):
+        text.index("if (-not (Test-Path $RequiredPath))")
+    ]
+    assert "$ImporterSmokeTool" in required
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="requires Windows PowerShell 5.1")
+@pytest.mark.parametrize("failed", ["offscreen", "windows", "importer"])
+def test_lite_injected_post_check_failure_still_collects_the_others(tmp_path, failed):
+    text = (ROOT / "tools/build_windows_folder_lite.ps1").read_text(encoding="utf-8")
+    helper = text[
+        text.index("function ConvertTo-Win32ArgumentList"):
+        text.index("function Invoke-BasePython")
+    ]
+    ok_child = tmp_path / "ok.py"
+    fail_child = tmp_path / "fail.py"
+    ok_child.write_text("import sys\nsys.exit(0)\n", encoding="utf-8")
+    fail_child.write_text("import sys\nsys.exit(23)\n", encoding="utf-8")
+    names = ("offscreen", "windows", "importer")
+    children = {
+        name: fail_child if name == failed else ok_child for name in names
+    }
+    exe = tmp_path / "TraceLabProbe.exe"
+    exe.write_bytes(b"fake")
+    calls = []
+    for name in names:
+        child = children[name]
+        calls.append(
+            f'Invoke-IndependentPostCheck -Name "{name}" '
+            f"-Executable {_powershell_literal(Path(sys.executable))} "
+            f"-Arguments @({_powershell_literal(child)}) -TimeoutSeconds 15"
+        )
+    probe = "\n".join(
+        [
+            '$ErrorActionPreference = "Stop"',
+            "Set-StrictMode -Version Latest",
+            helper,
+            "$script:PostCheckResults = New-Object System.Collections.ArrayList",
+            "$script:ExeGenerated = $true",
+            f"$ExePath = {_powershell_literal(exe)}",
+            *calls,
+            "Write-PostCheckSummary",
+            "if (Test-AllPostChecksPassed) { $BuildSucceeded = $true } else { $BuildSucceeded = $false }",
+            'Write-Host "Build succeeded: $BuildSucceeded"',
+        ]
+    )
+    completed = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-Command", probe],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    output = completed.stdout + completed.stderr
+    assert completed.returncode == 0, output
+    assert "EXE generated: True" in output
+    for name in names:
+        expected = "failed" if name == failed else "passed"
+        assert f"{name}: {expected}" in output
+    assert "Build succeeded: False" in output
+    assert "Build succeeded: True" not in output.replace("Build succeeded: False", "")
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="requires Windows PowerShell 5.1")
+def test_lite_post_check_timeout_kills_child_then_runs_the_next(tmp_path):
+    text = (ROOT / "tools/build_windows_folder_lite.ps1").read_text(encoding="utf-8")
+    helper = text[
+        text.index("function ConvertTo-Win32ArgumentList"):
+        text.index("function Invoke-BasePython")
+    ]
+    hang = tmp_path / "hang.py"
+    ok_child = tmp_path / "ok.py"
+    hang.write_text("import time\ntime.sleep(30)\n", encoding="utf-8")
+    ok_child.write_text("import sys\nsys.exit(0)\n", encoding="utf-8")
+    probe = "\n".join(
+        [
+            '$ErrorActionPreference = "Stop"',
+            "Set-StrictMode -Version Latest",
+            helper,
+            "$script:PostCheckResults = New-Object System.Collections.ArrayList",
+            "$script:ExeGenerated = $true",
+            f"$ExePath = {_powershell_literal(tmp_path / 'TraceLabProbe.exe')}",
+            f'Invoke-IndependentPostCheck -Name "offscreen" -Executable {_powershell_literal(Path(sys.executable))} -Arguments @({_powershell_literal(hang)}) -TimeoutSeconds 2',
+            f'Invoke-IndependentPostCheck -Name "windows" -Executable {_powershell_literal(Path(sys.executable))} -Arguments @({_powershell_literal(ok_child)}) -TimeoutSeconds 15',
+            f'Invoke-IndependentPostCheck -Name "importer" -Executable {_powershell_literal(Path(sys.executable))} -Arguments @({_powershell_literal(ok_child)}) -TimeoutSeconds 15',
+            "Write-PostCheckSummary",
+            "if (Test-AllPostChecksPassed) { $BuildSucceeded = $true } else { $BuildSucceeded = $false }",
+            'Write-Host "Build succeeded: $BuildSucceeded"',
+        ]
+    )
+    completed = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-Command", probe],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    output = completed.stdout + completed.stderr
+    assert completed.returncode == 0, output
+    assert "offscreen: timeout" in output
+    assert "windows: passed" in output
+    assert "importer: passed" in output
+    assert "Build succeeded: False" in output
+    assert "process terminated" in output
