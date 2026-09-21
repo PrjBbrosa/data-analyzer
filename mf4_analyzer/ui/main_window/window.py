@@ -1179,6 +1179,7 @@ class MainWindow(
         # File/Save share CommandCoordinator QActions; do not also connect
         # toolbar ``*_requested`` signals to the same slots (would double-fire).
         self._command_coordinator.bind_toolbar(self.toolbar)
+        self._refresh_project_session_chrome()
         self.toolbar.recent_menu_about_to_show.connect(self._populate_recent_menu)
         self.toolbar.recent_open_requested.connect(self._open_recent_path)
         self.toolbar.recent_clear_requested.connect(self._clear_recent_files)
@@ -1991,7 +1992,12 @@ class MainWindow(
                 page.pane_canvas(pane_idx).begin_section_reveal()
         self.chart_stack.set_mode(mode)
         self.inspector.set_mode(mode)
-        self.toolbar.set_enabled_for_mode(mode, has_file=bool(self.files))
+        self.toolbar.set_enabled_for_mode(
+            mode,
+            has_file=self._project_session_can_save(),
+            can_save=self._project_session_can_save(),
+            can_close=self._project_close_available(),
+        )
         if mode in {"fft", "fft_time", "order"}:
             # dB-reference-defaults nudge feed (spec S5 / A17): a section
             # entered without any signal/value/mode change since its last
@@ -2928,9 +2934,7 @@ class MainWindow(
                     default=0,
                 )
                 self.inspector.top.set_range_limits(0, max_t)
-        self.toolbar.set_enabled_for_mode(
-            self.toolbar.current_mode(), has_file=bool(self.files)
-        )
+        self._refresh_project_session_chrome()
 
     def _on_file_order_requested(self, fids, target_fids, placement):
         if not self.navigator_order.move_file_block(fids, target_fids, placement):
@@ -3020,7 +3024,12 @@ class MainWindow(
                     analysis_managers=self.analysis_managers,
                 )
             )
-        if uses and not self._confirm_global_file_close(
+        decision = self._decide_source_removal(ordered, uses)
+        if decision == "abort":
+            return
+        if decision == "close_project":
+            return
+        if decision == "confirm_deps" and uses and not self._confirm_global_file_close(
             uses, files=tuple(ordered),
         ):
             return
@@ -3046,9 +3055,8 @@ class MainWindow(
             )
 
     def _on_close_all_requested(self):
-        # Single product confirm (dependency summary + close-all) lives here;
-        # the navigator only requests — it must not show a second dialog.
-        self.close_all()
+        # Navigator "关闭项目…" shares the product session-end transaction.
+        self.close_project()
 
     def _on_xaxis_mode_changed(self, mode):
         """横坐标模式切换 — populate Inspector candidates when switching to 'channel'.
@@ -3467,12 +3475,15 @@ class MainWindow(
         """Surface active-file summary via the status bar (no more lbl_info shim)."""
         if not self.files:
             self.statusBar.showMessage("未加载文件")
-            return
-        parts = [
-            f"{'▶' if fid == self._active else '  '} {fd.short_name}: {len(fd.data)}"
-            for fid, fd in self.files.items()
-        ]
-        self.statusBar.showMessage(" | ".join(parts))
+        else:
+            parts = [
+                f"{'▶' if fid == self._active else '  '} {fd.short_name}: {len(fd.data)}"
+                for fid, fd in self.files.items()
+            ]
+            self.statusBar.showMessage(" | ".join(parts))
+        refresh = getattr(self, "_refresh_project_session_chrome", None)
+        if callable(refresh):
+            refresh()
 
     def _reset_plot_state(self, scope='file'):
         """Wipe plot-related state after a file close.
@@ -3601,6 +3612,38 @@ class MainWindow(
         """
         self._refresh_analysis_candidates()
 
+    def _format_source_use_summary(self, uses):
+        uses = list(uses or ())
+        if not uses:
+            return ""
+        time_views = {
+            (u.domain, u.view_id)
+            for u in uses
+            if u.domain == "time" and u.role == "attachment"
+        }
+        analysis_views = {
+            (u.domain, u.view_id)
+            for u in uses
+            if u.domain != "time" and u.role == "attachment"
+        }
+        role_uses = [u for u in uses if u.role != "attachment"]
+        summary_lines = [
+            f"时域 View：{len(time_views)}",
+            f"分析 View：{len(analysis_views)}",
+            f"来源角色：{len(role_uses)}",
+        ]
+        detail = []
+        for use in uses[:12]:
+            where = use.view_name or use.view_id or "?"
+            role = use.role
+            ch = f" · {use.channel}" if use.channel else ""
+            detail.append(f"{use.domain} / {where} / {role}{ch}")
+        if len(uses) > 12:
+            detail.append(f"…另有 {len(uses) - 12} 处引用")
+        return "\n".join(summary_lines) + (
+            "\n\n" + "\n".join(detail) if detail else ""
+        )
+
     def _confirm_global_file_close(self, uses, *, files=None, close_all=False):
         """Confirm cascading unload when Views still reference the file(s).
 
@@ -3627,30 +3670,7 @@ class MainWindow(
             box.exec_()
             return box.clickedButton() is close_btn
 
-        time_views = {
-            (u.domain, u.view_id)
-            for u in uses
-            if u.domain == "time" and u.role == "attachment"
-        }
-        analysis_views = {
-            (u.domain, u.view_id)
-            for u in uses
-            if u.domain != "time" and u.role == "attachment"
-        }
-        role_uses = [u for u in uses if u.role != "attachment"]
-        summary_lines = [
-            f"时域 View：{len(time_views)}",
-            f"分析 View：{len(analysis_views)}",
-            f"来源角色：{len(role_uses)}",
-        ]
-        detail = []
-        for use in uses[:12]:
-            where = use.view_name or use.view_id or "?"
-            role = use.role
-            ch = f" · {use.channel}" if use.channel else ""
-            detail.append(f"{use.domain} / {where} / {role}{ch}")
-        if len(uses) > 12:
-            detail.append(f"…另有 {len(uses) - 12} 处引用")
+        summary = self._format_source_use_summary(uses)
 
         box = QMessageBox(self)
         box.setWindowTitle(
@@ -3664,10 +3684,7 @@ class MainWindow(
             )
         else:
             box.setText("关闭文件前发现仍被 View 引用的来源。")
-        box.setInformativeText(
-            "\n".join(summary_lines)
-            + ("\n\n" + "\n".join(detail) if detail else "")
-        )
+        box.setInformativeText(summary)
         close_btn = box.addButton(
             "关闭并从所有 View 移除", QMessageBox.AcceptRole
         )

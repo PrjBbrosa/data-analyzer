@@ -265,6 +265,7 @@ lesson by default.
 | [Preserve JSON Argument Boundaries Across Typed PowerShell Helpers](codex-powershell-json-native-argv.md) | Passing JSON-generated command arguments through a PowerShell helper. | See lesson |
 | [QImage.bits() Views Are Not Stable Pixel Data](qimage-bits-numpy-view-needs-owned-copy.md) | Turning a `QImage` into a NumPy array for ink, colormap, or layout checks. | See lesson |
 | [Batch Export Fonts Must Not Follow Screen DPI](batch-export-fonts-ignore-screen-dpi.md) | Changing Qt batch report titles, ticks, legends, stats cards, colorbars, or PNG export size. | See lesson |
+| [Main Toolbar Chrome Belongs In The Mirrored Left Host](toolbar-mirrored-hosts-own-chrome.md) | Adding a label, chip, or other chrome to the main Analyzer toolbar, especially beside 打开 / 保存 / 批处理, or changing `_mode_zone_budget` / left-right mirroring. | See lesson |
 
 ## Selection Rules
 

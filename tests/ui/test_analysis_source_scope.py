@@ -560,32 +560,74 @@ def test_global_close_defaults_cancel_for_exact_x_only_dependency(
     assert time_state.axis_opts["x_axis"]["fid"] == fid_b
 
 
+def test_non_last_source_still_uses_dependency_confirm(win_two, monkeypatch):
+    win, fid_a, fid_b = win_two
+    fft = win.analysis_managers["fft"]
+    fft.get(0).attached_file_ids = [fid_a]
+    fft.get(0).panes[0].sources = [(fid_a, "sig")]
+    last = []
+    deps = []
+    monkeypatch.setattr(
+        win, "_confirm_last_source_removal",
+        lambda *a, **k: last.append(True) or "cancel",
+    )
+    monkeypatch.setattr(
+        win, "_confirm_global_file_close",
+        lambda uses, **k: deps.append(True) or False,
+    )
+    win._close(fid_a)
+    assert fid_a in win.files and fid_b in win.files
+    assert last == []
+    assert deps == [True]
+
+
+def test_last_source_dialog_defaults_to_cancel(qapp, qtbot):
+    from mf4_analyzer.ui_kit.message_dialog import build_last_source_dialog
+
+    dialog = build_last_source_dialog(
+        None, bound=True, dirty=False, project_name="A.tlproj",
+    )
+    qtbot.addWidget(dialog)
+    assert dialog.default_button() is dialog.button("cancel")
+    assert dialog.escape_button() is dialog.button("cancel")
+    assert dialog.button("close").text() == "关闭项目"
+    dialog.close()
+
+    dirty = build_last_source_dialog(
+        None, bound=True, dirty=True, project_name="A.tlproj",
+    )
+    qtbot.addWidget(dirty)
+    assert dirty.default_button() is dirty.button("cancel")
+    assert dirty.button("save_close").text() == "保存并关闭项目"
+    assert dirty.button("keep").text() == "仅移除文件，保留项目"
+    dirty.close()
+
+
 def test_close_files_group_is_atomic_on_cancel_and_confirm(win_two, monkeypatch):
     win, fid_a, fid_b = win_two
     fft = win.analysis_managers["fft"]
     fft.get(0).attached_file_ids = [fid_a]
     fft.get(0).panes[0].sources = [(fid_a, "sig")]
-    confirms = []
+    decisions = []
 
-    def _confirm(uses, **kwargs):
-        confirms.append((list(uses), kwargs.get("files")))
-        return False
+    def _last(fids, uses, **kwargs):
+        decisions.append(tuple(fids))
+        return "cancel"
 
-    monkeypatch.setattr(win, "_confirm_global_file_close", _confirm)
+    monkeypatch.setattr(win, "_confirm_last_source_removal", _last)
     win._close_files([fid_a, fid_b])
     assert fid_a in win.files and fid_b in win.files
-    assert len(confirms) == 1
-    assert set(confirms[0][1]) == {fid_a, fid_b}
+    assert decisions == [(fid_a, fid_b)]
 
-    confirms.clear()
+    decisions.clear()
     monkeypatch.setattr(
         win,
-        "_confirm_global_file_close",
-        lambda uses, **kwargs: confirms.append(kwargs.get("files")) or True,
+        "_confirm_last_source_removal",
+        lambda fids, uses, **kwargs: decisions.append(tuple(fids)) or "keep",
     )
     win._close_files([fid_a, fid_b])
     assert fid_a not in win.files and fid_b not in win.files
-    assert len(confirms) == 1
+    assert decisions == [(fid_a, fid_b)]
 
 
 def test_close_files_group_emits_one_aggregated_toast_and_reset(
@@ -598,7 +640,7 @@ def test_close_files_group_emits_one_aggregated_toast_and_reset(
     fired its own toast + statusBar + full plot-state reset.
     """
     win, fid_a, fid_b = win_two
-    monkeypatch.setattr(win, "_confirm_global_file_close", lambda *a, **k: True)
+    monkeypatch.setattr(win, "_confirm_last_source_removal", lambda *a, **k: "keep")
     toasts = []
     monkeypatch.setattr(
         win, "toast", lambda msg, level="info": toasts.append((msg, level))
@@ -734,7 +776,7 @@ def test_wwt_group_close_is_atomic_and_clears_record_rows_once(
     assert record_binding_count(win.navigator) == 1
     files_before = dict(win.files)
     bindings_before = [list(v.curve_bindings) for v in win.view_manager.views]
-    monkeypatch.setattr(win, "_confirm_global_file_close", lambda *a, **k: False)
+    monkeypatch.setattr(win, "_confirm_last_source_removal", lambda *a, **k: "cancel")
     win._close_files(fids)
     qapp.processEvents()
     assert list(win.files) == list(files_before)
@@ -762,7 +804,7 @@ def test_wwt_group_close_is_atomic_and_clears_record_rows_once(
         return orig_reset(*a, **k)
 
     monkeypatch.setattr(win, "_reset_plot_state", _tracked_reset)
-    monkeypatch.setattr(win, "_confirm_global_file_close", lambda *a, **k: True)
+    monkeypatch.setattr(win, "_confirm_last_source_removal", lambda *a, **k: "keep")
     win._close_files(fids)
     qapp.processEvents()
     assert win.files == {}

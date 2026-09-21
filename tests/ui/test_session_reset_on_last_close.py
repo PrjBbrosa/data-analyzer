@@ -200,7 +200,7 @@ def test_close_files_group_resets_when_workspace_empties(
 ):
     win, fid_a, fid_b = _load_two(qtbot, tmp_path)
     _dirty_session(win)
-    monkeypatch.setattr(win, "_confirm_global_file_close", lambda *a, **k: True)
+    monkeypatch.setattr(win, "_confirm_last_source_removal", lambda *a, **k: "keep")
 
     win._close_files([fid_a, fid_b])
     _assert_empty_workspace_defaults(win)
@@ -351,3 +351,64 @@ def test_open_project_does_not_collapse_views_or_custom_x(qapp, qtbot, tmp_path)
         label="Speed",
     )
     assert restored.inspector.top.xaxis_mode() == CHANNEL_MODE
+
+
+def test_close_all_keeps_save_binding_close_project_unbinds(
+    qapp, qtbot, tmp_path,
+):
+    win, _fid_a, _fid_b = _load_two(qtbot, tmp_path)
+    project = tmp_path / "keep-binding.tlproj"
+    assert win.save_project(project) is True
+    win.close_all(force=True)
+    _assert_empty_workspace_defaults(win)
+    assert str(win._project_path) == str(project)
+    assert win._project_dirty.path == str(project)
+
+    assert win.close_project(already_confirmed=True) is True
+    _assert_empty_workspace_defaults(win)
+    assert win._project_path is None
+    assert win._project_dirty.path is None
+    assert win._project_dirty.saved_digest is None
+    assert not win._project_dirty.is_dirty
+
+
+def test_last_source_keep_retains_binding_and_marks_dirty(
+    qapp, qtbot, tmp_path, monkeypatch,
+):
+    win, fid_a, fid_b = _load_two(qtbot, tmp_path)
+    project = tmp_path / "keep-empty.tlproj"
+    assert win.save_project(project) is True
+    digest = win._project_dirty.saved_digest
+    monkeypatch.setattr(win, "_confirm_last_source_removal", lambda *a, **k: "keep")
+
+    win._close_files([fid_a, fid_b])
+    _assert_empty_workspace_defaults(win)
+    assert str(win._project_path) == str(project)
+    assert win._project_dirty.path == str(project)
+    assert win._project_dirty.saved_digest == digest
+    assert win._project_dirty.is_dirty
+    assert win.navigator._close_project_available is True
+
+
+def test_last_source_close_project_unbinds_once(
+    qapp, qtbot, tmp_path, monkeypatch,
+):
+    win, fid_a, fid_b = _load_two(qtbot, tmp_path)
+    project = tmp_path / "close-last.tlproj"
+    assert win.save_project(project) is True
+    prompts = []
+    monkeypatch.setattr(
+        win, "_confirm_last_source_removal",
+        lambda fids, uses, **k: prompts.append(tuple(fids)) or "close",
+    )
+    monkeypatch.setattr(
+        win, "_confirm_global_file_close",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("dep confirm must not run")),
+    )
+
+    win._close_files([fid_a, fid_b])
+    assert len(prompts) == 1
+    assert set(prompts[0]) == {fid_a, fid_b}
+    _assert_empty_workspace_defaults(win)
+    assert win._project_path is None
+    assert win._project_dirty.path is None

@@ -720,24 +720,33 @@ class AppMessageDialog(QDialog):
             self._applying = False
 
 
-def build_unsaved_project_dialog(parent=None, *, available_rect=None) -> AppMessageDialog:
+def build_unsaved_project_dialog(
+    parent=None,
+    *,
+    available_rect=None,
+    title="未保存的项目",
+    text="项目有未保存的更改。是否保存？",
+    save_label="保存",
+    discard_label="不保存",
+    default_action_id="save",
+) -> AppMessageDialog:
     """Unsaved-project demonstration prompt. Business mapping stays in the mixin."""
     return AppMessageDialog(
         parent,
         prompt_id="unsaved_project",
-        title="未保存的项目",
-        text="项目有未保存的更改。是否保存？",
+        title=title,
+        text=text,
         icon=AppMessageDialog.Warning,
         actions=(
             MessageAction(
                 action_id="save",
-                label="保存",
+                label=save_label,
                 button_role=QDialogButtonBox.AcceptRole,
                 style="warning",
             ),
             MessageAction(
                 action_id="discard",
-                label="不保存",
+                label=discard_label,
                 button_role=QDialogButtonBox.DestructiveRole,
                 style="danger",
             ),
@@ -748,7 +757,97 @@ def build_unsaved_project_dialog(parent=None, *, available_rect=None) -> AppMess
                 style="neutral",
             ),
         ),
-        default_action_id="save",
+        default_action_id=default_action_id,
+        escape_action_id="cancel",
+        available_rect=available_rect,
+    )
+
+
+def build_last_source_dialog(
+    parent=None,
+    *,
+    bound,
+    dirty,
+    project_name="未命名项目",
+    summary_text="",
+    available_rect=None,
+) -> AppMessageDialog:
+    """Last-source removal: close project, keep empty project, or cancel."""
+    name = project_name or "未命名项目"
+    if bound and not dirty:
+        text = (
+            f"移除最后的数据来源后，“{name}”将没有打开的文件。"
+            "可以关闭项目，或仅移除文件并保留当前项目。"
+        )
+        actions = (
+            MessageAction(
+                action_id="close",
+                label="关闭项目",
+                button_role=QDialogButtonBox.AcceptRole,
+                style="warning",
+            ),
+            MessageAction(
+                action_id="keep",
+                label="仅移除文件，保留项目",
+                button_role=QDialogButtonBox.ActionRole,
+                style="neutral",
+                closes=True,
+            ),
+            MessageAction(
+                action_id="cancel",
+                label="取消",
+                button_role=QDialogButtonBox.RejectRole,
+                style="neutral",
+            ),
+        )
+    else:
+        text = (
+            f"“{name}”有未保存的更改，且这次操作会移除全部数据来源。"
+            "关闭项目前请选择是否保存；也可以仅移除文件并保留当前项目。"
+        )
+        actions = (
+            MessageAction(
+                action_id="save_close",
+                label="保存并关闭项目",
+                button_role=QDialogButtonBox.AcceptRole,
+                style="warning",
+            ),
+            MessageAction(
+                action_id="discard_close",
+                label="不保存并关闭项目",
+                button_role=QDialogButtonBox.DestructiveRole,
+                style="danger",
+            ),
+            MessageAction(
+                action_id="keep",
+                label="仅移除文件，保留项目",
+                button_role=QDialogButtonBox.ActionRole,
+                style="neutral",
+                closes=True,
+            ),
+            MessageAction(
+                action_id="cancel",
+                label="取消",
+                button_role=QDialogButtonBox.RejectRole,
+                style="neutral",
+            ),
+        )
+    keep_note = (
+        "选择保留项目后，已绑定的保存仍写入当前项目；"
+        "未命名项目仍需首次另存为。移除文件本身是一次可保存的修改。"
+    )
+    informative = "\n".join(
+        part for part in (summary_text, keep_note) if part
+    )
+    return AppMessageDialog(
+        parent,
+        prompt_id="last_source_removal",
+        title="移除最后的数据来源",
+        text=text,
+        informative_text=informative,
+        icon=AppMessageDialog.Warning,
+        actions=actions,
+        default_action_id="cancel",
         escape_action_id="cancel",
         available_rect=available_rect,
     )

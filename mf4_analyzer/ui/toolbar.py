@@ -135,6 +135,8 @@ class Toolbar(QWidget):
     recent_clear_requested = pyqtSignal()
     save_project_requested = pyqtSignal()
     save_project_as_requested = pyqtSignal()
+    new_project_requested = pyqtSignal()
+    close_project_requested = pyqtSignal()
     batch_requested = pyqtSignal()
     # Center segment
     mode_changed = pyqtSignal(str)  # time | fft | fft_time | frf | order
@@ -218,6 +220,12 @@ class Toolbar(QWidget):
             self.btn_batch,
         ):
             left.addWidget(b, 0, Qt.AlignVCenter)
+        self.lbl_project_session = QLabel("未命名项目", self)
+        self.lbl_project_session.setObjectName("toolbarProjectSession")
+        self.lbl_project_session.setMaximumWidth(88)
+        self.lbl_project_session.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
+        self.lbl_project_session.setToolTip("未命名项目")
+        left.addWidget(self.lbl_project_session, 0, Qt.AlignVCenter)
 
         # Wrap left in a QWidget so it has a concrete sizeHint that the
         # stretch arithmetic can balance against.
@@ -563,14 +571,19 @@ class Toolbar(QWidget):
         self.btn_save_caret.setIcon(Icons.chevron_down(QColor("#1769E0")))
         self.btn_save_caret.setFixedWidth(_SAVE_CARET_WIDTH)
         self.btn_save_caret.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        self.btn_save_caret.setToolTip("另存为…")
-        self.btn_save_caret.setAccessibleName("另存为")
+        self.btn_save_caret.setToolTip("项目操作")
+        self.btn_save_caret.setAccessibleName("项目操作")
 
         self._save_menu = apply_rounded_menu_chrome(QMenu(host))
         bind_popup_trigger(self._save_menu, self.btn_save_caret)
-        self.btn_save_project_as = self._save_menu.addAction("另存为")
+        self.btn_save_project_as = self._save_menu.addAction("另存为…")
         self.btn_save_project_as.setIcon(Icons.save_disk())
         self.btn_save_project_as.setToolTip("将当前会话另存为新的 .tlproj 项目")
+        self._save_menu.addSeparator()
+        self.btn_new_project = self._save_menu.addAction("新建项目…")
+        self.btn_new_project.setToolTip("结束当前项目，开始新的分析")
+        self.btn_close_project = self._save_menu.addAction("关闭项目…")
+        self.btn_close_project.setToolTip("结束当前会话并保持应用窗口打开")
 
         row.addWidget(self.btn_save_project, 1)
         row.addWidget(self.btn_save_caret, 0)
@@ -583,8 +596,15 @@ class Toolbar(QWidget):
     def _emit_save_project_as(self, _checked=False):
         self.save_project_as_requested.emit()
 
+    def _emit_new_project(self, _checked=False):
+        self.new_project_requested.emit()
+
+    def _emit_close_project(self, _checked=False):
+        self.close_project_requested.emit()
+
     def bind_command_actions(
         self, open_action, save_action, save_as_action, recent_action=None,
+        new_action=None, close_action=None,
     ):
         """Route file chips through the window's command QActions.
 
@@ -595,13 +615,18 @@ class Toolbar(QWidget):
         self.btn_add.clicked.connect(open_action.trigger)
         self.btn_save_project.clicked.connect(save_action.trigger)
         self.btn_save_project_as.triggered.connect(save_as_action.trigger)
+        if new_action is not None:
+            self.btn_new_project.triggered.connect(new_action.trigger)
+        if close_action is not None:
+            self.btn_close_project.triggered.connect(close_action.trigger)
         if open_action.toolTip():
             self.btn_add.setToolTip(open_action.toolTip())
         if save_action.toolTip():
             self.btn_save_project.setToolTip(save_action.toolTip())
         if save_as_action.toolTip():
             self.btn_save_project_as.setToolTip(save_as_action.toolTip())
-            self.btn_save_caret.setToolTip(save_as_action.toolTip())
+        self.btn_save_caret.setToolTip("项目操作")
+        self.btn_save_caret.setAccessibleName("项目操作")
         if recent_action is not None and recent_action.toolTip():
             self.btn_open_caret.setToolTip(recent_action.toolTip())
             self.btn_open_caret.setAccessibleName(recent_action.toolTip())
@@ -612,6 +637,8 @@ class Toolbar(QWidget):
         self.btn_save_project.clicked.connect(self.save_project_requested)
         self.btn_save_caret.clicked.connect(self._open_save_menu)
         self.btn_save_project_as.triggered.connect(self._emit_save_project_as)
+        self.btn_new_project.triggered.connect(self._emit_new_project)
+        self.btn_close_project.triggered.connect(self._emit_close_project)
         self.btn_batch.clicked.connect(self.batch_requested)
         # Hidden Cockpit entry: triple-click the brand logo (see _LogoLabel).
         self._logo_label.triple_clicked.connect(self.acquisition_cockpit_requested)
@@ -737,11 +764,37 @@ class Toolbar(QWidget):
             return
         helper.set_motion_policy(self._motion_policy)
 
-    def set_enabled_for_mode(self, mode, has_file):
-        """Implements the §7.1 enabled-state matrix."""
-        self._save_split.setEnabled(has_file)
-        self.btn_save_project_as.setEnabled(has_file)
+    def set_enabled_for_mode(
+        self, mode, has_file, *, can_save=None, can_close=None,
+    ):
+        """Implements the §7.1 enabled-state matrix plus project-session capability."""
+        if can_save is None:
+            can_save = bool(has_file)
+        if can_close is None:
+            can_close = bool(has_file)
+        self._save_split.setEnabled(True)
+        self.btn_save_caret.setEnabled(True)
+        self.btn_save_project.setEnabled(can_save)
+        self.btn_save_project_as.setEnabled(can_save)
+        self.btn_new_project.setEnabled(True)
+        self.btn_close_project.setEnabled(can_close)
         self.btn_batch.setEnabled(True)
+
+    def set_project_session_chrome(
+        self, *, display_name, tooltip, dirty, can_save, can_close,
+    ):
+        """Project owner projection: name chip, tooltips, and action enablement."""
+        name = display_name or "未命名项目"
+        mark = "*" if dirty else ""
+        full = f"{name}{mark}"
+        metrics = self.lbl_project_session.fontMetrics()
+        elided = metrics.elidedText(full, Qt.ElideMiddle, 88)
+        self.lbl_project_session.setText(elided)
+        self.lbl_project_session.setToolTip(tooltip or name)
+        self.set_enabled_for_mode(
+            self._current_mode, has_file=can_save,
+            can_save=can_save, can_close=can_close,
+        )
 
     def current_mode(self):
         return self._current_mode

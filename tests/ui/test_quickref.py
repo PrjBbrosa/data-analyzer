@@ -166,6 +166,12 @@ def test_quickref_standard_desktop_copy_matches_runtime():
     assert "Esc 先清空搜索，再按一次关闭" in search.sub
     save = _row_by_desc("保存会话")
     assert "有未保存更改时可保存、不保存或取消" in save.sub
+    assert "关闭项目" in save.sub
+    assert "另存为" in save.sub
+    close_row = _row_by_desc("新建 / 关闭项目")
+    assert "解除" in close_row.sub or "解绑" in close_row.sub
+    assert "保留空项目" in close_row.sub
+    assert "关闭项目" in (close_row.gesture or "")
     files = _row_by_desc("把文件加入当前 View")
     assert "Enter/Space" in files.sub
     assert "F2" in files.sub

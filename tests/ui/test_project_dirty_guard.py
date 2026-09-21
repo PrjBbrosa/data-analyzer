@@ -550,6 +550,175 @@ def test_unsaved_prompt_defaults_to_save_not_discard(qapp, qtbot):
     box.close()
 
 
+def test_close_project_prompt_defaults_to_cancel(qapp, qtbot):
+    from PyQt5.QtWidgets import QWidget
+    from mf4_analyzer.ui.main_window._project_io_mixin import ProjectIOMixin
+
+    widget = QWidget()
+    qtbot.addWidget(widget)
+    widget._project_path = "/tmp/工况A.tlproj"
+    widget._project_dirty = ProjectDirtyState(path="/tmp/工况A.tlproj")
+    widget._unsaved_prompt_intent = "close"
+    widget._project_session_display_name = (
+        ProjectIOMixin._project_session_display_name.__get__(widget)
+    )
+    widget._unsaved_project_prompt_copy = (
+        ProjectIOMixin._unsaved_project_prompt_copy.__get__(widget)
+    )
+    widget._unsaved_project_prompt_buttons = (
+        ProjectIOMixin._unsaved_project_prompt_buttons.__get__(widget)
+    )
+    box, save_btn, discard_btn, cancel_btn = widget._unsaved_project_prompt_buttons()
+    qtbot.addWidget(box)
+    assert box.windowTitle() == "关闭项目"
+    assert "工况A.tlproj" in box._text_label.text()
+    assert box.default_button() is cancel_btn
+    assert box.escape_button() is cancel_btn
+    assert save_btn.text() == "保存并关闭"
+    assert discard_btn.text() == "不保存并关闭"
+    box.close()
+
+
+def _binding_snapshot(window):
+    holder = window._project_dirty
+    uv = getattr(window, "_ultraview", None)
+    board = getattr(uv, "board", None) if uv is not None else None
+    return {
+        "files": tuple(window.files),
+        "n_views": len(window.view_manager.views),
+        "path": None if window._project_path is None else str(window._project_path),
+        "holder_path": holder.path,
+        "digest": holder.saved_digest,
+        "revision": holder.revision,
+        "save_point": holder.save_point,
+        "board_name": getattr(board, "name", None),
+    }
+
+
+def test_close_project_cancel_keeps_sources_board_and_both_paths(
+    qapp, qtbot, tmp_path, monkeypatch,
+):
+    import csv
+    from mf4_analyzer.ui.main_window import MainWindow
+    from mf4_analyzer.ui.ultraview_state import UltraViewRef, add_ref, membership_set
+
+    csv_path = tmp_path / "a.csv"
+    with open(csv_path, "w", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["time", "rpm"])
+        for i in range(16):
+            writer.writerow([i / 100.0, float(i)])
+    project = tmp_path / "keep.tlproj"
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window._load_one(str(csv_path))
+    assert window.save_project(project) is True
+    uv = window._ultraview
+    view_id = str(window.view_manager.get(0).view_id)
+    add_ref(uv.board, UltraViewRef("time", view_id))
+    uv.board.name = "会话保留"
+    window.view_manager.rename(0, "未保存")
+    before = _binding_snapshot(window)
+    before_refs = membership_set(uv.board)
+    monkeypatch.setattr(window, "_prompt_unsaved_project", lambda: "cancel")
+
+    assert window.close_project() is False
+    assert _binding_snapshot(window) == before
+    assert membership_set(uv.board) == before_refs
+    assert window.view_manager.views[0].name == "未保存"
+
+
+def test_close_project_save_as_cancel_keeps_binding(
+    qapp, qtbot, tmp_path, monkeypatch,
+):
+    import csv
+    from PyQt5.QtWidgets import QFileDialog
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    csv_path = tmp_path / "a.csv"
+    with open(csv_path, "w", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["time", "rpm"])
+        for i in range(16):
+            writer.writerow([i / 100.0, float(i)])
+    project = tmp_path / "keep-as.tlproj"
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window._load_one(str(csv_path))
+    assert window.save_project(project) is True
+    window._project_path = None
+    window._project_dirty.path = None
+    window.view_manager.rename(0, "另存取消")
+    before = _binding_snapshot(window)
+    monkeypatch.setattr(window, "_prompt_unsaved_project", lambda: "save")
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: ("", ""))
+
+    assert window.close_project() is False
+    assert _binding_snapshot(window) == before
+    assert window.files
+    assert window.view_manager.views[0].name == "另存取消"
+
+
+def test_close_project_write_failure_keeps_dirty_binding(
+    qapp, qtbot, tmp_path, monkeypatch,
+):
+    import csv
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    csv_path = tmp_path / "a.csv"
+    with open(csv_path, "w", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["time", "rpm"])
+        for i in range(16):
+            writer.writerow([i / 100.0, float(i)])
+    project = tmp_path / "fail.tlproj"
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window._load_one(str(csv_path))
+    assert window.save_project(project) is True
+    window.view_manager.rename(0, "写入失败")
+    before = _binding_snapshot(window)
+    monkeypatch.setattr(window, "_prompt_unsaved_project", lambda: "save")
+    monkeypatch.setattr(
+        window, "save_project_via_dialog",
+        lambda: (_ for _ in ()).throw(OSError("disk full")),
+    )
+
+    assert window.close_project() is False
+    assert _binding_snapshot(window) == before
+    assert window._project_dirty.is_dirty
+    assert str(window._project_path) == str(project)
+
+
+def test_close_project_degraded_save_cancel_blocks_close(
+    qapp, qtbot, tmp_path, monkeypatch,
+):
+    import csv
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    csv_path = tmp_path / "a.csv"
+    with open(csv_path, "w", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["time", "rpm"])
+        for i in range(16):
+            writer.writerow([i / 100.0, float(i)])
+    project = tmp_path / "degraded.tlproj"
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window._load_one(str(csv_path))
+    assert window.save_project(project) is True
+    window.view_manager.rename(0, "恢复不完整")
+    health = window._project_restore_health
+    health.adopt_restore(missing_paths=("gone.csv",), missing_old_fids=())
+    before = _binding_snapshot(window)
+    monkeypatch.setattr(window, "_prompt_unsaved_project", lambda: "save")
+    monkeypatch.setattr(window, "_confirm_degraded_project_save", lambda *_a, **_k: False)
+
+    assert window.close_project() is False
+    assert _binding_snapshot(window) == before
+    assert window.files
+
+
 def test_successful_save_sets_clean_save_point_on_window(qapp, tmp_path):
     import csv
     from mf4_analyzer.ui.main_window import MainWindow

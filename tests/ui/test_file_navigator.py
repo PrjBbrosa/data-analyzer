@@ -30,6 +30,36 @@ def test_file_navigator_signals_exist(qapp):
     assert hasattr(nav, 'file_order_requested')
 
 
+def test_navigator_close_project_available_without_rows(qapp):
+    nav = FileNavigator()
+    assert nav._close_project_available is False
+    nav.set_close_project_available(True)
+    assert nav._close_project_available is True
+
+
+def test_navigator_kebab_offers_close_project(qapp, qtbot, monkeypatch):
+    from PyQt5.QtWidgets import QMenu
+
+    nav = FileNavigator()
+    qtbot.addWidget(nav)
+    labels = []
+    enabled = []
+
+    def fake_exec(self, *args, **kwargs):
+        for action in self.actions():
+            labels.append(action.text())
+            enabled.append(action.isEnabled())
+        return None
+
+    monkeypatch.setattr(QMenu, "exec_", fake_exec)
+    monkeypatch.setattr(QMenu, "exec", fake_exec)
+    nav.set_close_project_available(True)
+    nav._open_kebab()
+    assert "关闭项目…" in labels
+    assert "全部关闭…" not in labels
+    assert True in enabled
+
+
 class FakeFd:
     def __init__(self, filename="sample.csv", short_name="sample", rows=100, fs=1000.0, duration=5.0, filepath=None, label_suffix=""):
         self.filename = filename

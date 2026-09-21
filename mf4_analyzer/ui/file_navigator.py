@@ -382,6 +382,7 @@ class FileNavigator(QWidget):
         # fid -> rows_key
         self._fid_to_key = {}
         self._active_fid = None
+        self._close_project_available = False
         # Presentation-only attachment context. ViewState owns the underlying
         # facts; these fields exist solely to render file-card affordances.
         self._attachment_target = ""
@@ -1149,19 +1150,23 @@ class FileNavigator(QWidget):
     def _open_kebab(self):
         menu = apply_rounded_menu_chrome(QMenu(self))
         bind_popup_trigger(menu, self._btn_kebab)
-        act = menu.addAction("全部关闭…")
-        act.setEnabled(bool(self._rows))
+        act = menu.addAction("关闭项目…")
+        act.setEnabled(bool(self._rows) or bool(self._close_project_available))
         gp = self._btn_kebab.mapToGlobal(self._btn_kebab.rect().bottomLeft())
         try:
             chosen = menu.exec_(gp)
             sync_popup_trigger(self._btn_kebab, popup=menu)
             if chosen == act:
-                # Confirm lives in MainWindow.close_all so dependency preflight
-                # and close-all share one product dialog.
+                # Confirm lives in MainWindow.close_project so last-source /
+                # dirty leave share one product transaction.
                 self.close_all_requested.emit()
         finally:
             menu.close()
             menu.deleteLater()
+
+    def set_close_project_available(self, available):
+        """Owner projection: bound or persistable sessions can close with zero rows."""
+        self._close_project_available = bool(available)
 
     def _refresh_header(self):
         self._lbl_count.setText(str(len(self._rows)))

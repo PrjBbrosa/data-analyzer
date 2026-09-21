@@ -1,4 +1,5 @@
 # tests/ui/test_project_session.py
+import hashlib
 import json
 import pytest
 
@@ -14,7 +15,9 @@ def test_app_meta_constants():
 def test_window_title_uses_app_meta(qapp):
     from mf4_analyzer.ui.main_window import MainWindow
     mw = MainWindow()
-    assert mw.windowTitle() == app_meta.WINDOW_TITLE
+    assert mw.windowTitle().endswith(app_meta.WINDOW_TITLE)
+    assert app_meta.WINDOW_TITLE in mw.windowTitle()
+    assert "未命名项目" in mw.windowTitle()
 
 
 def test_open_project_unsupported_schema_prompts_chinese_upgrade(
@@ -2134,3 +2137,211 @@ def test_project_roundtrip_keeps_wwt_user_xaxis_label_origin(
     assert restored._custom_xaxis_spec.label == wwt.CHAN_X
     restored.inspector.top.set_xaxis_mode("time")
     assert restored.inspector.top.xaxis_label() == wwt.CHAN_X
+
+
+def _sha256(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _session_binding(mw):
+    holder = mw._project_dirty
+    uv = getattr(mw, "_ultraview", None)
+    board = getattr(uv, "board", None) if uv is not None else None
+    return {
+        "files": tuple(mw.files),
+        "n_views": len(mw.view_manager.views),
+        "path": None if mw._project_path is None else str(mw._project_path),
+        "holder_path": holder.path,
+        "digest": holder.saved_digest,
+        "revision": holder.revision,
+        "save_point": holder.save_point,
+        "board_name": getattr(board, "name", None),
+        "board_refs": tuple(
+            getattr(board, "refs", ()) or (),
+        ) if board is not None else (),
+    }
+
+
+def test_close_project_then_import_b_save_goes_to_save_as(
+    qapp, qtbot, tmp_path, monkeypatch,
+):
+    from PyQt5.QtWidgets import QFileDialog
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    csv_a = tmp_path / "a.csv"
+    csv_b = tmp_path / "b.csv"
+    _write_csv(csv_a, n=20)
+    _write_csv(csv_b, n=24)
+    project_a = tmp_path / "A.tlproj"
+    project_b = tmp_path / "B.tlproj"
+
+    mw = MainWindow()
+    qtbot.addWidget(mw)
+    mw._load_one(str(csv_a))
+    assert mw.save_project(project_a) is True
+    digest_a = _sha256(project_a)
+
+    prompted = []
+    monkeypatch.setattr(mw, "_prompt_unsaved_project", lambda: prompted.append("hit") or "cancel")
+    assert mw.close_project() is True
+    assert prompted == []
+    assert mw._project_path is None
+    assert mw._project_dirty.path is None
+    assert mw._project_dirty.saved_digest is None
+    assert not mw.files
+
+    mw._load_one(str(csv_b))
+    starts = []
+
+    def _save_as(*args, **kwargs):
+        start = args[2] if len(args) > 2 else kwargs.get("dir", "")
+        starts.append(start)
+        return (str(project_b), "")
+
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", _save_as)
+    assert mw.save_project_via_dialog() is True
+    assert starts == [""]
+    assert _sha256(project_a) == digest_a
+    assert project_b.exists()
+    assert str(mw._project_path) == str(project_b)
+    assert tuple(mw.files)
+
+
+def test_close_project_save_writes_pre_clean_session(
+    qapp, qtbot, tmp_path, monkeypatch,
+):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    csv_a = tmp_path / "a.csv"
+    _write_csv(csv_a, n=20)
+    project_a = tmp_path / "A.tlproj"
+
+    mw = MainWindow()
+    qtbot.addWidget(mw)
+    mw._load_one(str(csv_a))
+    assert mw.save_project(project_a) is True
+    mw.view_manager.rename(0, "工况A")
+    assert mw._project_session_is_dirty()
+    monkeypatch.setattr(mw, "_prompt_unsaved_project", lambda: "save")
+
+    assert mw.close_project() is True
+    payload = json.loads(project_a.read_text(encoding="utf-8"))
+    assert payload["views"][0]["name"] == "工况A"
+    assert not mw.files
+    assert mw._project_path is None
+    assert mw._project_dirty.path is None
+    assert not mw._project_dirty.is_dirty
+
+    restored = MainWindow()
+    qtbot.addWidget(restored)
+    restored.open_project(project_a)
+    assert restored.view_manager.views[0].name == "工况A"
+    assert restored.files
+
+
+def test_close_project_discard_leaves_disk_bytes(
+    qapp, qtbot, tmp_path, monkeypatch,
+):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    csv_a = tmp_path / "a.csv"
+    _write_csv(csv_a, n=20)
+    project_a = tmp_path / "A.tlproj"
+
+    mw = MainWindow()
+    qtbot.addWidget(mw)
+    mw._load_one(str(csv_a))
+    assert mw.save_project(project_a) is True
+    digest_a = _sha256(project_a)
+    mw.view_manager.rename(0, "丢弃")
+    monkeypatch.setattr(mw, "_prompt_unsaved_project", lambda: "discard")
+
+    assert mw.close_project() is True
+    assert _sha256(project_a) == digest_a
+    assert not mw.files
+    assert mw._project_path is None
+    assert mw._project_dirty.path is None
+
+
+def test_new_project_unbinds_and_does_not_open_file_dialog(
+    qapp, qtbot, tmp_path, monkeypatch,
+):
+    from PyQt5.QtWidgets import QFileDialog
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    csv_a = tmp_path / "a.csv"
+    _write_csv(csv_a, n=16)
+    project_a = tmp_path / "A.tlproj"
+    mw = MainWindow()
+    qtbot.addWidget(mw)
+    mw._load_one(str(csv_a))
+    assert mw.save_project(project_a) is True
+    digest_a = _sha256(project_a)
+    opened = []
+    monkeypatch.setattr(
+        QFileDialog, "getOpenFileNames",
+        lambda *a, **k: opened.append("dialog") or ([], ""),
+    )
+    assert mw.new_project() is True
+    assert opened == []
+    assert mw._project_path is None
+    assert not mw.files
+    assert _sha256(project_a) == digest_a
+
+
+def test_late_analysis_restore_after_close_does_not_rebuild(
+    qapp, qtbot, tmp_path,
+):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    csv_a = tmp_path / "a.csv"
+    _write_csv(csv_a, n=16)
+    project_a = tmp_path / "A.tlproj"
+    mw = MainWindow()
+    qtbot.addWidget(mw)
+    mw._load_one(str(csv_a))
+    assert mw.save_project(project_a) is True
+    fft_id = str(mw.analysis_managers["fft"].get(0).view_id)
+    mw._analysis_restore_pending.add(("fft", fft_id))
+    mw._analysis_restore_queue = [("fft", fft_id)]
+
+    assert mw.close_project() is True
+    assert mw._analysis_restore_pending == set()
+    assert mw._analysis_restore_queue == []
+    mw._pump_analysis_restore()
+    mw._recompute_restored_analysis_view("fft", fft_id)
+    qapp.processEvents()
+    assert not mw.files
+    assert mw._project_path is None
+    assert mw._project_dirty.path is None
+
+
+def test_bound_empty_close_project_clears_board_and_binding(
+    qapp, qtbot, tmp_path,
+):
+    from mf4_analyzer.ui.main_window import MainWindow
+    from mf4_analyzer.ui.ultraview_state import UltraViewRef, add_ref, membership_set
+
+    csv_a = tmp_path / "a.csv"
+    _write_csv(csv_a, n=16)
+    project_a = tmp_path / "A.tlproj"
+    mw = MainWindow()
+    qtbot.addWidget(mw)
+    mw._load_one(str(csv_a))
+    assert mw.save_project(project_a) is True
+    mw.close_all(force=True)
+    assert not mw.files
+    assert str(mw._project_path) == str(project_a)
+    assert mw._project_dirty.path == str(project_a)
+
+    uv = mw._ultraview
+    view_id = str(mw.view_manager.get(0).view_id)
+    add_ref(uv.board, UltraViewRef("time", view_id))
+    uv.board.name = "空项目Board"
+
+    assert mw.close_project(already_confirmed=True) is True
+    assert mw._project_path is None
+    assert mw._project_dirty.path is None
+    assert mw._project_dirty.saved_digest is None
+    assert uv.board.name != "空项目Board"
+    assert UltraViewRef("time", view_id) not in membership_set(uv.board)

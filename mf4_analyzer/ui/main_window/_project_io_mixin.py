@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 from time import monotonic
 
-from PyQt5.QtCore import QEventLoop, QSettings
+from PyQt5.QtCore import QEventLoop, QSettings, Qt
 from PyQt5.QtWidgets import QApplication, QFileDialog, QInputDialog, QMessageBox
 
 from ...blf_dbc_candidates import (
@@ -82,6 +82,10 @@ class ProjectIOMixin:
     #: Views. Only this mixin writes it -- the default lives here as a class
     #: attribute so the guard has exactly one owning file (spec D-E2).
     _restoring_project = False
+    #: Contextual copy for the shared Save/Discard/Cancel prompt. ``leave``
+    #: keeps the existing window-close / open-replace wording; ``close`` and
+    #: ``new`` are product session-end intents and default to Cancel.
+    _unsaved_prompt_intent = "leave"
 
     def _note_user_project_mutation(self, token=None):
         """Publish one persistable user mutation. No-op while restoring."""
@@ -209,11 +213,59 @@ class ProjectIOMixin:
         self._view_bridge.capture_canvas_ranges_into(snapshot, canvas)
         return snapshot
 
+    def _project_session_display_name(self):
+        """Short name for prompts and chrome. Path is identity; this is display."""
+        path = getattr(self, "_project_path", None)
+        if path is None:
+            holder = getattr(self, "_project_dirty", None)
+            path = getattr(holder, "path", None) if holder is not None else None
+        if path:
+            return Path(path).name
+        return "未命名项目"
+
+    def _unsaved_project_prompt_copy(self, intent="leave"):
+        """Contextual labels for the shared leave prompt. Same action ids."""
+        name = self._project_session_display_name()
+        if intent == "close":
+            return {
+                "title": "关闭项目",
+                "text": (
+                    f"“{name}”有未保存的更改。"
+                    "关闭后将结束当前会话（文件、View、分析与 Board）。"
+                ),
+                "save_label": "保存并关闭",
+                "discard_label": "不保存并关闭",
+                "default_action_id": "cancel",
+            }
+        if intent == "new":
+            return {
+                "title": "新建项目",
+                "text": (
+                    f"“{name}”有未保存的更改。"
+                    "新建将结束当前会话，开始空的分析工作区。"
+                ),
+                "save_label": "保存并新建",
+                "discard_label": "不保存并新建",
+                "default_action_id": "cancel",
+            }
+        return {
+            "title": "未保存的项目",
+            "text": "项目有未保存的更改。是否保存？",
+            "save_label": "保存",
+            "discard_label": "不保存",
+            "default_action_id": "save",
+        }
+
     def _unsaved_project_prompt_buttons(self):
         """Build the shared Save / Don't Save / Cancel box. Does not exec."""
         from ...ui_kit.message_dialog import build_unsaved_project_dialog
 
-        dialog = build_unsaved_project_dialog(self)
+        copy_fn = getattr(self, "_unsaved_project_prompt_copy", None)
+        if callable(copy_fn):
+            copy = copy_fn(getattr(self, "_unsaved_prompt_intent", "leave"))
+            dialog = build_unsaved_project_dialog(self, **copy)
+        else:
+            dialog = build_unsaved_project_dialog(self)
         return (
             dialog,
             dialog.button("save"),
@@ -232,14 +284,17 @@ class ProjectIOMixin:
             return "cancel"
         return result.action_id
 
-    def confirm_leave_unsaved_project(self):
+    def confirm_leave_unsaved_project(self, *, intent="leave"):
         """Shared Save / Don't Save / Cancel guard. Does not destroy the window."""
         from .project_dirty import DirtyGuardResult
 
         holder = getattr(self, "_project_dirty", None)
         if holder is not None and holder.guard_open:
             return DirtyGuardResult.CANCELLED
+        previous_intent = getattr(self, "_unsaved_prompt_intent", "leave")
+        self._unsaved_prompt_intent = intent or "leave"
         if not self._project_session_is_dirty():
+            self._unsaved_prompt_intent = previous_intent
             return DirtyGuardResult.PROCEED_DISCARDED
         if holder is not None:
             holder.guard_open = True
@@ -258,6 +313,7 @@ class ProjectIOMixin:
                 return DirtyGuardResult.PROCEED_DISCARDED
             return DirtyGuardResult.CANCELLED
         finally:
+            self._unsaved_prompt_intent = previous_intent
             if holder is not None:
                 holder.guard_open = False
 
@@ -2112,6 +2168,164 @@ class ProjectIOMixin:
             migrated.extend(migrate_legacy_channel_bindings(state, self.files))
         return migrated
 
+    def _project_is_bound(self):
+        path = getattr(self, "_project_path", None)
+        if path is not None:
+            return True
+        holder = getattr(self, "_project_dirty", None)
+        return bool(getattr(holder, "path", None)) if holder is not None else False
+
+    def _project_close_available(self):
+        if self._project_is_bound():
+            return True
+        if self.files:
+            return True
+        holder = getattr(self, "_project_dirty", None)
+        return bool(holder is not None and holder.is_dirty)
+
+    def _project_session_can_save(self):
+        if self._project_is_bound() or self.files:
+            return True
+        holder = getattr(self, "_project_dirty", None)
+        return bool(holder is not None and holder.is_dirty)
+
+    def _project_session_path_tooltip(self):
+        path = getattr(self, "_project_path", None)
+        if path is None:
+            holder = getattr(self, "_project_dirty", None)
+            path = getattr(holder, "path", None) if holder is not None else None
+        if path:
+            return str(path)
+        return "未命名项目"
+
+    def _project_save_tooltip(self):
+        path = getattr(self, "_project_path", None)
+        if path is None:
+            holder = getattr(self, "_project_dirty", None)
+            path = getattr(holder, "path", None) if holder is not None else None
+        if path:
+            return f"保存到 {path}"
+        return "首次保存请选择项目位置"
+
+    def _project_window_title(self):
+        from ... import app_meta
+
+        name = self._project_session_display_name()
+        holder = getattr(self, "_project_dirty", None)
+        mark = "*" if holder is not None and holder.is_dirty else ""
+        return f"{name}{mark} — {app_meta.WINDOW_TITLE}"
+
+    def _refresh_project_session_chrome(self):
+        """Project owner projection for navigator/toolbar/title/QAction state."""
+        can_save = self._project_session_can_save()
+        can_close = self._project_close_available()
+        holder = getattr(self, "_project_dirty", None)
+        dirty = bool(holder is not None and holder.is_dirty)
+        nav = getattr(self, "navigator", None)
+        setter = getattr(nav, "set_close_project_available", None)
+        if callable(setter):
+            setter(can_close)
+        toolbar = getattr(self, "toolbar", None)
+        chrome = getattr(toolbar, "set_project_session_chrome", None)
+        if callable(chrome):
+            chrome(
+                display_name=self._project_session_display_name(),
+                tooltip=self._project_session_path_tooltip(),
+                dirty=dirty,
+                can_save=can_save,
+                can_close=can_close,
+            )
+        elif toolbar is not None:
+            set_enabled = getattr(toolbar, "set_enabled_for_mode", None)
+            if callable(set_enabled):
+                set_enabled(
+                    toolbar.current_mode(),
+                    has_file=can_save,
+                    can_save=can_save,
+                    can_close=can_close,
+                )
+            if hasattr(toolbar, "btn_save_project"):
+                toolbar.btn_save_project.setToolTip(self._project_save_tooltip())
+        if toolbar is not None and hasattr(toolbar, "btn_save_project"):
+            toolbar.btn_save_project.setToolTip(self._project_save_tooltip())
+        coord = getattr(self, "_command_coordinator", None)
+        if coord is not None:
+            from ..command_registry import CommandId
+
+            save_action = coord.action(CommandId.SAVE_PROJECT)
+            save_action.setEnabled(can_save)
+            save_action.setToolTip(self._project_save_tooltip())
+            coord.action(CommandId.SAVE_PROJECT_AS).setEnabled(can_save)
+            coord.action(CommandId.NEW_PROJECT).setEnabled(True)
+            coord.action(CommandId.CLOSE_PROJECT).setEnabled(can_close)
+        set_title = getattr(self, "setWindowTitle", None)
+        if callable(set_title):
+            set_title(self._project_window_title())
+
+    def _removal_empties_workspace(self, fids):
+        targets = {str(fid) for fid in (fids or ()) if str(fid) in self.files}
+        if not targets:
+            return False
+        return set(map(str, self.files)) <= targets
+
+    def _confirm_last_source_removal(self, fids, uses, *, bound, dirty):
+        """Prompt once before the last logical sources disappear. Default Cancel."""
+        from ...ui_kit.message_dialog import build_last_source_dialog
+
+        formatter = getattr(self, "_format_source_use_summary", None)
+        summary = formatter(uses) if callable(formatter) else ""
+        dialog = build_last_source_dialog(
+            self,
+            bound=bound,
+            dirty=dirty,
+            project_name=self._project_session_display_name(),
+            summary_text=summary,
+        )
+        dialog.exec_()
+        result = dialog.message_result
+        if result is None or result.action_id not in {
+            "close", "save_close", "discard_close", "keep", "cancel",
+        }:
+            return "cancel"
+        return result.action_id
+
+    def _decide_source_removal(self, fids, uses):
+        """Return ``abort``, ``remove``, ``close_project``, or ``confirm_deps``.
+
+        Last-source close-project decisions finish the product transaction
+        here so the caller does not also purge.
+        """
+        if self._project_session_in_restore():
+            return "confirm_deps"
+        if not self._removal_empties_workspace(fids):
+            return "confirm_deps"
+        bound = self._project_is_bound()
+        dirty = bool(self._project_session_is_dirty())
+        if not bound and not dirty:
+            return "confirm_deps"
+        action = self._confirm_last_source_removal(
+            fids, uses, bound=bound, dirty=dirty,
+        )
+        if action == "keep":
+            return "remove"
+        if action == "close":
+            self.close_project(already_confirmed=True)
+            return "close_project"
+        if action == "discard_close":
+            self.close_project(already_confirmed=True)
+            return "close_project"
+        if action == "save_close":
+            try:
+                ok = bool(self.save_project_via_dialog())
+            except (OSError, TypeError, ValueError):
+                logger.exception("last-source save failed")
+                ok = False
+            if not ok:
+                return "abort"
+            self.close_project(already_confirmed=True)
+            return "close_project"
+        return "abort"
+
     def _close(self, fid, *, force=False, notify=True):
         """Close one logical source (fid).
 
@@ -2130,12 +2344,16 @@ class ProjectIOMixin:
             time_views=self.view_manager.views,
             analysis_managers=self.analysis_managers,
         )
-        if (
-            uses
-            and not force
-            and not self._confirm_global_file_close(uses, files=(fid,))
-        ):
-            return
+        if not force:
+            decision = self._decide_source_removal((fid,), uses)
+            if decision == "abort":
+                return
+            if decision == "close_project":
+                return
+            if decision == "confirm_deps" and uses and not self._confirm_global_file_close(
+                uses, files=(fid,),
+            ):
+                return
         affected = (
             self._time_view_ids_using_fids((fid,)) if notify else ()
         )
@@ -2203,6 +2421,7 @@ class ProjectIOMixin:
         if sidecar_warnings:
             self.toast("项目已保存，预览未保存", "warning")
         self._recent_files.record_project(str(path))
+        self._refresh_project_session_chrome()
         return True
 
     def _assemble_project_document(self, path, saved_mode=None):
@@ -2534,6 +2753,7 @@ class ProjectIOMixin:
                     path=path,
                     digest=pio.canonical_project_digest(baseline),
                 )
+            self._refresh_project_session_chrome()
 
             try:
                 self._apply_active_view(self.view_manager.active)
@@ -2584,6 +2804,143 @@ class ProjectIOMixin:
         fp.chk_orig.setChecked(bool(payload.get("show_original", True)))
         fp.chk_filt.setChecked(bool(payload.get("show_filtered", True)))
         fp.set_enabled(bool(payload.get("enabled", False)))
+
+    def _project_session_in_restore(self):
+        return bool(
+            getattr(self, "_restoring_project", False)
+            or getattr(self, "_opening_project", False)
+        )
+
+    def _unbind_project_save_target(self):
+        """Drop both path representations and the saved digest after session end.
+
+        Internal restore must not call this: ``open_project`` reuses
+        ``close_all(force=True)`` and then binds the incoming project.
+        """
+        if self._project_session_in_restore():
+            return
+        self._project_path = None
+        dirty = getattr(self, "_project_dirty", None)
+        if dirty is None:
+            return
+        restore_depth = dirty.restore_depth
+        close_teardown = dirty.close_teardown_started
+        dirty.clear()
+        dirty.restore_depth = restore_depth
+        dirty.close_teardown_started = close_teardown
+
+    def _invalidate_session_owned_deferred_work(self):
+        """Make in-flight restore/compute/render work fail closed for this session."""
+        abort = getattr(self, "_abort_analysis_restore", None)
+        if callable(abort):
+            abort()
+        self._analysis_restore_pending = set()
+        gate = getattr(self, "_time_render", None)
+        if gate is not None:
+            clear = getattr(gate, "clear_pending_switch", None)
+            if callable(clear):
+                clear()
+            if hasattr(gate, "pending_section_view"):
+                gate.pending_section_view = None
+        coordinator = getattr(self, "_fft_time_coordinator", None)
+        if coordinator is not None:
+            coordinator.invalidate_all()
+        frf_coordinator = getattr(self, "_frf_coordinator", None)
+        if frf_coordinator is not None:
+            frf_coordinator.invalidate_all()
+        jobs = getattr(self, "_analysis_jobs", None)
+        if jobs is not None:
+            clear_token = getattr(jobs, "clear_progress_token", None)
+            if callable(clear_token):
+                clear_token("restore")
+
+    def _reset_ultraview_project_state(self):
+        uv = getattr(self, "_ultraview", None)
+        if uv is None or getattr(uv, "is_shutdown", False):
+            return
+        reset = getattr(uv, "reset_project_state", None)
+        if callable(reset):
+            reset()
+
+    def _purge_empty_bound_session_contents(self):
+        """Cleanup path when ``close_all`` would early-return on zero files."""
+        stack = getattr(self, "chart_stack", None)
+        if stack is not None:
+            stack.cancel_page_transition("files-closed")
+        health = getattr(self, "_project_restore_health", None)
+        if health is not None:
+            health.clear()
+        canvas_time = getattr(self, "canvas_time", None)
+        if canvas_time is not None:
+            canvas_time.invalidate_envelope_cache("all files closed")
+            canvas_time.invalidate_monotonicity_cache()
+        for cache in getattr(self, "analysis_caches", {}).values():
+            cache.clear()
+        for section in list(getattr(self, "analysis_caches", {}) or ()):
+            clear_pins = getattr(self, "_clear_analysis_section_pins", None)
+            if callable(clear_pins):
+                clear_pins(section)
+        ctrl = getattr(getattr(self, "_analysis_context", None), "time_range", None)
+        if ctrl is not None:
+            ctrl.clear_all()
+        self._reset_empty_workspace_session()
+        reset_plot = getattr(self, "_reset_plot_state", None)
+        if callable(reset_plot):
+            reset_plot(scope="all")
+        refresh_chip = getattr(self, "_refresh_time_axis_provenance_chips", None)
+        if callable(refresh_chip):
+            refresh_chip()
+
+    def _commit_project_session_end(self):
+        """Destructive half of close/new: invalidate, clean owners, unbind."""
+        self._invalidate_session_owned_deferred_work()
+        if self.files:
+            self.close_all(force=True)
+        else:
+            self._purge_empty_bound_session_contents()
+        # ``close_all`` skips UltraView reset when files are already empty.
+        self._reset_ultraview_project_state()
+        health = getattr(self, "_project_restore_health", None)
+        if health is not None:
+            health.clear()
+        self._unbind_project_save_target()
+        self._refresh_project_session_chrome()
+        update_info = getattr(self, "_update_info", None)
+        if callable(update_info):
+            update_info()
+
+    def close_project(self, *, already_confirmed=False, intent="close"):
+        """Product close: leave-guard, then end the session and unbind the path.
+
+        ``close_all`` remains the internal source-unload helper used by
+        project restore. Only an already-confirmed caller (last-source
+        dialog) may skip the leave prompt.
+        """
+        from .project_dirty import DirtyGuardResult
+
+        if self._project_session_in_restore():
+            logger.warning("close_project ignored during project restore")
+            return False
+        if not already_confirmed:
+            result = self.confirm_leave_unsaved_project(intent=intent)
+            if result is DirtyGuardResult.CANCELLED:
+                return False
+        self._commit_project_session_end()
+        if intent == "new":
+            self.statusBar.showMessage("已新建项目")
+        else:
+            self.statusBar.showMessage("已关闭项目")
+        return True
+
+    def new_project(self, *, already_confirmed=False):
+        """End the current project and land on an unnamed empty workspace."""
+        if not self.close_project(already_confirmed=already_confirmed, intent="new"):
+            return False
+        toolbar = getattr(self, "toolbar", None)
+        btn = getattr(toolbar, "btn_add", None)
+        if btn is not None:
+            btn.setFocus(Qt.OtherFocusReason)
+        return True
 
     def close_all(self, *, force=False):
         stack = getattr(self, "chart_stack", None)

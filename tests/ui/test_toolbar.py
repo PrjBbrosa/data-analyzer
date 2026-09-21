@@ -25,8 +25,10 @@ def test_toolbar_enabled_matrix(qapp):
     assert tb.btn_add.isEnabled()
     assert tb.btn_open_caret.isEnabled()
     assert not tb.btn_save_project.isEnabled()
-    assert not tb.btn_save_caret.isEnabled()
+    assert tb.btn_save_caret.isEnabled()
     assert not tb.btn_save_project_as.isEnabled()
+    assert tb.btn_new_project.isEnabled()
+    assert not tb.btn_close_project.isEnabled()
     assert tb.btn_batch.isEnabled()
     tb.set_enabled_for_mode('time', has_file=True)
     assert tb.btn_batch.isEnabled()
@@ -36,8 +38,10 @@ def test_toolbar_enabled_matrix(qapp):
     assert tb.btn_batch.isEnabled()
     tb.set_enabled_for_mode('time', has_file=False)
     assert not tb.btn_save_project.isEnabled()
-    assert not tb.btn_save_caret.isEnabled()
+    assert tb.btn_save_caret.isEnabled()
     assert not tb.btn_save_project_as.isEnabled()
+    assert tb.btn_new_project.isEnabled()
+    assert not tb.btn_close_project.isEnabled()
     assert tb.btn_batch.isEnabled()
 
 
@@ -222,7 +226,7 @@ def test_toolbar_open_save_split_and_no_export(qtbot):
     assert hasattr(tb, "btn_save_caret")
     assert tb.btn_save_caret.text() == ""
     assert hasattr(tb, "btn_save_project_as")
-    assert tb.btn_save_project_as.text() == "另存为"
+    assert tb.btn_save_project_as.text() == "另存为…"
     assert tb.btn_save_project_as.parent() is tb._save_menu
     assert not hasattr(tb, "btn_export")
     assert hasattr(tb, "open_requested")
@@ -313,8 +317,16 @@ def test_toolbar_save_caret_opens_rounded_save_as_menu(qtbot, qapp):
     tb.btn_save_caret.click()
     qapp.processEvents()
     assert tb._save_menu.isVisible()
-    assert [action.text() for action in tb._save_menu.actions()] == ["另存为"]
+    texts = [action.text() for action in tb._save_menu.actions() if action.text()]
+    assert texts == ["另存为…", "新建项目…", "关闭项目…"]
     tb._save_menu.close()
+
+
+def test_toolbar_project_name_lives_inside_mirrored_left_host(qtbot):
+    tb = Toolbar()
+    qtbot.addWidget(tb)
+    assert tb.lbl_project_session.parent() is tb._left_widget
+    assert tb.lbl_project_session.text() == "未命名项目"
 
 
 def test_save_caret_menu_dismiss_clears_stale_hover_on_caret(qtbot, qapp):

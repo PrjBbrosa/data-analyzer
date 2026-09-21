@@ -102,13 +102,17 @@ def test_save_disabled_on_empty_session_and_enabled_after_load(qapp, tmp_path):
     _csv(a)
     mw = MainWindow()
     assert not mw.toolbar.btn_save_project.isEnabled()
-    assert not mw.toolbar.btn_save_caret.isEnabled()
+    assert mw.toolbar.btn_save_caret.isEnabled()
+    assert mw.toolbar.btn_new_project.isEnabled()
+    assert not mw.toolbar.btn_close_project.isEnabled()
     mw._load_one(str(a))
     assert mw.toolbar.btn_save_project.isEnabled()
     assert mw.toolbar.btn_save_caret.isEnabled()
-    mw.close_all(force=True)
+    assert mw.toolbar.btn_close_project.isEnabled()
+    mw.close_project(already_confirmed=True)
     assert not mw.toolbar.btn_save_project.isEnabled()
-    assert not mw.toolbar.btn_save_caret.isEnabled()
+    assert mw.toolbar.btn_save_caret.isEnabled()
+    assert not mw.toolbar.btn_close_project.isEnabled()
 
 
 def test_save_via_dialog_first_time_prompts(qapp, tmp_path, monkeypatch):
@@ -244,3 +248,56 @@ def test_missing_recent_path_is_removed_after_open(qapp, tmp_path, monkeypatch):
     mw._open_recent_path(str(missing))
     assert called == [[str(missing)]]
     assert mw._recent_files.entries("file") == ()
+
+
+def test_keep_empty_project_save_and_reopen(qapp, qtbot, tmp_path, monkeypatch):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    a = tmp_path / "a.csv"
+    _csv(a)
+    project = tmp_path / "empty-keep.tlproj"
+    mw = MainWindow()
+    qtbot.addWidget(mw)
+    mw._load_one(str(a))
+    assert mw.save_project(project) is True
+    monkeypatch.setattr(mw, "_confirm_last_source_removal", lambda *a, **k: "keep")
+    mw._close_files(list(mw.files))
+    assert not mw.files
+    assert str(mw._project_path) == str(project)
+    assert mw.toolbar.btn_save_project.isEnabled()
+    assert mw.toolbar.lbl_project_session.toolTip() == str(project)
+    assert mw.save_project(project) is True
+
+    restored = MainWindow()
+    qtbot.addWidget(restored)
+    restored.open_project(project)
+    assert not restored.files
+    assert str(restored._project_path) == str(project)
+    assert restored.toolbar.btn_close_project.isEnabled()
+    assert restored.close_project(already_confirmed=True) is True
+    assert restored._project_path is None
+    assert not restored.toolbar.btn_save_project.isEnabled()
+
+
+def test_bound_project_close_available_when_sources_missing(
+    qapp, qtbot, tmp_path, monkeypatch,
+):
+    from PyQt5.QtWidgets import QMessageBox
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    a = tmp_path / "a.csv"
+    _csv(a)
+    project = tmp_path / "missing-src.tlproj"
+    mw = MainWindow()
+    qtbot.addWidget(mw)
+    mw._load_one(str(a))
+    assert mw.save_project(project) is True
+    a.unlink()
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: None)
+    restored = MainWindow()
+    qtbot.addWidget(restored)
+    restored.open_project(project)
+    assert restored._project_is_bound()
+    assert restored.toolbar.btn_close_project.isEnabled()
+    assert restored.close_project(already_confirmed=True) is True
+    assert restored._project_path is None
