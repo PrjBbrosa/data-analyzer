@@ -15,9 +15,8 @@ def test_app_meta_constants():
 def test_window_title_uses_app_meta(qapp):
     from mf4_analyzer.ui.main_window import MainWindow
     mw = MainWindow()
-    assert mw.windowTitle().endswith(app_meta.WINDOW_TITLE)
-    assert app_meta.WINDOW_TITLE in mw.windowTitle()
-    assert "未命名项目" in mw.windowTitle()
+    assert mw.windowTitle() == app_meta.WINDOW_TITLE
+    assert "未命名项目" not in mw.windowTitle()
 
 
 def test_open_project_unsupported_schema_prompts_chinese_upgrade(
@@ -2261,32 +2260,6 @@ def test_close_project_discard_leaves_disk_bytes(
     assert not mw.files
     assert mw._project_path is None
     assert mw._project_dirty.path is None
-
-
-def test_new_project_unbinds_and_does_not_open_file_dialog(
-    qapp, qtbot, tmp_path, monkeypatch,
-):
-    from PyQt5.QtWidgets import QFileDialog
-    from mf4_analyzer.ui.main_window import MainWindow
-
-    csv_a = tmp_path / "a.csv"
-    _write_csv(csv_a, n=16)
-    project_a = tmp_path / "A.tlproj"
-    mw = MainWindow()
-    qtbot.addWidget(mw)
-    mw._load_one(str(csv_a))
-    assert mw.save_project(project_a) is True
-    digest_a = _sha256(project_a)
-    opened = []
-    monkeypatch.setattr(
-        QFileDialog, "getOpenFileNames",
-        lambda *a, **k: opened.append("dialog") or ([], ""),
-    )
-    assert mw.new_project() is True
-    assert opened == []
-    assert mw._project_path is None
-    assert not mw.files
-    assert _sha256(project_a) == digest_a
 
 
 def test_late_analysis_restore_after_close_does_not_rebuild(

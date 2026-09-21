@@ -237,17 +237,6 @@ class ProjectIOMixin:
                 "discard_label": "不保存并关闭",
                 "default_action_id": "cancel",
             }
-        if intent == "new":
-            return {
-                "title": "新建项目",
-                "text": (
-                    f"“{name}”有未保存的更改。"
-                    "新建将结束当前会话，开始空的分析工作区。"
-                ),
-                "save_label": "保存并新建",
-                "discard_label": "不保存并新建",
-                "default_action_id": "cancel",
-            }
         return {
             "title": "未保存的项目",
             "text": "项目有未保存的更改。是否保存？",
@@ -2213,6 +2202,8 @@ class ProjectIOMixin:
         name = self._project_session_display_name()
         holder = getattr(self, "_project_dirty", None)
         mark = "*" if holder is not None and holder.is_dirty else ""
+        if not self._project_is_bound():
+            return app_meta.WINDOW_TITLE
         return f"{name}{mark} — {app_meta.WINDOW_TITLE}"
 
     def _refresh_project_session_chrome(self):
@@ -2234,6 +2225,7 @@ class ProjectIOMixin:
                 dirty=dirty,
                 can_save=can_save,
                 can_close=can_close,
+                bound=self._project_is_bound(),
             )
         elif toolbar is not None:
             set_enabled = getattr(toolbar, "set_enabled_for_mode", None)
@@ -2256,7 +2248,6 @@ class ProjectIOMixin:
             save_action.setEnabled(can_save)
             save_action.setToolTip(self._project_save_tooltip())
             coord.action(CommandId.SAVE_PROJECT_AS).setEnabled(can_save)
-            coord.action(CommandId.NEW_PROJECT).setEnabled(True)
             coord.action(CommandId.CLOSE_PROJECT).setEnabled(can_close)
         set_title = getattr(self, "setWindowTitle", None)
         if callable(set_title):
@@ -2926,20 +2917,7 @@ class ProjectIOMixin:
             if result is DirtyGuardResult.CANCELLED:
                 return False
         self._commit_project_session_end()
-        if intent == "new":
-            self.statusBar.showMessage("已新建项目")
-        else:
-            self.statusBar.showMessage("已关闭项目")
-        return True
-
-    def new_project(self, *, already_confirmed=False):
-        """End the current project and land on an unnamed empty workspace."""
-        if not self.close_project(already_confirmed=already_confirmed, intent="new"):
-            return False
-        toolbar = getattr(self, "toolbar", None)
-        btn = getattr(toolbar, "btn_add", None)
-        if btn is not None:
-            btn.setFocus(Qt.OtherFocusReason)
+        self.statusBar.showMessage("已关闭项目")
         return True
 
     def close_all(self, *, force=False):

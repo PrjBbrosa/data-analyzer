@@ -102,17 +102,20 @@ def test_save_disabled_on_empty_session_and_enabled_after_load(qapp, tmp_path):
     _csv(a)
     mw = MainWindow()
     assert not mw.toolbar.btn_save_project.isEnabled()
-    assert mw.toolbar.btn_save_caret.isEnabled()
-    assert mw.toolbar.btn_new_project.isEnabled()
+    assert not mw.toolbar.btn_save_caret.isEnabled()
+    assert not hasattr(mw.toolbar, "btn_new_project")
     assert not mw.toolbar.btn_close_project.isEnabled()
+    assert mw.toolbar.lbl_project_session.isHidden()
     mw._load_one(str(a))
     assert mw.toolbar.btn_save_project.isEnabled()
     assert mw.toolbar.btn_save_caret.isEnabled()
     assert mw.toolbar.btn_close_project.isEnabled()
+    assert mw.toolbar.lbl_project_session.isHidden()
     mw.close_project(already_confirmed=True)
     assert not mw.toolbar.btn_save_project.isEnabled()
-    assert mw.toolbar.btn_save_caret.isEnabled()
+    assert not mw.toolbar.btn_save_caret.isEnabled()
     assert not mw.toolbar.btn_close_project.isEnabled()
+    assert mw.toolbar.lbl_project_session.isHidden()
 
 
 def test_save_via_dialog_first_time_prompts(qapp, tmp_path, monkeypatch):
@@ -265,7 +268,10 @@ def test_keep_empty_project_save_and_reopen(qapp, qtbot, tmp_path, monkeypatch):
     assert not mw.files
     assert str(mw._project_path) == str(project)
     assert mw.toolbar.btn_save_project.isEnabled()
+    assert not mw.toolbar.lbl_project_session.isHidden()
     assert mw.toolbar.lbl_project_session.toolTip() == str(project)
+    assert mw.toolbar.lbl_project_session.text()
+    assert "*" in mw.toolbar.lbl_project_session.text()
     assert mw.save_project(project) is True
 
     restored = MainWindow()

@@ -20,7 +20,6 @@ class CommandId(Enum):
     OPEN_RECENT = "open_recent"
     SAVE_PROJECT = "save_project"
     SAVE_PROJECT_AS = "save_project_as"
-    NEW_PROJECT = "new_project"
     CLOSE_PROJECT = "close_project"
     QUIT = "quit"
     UNDO = "undo"
@@ -92,14 +91,6 @@ _register(CommandMeta(
     "Ctrl+Shift+S",
     CommandScope.WINDOW,
     "将当前会话另存为新的 .tlproj 项目",
-))
-_register(CommandMeta(
-    CommandId.NEW_PROJECT,
-    "新建项目…",
-    None,
-    None,
-    CommandScope.WINDOW,
-    "结束当前项目，开始新的分析",
 ))
 _register(CommandMeta(
     CommandId.CLOSE_PROJECT,

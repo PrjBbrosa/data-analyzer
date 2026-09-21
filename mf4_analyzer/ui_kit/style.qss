@@ -1381,6 +1381,14 @@ Toolbar QPushButton#toolbarSaveCaret {
     border-top-left-radius: 0;
     border-bottom-left-radius: 0;
 }
+Toolbar QLabel#toolbarProjectSession {
+    color: {{CONTROL_ACCENT_INK}};
+    background-color: {{CONTROL_ACCENT_WASH}};
+    border: 1px solid {{CONTROL_ACCENT_LINE_SOFT}};
+    border-radius: 8px;
+    padding: 2px 9px;
+    min-height: {{CONTROL_H_COMPACT_BUTTON_CONTENT}};
+}
 /* Open + recent-files share one primary chip. Hover/pressed rewrite only
  * background-color so Qt does not reset the split radii via border:. */
 Toolbar QWidget#toolbarOpenSplit {

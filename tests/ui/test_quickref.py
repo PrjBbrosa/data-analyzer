@@ -168,7 +168,7 @@ def test_quickref_standard_desktop_copy_matches_runtime():
     assert "有未保存更改时可保存、不保存或取消" in save.sub
     assert "关闭项目" in save.sub
     assert "另存为" in save.sub
-    close_row = _row_by_desc("新建 / 关闭项目")
+    close_row = _row_by_desc("关闭项目")
     assert "解除" in close_row.sub or "解绑" in close_row.sub
     assert "保留空项目" in close_row.sub
     assert "关闭项目" in (close_row.gesture or "")

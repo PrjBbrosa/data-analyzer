@@ -83,7 +83,6 @@ class CommandCoordinator(QObject):
         self._actions[CommandId.OPEN_RECENT].triggered.connect(self._on_open_recent)
         self._actions[CommandId.SAVE_PROJECT].triggered.connect(self._on_save)
         self._actions[CommandId.SAVE_PROJECT_AS].triggered.connect(self._on_save_as)
-        self._actions[CommandId.NEW_PROJECT].triggered.connect(self._on_new_project)
         self._actions[CommandId.CLOSE_PROJECT].triggered.connect(self._on_close_project)
         self._actions[CommandId.FIND].triggered.connect(self._on_find)
         self._actions[CommandId.QUICK_REFERENCE].triggered.connect(
@@ -127,11 +126,6 @@ class CommandCoordinator(QObject):
 
     def _on_save_as(self, checked=False) -> None:
         method = getattr(self._host, "save_project_as_via_dialog", None)
-        if callable(method):
-            method()
-
-    def _on_new_project(self, checked=False) -> None:
-        method = getattr(self._host, "new_project", None)
         if callable(method):
             method()
 
@@ -197,7 +191,6 @@ class CommandCoordinator(QObject):
                 self._actions[CommandId.SAVE_PROJECT],
                 self._actions[CommandId.SAVE_PROJECT_AS],
                 self._actions[CommandId.OPEN_RECENT],
-                new_action=self._actions[CommandId.NEW_PROJECT],
                 close_action=self._actions[CommandId.CLOSE_PROJECT],
             )
         self._toolbar_bound = True

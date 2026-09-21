@@ -42,7 +42,7 @@ def test_v831_changelog_covers_pinned_header_alignment():
         entry for entry in _deck_data()["changelog"] if entry["v"] == "v8.3.1"
     )
     description = " ".join(entry["items"])
-    for keyword in ("固定读数", "数值", "完整", "纵向居中", "关闭项目", "新建项目", "另存为", "保留空项目"):
+    for keyword in ("固定读数", "数值", "完整", "纵向居中", "关闭项目", "另存为", "保留空项目"):
         assert keyword in description
 
 
@@ -546,7 +546,6 @@ def test_cheat_sheet_matches_runtime_desktop_shortcuts():
     project_blob = json.dumps(project, ensure_ascii=False)
     assert "有未保存更改时可保存、不保存或取消" in project_blob
     assert "关闭项目" in project_blob
-    assert "新建项目" in project_blob
     assert "另存为" in project_blob
     assert "解除保存路径" in project_blob
     assert "固定读数" in project_blob

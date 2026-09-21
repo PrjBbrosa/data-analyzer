@@ -234,7 +234,7 @@ _HINTS = (
     ),
     Hint(
         id="toolbar.save_as_menu",
-        text="保存旁箭头可另存为、新建或关闭",
+        text="保存旁箭头可另存为或关闭",
         surface="discovery",
         retire_on="save_as",
         priority=40,

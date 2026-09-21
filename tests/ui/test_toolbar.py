@@ -25,9 +25,9 @@ def test_toolbar_enabled_matrix(qapp):
     assert tb.btn_add.isEnabled()
     assert tb.btn_open_caret.isEnabled()
     assert not tb.btn_save_project.isEnabled()
-    assert tb.btn_save_caret.isEnabled()
+    assert not tb.btn_save_caret.isEnabled()
     assert not tb.btn_save_project_as.isEnabled()
-    assert tb.btn_new_project.isEnabled()
+    assert not hasattr(tb, "btn_new_project")
     assert not tb.btn_close_project.isEnabled()
     assert tb.btn_batch.isEnabled()
     tb.set_enabled_for_mode('time', has_file=True)
@@ -38,9 +38,8 @@ def test_toolbar_enabled_matrix(qapp):
     assert tb.btn_batch.isEnabled()
     tb.set_enabled_for_mode('time', has_file=False)
     assert not tb.btn_save_project.isEnabled()
-    assert tb.btn_save_caret.isEnabled()
+    assert not tb.btn_save_caret.isEnabled()
     assert not tb.btn_save_project_as.isEnabled()
-    assert tb.btn_new_project.isEnabled()
     assert not tb.btn_close_project.isEnabled()
     assert tb.btn_batch.isEnabled()
 
@@ -318,15 +317,45 @@ def test_toolbar_save_caret_opens_rounded_save_as_menu(qtbot, qapp):
     qapp.processEvents()
     assert tb._save_menu.isVisible()
     texts = [action.text() for action in tb._save_menu.actions() if action.text()]
-    assert texts == ["另存为…", "新建项目…", "关闭项目…"]
+    assert texts == ["另存为…", "关闭项目…"]
     tb._save_menu.close()
 
 
-def test_toolbar_project_name_lives_inside_mirrored_left_host(qtbot):
+def test_toolbar_project_name_lives_inside_mirrored_left_host(qtbot, qapp):
+    from PyQt5.QtGui import QFont
+    from mf4_analyzer.ui_kit import load_stylesheet
+
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
     tb = Toolbar()
     qtbot.addWidget(tb)
     assert tb.lbl_project_session.parent() is tb._left_widget
-    assert tb.lbl_project_session.text() == "未命名项目"
+    assert tb.lbl_project_session.isHidden()
+    tb.set_project_session_chrome(
+        display_name="1.tlproj",
+        tooltip="/tmp/1.tlproj",
+        dirty=False,
+        can_save=True,
+        can_close=True,
+        bound=True,
+    )
+    tb.resize(1440, 44)
+    tb.show()
+    qapp.processEvents()
+    assert tb.lbl_project_session.isVisible()
+    assert "1.tlproj" in tb.lbl_project_session.text()
+    assert tb.lbl_project_session.font().weight() >= QFont.DemiBold
+    assert tb.lbl_project_session.height() >= tb.btn_save_project.height() - 4
+    tb.set_project_session_chrome(
+        display_name="未命名项目",
+        tooltip="未命名项目",
+        dirty=False,
+        can_save=False,
+        can_close=False,
+        bound=False,
+    )
+    qapp.processEvents()
+    assert tb.lbl_project_session.isHidden()
 
 
 def test_save_caret_menu_dismiss_clears_stale_hover_on_caret(qtbot, qapp):
