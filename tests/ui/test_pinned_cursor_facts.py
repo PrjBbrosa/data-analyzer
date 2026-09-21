@@ -511,6 +511,34 @@ def test_fft_evaluate_nonfinite_and_empty_are_none(qapp):
     assert canvas.evaluate_dual_frequency_cursor(100.0, float("nan")) is None
 
 
+def test_fft_empty_evaluate_reconciles_to_status_channel_not_value_dto(qapp):
+    from mf4_analyzer.ui.pinned_cursor_facts import (
+        UNCHECKED_TEXT,
+        _frequency_sample_channel_kind,
+        _reconcile_sample,
+    )
+    from mf4_analyzer.ui.pinned_cursor_state import empty_collection, next_record
+
+    canvas = _fft_canvas(qapp)
+    assert canvas.evaluate_frequency_cursor_sample(12.0) is None
+    _collection, intent = next_record(empty_collection(), {
+        "mode": "single",
+        "domain": "frequency",
+        "x": 12.0,
+        "x_unit": "Hz",
+        "bindings": [{"fid": "fid-a", "channel": "force"}],
+        "presentation": "full",
+    })
+    sample, _next, dropped = _reconcile_sample(
+        intent, None, bound=set(), hidden=set(),
+    )
+    assert dropped is False
+    assert sample.domain == "frequency"
+    assert _frequency_sample_channel_kind(sample.channels[0]) == "status"
+    assert sample.channels[0].diagnostic == UNCHECKED_TEXT
+    assert not hasattr(sample.channels[0], "value")
+
+
 def test_frf_evaluate_linear_matches_live_and_keeps_hz(qtbot):
     canvas = _frf_canvas(qtbot)
     canvas.set_result(

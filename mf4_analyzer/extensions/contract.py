@@ -86,6 +86,12 @@ _SEMVER_RE = re.compile(
     r"(?:\.(?:0|[1-9]\d*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))"
     r"?(?:\+[0-9A-Za-z.-]+)?$"
 )
+_DEVICE_NAME_RE = re.compile(
+    r"^(CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])(\..*)?$",
+    re.IGNORECASE,
+)
+_WINDOWS_ILLEGAL_CHARS = frozenset('<>"|?*')
+_FORBIDDEN_ACTIVE_ROOTS = frozenset({".staging", "cache"})
 
 
 class ReasonCode:
@@ -358,31 +364,127 @@ def normalize_relpath(value: str) -> str:
     return str(value).replace("\\", "/").strip()
 
 
+def inspect_windows_relpath(name: str) -> str | None:
+    """Return a shared path-policy issue code, or ``None`` if the ref is allowed.
+
+    Codes match the unpack detail vocabulary so JSON manifests, active pointers,
+    and ZIP members share one Windows relative-path policy.
+    """
+
+    if not isinstance(name, str) or not name:
+        return "empty_path"
+    if "\x00" in name:
+        return "nul_byte"
+    if any(ord(char) < 32 for char in name):
+        return "control_char"
+
+    raw = name.replace("\\", "/")
+    if raw.startswith("/") or name.startswith("\\"):
+        return "absolute_path"
+    if raw.startswith("//") or name.startswith("\\\\"):
+        return "unc_path"
+    if re.match(r"^[A-Za-z]:", raw) or re.match(r"^[A-Za-z]:", name):
+        return "drive_letter"
+
+    parts = raw.split("/")
+    if raw.endswith("/") and parts and parts[-1] == "":
+        parts = parts[:-1]
+    if not parts:
+        return "empty_path"
+    if len("/".join(parts)) > MAX_RELPATH_CHARS:
+        return "too_long"
+
+    for part in parts:
+        if part == "":
+            return "empty_segment"
+        if part == ".":
+            return "dot_segment"
+        if part == "..":
+            return "parent_escape"
+        if len(part) >= 2 and part[0].isalpha() and part[1] == ":":
+            return "drive_letter"
+        if ":" in part:
+            return "ads"
+        if _DEVICE_NAME_RE.fullmatch(part.rstrip(" .")):
+            return "device_name"
+        if any(char in _WINDOWS_ILLEGAL_CHARS for char in part):
+            return "illegal_char"
+        if part.rstrip(" .") != part:
+            return "trailing_junk"
+    return None
+
+
+def canonical_windows_relpath(name: str) -> str:
+    issue = inspect_windows_relpath(name)
+    if issue is not None:
+        raise ExtensionError(
+            ReasonCode.VERIFICATION_FAILED,
+            f"unsafe relative path ({issue}): {name!r}",
+        )
+    return "/".join(part for part in name.replace("\\", "/").split("/") if part)
+
+
 def validate_relative_ref(value: str, *, what: str = "path") -> str:
-    """Reject absolute paths, parent escapes, and empty / oversized refs."""
+    """Reject absolute paths, parent escapes, ADS, device names, and empty refs."""
     text = normalize_relpath(value)
     if not text or len(text) > MAX_RELPATH_CHARS:
         raise ExtensionError(
             ReasonCode.VERIFICATION_FAILED,
             f"{what} is missing or longer than {MAX_RELPATH_CHARS} characters",
         )
-    if "\x00" in text or "\n" in text or "\r" in text:
-        raise ExtensionError(ReasonCode.VERIFICATION_FAILED, f"{what} contains illegal characters")
-    if text.startswith("/") or text.startswith("//"):
-        raise ExtensionError(ReasonCode.VERIFICATION_FAILED, f"{what} must be a relative path")
-    if re.match(r"^[A-Za-z]:", text) or text.startswith("\\\\"):
-        raise ExtensionError(ReasonCode.VERIFICATION_FAILED, f"{what} must be a relative path")
-    if ":" in text:
-        raise ExtensionError(ReasonCode.VERIFICATION_FAILED, f"{what} must not contain a drive or ADS colon")
-    parts = [part for part in text.split("/") if part not in ("",)]
-    if not parts or any(part in (".", "..") for part in parts):
+    issue = inspect_windows_relpath(value)
+    if issue is not None:
         raise ExtensionError(
             ReasonCode.VERIFICATION_FAILED,
-            f"{what} must not contain '.' or '..' segments",
+            f"{what} is not a safe relative path ({issue})",
         )
-    if len(parts) != len(text.split("/")):
-        raise ExtensionError(ReasonCode.VERIFICATION_FAILED, f"{what} must not contain empty segments")
-    return "/".join(parts)
+    return canonical_windows_relpath(value)
+
+
+def store_package_relpath(runtime_id: str, component: str, package_sha256: str) -> str:
+    """Canonical active pointer: ``store/<runtime>/<component>/<sha256>``."""
+
+    runtime = str(runtime_id).strip()
+    comp = str(component).strip()
+    digest = _require_sha256(package_sha256, what="package_sha256")
+    for label, value in (("runtime_id", runtime), ("component", comp)):
+        if not value or "/" in value or "\\" in value:
+            raise ExtensionError(
+                ReasonCode.VERIFICATION_FAILED,
+                f"store path {label} is missing or not a single segment",
+            )
+        issue = inspect_windows_relpath(value)
+        if issue is not None:
+            raise ExtensionError(
+                ReasonCode.VERIFICATION_FAILED,
+                f"store path {label} is not a safe relative path ({issue})",
+            )
+    return f"store/{runtime}/{comp}/{digest}"
+
+
+def validate_active_store_relpath(
+    relpath: str,
+    *,
+    runtime_id: str,
+    component: str,
+    package_sha256: str,
+) -> str:
+    """Active pointers must land exactly on the immutable store entry."""
+
+    text = validate_relative_ref(relpath, what="active.json package_relpath")
+    folded = [part.casefold() for part in text.split("/")]
+    if any(part in _FORBIDDEN_ACTIVE_ROOTS for part in folded):
+        raise ExtensionError(
+            ReasonCode.VERIFICATION_FAILED,
+            "active.json must not point at staging or download cache",
+        )
+    expected = store_package_relpath(runtime_id, component, package_sha256)
+    if text != expected:
+        raise ExtensionError(
+            ReasonCode.VERIFICATION_FAILED,
+            "active.json must point at store/<runtime>/<component>/<hash>",
+        )
+    return text
 
 
 @dataclass(frozen=True)
@@ -841,6 +943,140 @@ def package_trusted_target_id(package: PackageManifest) -> str:
 
 
 @dataclass(frozen=True)
+class ArtifactIdentity:
+    """One TUF target identity bound into a verification snapshot."""
+
+    target: str
+    sha256: str
+    length: int
+
+    def __post_init__(self) -> None:
+        target = str(self.target).strip()
+        if not target or inspect_windows_relpath(target) not in {None, "absolute_path"}:
+            # Targets are repository paths such as packages/media-3.zip; still
+            # reject parent-escape / ADS / device names while allowing no drive.
+            issue = inspect_windows_relpath(target)
+            if not target:
+                raise ExtensionError(ReasonCode.VERIFICATION_FAILED, "artifact target is missing")
+            if issue in {"parent_escape", "ads", "device_name", "dot_segment", "empty_segment", "nul_byte"}:
+                raise ExtensionError(
+                    ReasonCode.VERIFICATION_FAILED,
+                    f"artifact target is not a safe relative path ({issue})",
+                )
+        digest = _require_sha256(self.sha256, what="artifact sha256")
+        if isinstance(self.length, bool) or not isinstance(self.length, int) or self.length < 0:
+            raise ExtensionError(
+                ReasonCode.PROTOCOL_UNSUPPORTED,
+                "artifact length must be a non-negative int",
+            )
+        object.__setattr__(self, "target", target)
+        object.__setattr__(self, "sha256", digest)
+
+
+@dataclass(frozen=True)
+class VerifiedPackage:
+    """ZIP + independent package.json, bound to one verification snapshot.
+
+    Receipts record this result later.  They are not a local trust root.
+    """
+
+    snapshot_id: str
+    component: str
+    runtime_id: str
+    package_revision: int
+    component_api: str
+    min_manager_version: str
+    zip: ArtifactIdentity
+    manifest: ArtifactIdentity
+    package: PackageManifest
+    package_json_bytes: bytes
+
+    @property
+    def files(self) -> tuple[FileEntry, ...]:
+        return self.package.files
+
+    def unpack_manifest(self) -> tuple[FileEntry, ...]:
+        """FileEntry list for unpack, including the trusted package.json bytes."""
+        entries = list(self.package.files)
+        if not any(entry.relpath == "package.json" for entry in entries):
+            entries.append(
+                FileEntry(
+                    relpath="package.json",
+                    size=len(self.package_json_bytes),
+                    sha256=self.manifest.sha256,
+                )
+            )
+        return tuple(entries)
+
+
+def bind_verified_package(
+    *,
+    snapshot_id: str,
+    component: str,
+    runtime_id: str,
+    package_revision: int,
+    component_api: str,
+    min_manager_version: str,
+    zip_target: str,
+    zip_sha256: str,
+    zip_length: int,
+    manifest_target: str,
+    manifest_sha256: str,
+    manifest_length: int,
+    package_json_bytes: bytes,
+) -> VerifiedPackage:
+    """Parse package.json once and bind it to ZIP / manifest target identities."""
+
+    if not str(snapshot_id).strip():
+        raise ExtensionError(ReasonCode.VERIFICATION_FAILED, "verification snapshot id is missing")
+    raw = bytes(package_json_bytes)
+    zip_identity = ArtifactIdentity(target=zip_target, sha256=zip_sha256, length=zip_length)
+    manifest_identity = ArtifactIdentity(
+        target=manifest_target,
+        sha256=manifest_sha256,
+        length=manifest_length,
+    )
+    if len(raw) != manifest_identity.length:
+        raise ExtensionError(
+            ReasonCode.VERIFICATION_FAILED,
+            "package.json length does not match the trusted manifest target",
+        )
+    if sha256_hex(raw) != manifest_identity.sha256:
+        raise ExtensionError(
+            ReasonCode.VERIFICATION_FAILED,
+            "package.json hash does not match the trusted manifest target",
+        )
+    package = parse_package_manifest(raw)
+    if (
+        package.component != component
+        or package.runtime_id != runtime_id
+        or package.package_revision != package_revision
+        or package.component_api != component_api
+    ):
+        raise ExtensionError(
+            ReasonCode.VERIFICATION_FAILED,
+            "package.json identity does not match the catalog / snapshot binding",
+        )
+    if str(SemVer.parse(package.min_manager_version)) != str(SemVer.parse(min_manager_version)):
+        raise ExtensionError(
+            ReasonCode.VERIFICATION_FAILED,
+            "package.json min_manager_version does not match the catalog binding",
+        )
+    return VerifiedPackage(
+        snapshot_id=str(snapshot_id).strip(),
+        component=package.component,
+        runtime_id=package.runtime_id,
+        package_revision=package.package_revision,
+        component_api=package.component_api,
+        min_manager_version=package.min_manager_version,
+        zip=zip_identity,
+        manifest=manifest_identity,
+        package=package,
+        package_json_bytes=raw,
+    )
+
+
+@dataclass(frozen=True)
 class ActiveSelection:
     component: str
     package_relpath: str
@@ -879,22 +1115,20 @@ def parse_active_state(payload: str | bytes | Mapping[str, Any]) -> ActiveState:
         for component, spec in mapping.items():
             if not isinstance(spec, dict):
                 raise ExtensionError(ReasonCode.PROTOCOL_UNSUPPORTED, "active selection must be an object")
-            relpath = validate_relative_ref(
-                str(spec.get("package_relpath", "")),
-                what="active.json package_relpath",
+            digest = _require_sha256(
+                str(spec.get("package_sha256", "")),
+                what="active.json package_sha256",
             )
-            if relpath.startswith(".staging/") or relpath.startswith("cache/"):
-                raise ExtensionError(
-                    ReasonCode.VERIFICATION_FAILED,
-                    "active.json must not point at staging or download cache",
-                )
+            relpath = validate_active_store_relpath(
+                str(spec.get("package_relpath", "")),
+                runtime_id=runtime_id.strip(),
+                component=str(component),
+                package_sha256=digest,
+            )
             parsed[str(component)] = ActiveSelection(
                 component=str(component),
                 package_relpath=relpath,
-                package_sha256=_require_sha256(
-                    str(spec.get("package_sha256", "")),
-                    what="active.json package_sha256",
-                ),
+                package_sha256=digest,
             )
         by_runtime[runtime_id.strip()] = parsed
     return ActiveState(
@@ -1284,9 +1518,13 @@ __all__ = (
     "SemVer",
     "TRANSACTION_STAGES",
     "TransactionLog",
+    "ArtifactIdentity",
     "TrustedTarget",
+    "VerifiedPackage",
+    "bind_verified_package",
     "can_reuse_installed_package",
     "canonical_json_bytes",
+    "canonical_windows_relpath",
     "compare_semver",
     "compute_runtime_id",
     "dumps_json",
@@ -1299,6 +1537,7 @@ __all__ = (
     "generate_discovery_envelope",
     "generate_package_manifest",
     "generate_receipt",
+    "inspect_windows_relpath",
     "manager_satisfies",
     "package_trusted_target_id",
     "parse_active_state",
@@ -1309,5 +1548,7 @@ __all__ = (
     "parse_receipt",
     "parse_transaction_log",
     "sha256_hex",
+    "store_package_relpath",
+    "validate_active_store_relpath",
     "validate_relative_ref",
 )

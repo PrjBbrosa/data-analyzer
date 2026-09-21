@@ -14,7 +14,10 @@
       "platform_tag": "win-amd64",
       "target": "packages/media-3.bin",
       "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      "length": 16
+      "length": 16,
+      "package_json_target": "packages/media-3.package.json",
+      "package_json_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "package_json_length": 32
     }
   ],
   "revoked": []

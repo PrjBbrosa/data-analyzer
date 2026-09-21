@@ -92,6 +92,7 @@ class ProjectIOMixin:
         holder = getattr(self, "_project_dirty", None)
         if holder is None:
             return False
+        self._bind_project_dirty_chrome_listener()
         return holder.mark_user_mutation(token)
 
     def _on_pinned_cursor_intent_changed(self):
@@ -165,6 +166,7 @@ class ProjectIOMixin:
         holder = getattr(self, "_project_dirty", None)
         if holder is None or holder.saved_digest is None:
             return False
+        self._bind_project_dirty_chrome_listener()
         try:
             digest = self._canonical_session_digest()
         except Exception:
@@ -2206,12 +2208,40 @@ class ProjectIOMixin:
             return app_meta.WINDOW_TITLE
         return f"{name}{mark} — {app_meta.WINDOW_TITLE}"
 
-    def _refresh_project_session_chrome(self):
-        """Project owner projection for navigator/toolbar/title/QAction state."""
-        can_save = self._project_session_can_save()
-        can_close = self._project_close_available()
+    def _bind_project_dirty_chrome_listener(self):
+        holder = getattr(self, "_project_dirty", None)
+        binder = getattr(holder, "bind_dirty_bool_listener", None)
+        if callable(binder):
+            binder(self._on_project_dirty_bool_changed)
+
+    def _on_project_dirty_bool_changed(self, _dirty):
+        self._refresh_project_session_chrome()
+
+    def _project_session_chrome_snapshot(self):
         holder = getattr(self, "_project_dirty", None)
         dirty = bool(holder is not None and holder.is_dirty)
+        return (
+            self._project_session_display_name(),
+            self._project_session_path_tooltip(),
+            self._project_save_tooltip(),
+            dirty,
+            self._project_session_can_save(),
+            self._project_close_available(),
+            self._project_is_bound(),
+            self._project_window_title(),
+        )
+
+    def _refresh_project_session_chrome(self):
+        """Project owner projection for navigator/toolbar/title/QAction state."""
+        self._bind_project_dirty_chrome_listener()
+        snapshot = self._project_session_chrome_snapshot()
+        if getattr(self, "_projected_project_session_chrome", None) == snapshot:
+            return
+        self._projected_project_session_chrome = snapshot
+        (
+            display_name, path_tooltip, save_tooltip, dirty,
+            can_save, can_close, bound, title,
+        ) = snapshot
         nav = getattr(self, "navigator", None)
         setter = getattr(nav, "set_close_project_available", None)
         if callable(setter):
@@ -2220,12 +2250,12 @@ class ProjectIOMixin:
         chrome = getattr(toolbar, "set_project_session_chrome", None)
         if callable(chrome):
             chrome(
-                display_name=self._project_session_display_name(),
-                tooltip=self._project_session_path_tooltip(),
+                display_name=display_name,
+                tooltip=path_tooltip,
                 dirty=dirty,
                 can_save=can_save,
                 can_close=can_close,
-                bound=self._project_is_bound(),
+                bound=bound,
             )
         elif toolbar is not None:
             set_enabled = getattr(toolbar, "set_enabled_for_mode", None)
@@ -2237,21 +2267,21 @@ class ProjectIOMixin:
                     can_close=can_close,
                 )
             if hasattr(toolbar, "btn_save_project"):
-                toolbar.btn_save_project.setToolTip(self._project_save_tooltip())
+                toolbar.btn_save_project.setToolTip(save_tooltip)
         if toolbar is not None and hasattr(toolbar, "btn_save_project"):
-            toolbar.btn_save_project.setToolTip(self._project_save_tooltip())
+            toolbar.btn_save_project.setToolTip(save_tooltip)
         coord = getattr(self, "_command_coordinator", None)
         if coord is not None:
             from ..command_registry import CommandId
 
             save_action = coord.action(CommandId.SAVE_PROJECT)
             save_action.setEnabled(can_save)
-            save_action.setToolTip(self._project_save_tooltip())
+            save_action.setToolTip(save_tooltip)
             coord.action(CommandId.SAVE_PROJECT_AS).setEnabled(can_save)
             coord.action(CommandId.CLOSE_PROJECT).setEnabled(can_close)
         set_title = getattr(self, "setWindowTitle", None)
         if callable(set_title):
-            set_title(self._project_window_title())
+            set_title(title)
 
     def _removal_empties_workspace(self, fids):
         targets = {str(fid) for fid in (fids or ()) if str(fid) in self.files}

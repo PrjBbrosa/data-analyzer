@@ -29,6 +29,8 @@ from mf4_analyzer.extensions.contract import (
     validate_relative_ref,
 )
 
+_WINDOWS_REPARSE_POINT = 0x400
+
 
 @dataclass(frozen=True)
 class CoreIdentity:
@@ -125,12 +127,29 @@ def core_build_id_for_files(files: CoreFilesManifest | tuple[FileEntry, ...]) ->
     return f"cb1-{digest}"
 
 
+def _is_reparse_or_symlink(path: Path) -> bool:
+    try:
+        if path.is_symlink():
+            return True
+        attrs = getattr(path.lstat(), "st_file_attributes", 0)
+    except OSError:
+        return False
+    return bool(attrs and attrs & _WINDOWS_REPARSE_POINT)
+
+
 def resolve_inside(root: Path, relpath: str) -> Path:
     """Resolve a versioned relative pointer and reject symlink / ``..`` escape."""
     safe = validate_relative_ref(relpath, what="relative ref")
     root_resolved = Path(root).resolve()
-    candidate = root_resolved.joinpath(*safe.split("/"))
-    resolved = candidate.resolve()
+    current = root_resolved
+    for part in safe.split("/"):
+        current = current / part
+        if _is_reparse_or_symlink(current):
+            raise ExtensionError(
+                ReasonCode.VERIFICATION_FAILED,
+                "path uses a symlink or reparse point",
+            )
+    resolved = current.resolve()
     try:
         resolved.relative_to(root_resolved)
     except ValueError as exc:
@@ -138,6 +157,11 @@ def resolve_inside(root: Path, relpath: str) -> Path:
             ReasonCode.VERIFICATION_FAILED,
             "path escapes the install root",
         ) from exc
+    if _is_reparse_or_symlink(resolved):
+        raise ExtensionError(
+            ReasonCode.VERIFICATION_FAILED,
+            "path uses a symlink or reparse point",
+        )
     return resolved
 
 

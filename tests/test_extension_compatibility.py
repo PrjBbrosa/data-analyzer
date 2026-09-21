@@ -299,3 +299,33 @@ def test_active_symlink_escape_is_rejected(tmp_path: Path):
 
     with pytest.raises(ExtensionError):
         resolve_inside(extensions_root, "escape/payload")
+
+
+def test_active_store_symlink_is_rejected(tmp_path: Path):
+    runtime = "rt1-0123456789abcdef0123456789abcdef"
+    digest = "d" * 64
+    relpath = f"store/{runtime}/media/{digest}"
+    extensions_root = tmp_path / "extensions"
+    store_parent = extensions_root / "store" / runtime / "media"
+    store_parent.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / digest).write_text("nope", encoding="utf-8")
+    (store_parent / digest).symlink_to(outside / digest)
+    active = {
+        "schema": 1,
+        "generation": 1,
+        "by_runtime": {
+            runtime: {
+                "media": {
+                    "package_relpath": relpath,
+                    "package_sha256": digest,
+                }
+            }
+        },
+    }
+    path = extensions_root / "active.json"
+    path.write_text(json.dumps(active), encoding="utf-8")
+    with pytest.raises(ExtensionError) as info:
+        load_active_state(path, extensions_root=extensions_root)
+    assert info.value.reason_code == ReasonCode.VERIFICATION_FAILED

@@ -11,13 +11,16 @@ import uuid
 
 from .batch import AnalysisPreset, BatchOutput, BatchRunner
 from .batch_manifest import load_batch_manifest
+from .frozen_evidence_paths import (
+    UnsafeEvidencePath as _UnsafeEvidencePath,
+    canonical_path as _canonical_path,
+    path_is_within,
+    reject_aliased_evidence,
+    same_path as _same_path,
+)
 
 
 DEFAULT_CHANNEL = "EpsDrvrSteerTq"
-
-
-class _UnsafeEvidencePath(ValueError):
-    """The evidence target could overwrite an input or batch output."""
 
 
 def _write_json(path: Path, payload: dict[str, object]) -> None:
@@ -42,32 +45,23 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _canonical_path(path) -> Path:
-    return Path(path).expanduser().resolve(strict=False)
-
-
-def _same_path(left: Path, right: Path) -> bool:
-    if os.path.normcase(str(left)) == os.path.normcase(str(right)):
-        return True
-    try:
-        return left.exists() and right.exists() and os.path.samefile(left, right)
-    except OSError:
-        return False
-
-
 def _validate_evidence_path(
     result_json: Path,
     output_dir: Path,
     sources: tuple[Path, ...],
     authoritative_paths: tuple[Path, ...],
 ) -> None:
-    if any(_same_path(result_json, source) for source in sources):
-        raise _UnsafeEvidencePath("acceptance JSON must not alias an input MF4")
-    if any(_same_path(result_json, path) for path in authoritative_paths):
-        raise _UnsafeEvidencePath(
-            "acceptance JSON must not alias frozen runtime evidence"
-        )
-    if result_json == output_dir or result_json.is_relative_to(output_dir):
+    reject_aliased_evidence(
+        result_json,
+        sources,
+        message="acceptance JSON must not alias an input MF4",
+    )
+    reject_aliased_evidence(
+        result_json,
+        authoritative_paths,
+        message="acceptance JSON must not alias frozen runtime evidence",
+    )
+    if path_is_within(result_json, output_dir):
         raise _UnsafeEvidencePath(
             "acceptance JSON must be outside the batch output directory"
         )

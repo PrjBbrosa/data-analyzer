@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -117,3 +118,191 @@ def test_importer_verifier_does_not_require_console_streams(tmp_path, monkeypatc
     assert tool.verify(exe, diagnostics_dir=diagnostics) == 0
     evidence = json.loads((diagnostics / "evidence.json").read_text(encoding="utf-8"))
     assert evidence["ok"] is True
+
+
+SENTINEL = b"FAKE-FROZEN-IMPORTER-EXE"
+
+
+def _fake_importer_exe(directory: Path) -> Path:
+    exe = directory / "probe.exe"
+    exe.write_bytes(SENTINEL)
+    return exe
+
+
+def _track_child(monkeypatch, tool, *, returncode: int = 1, timeout: bool = False):
+    started: list[list[str]] = []
+
+    def child(command, **kwargs):
+        started.append(list(command))
+        if timeout:
+            raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+        return subprocess.CompletedProcess(command, returncode)
+
+    monkeypatch.setattr(tool.subprocess, "run", child)
+    return started
+
+
+def test_importer_verifier_evidence_json_must_not_overwrite_exe(tmp_path, monkeypatch):
+    """F6: --evidence-json aliased to --exe must not clobber the executable."""
+    from tools import verify_lite_importer_runtime as tool
+
+    exe = _fake_importer_exe(tmp_path)
+    started = _track_child(monkeypatch, tool, returncode=1)
+
+    assert tool.verify(exe, evidence_json=exe) == 2
+    assert exe.read_bytes() == SENTINEL
+    assert started == []
+
+
+@pytest.mark.parametrize("failure", ["exit", "timeout"])
+def test_importer_verifier_rejects_exe_alias_before_failed_or_timed_out_child(
+    tmp_path, monkeypatch, failure
+):
+    from tools import verify_lite_importer_runtime as tool
+
+    exe = _fake_importer_exe(tmp_path)
+    started = _track_child(monkeypatch, tool, returncode=1, timeout=failure == "timeout")
+
+    assert tool.verify(exe, evidence_json=exe, timeout=12) == 2
+    assert exe.read_bytes() == SENTINEL
+    assert started == []
+
+
+def test_importer_verifier_rejects_resolved_path_alias_of_exe(tmp_path, monkeypatch):
+    from tools import verify_lite_importer_runtime as tool
+
+    exe = _fake_importer_exe(tmp_path)
+    alias = tmp_path / "nested" / ".." / exe.name
+    started = _track_child(monkeypatch, tool)
+
+    assert tool.verify(exe, evidence_json=alias) == 2
+    assert exe.read_bytes() == SENTINEL
+    assert started == []
+
+
+def test_importer_verifier_rejects_symlink_alias_of_exe(tmp_path, monkeypatch):
+    from tools import verify_lite_importer_runtime as tool
+
+    exe = _fake_importer_exe(tmp_path)
+    alias = tmp_path / "evidence.json"
+    alias.symlink_to(exe)
+    started = _track_child(monkeypatch, tool)
+
+    assert tool.verify(exe, evidence_json=alias) == 2
+    assert exe.read_bytes() == SENTINEL
+    assert alias.is_symlink()
+    assert started == []
+
+
+def test_importer_verifier_rejects_hardlink_alias_of_exe(tmp_path, monkeypatch):
+    from tools import verify_lite_importer_runtime as tool
+
+    exe = _fake_importer_exe(tmp_path)
+    alias = tmp_path / "evidence.json"
+    try:
+        os.link(exe, alias)
+    except OSError as exc:
+        pytest.skip(f"hard links are unavailable: {exc}")
+    started = _track_child(monkeypatch, tool)
+
+    assert tool.verify(exe, evidence_json=alias) == 2
+    assert exe.read_bytes() == SENTINEL
+    assert alias.read_bytes() == SENTINEL
+    assert started == []
+
+
+def test_importer_verifier_rejects_evidence_alias_of_child_result(tmp_path, monkeypatch):
+    from tools import verify_lite_importer_runtime as tool
+
+    exe = _fake_importer_exe(tmp_path)
+    diagnostics = tmp_path / "diagnostics"
+    result_json = diagnostics / "result.json"
+    started = _track_child(monkeypatch, tool)
+
+    assert tool.verify(exe, diagnostics_dir=diagnostics, evidence_json=result_json) == 2
+    assert exe.read_bytes() == SENTINEL
+    assert not result_json.exists()
+    assert started == []
+
+
+def test_importer_verifier_rejects_evidence_alias_of_fixture_input(tmp_path, monkeypatch):
+    from tools import verify_lite_importer_runtime as tool
+
+    exe = _fake_importer_exe(tmp_path)
+    diagnostics = tmp_path / "diagnostics"
+    fixture = diagnostics / "fixtures" / "legacy.mat"
+    started = _track_child(monkeypatch, tool)
+
+    assert tool.verify(exe, diagnostics_dir=diagnostics, evidence_json=fixture) == 2
+    assert exe.read_bytes() == SENTINEL
+    assert not fixture.exists()
+    assert started == []
+
+
+def test_importer_verifier_cli_rejects_exe_alias_as_usage_error(tmp_path, monkeypatch):
+    from tools import verify_lite_importer_runtime as tool
+
+    exe = _fake_importer_exe(tmp_path)
+    started = _track_child(monkeypatch, tool)
+
+    with pytest.raises(SystemExit) as stopped:
+        tool.main(["--exe", str(exe), "--evidence-json", str(exe)])
+
+    assert stopped.value.code == 2
+    assert exe.read_bytes() == SENTINEL
+    assert started == []
+
+
+def test_importer_verifier_writes_legal_evidence_json_without_touching_exe(
+    tmp_path, monkeypatch
+):
+    pytest.importorskip("h5py")
+    pytest.importorskip("av")
+    from tools import verify_lite_importer_runtime as tool
+
+    exe = _fake_importer_exe(tmp_path)
+    evidence = tmp_path / "evidence.json"
+    diagnostics = tmp_path / "diagnostics"
+
+    def ok_child(command, **kwargs):
+        kwargs["stdout"].write(b"")
+        kwargs["stderr"].write(b"")
+        json_path = Path(command[command.index("--json") + 1])
+        json_path.write_text(
+            json.dumps(
+                {
+                    "files": [
+                        {"path": "legacy.mat", "channels": 2},
+                        {"path": "sample-v73.mat", "channels": 2},
+                        {"path": "sample.wav", "channels": 1},
+                        {"path": "sample.mp4", "channels": 1},
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(tool.subprocess, "run", ok_child)
+    assert tool.verify(exe, diagnostics_dir=diagnostics, evidence_json=evidence) == 0
+    assert exe.read_bytes() == SENTINEL
+    payload = json.loads(evidence.read_text(encoding="utf-8"))
+    assert payload["ok"] is True
+    assert payload["executable"] == str(exe.resolve())
+
+
+def test_importer_verifier_still_writes_legal_failure_evidence(tmp_path, monkeypatch):
+    pytest.importorskip("h5py")
+    pytest.importorskip("av")
+    from tools import verify_lite_importer_runtime as tool
+
+    exe = _fake_importer_exe(tmp_path)
+    evidence = tmp_path / "evidence.json"
+    started = _track_child(monkeypatch, tool, returncode=1)
+
+    assert tool.verify(exe, evidence_json=evidence) == 1
+    assert exe.read_bytes() == SENTINEL
+    assert started
+    payload = json.loads(evidence.read_text(encoding="utf-8"))
+    assert payload["ok"] is False
+    assert payload["exit_code"] == 1

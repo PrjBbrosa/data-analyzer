@@ -358,6 +358,42 @@ def test_toolbar_project_name_lives_inside_mirrored_left_host(qtbot, qapp):
     assert tb.lbl_project_session.isHidden()
 
 
+def test_toolbar_project_session_chrome_dirty_star_skips_unchanged(qtbot, qapp):
+    from mf4_analyzer.ui_kit import load_stylesheet
+
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
+    tb = Toolbar()
+    qtbot.addWidget(tb)
+    kwargs = dict(
+        display_name="A.tlproj",
+        tooltip="/tmp/A.tlproj",
+        can_save=True,
+        can_close=True,
+        bound=True,
+    )
+    tb.set_project_session_chrome(dirty=False, **kwargs)
+    assert "A.tlproj" in tb.lbl_project_session.text()
+    assert "*" not in tb.lbl_project_session.text()
+
+    syncs = []
+    real_sync = tb._schedule_mirror_sync
+
+    def _count_sync():
+        syncs.append(1)
+        return real_sync()
+
+    tb._schedule_mirror_sync = _count_sync
+    tb.set_project_session_chrome(dirty=False, **kwargs)
+    tb.set_project_session_chrome(dirty=False, **kwargs)
+    assert syncs == []
+    tb.set_project_session_chrome(dirty=True, **kwargs)
+    assert syncs == [1]
+    assert "*" in tb.lbl_project_session.text()
+    tb.set_project_session_chrome(dirty=True, **kwargs)
+    assert syncs == [1]
+
+
 def test_save_caret_menu_dismiss_clears_stale_hover_on_caret(qtbot, qapp):
     from PyQt5.QtCore import QPoint, Qt
     from PyQt5.QtGui import QCursor

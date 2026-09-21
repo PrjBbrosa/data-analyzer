@@ -642,3 +642,151 @@ def test_artifact_verifier_rejects_missing_layout_diagnostics(
     report = json.loads(evidence.read_text(encoding="utf-8"))
     assert report["ok"] is False
     assert "layout diagnostics" in report["error"]
+
+
+RENDER_SENTINEL = b"FAKE-FROZEN-RENDER-EXE"
+
+
+def test_render_verifier_rejects_evidence_alias_of_exe_without_starting_child(
+    tmp_path, monkeypatch
+):
+    from tools import verify_frozen_batch_render as verifier
+
+    exe = tmp_path / "probe.exe"
+    exe.write_bytes(RENDER_SENTINEL)
+    started: list[list[str]] = []
+
+    def child(command, **kwargs):
+        started.append(list(command))
+        return subprocess.CompletedProcess(command, 1)
+
+    monkeypatch.setattr(verifier.subprocess, "run", child)
+    with pytest.raises(SystemExit) as stopped:
+        verifier.main(
+            [
+                "--exe",
+                str(exe),
+                "--platform",
+                "offscreen",
+                "--evidence-json",
+                str(exe),
+            ]
+        )
+    assert stopped.value.code == 2
+    assert exe.read_bytes() == RENDER_SENTINEL
+    assert started == []
+
+
+def test_render_verifier_rejects_symlink_alias_of_exe_without_starting_child(
+    tmp_path, monkeypatch
+):
+    from tools import verify_frozen_batch_render as verifier
+
+    exe = tmp_path / "probe.exe"
+    exe.write_bytes(RENDER_SENTINEL)
+    alias = tmp_path / "evidence.json"
+    alias.symlink_to(exe)
+    started: list[list[str]] = []
+
+    def child(command, **kwargs):
+        started.append(list(command))
+        return subprocess.CompletedProcess(command, 1)
+
+    monkeypatch.setattr(verifier.subprocess, "run", child)
+    with pytest.raises(SystemExit) as stopped:
+        verifier.main(
+            [
+                "--exe",
+                str(exe),
+                "--platform",
+                "offscreen",
+                "--evidence-json",
+                str(alias),
+            ]
+        )
+    assert stopped.value.code == 2
+    assert exe.read_bytes() == RENDER_SENTINEL
+    assert alias.is_symlink()
+    assert started == []
+
+
+def test_render_verifier_rejects_evidence_alias_of_child_json(tmp_path):
+    from tools import verify_frozen_batch_render as verifier
+
+    artifacts = tmp_path / "outputs"
+    artifacts.mkdir()
+    (artifacts / "time.png").write_bytes(b"png-bytes-must-survive")
+    child_json = tmp_path / "child.json"
+    original = b'{"ok": true, "must": "survive"}'
+    child_json.write_bytes(original)
+
+    with pytest.raises(SystemExit) as stopped:
+        verifier.main(
+            [
+                "--artifacts",
+                str(artifacts),
+                "--child-json",
+                str(child_json),
+                "--platform",
+                "offscreen",
+                "--evidence-json",
+                str(child_json),
+            ]
+        )
+    assert stopped.value.code == 2
+    assert child_json.read_bytes() == original
+    assert (artifacts / "time.png").read_bytes() == b"png-bytes-must-survive"
+
+
+def test_render_verifier_rejects_evidence_inside_artifacts_directory(tmp_path):
+    from tools import verify_frozen_batch_render as verifier
+
+    artifacts = tmp_path / "outputs"
+    artifacts.mkdir()
+    png = artifacts / "time.png"
+    png.write_bytes(b"png-bytes-must-survive")
+    child_json = tmp_path / "child.json"
+    child_json.write_text("{}", encoding="utf-8")
+
+    with pytest.raises(SystemExit) as stopped:
+        verifier.main(
+            [
+                "--artifacts",
+                str(artifacts),
+                "--child-json",
+                str(child_json),
+                "--platform",
+                "offscreen",
+                "--evidence-json",
+                str(png),
+            ]
+        )
+    assert stopped.value.code == 2
+    assert png.read_bytes() == b"png-bytes-must-survive"
+    assert child_json.read_text(encoding="utf-8") == "{}"
+
+
+def test_render_verifier_still_writes_legal_failure_evidence(tmp_path):
+    from tools import verify_frozen_batch_render as verifier
+
+    artifacts = tmp_path / "outputs"
+    artifacts.mkdir()
+    child_json = tmp_path / "child.json"
+    child_json.write_text("{}", encoding="utf-8")
+    evidence = tmp_path / "evidence.json"
+
+    assert verifier.main(
+        [
+            "--artifacts",
+            str(artifacts),
+            "--child-json",
+            str(child_json),
+            "--platform",
+            "offscreen",
+            "--evidence-json",
+            str(evidence),
+        ]
+    ) == 1
+    report = json.loads(evidence.read_text(encoding="utf-8"))
+    assert report["ok"] is False
+    assert "error" in report

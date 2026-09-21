@@ -688,6 +688,8 @@ class _FakeToolhelpKernel32:
         pid, ppid = self.rows[self._index]
         self._index += 1
         entry = getattr(entry_ref, "_obj", None)
+        if entry is None:
+            entry = getattr(entry_ref, "contents", None)
         if entry is not None:
             entry.th32ProcessID = pid
             entry.th32ParentProcessID = ppid
@@ -721,7 +723,15 @@ def _install_windows_toolhelp(
 ) -> _FakeToolhelpKernel32:
     monkeypatch.setattr(os, "name", "nt")
     fake = _FakeToolhelpKernel32(rows=rows, snapshot_failed=snapshot_failed)
-    monkeypatch.setattr(ctypes, "WinDLL", lambda *args, **kwargs: fake)
+
+    def _kernel32_windll(name, *args, **kwargs):
+        if name != "kernel32":
+            raise OSError(f"unexpected WinDLL({name!r})")
+        return fake
+
+    # macOS ctypes has no WinDLL. raising=False injects the missing
+    # attribute and lets monkeypatch delete it on teardown.
+    monkeypatch.setattr(ctypes, "WinDLL", _kernel32_windll, raising=False)
     return fake
 
 

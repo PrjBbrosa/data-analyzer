@@ -30,6 +30,7 @@ from mf4_analyzer.ui.pinned_cursor_facts import (
     UNAVAILABLE_TEXT,
     _binding_key,
     _finite,
+    _frequency_sample_channel_kind,
     _hidden_channel_row,
     _hidden_keys_from_sample,
     _identity_key,
@@ -218,6 +219,150 @@ def test_reconcile_binding_id_matches_two_tuple_pool():
     assert dropped is False
     assert out.channels[0].current_value == 1.5
     assert out.channels[0].diagnostic == ""
+
+
+def _freq_channel(**overrides):
+    data = {
+        "identity": ("f0", "rpm"),
+        "source_label": "eps",
+        "channel_label": "rpm",
+        "color": "#2563eb",
+        "value": 4.0,
+    }
+    data.update(overrides)
+    return FrequencyCursorChannel(**data)
+
+
+def _freq_intent(**overrides):
+    data = {
+        "domain": "frequency",
+        "x": 12.0,
+        "x_unit": "Hz",
+        "bindings": (PinnedCursorBinding(fid="f0", channel="rpm"),),
+    }
+    data.update(overrides)
+    return _intent(**data)
+
+
+def test_frequency_status_row_is_cursor_display_channel():
+    binding = PinnedCursorBinding(fid="f0", channel="rpm")
+    row = _hidden_channel_row(binding, None, diagnostic=UNCHECKED_TEXT)
+    assert isinstance(row, CursorDisplayChannel)
+    assert not isinstance(row, FrequencyCursorChannel)
+    assert row.diagnostic == UNCHECKED_TEXT
+    assert not hasattr(row, "value")
+    assert _frequency_sample_channel_kind(row) == "status"
+
+
+def test_frequency_hidden_converts_numeric_dto_to_status_channel():
+    existing = _freq_channel()
+    binding = PinnedCursorBinding(fid="f0", channel="rpm")
+    row = _hidden_channel_row(binding, existing, diagnostic=HIDDEN_CHANNEL_TEXT)
+    assert isinstance(row, CursorDisplayChannel)
+    assert row.diagnostic == HIDDEN_CHANNEL_TEXT
+    assert row.identity == existing.identity
+    assert row.color == existing.color
+    assert row.channel_label == "rpm"
+    assert not hasattr(row, "value")
+    assert _frequency_sample_channel_kind(row) == "status"
+
+
+def test_frequency_sample_channel_kind_rejects_wrong_dto():
+    assert _frequency_sample_channel_kind(_freq_channel()) == "numeric"
+    with pytest.raises(TypeError, match="without diagnostic"):
+        _frequency_sample_channel_kind(_channel(current_value=None, diagnostic=""))
+    with pytest.raises(TypeError, match="FrequencyCursorChannel"):
+        _frequency_sample_channel_kind(object())
+
+
+def test_reconcile_frequency_empty_sample_marks_unchecked_and_unavailable():
+    intent = _freq_intent(bindings=(
+        PinnedCursorBinding(fid="f0", channel="rpm"),
+        PinnedCursorBinding(fid="f0", channel="torque"),
+    ))
+    sample, next_intent, dropped = _reconcile_sample(
+        intent, None, bound={("f0", "torque")}, hidden=set(),
+    )
+    assert dropped is False
+    assert next_intent is intent
+    assert sample is not None
+    assert sample.domain == "frequency"
+    assert sample.x == 12.0
+    assert all(isinstance(ch, CursorDisplayChannel) for ch in sample.channels)
+    assert [ch.diagnostic for ch in sample.channels] == [
+        UNCHECKED_TEXT, UNAVAILABLE_TEXT,
+    ]
+    assert not hasattr(sample.channels[0], "value")
+    assert _frequency_sample_channel_kind(sample.channels[0]) == "status"
+    assert _frequency_sample_channel_kind(sample.channels[1]) == "status"
+
+
+def test_reconcile_frequency_keeps_numeric_and_adds_unchecked_status():
+    existing = _freq_channel()
+    intent = _freq_intent(bindings=(
+        PinnedCursorBinding(fid="f0", channel="rpm"),
+        PinnedCursorBinding(fid="f0", channel="torque"),
+    ))
+    sample = _sample(domain="frequency", x=12.0, channels=(existing,))
+    out, _next, dropped = _reconcile_sample(
+        intent, sample, bound={("f0", "rpm")}, hidden=set(),
+    )
+    assert dropped is False
+    assert out.channels[0] is existing
+    assert isinstance(out.channels[0], FrequencyCursorChannel)
+    assert out.channels[0].value == 4.0
+    assert isinstance(out.channels[1], CursorDisplayChannel)
+    assert out.channels[1].diagnostic == UNCHECKED_TEXT
+    assert _frequency_sample_channel_kind(out.channels[0]) == "numeric"
+    assert _frequency_sample_channel_kind(out.channels[1]) == "status"
+
+
+def test_reconcile_frequency_bound_missing_source_is_unavailable_status():
+    intent = _freq_intent()
+    sample, _next, dropped = _reconcile_sample(
+        intent,
+        _sample(domain="frequency", x=12.0),
+        bound={("f0", "rpm")},
+        hidden=set(),
+    )
+    assert dropped is False
+    assert len(sample.channels) == 1
+    assert isinstance(sample.channels[0], CursorDisplayChannel)
+    assert sample.channels[0].diagnostic == UNAVAILABLE_TEXT
+
+
+def test_reconcile_frequency_hidden_strips_numeric_and_keeps_identity():
+    existing = _freq_channel()
+    sample = _sample(domain="frequency", x=12.0, channels=(existing,))
+    out, _next, dropped = _reconcile_sample(
+        _freq_intent(), sample, bound={("f0", "rpm")}, hidden={("f0", "rpm")},
+    )
+    assert dropped is False
+    row = out.channels[0]
+    assert isinstance(row, CursorDisplayChannel)
+    assert row.diagnostic == HIDDEN_CHANNEL_TEXT
+    assert row.identity == ("f0", "rpm")
+    assert row.color == "#2563eb"
+
+
+def test_reconcile_frequency_dual_keeps_a_b_values():
+    existing = _freq_channel(
+        value=None, a_value=1.5, b_value=2.5, delta_ab=1.0,
+    )
+    sample = _sample(
+        domain="frequency", mode="dual", x=None, ax=10.0, bx=40.0,
+        channels=(existing,),
+    )
+    out, _next, dropped = _reconcile_sample(
+        _freq_intent(mode="dual", x=None, ax=10.0, bx=40.0),
+        sample,
+        bound={("f0", "rpm")},
+        hidden=set(),
+    )
+    assert dropped is False
+    assert out.channels[0] is existing
+    assert out.channels[0].a_value == 1.5
+    assert out.channels[0].b_value == 2.5
 
 
 def test_hidden_channel_row_builds_identity_with_binding_id():

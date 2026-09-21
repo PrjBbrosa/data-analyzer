@@ -264,7 +264,7 @@ def download_verified_file(
             last_error = exc
             if not _retryable(exc) or attempt + 1 >= attempts:
                 raise
-        except Exception as exc:  # noqa: BLE001 — mapped to a stable reason_code
+        except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as exc:
             last_error = exc
             if not _retryable(exc) or attempt + 1 >= attempts:
                 raise DownloadPolicyError(str(exc), "NETWORK_CHECK_FAILED") from exc
@@ -306,8 +306,11 @@ def _download_attempt(
         resume_from = 0
 
     headers = {"Accept": "*/*"}
+    saved_etag = str(meta.get("etag") or "") if identity_ok else ""
     if resume_from:
         headers["Range"] = f"bytes={resume_from}-"
+        if saved_etag:
+            headers["If-Range"] = saved_etag
     request = Request(url, headers=headers, method="GET")
     opener = None if urlopen is not None else build_policy_opener(policy)
     context = _ssl_context(policy)
@@ -362,6 +365,38 @@ def _download_attempt(
                 )
 
         etag = _header_str(headers_obj, "ETag")
+        if resume_from and status == 206:
+            range_start, range_end, range_total = _parse_content_range(
+                _header_str(headers_obj, "Content-Range")
+            )
+            if range_start != resume_from:
+                part_path.unlink(missing_ok=True)
+                meta_path.unlink(missing_ok=True)
+                raise DownloadPolicyError(
+                    "Content-Range start does not match the requested resume offset",
+                    "NETWORK_CHECK_FAILED",
+                )
+            if range_total is not None and range_total != expected_length:
+                part_path.unlink(missing_ok=True)
+                meta_path.unlink(missing_ok=True)
+                raise DownloadPolicyError(
+                    "Content-Range total does not match trusted expected_length",
+                    "VERIFICATION_FAILED",
+                )
+            if range_end + 1 > expected_length:
+                part_path.unlink(missing_ok=True)
+                meta_path.unlink(missing_ok=True)
+                raise DownloadPolicyError(
+                    "Content-Range end exceeds trusted expected_length",
+                    "VERIFICATION_FAILED",
+                )
+            if saved_etag and etag and _normalize_etag(saved_etag) != _normalize_etag(etag):
+                part_path.unlink(missing_ok=True)
+                meta_path.unlink(missing_ok=True)
+                raise DownloadPolicyError(
+                    "ETag changed for a resumed download",
+                    "NETWORK_CHECK_FAILED",
+                )
         _write_part_meta(
             meta_path,
             {
@@ -440,3 +475,44 @@ def _header_str(headers: Any, name: str) -> str | None:
         return None
     raw = headers.get(name)
     return str(raw) if raw else None
+
+
+def _normalize_etag(value: str | None) -> str | None:
+    if not value:
+        return None
+    text = str(value).strip()
+    if text[:2].lower() == "w/":
+        text = text[2:].strip()
+    if len(text) >= 2 and text[0] == text[-1] == '"':
+        text = text[1:-1]
+    return text or None
+
+
+def _parse_content_range(header: str | None) -> tuple[int, int, int | None]:
+    if not header:
+        raise DownloadPolicyError(
+            "206 response is missing Content-Range",
+            "VERIFICATION_FAILED",
+        )
+    text = header.strip()
+    if not text.lower().startswith("bytes "):
+        raise DownloadPolicyError("unsupported Content-Range unit", "VERIFICATION_FAILED")
+    spec = text.split(None, 1)[1]
+    range_part, separator, total_part = spec.partition("/")
+    if not separator or "-" not in range_part:
+        raise DownloadPolicyError("invalid Content-Range", "VERIFICATION_FAILED")
+    start_s, end_s = range_part.split("-", 1)
+    try:
+        start = int(start_s)
+        end = int(end_s)
+    except ValueError as exc:
+        raise DownloadPolicyError("invalid Content-Range", "VERIFICATION_FAILED") from exc
+    if start < 0 or end < start:
+        raise DownloadPolicyError("invalid Content-Range", "VERIFICATION_FAILED")
+    if total_part == "*":
+        return start, end, None
+    try:
+        total = int(total_part)
+    except ValueError as exc:
+        raise DownloadPolicyError("invalid Content-Range", "VERIFICATION_FAILED") from exc
+    return start, end, total

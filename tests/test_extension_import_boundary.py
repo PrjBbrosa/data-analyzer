@@ -22,6 +22,7 @@ for name in (
     'av',
     'scipy',
     'h5py',
+    'tuf',
 ):
     sys.modules[name] = None
 
@@ -58,6 +59,7 @@ blocked = sorted(
         'h5py',
         'matplotlib.pyplot',
         'PyQt5',
+        'tuf',
     } and sys.modules[name] is not None
 )
 print(json.dumps({'blocked': blocked, 'status': 'clean'}))

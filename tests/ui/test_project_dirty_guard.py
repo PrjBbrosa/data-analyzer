@@ -175,6 +175,39 @@ def test_clear_resets_symmetrically_with_init():
     assert holder.restore_depth == 0
 
 
+def test_dirty_bool_listener_fires_once_per_bool_change():
+    holder = ProjectDirtyState()
+    events = []
+    holder.bind_dirty_bool_listener(events.append)
+
+    holder.mark_user_mutation()
+    holder.mark_user_mutation()
+    assert events == [True]
+
+    holder.mark_saved(path="a.tlproj", digest="saved")
+    assert events == [True, False]
+
+    holder.mark_user_mutation()
+    assert events == [True, False, True]
+    assert holder.reconcile_saved_digest("saved") is True
+    assert events == [True, False, True, False]
+
+    holder.mark_user_mutation()
+    holder.begin_restore()
+    assert holder.mark_user_mutation() is False
+    holder.end_restore()
+    holder.clear()
+    assert events[-1] is False
+    assert holder.mark_user_mutation() is True
+    assert events[-1] is True
+
+
+def _current_schema_time_filter():
+    from mf4_analyzer.ui.view_state import default_time_filter
+
+    return default_time_filter()
+
+
 def test_guard_result_enum_is_defined_for_later_close_wiring():
     assert {item.name for item in DirtyGuardResult} == {
         "PROCEED_SAVED",
@@ -195,7 +228,7 @@ def test_runtime_selection_focus_hover_are_not_holder_mutations():
     assert not holder.is_dirty
 
 
-def _characterization_doc():
+def _characterization_doc(*, include_time_filter=True):
     return pio.ProjectDocument(
         active_file="f0",
         current_mode="time",
@@ -224,6 +257,10 @@ def _characterization_doc():
                 "tab_color": "#2d7ff9",
                 "checked": [["f0", "rpm"]],
                 "axis_opts": {"tick_density": "normal"},
+                **(
+                    {"time_filter": _current_schema_time_filter()}
+                    if include_time_filter else {}
+                ),
             }
         ],
         view_manager={"active": 0, "split_pairs": {"1": 0}},
@@ -314,6 +351,32 @@ def test_canonical_digest_matches_project_roundtrip_and_excludes_runtime_keys(tm
     assert pio.canonical_project_digest(runtime_probe) != digest
     for key in _walk_keys(payload):
         assert key not in pio.PROJECT_RUNTIME_ONLY_KEYS, key
+
+
+def test_canonical_digest_missing_time_filter_fixture_is_codec_fill_not_corruption(
+    tmp_path,
+):
+    """Incomplete fixture vs legal current-schema project are different contracts.
+
+    Codec filling View ``time_filter`` defaults is expected schema migration,
+    not a damaged user file. The incomplete fixture digest must still change.
+    """
+    incomplete = _characterization_doc(include_time_filter=False)
+    current = _characterization_doc(include_time_filter=True)
+    payload = pio.project_document_to_payload(incomplete)
+    assert "time_filter" not in payload["views"][0]
+    assert "time_filter" in pio.project_document_to_payload(current)["views"][0]
+
+    path = tmp_path / "legacy-missing-filter.tlproj"
+    pio.save_project_to_json(incomplete, path)
+    loaded = pio.load_project_from_json(path)
+
+    incomplete_digest = pio.canonical_project_digest(incomplete)
+    loaded_digest = pio.canonical_project_digest(loaded)
+    current_digest = pio.canonical_project_digest(current)
+    assert loaded_digest != incomplete_digest
+    assert loaded.views[0]["time_filter"] == _current_schema_time_filter()
+    assert loaded_digest == current_digest
 
 
 def test_selection_render_preview_and_job_progress_do_not_mark_dirty():
@@ -739,6 +802,95 @@ def test_successful_save_sets_clean_save_point_on_window(qapp, tmp_path):
     assert mw._project_dirty.saved_digest
 
 
+def test_user_mutation_projects_dirty_star_without_serializing(
+    qapp, qtbot, tmp_path, monkeypatch,
+):
+    """Bound chrome follows the dirty bool; edits must not serialize or write."""
+    import csv
+
+    from mf4_analyzer import app_meta
+    from mf4_analyzer.ui import project_io as pio
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    csv_path = tmp_path / "a.csv"
+    with open(csv_path, "w", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["time", "rpm"])
+        for i in range(20):
+            writer.writerow([i / 100.0, float(i)])
+    project = tmp_path / "A.tlproj"
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window._load_one(str(csv_path))
+    assert window.save_project(project) is True
+    label = window.toolbar.lbl_project_session
+    assert "A.tlproj" in label.text()
+    assert "*" not in label.text()
+    assert "*" not in window.windowTitle()
+    assert window.windowTitle() == window._project_window_title()
+
+    digest_calls = []
+    save_calls = []
+    real_digest = pio.canonical_project_digest
+    real_save = pio.save_project_to_json
+
+    def _count_digest(source):
+        digest_calls.append(1)
+        return real_digest(source)
+
+    def _count_save(doc, path):
+        save_calls.append(path)
+        return real_save(doc, path)
+
+    monkeypatch.setattr(pio, "canonical_project_digest", _count_digest)
+    monkeypatch.setattr(pio, "save_project_to_json", _count_save)
+
+    window._on_markup_revision_changed()
+    window._on_markup_revision_changed()
+    assert window._project_dirty.is_dirty
+    assert "*" in label.text()
+    assert "*" in window.windowTitle()
+    assert window.windowTitle() == window._project_window_title()
+    assert digest_calls == []
+    assert save_calls == []
+
+    window._refresh_project_session_chrome()
+    window._refresh_project_session_chrome()
+    assert digest_calls == []
+    assert "*" in label.text()
+
+    assert window.save_project(project) is True
+    assert not window._project_dirty.is_dirty
+    assert "*" not in label.text()
+    assert "*" not in window.windowTitle()
+
+    window._on_markup_revision_changed()
+    assert "*" in label.text()
+    assert window._project_dirty.reconcile_saved_digest(
+        window._project_dirty.saved_digest,
+    )
+    assert not window._project_dirty.is_dirty
+    assert "*" not in label.text()
+    assert "*" not in window.windowTitle()
+
+    window._project_dirty.begin_restore()
+    window._on_markup_revision_changed()
+    assert not window._project_dirty.is_dirty
+    assert "*" not in label.text()
+    window._project_dirty.end_restore()
+
+    other = tmp_path / "B.tlproj"
+    assert window.save_project(other) is True
+    assert "B.tlproj" in label.text()
+    assert "*" not in label.text()
+
+    window._on_markup_revision_changed()
+    assert "*" in label.text()
+    assert window.close_project(already_confirmed=True) is True
+    assert label.isHidden()
+    assert window.windowTitle() == app_meta.WINDOW_TITLE
+
+
 def test_remark_after_save_marks_dirty(qapp, qtbot, tmp_path, loaded_csv, monkeypatch):
     """A real time-domain remark is persistable user intent after save."""
     from PyQt5.QtCore import QPoint
@@ -867,6 +1019,10 @@ def test_save_a_then_open_b_replaces_digest_and_project_session(
     assert target._project_dirty.revision == 0
     assert target._project_dirty.save_point == 0
     assert not target._project_dirty.is_dirty
+    assert "b.tlproj" in target.toolbar.lbl_project_session.text()
+    assert "*" not in target.toolbar.lbl_project_session.text()
+    assert "*" not in target.windowTitle()
+    assert target.windowTitle() == target._project_window_title()
 
 
 def test_fresh_open_seeds_canonical_baseline_and_leave_is_clean(
@@ -941,14 +1097,20 @@ def test_ultraview_undo_to_saved_payload_is_clean_and_redo_is_dirty(
     )
     assert uv._commit_author_mutation(board, later_edit, label="create")
     assert window._project_dirty.is_dirty
+    assert "*" in window.toolbar.lbl_project_session.text()
+    assert "*" in window.windowTitle()
 
     uv._on_free_grid_undo()
     assert [item.object_id for item in board.author_objects] == ["saved"]
     assert not window._project_dirty.is_dirty
+    assert "*" not in window.toolbar.lbl_project_session.text()
+    assert "*" not in window.windowTitle()
 
     uv._on_free_grid_redo()
     assert [item.object_id for item in board.author_objects] == ["saved", "later"]
     assert window._project_dirty.is_dirty
+    assert "*" in window.toolbar.lbl_project_session.text()
+    assert "*" in window.windowTitle()
 
 
 def test_empty_and_rejected_ultraview_undo_do_not_advance_dirty_revision(

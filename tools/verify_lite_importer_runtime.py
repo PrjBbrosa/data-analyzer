@@ -16,6 +16,22 @@ import h5py
 import numpy as np
 from scipy.io import savemat
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from mf4_analyzer.frozen_evidence_paths import (  # noqa: E402
+    UnsafeEvidencePath,
+    canonical_path,
+    reject_aliased_evidence,
+)
+
+_IMPORTER_EVIDENCE_MESSAGE = (
+    "evidence JSON must not alias the frozen executable, an input fixture, "
+    "or the child result JSON"
+)
+_FIXTURE_NAMES = ("legacy.mat", "sample-v73.mat", "sample.wav", "sample.mp4")
+
 
 def create_fixtures(directory: Path) -> tuple[Path, Path, Path, Path]:
     """Create MAT, WAV, and MP4-with-audio fixtures in ``directory``."""
@@ -59,6 +75,32 @@ def create_fixtures(directory: Path) -> tuple[Path, Path, Path, Path]:
             container.mux(packet)
 
     return legacy_mat, hdf5_mat, wav, mp4
+
+
+def _planned_protected_files(exe: Path, directory: Path) -> tuple[Path, ...]:
+    fixtures = directory / "fixtures"
+    return (
+        canonical_path(exe),
+        canonical_path(directory / "result.json"),
+        *(canonical_path(fixtures / name) for name in _FIXTURE_NAMES),
+    )
+
+
+def _reject_evidence_target(
+    evidence_json: Path | None,
+    exe: Path,
+    directory: Path | None,
+) -> None:
+    if evidence_json is None:
+        return
+    protected = (canonical_path(exe),)
+    if directory is not None:
+        protected = _planned_protected_files(exe, directory)
+    reject_aliased_evidence(
+        canonical_path(evidence_json),
+        protected,
+        message=_IMPORTER_EVIDENCE_MESSAGE,
+    )
 
 
 def _write_json(path: Path, payload: dict[str, object]) -> None:
@@ -108,9 +150,17 @@ def verify(
     Probe truth is the exit code plus ``result.json``. Console streams are
     best-effort and must not be required for a windowed executable.
     """
-    exe = Path(exe).resolve()
+    exe = canonical_path(exe)
+    if evidence_json is not None:
+        evidence_json = canonical_path(evidence_json)
     if diagnostics_dir is not None:
-        diagnostics_dir = Path(diagnostics_dir).resolve()
+        diagnostics_dir = canonical_path(diagnostics_dir)
+    try:
+        _reject_evidence_target(evidence_json, exe, diagnostics_dir)
+    except UnsafeEvidencePath as exc:
+        _best_effort_write(sys.stderr, f"{exc}\n")
+        return 2
+    if diagnostics_dir is not None:
         diagnostics_dir.mkdir(parents=True, exist_ok=False)
     workspace = (
         nullcontext(diagnostics_dir) if diagnostics_dir is not None
@@ -120,6 +170,11 @@ def verify(
     return_code = 1
     with workspace as raw_directory:
         directory = Path(raw_directory)
+        try:
+            _reject_evidence_target(evidence_json, exe, directory)
+        except UnsafeEvidencePath as exc:
+            _best_effort_write(sys.stderr, f"{exc}\n")
+            return 2
         fixtures_dir = directory / "fixtures"
         paths = create_fixtures(fixtures_dir)
         output = directory / "result.json"
@@ -214,6 +269,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if not args.exe.is_file():
         parser.error(f"frozen executable not found: {args.exe}")
+    try:
+        _reject_evidence_target(args.evidence_json, args.exe, args.diagnostics_dir)
+    except UnsafeEvidencePath as exc:
+        parser.error(str(exc))
     return verify(
         args.exe,
         diagnostics_dir=args.diagnostics_dir,

@@ -370,6 +370,7 @@ def test_close_all_keeps_save_binding_close_project_unbinds(
     assert win._project_dirty.path is None
     assert win._project_dirty.saved_digest is None
     assert not win._project_dirty.is_dirty
+    assert win.toolbar.lbl_project_session.isHidden()
 
 
 def test_last_source_keep_retains_binding_and_marks_dirty(
@@ -388,6 +389,7 @@ def test_last_source_keep_retains_binding_and_marks_dirty(
     assert win._project_dirty.saved_digest == digest
     assert win._project_dirty.is_dirty
     assert win.navigator._close_project_available is True
+    assert "*" in win.toolbar.lbl_project_session.text()
 
 
 def test_last_source_close_project_unbinds_once(

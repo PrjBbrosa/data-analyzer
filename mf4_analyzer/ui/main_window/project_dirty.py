@@ -52,10 +52,26 @@ class ProjectDirtyState:
     _last_mutation_token: object | None = field(
         default=None, repr=False, compare=False,
     )
+    _dirty_bool_listener: object | None = field(
+        default=None, repr=False, compare=False,
+    )
 
     @property
     def is_dirty(self) -> bool:
         return self.revision != self.save_point
+
+    def bind_dirty_bool_listener(self, listener) -> None:
+        """Project chrome onto bool changes. Not a second dirty owner."""
+        self._dirty_bool_listener = listener
+
+    def _emit_dirty_bool_if_changed(self, before: bool) -> None:
+        after = self.is_dirty
+        if after == before:
+            return
+        listener = self._dirty_bool_listener
+        if listener is None:
+            return
+        listener(after)
 
     def session_needs_guard(self, current_digest=None) -> bool:
         """True when revision is dirty, or guard-time digest disagrees.
@@ -82,18 +98,22 @@ class ProjectDirtyState:
             return False
         if token is not None and token == self._last_mutation_token:
             return False
+        before = self.is_dirty
         self._last_mutation_token = token
         self.revision += 1
+        self._emit_dirty_bool_if_changed(before)
         return True
 
     def mark_saved(self, path=None, digest=None) -> None:
         """Record a successful save. Failed or cancelled saves must not call this."""
+        before = self.is_dirty
         self.save_point = self.revision
         if path is not None:
             self.path = str(path)
         if digest is not None:
             self.saved_digest = str(digest)
         self._last_mutation_token = None
+        self._emit_dirty_bool_if_changed(before)
 
     def adopt_restored_session(self, *, path=None, digest=None) -> None:
         """Atomically adopt a restored project as a fresh clean session.
@@ -103,11 +123,13 @@ class ProjectDirtyState:
         with its path, canonical baseline, and mutation-token coalescer while
         preserving the active restore guard and leave/teardown guards.
         """
+        before = self.is_dirty
         self.revision = 0
         self.save_point = 0
         self.path = None if path is None else str(path)
         self.saved_digest = None if digest is None else str(digest)
         self._last_mutation_token = None
+        self._emit_dirty_bool_if_changed(before)
 
     def reconcile_saved_digest(self, current_digest) -> bool:
         """Move the save point to ``revision`` when payload equals the save.
@@ -121,8 +143,10 @@ class ProjectDirtyState:
             return False
         if str(current_digest) != self.saved_digest:
             return False
+        before = self.is_dirty
         self.save_point = self.revision
         self._last_mutation_token = None
+        self._emit_dirty_bool_if_changed(before)
         return True
 
     def begin_restore(self) -> None:
@@ -132,7 +156,11 @@ class ProjectDirtyState:
         self.restore_depth = max(0, self.restore_depth - 1)
 
     def clear(self) -> None:
-        """Reset to the same empty session as ``ProjectDirtyState()``."""
+        """Reset to the same empty session as ``ProjectDirtyState()``.
+
+        The chrome listener is wiring, not session state, so it survives.
+        """
+        before = self.is_dirty
         self.revision = 0
         self.save_point = 0
         self.path = None
@@ -141,3 +169,4 @@ class ProjectDirtyState:
         self.guard_open = False
         self.close_teardown_started = False
         self._last_mutation_token = None
+        self._emit_dirty_bool_if_changed(before)

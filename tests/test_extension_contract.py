@@ -214,6 +214,65 @@ def test_active_json_rejects_absolute_paths_and_parent_escape():
     with pytest.raises(ExtensionError):
         validate_relative_ref(r"C:\TraceLab\store")
 
+    with pytest.raises(ExtensionError) as staging:
+        parse_active_state(
+            {
+                "schema": 1,
+                "generation": 1,
+                "by_runtime": {
+                    "rt1-0123456789abcdef0123456789abcdef": {
+                        "media": {
+                            "package_relpath": ".STAGING/txn-1",
+                            "package_sha256": "d" * 64,
+                        }
+                    }
+                },
+            }
+        )
+    assert staging.value.reason_code == ReasonCode.VERIFICATION_FAILED
+
+    with pytest.raises(ExtensionError) as cache:
+        parse_active_state(
+            {
+                "schema": 1,
+                "generation": 1,
+                "by_runtime": {
+                    "rt1-0123456789abcdef0123456789abcdef": {
+                        "media": {
+                            "package_relpath": "CACHE/downloads/pkg",
+                            "package_sha256": "d" * 64,
+                        }
+                    }
+                },
+            }
+        )
+    assert cache.value.reason_code == ReasonCode.VERIFICATION_FAILED
+
+    with pytest.raises(ExtensionError) as wrong_component:
+        parse_active_state(
+            {
+                "schema": 1,
+                "generation": 1,
+                "by_runtime": {
+                    "rt1-0123456789abcdef0123456789abcdef": {
+                        "media": {
+                            "package_relpath": (
+                                "store/rt1-0123456789abcdef0123456789abcdef/matlab/"
+                                + ("d" * 64)
+                            ),
+                            "package_sha256": "d" * 64,
+                        }
+                    }
+                },
+            }
+        )
+    assert wrong_component.value.reason_code == ReasonCode.VERIFICATION_FAILED
+
+    with pytest.raises(ExtensionError):
+        validate_relative_ref("NUL/payload")
+    with pytest.raises(ExtensionError):
+        validate_relative_ref("payload.txt:hidden")
+
 
 def test_transaction_and_manager_status_fixtures():
     log = parse_transaction_log(_load("transaction-valid.json"))

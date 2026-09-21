@@ -29,6 +29,11 @@ from mf4_analyzer.batch_render_qt._theme import (  # noqa: E402
     EXPORT_FONT_DPI,
     THEMES,
 )
+from mf4_analyzer.frozen_evidence_paths import (  # noqa: E402
+    UnsafeEvidencePath,
+    canonical_path,
+    reject_aliased_evidence,
+)
 from mf4_analyzer.qt_analysis_shared import (  # noqa: E402
     DEFAULT_HEATMAP_CMAP,
     _resolve_colormap,
@@ -53,6 +58,38 @@ LAYOUT_ARTIFACT = "time.png"
 REGION_INK_MIN = 120
 TICK_INK_MIN = 8
 REGION_BACKGROUND_DELTA = 12
+_RENDER_EVIDENCE_MESSAGE = (
+    "evidence JSON must not alias the frozen executable, an input artifact, "
+    "or the child result JSON"
+)
+
+
+def _reject_render_evidence(
+    evidence_json: Path,
+    *,
+    exe: Path | None = None,
+    artifacts: Path | None = None,
+    child_json: Path | None = None,
+    diagnostics_dir: Path | None = None,
+) -> None:
+    protected: list[Path] = []
+    contained_in: list[Path] = []
+    if exe is not None:
+        protected.append(canonical_path(exe))
+    if child_json is not None:
+        protected.append(canonical_path(child_json))
+    if artifacts is not None:
+        contained_in.append(canonical_path(artifacts))
+    if diagnostics_dir is not None:
+        diagnostics = canonical_path(diagnostics_dir)
+        protected.append(diagnostics / "child.json")
+        contained_in.append(diagnostics / "outputs")
+    reject_aliased_evidence(
+        canonical_path(evidence_json),
+        tuple(protected),
+        contained_in=tuple(contained_in),
+        message=_RENDER_EVIDENCE_MESSAGE,
+    )
 
 
 def _endpoint_rgb(color_map: pg.ColorMap) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
@@ -412,11 +449,11 @@ def verify_artifacts(
 def verify_frozen(
     exe: Path, expected_platform: str, *, diagnostics_dir: Path | None = None,
 ) -> dict[str, object]:
-    exe = Path(exe).resolve()
+    exe = canonical_path(exe)
     if not exe.is_file():
         raise FileNotFoundError(f"frozen executable not found: {exe}")
     if diagnostics_dir is not None:
-        diagnostics_dir = Path(diagnostics_dir).resolve()
+        diagnostics_dir = canonical_path(diagnostics_dir)
         # A new attempt must never inherit a previous child's JSON or images.
         diagnostics_dir.mkdir(parents=True, exist_ok=False)
     workspace = (
@@ -474,6 +511,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--evidence-json", type=Path, required=True)
     args = parser.parse_args(argv)
+    try:
+        _reject_render_evidence(
+            args.evidence_json,
+            exe=args.exe,
+            artifacts=args.artifacts,
+            child_json=args.child_json,
+            diagnostics_dir=args.diagnostics_dir,
+        )
+    except UnsafeEvidencePath as exc:
+        parser.error(str(exc))
     try:
         if args.exe is not None:
             evidence = verify_frozen(

@@ -19,7 +19,7 @@ from PyQt5.QtWidgets import (
 
 from ...ui_kit.dialog_geometry import fit_popover
 
-from ..pinned_cursor_facts import _finite
+from ..pinned_cursor_facts import _finite, _frequency_sample_channel_kind
 from ..cursor_display_model import (
     CursorDisplayBlock,
     CursorDisplayBranch,
@@ -718,14 +718,85 @@ def _fft_single_value_text(channel: FrequencyCursorChannel) -> str:
     return f"{text}  Δ{channel.delta_to_primary:+.4g}"
 
 
+def _fft_status_block(channel: CursorDisplayChannel, *, mini: bool) -> CursorDisplayBlock:
+    """Project an explicit non-numeric frequency placeholder (unchecked / missing)."""
+    face = str(channel.channel_label or channel.qualified_label or "").strip()
+    text = str(channel.diagnostic)
+    visible = (
+        (CursorDisplayRow(_DOT_MARKER, text),)
+        if mini else (CursorDisplayRow(face, text),)
+    )
+    return CursorDisplayBlock(
+        identity=channel.identity,
+        qualified_label=channel.qualified_label,
+        channel_label=channel.channel_label,
+        color=channel.color,
+        visible_rows=visible,
+        tooltip_rows=(CursorDisplayRow(face, text),),
+        diagnostic=channel.diagnostic,
+        metric_texts=(),
+        unit_text="",
+        table_rows=(CursorTableRow(diagnostic=text),),
+    )
+
+
+def _fft_numeric_block(
+    channel: FrequencyCursorChannel,
+    *,
+    cursor_mode: str,
+    mini: bool,
+) -> CursorDisplayBlock:
+    face = str(channel.channel_label or channel.qualified_label or "").strip()
+    if cursor_mode == "single":
+        value_text = _fft_single_value_text(channel)
+        table_rows = (CursorTableRow(metric_texts=(value_text,)),)
+        tooltip = (CursorDisplayRow(face, value_text),)
+        if mini:
+            visible = (CursorDisplayRow(_DOT_MARKER, value_text),)
+        else:
+            visible = (CursorDisplayRow(face, value_text),)
+    else:
+        a_text = _formatted(channel.a_value)
+        b_text = _formatted(channel.b_value)
+        delta_text = _formatted(channel.delta_ab)
+        if mini:
+            table_rows = (CursorTableRow(metric_texts=(delta_text,)),)
+            visible = (CursorDisplayRow(face, delta_text, role="Δ"),)
+        else:
+            table_rows = (CursorTableRow(
+                metric_texts=(a_text, b_text, delta_text),
+            ),)
+            visible = (
+                CursorDisplayRow("A", a_text),
+                CursorDisplayRow("B", b_text),
+                CursorDisplayRow("Δ", delta_text),
+            )
+        tooltip = (
+            CursorDisplayRow("A", a_text),
+            CursorDisplayRow("B", b_text),
+            CursorDisplayRow("Δ", delta_text),
+        )
+    return CursorDisplayBlock(
+        identity=channel.identity,
+        qualified_label=channel.qualified_label,
+        channel_label=channel.channel_label,
+        color=channel.color,
+        visible_rows=visible,
+        tooltip_rows=tooltip,
+        metric_texts=table_rows[0].metric_texts,
+        unit_text=str(channel.unit_suffix or ""),
+        table_rows=table_rows,
+    )
+
+
 def build_fft_cursor_presentation(
-    channels: Iterable[FrequencyCursorChannel],
+    channels: Iterable[FrequencyCursorChannel | CursorDisplayChannel],
     *,
     cursor_mode: str,
     mini: bool,
     layout_category: str = "natural",
 ) -> CursorPresentation:
-    """Project already-computed FFT cursor readings into the shared table."""
+    """Project FFT cursor readings, including explicit diagnostic placeholders."""
     if cursor_mode not in {"single", "dual"}:
         raise ValueError("cursor_mode must be single or dual")
     channel_list = tuple(channels)
@@ -738,46 +809,12 @@ def build_fft_cursor_presentation(
         metric_labels = ("A", "B", "Δ")
     blocks = []
     for channel in channel_list:
-        face = str(channel.channel_label or channel.qualified_label or "").strip()
-        if cursor_mode == "single":
-            value_text = _fft_single_value_text(channel)
-            table_rows = (CursorTableRow(metric_texts=(value_text,)),)
-            tooltip = (CursorDisplayRow(face, value_text),)
-            if mini:
-                visible = (CursorDisplayRow(_DOT_MARKER, value_text),)
-            else:
-                visible = (CursorDisplayRow(face, value_text),)
-        else:
-            a_text = _formatted(channel.a_value)
-            b_text = _formatted(channel.b_value)
-            delta_text = _formatted(channel.delta_ab)
-            if mini:
-                table_rows = (CursorTableRow(metric_texts=(delta_text,)),)
-                visible = (CursorDisplayRow(face, delta_text, role="Δ"),)
-            else:
-                table_rows = (CursorTableRow(
-                    metric_texts=(a_text, b_text, delta_text),
-                ),)
-                visible = (
-                    CursorDisplayRow("A", a_text),
-                    CursorDisplayRow("B", b_text),
-                    CursorDisplayRow("Δ", delta_text),
-                )
-            tooltip = (
-                CursorDisplayRow("A", a_text),
-                CursorDisplayRow("B", b_text),
-                CursorDisplayRow("Δ", delta_text),
-            )
-        blocks.append(CursorDisplayBlock(
-            identity=channel.identity,
-            qualified_label=channel.qualified_label,
-            channel_label=channel.channel_label,
-            color=channel.color,
-            visible_rows=visible,
-            tooltip_rows=tooltip,
-            metric_texts=table_rows[0].metric_texts,
-            unit_text=str(channel.unit_suffix or ""),
-            table_rows=table_rows,
+        kind = _frequency_sample_channel_kind(channel)
+        if kind == "status":
+            blocks.append(_fft_status_block(channel, mini=mini))
+            continue
+        blocks.append(_fft_numeric_block(
+            channel, cursor_mode=cursor_mode, mini=mini,
         ))
     projection = CursorPresentation(
         blocks=tuple(blocks),

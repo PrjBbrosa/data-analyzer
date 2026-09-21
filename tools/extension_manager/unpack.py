@@ -7,44 +7,28 @@ the extensions tree.
 """
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 import hashlib
 import os
 from pathlib import Path
-import re
 import shutil
 import stat
-from typing import Any
 from zipfile import ZipFile, ZipInfo
 
-
-_FALLBACK_VERIFICATION_FAILED = "VERIFICATION_FAILED"
-
-_DEVICE_NAME_RE = re.compile(
-    r"^(CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])(\..*)?$",
-    re.IGNORECASE,
+from mf4_analyzer.extensions.contract import (
+    FileEntry,
+    ReasonCode,
+    VerifiedPackage,
+    canonical_windows_relpath,
+    inspect_windows_relpath,
 )
+
+VERIFICATION_FAILED = ReasonCode.VERIFICATION_FAILED
+
 _STARTUP_SCRIPT_NAMES = frozenset({"sitecustomize.py", "usercustomize.py"})
 _WINDOWS_REPARSE_POINT = 0x400
 _READ_CHUNK = 1024 * 1024
-_WINDOWS_ILLEGAL_CHARS = frozenset('<>"|?*')
-
-
-def _verification_failed_code() -> str:
-    """Prefer the shared contract constant when the extensions package exists."""
-
-    try:
-        from mf4_analyzer.extensions.contract import ReasonCode
-    except ImportError:
-        return _FALLBACK_VERIFICATION_FAILED
-    value = getattr(ReasonCode, "VERIFICATION_FAILED", None)
-    if isinstance(value, str) and value:
-        return value
-    return _FALLBACK_VERIFICATION_FAILED
-
-
-VERIFICATION_FAILED = _verification_failed_code()
 
 
 class UnpackError(Exception):
@@ -68,15 +52,24 @@ class UnpackError(Exception):
 
 @dataclass(frozen=True)
 class ManifestFile:
-    """One trusted file entry from a verified package manifest."""
+    """Unique unpack adapter for ``FileEntry``. SHA-256 is required."""
 
     relative_path: str
     size: int
-    sha256: str | None = None
+    sha256: str
 
     def __post_init__(self) -> None:
         if self.size < 0:
             raise ValueError("manifest file size must be >= 0")
+        if not str(self.sha256).strip():
+            raise ValueError("manifest file sha256 is required")
+
+    def to_file_entry(self) -> FileEntry:
+        return FileEntry(
+            relpath=self.relative_path,
+            size=self.size,
+            sha256=str(self.sha256).strip().lower(),
+        )
 
 
 @dataclass(frozen=True)
@@ -98,7 +91,7 @@ class ValidatedMember:
     zip_name: str
     relative_path: str
     size: int
-    sha256: str | None
+    sha256: str
 
 
 @dataclass(frozen=True)
@@ -145,24 +138,6 @@ def _casefold_key(relative_path: str) -> str:
     return relative_path.replace("\\", "/").casefold()
 
 
-def _looks_like_ads(component: str) -> bool:
-    if ":" not in component:
-        return False
-    if len(component) >= 2 and component[0].isalpha() and component[1] == ":":
-        return False
-    return True
-
-
-def _has_drive_letter(name: str, component: str) -> bool:
-    if len(name) >= 2 and name[0].isalpha() and name[1] == ":":
-        return True
-    return len(component) >= 2 and component[0].isalpha() and component[1] == ":"
-
-
-def _is_device_name(component: str) -> bool:
-    return bool(_DEVICE_NAME_RE.fullmatch(component.rstrip(" .")))
-
-
 def _is_startup_script(basename: str) -> bool:
     return basename.casefold() in _STARTUP_SCRIPT_NAMES
 
@@ -174,62 +149,41 @@ def _is_pth_file(basename: str) -> bool:
 def normalize_zip_path(name: str, *, allow_directory: bool = False) -> str:
     """Return a canonical relative POSIX path, or raise ``UnpackError``.
 
-    Rejects ZipSlip, drive letters, ADS, device names, and empty/dot segments.
-    Does **not** collapse ``..``; parent segments are always a hard failure.
+    Shared Windows relative-path policy lives in the neutral contract.
+    This function adds ZIP-only rules: directory members, ``.pth``, and
+    Python startup scripts. Parent segments are a hard failure.
     """
 
     if not isinstance(name, str) or not name:
         _fail("empty_path", "archive member path is empty")
-    if "\x00" in name:
-        _fail("nul_byte", f"archive member path contains a NUL byte: {name!r}")
-    if any(ord(char) < 32 for char in name):
-        _fail("control_char", f"archive member path contains a control character: {name!r}")
-
     raw = name.replace("\\", "/")
     is_directory = raw.endswith("/")
     if is_directory and not allow_directory:
         _fail("directory_entry", f"unexpected directory member: {name!r}")
-
-    if raw.startswith("/") or name.startswith("\\"):
-        _fail("absolute_path", f"absolute archive member path is not allowed: {name!r}")
-    if raw.startswith("//") or name.startswith("\\\\"):
-        _fail("unc_path", f"UNC archive member path is not allowed: {name!r}")
-
-    parts = [part for part in raw.split("/")]
-    if is_directory and parts and parts[-1] == "":
-        parts = parts[:-1]
-    if not parts:
-        _fail("empty_path", f"archive member path is empty: {name!r}")
-
-    safe_parts: list[str] = []
-    for part in parts:
-        if part == "":
-            _fail("empty_segment", f"archive member path has an empty segment: {name!r}")
-        if part == ".":
-            _fail("dot_segment", f"archive member path has a '.' segment: {name!r}")
-        if part == "..":
-            _fail("parent_escape", f"archive member path escapes the staging root: {name!r}")
-        if _has_drive_letter(name, part):
-            _fail("drive_letter", f"archive member path includes a drive letter: {name!r}")
-        if _looks_like_ads(part) or ":" in part:
-            _fail("ads", f"archive member path includes an NTFS stream: {name!r}")
-        if _is_device_name(part):
-            _fail("device_name", f"archive member path uses a Windows device name: {name!r}")
-        if any(char in _WINDOWS_ILLEGAL_CHARS for char in part):
-            _fail(
-                "illegal_char",
-                f"archive member path contains an illegal filename character: {name!r}",
-            )
-        trimmed = part.rstrip(" .")
-        if trimmed != part:
-            _fail(
-                "trailing_junk",
-                f"archive member path has a trailing space or dot: {name!r}",
-            )
-        safe_parts.append(part)
-
-    relative = "/".join(safe_parts)
-    basename = safe_parts[-1]
+    inspected = raw.rstrip("/") if is_directory else name
+    issue = inspect_windows_relpath(inspected)
+    if issue is not None:
+        messages = {
+            "empty_path": "archive member path is empty",
+            "nul_byte": f"archive member path contains a NUL byte: {name!r}",
+            "control_char": f"archive member path contains a control character: {name!r}",
+            "absolute_path": f"absolute archive member path is not allowed: {name!r}",
+            "unc_path": f"UNC archive member path is not allowed: {name!r}",
+            "empty_segment": f"archive member path has an empty segment: {name!r}",
+            "dot_segment": f"archive member path has a '.' segment: {name!r}",
+            "parent_escape": f"archive member path escapes the staging root: {name!r}",
+            "drive_letter": f"archive member path includes a drive letter: {name!r}",
+            "ads": f"archive member path includes an NTFS stream: {name!r}",
+            "device_name": f"archive member path uses a Windows device name: {name!r}",
+            "illegal_char": (
+                f"archive member path contains an illegal filename character: {name!r}"
+            ),
+            "trailing_junk": f"archive member path has a trailing space or dot: {name!r}",
+            "too_long": f"archive member path is too long: {name!r}",
+        }
+        _fail(issue, messages.get(issue, f"unsafe archive member path: {name!r}"))
+    relative = canonical_windows_relpath(inspected)
+    basename = relative.rsplit("/", 1)[-1]
     if _is_pth_file(basename):
         _fail("pth", f".pth files are not allowed in extension packages: {name!r}")
     if _is_startup_script(basename):
@@ -262,40 +216,40 @@ def _member_kind(info: ZipInfo) -> str:
 
 
 def coerce_manifest(
-    manifest: Sequence[ManifestFile | Mapping[str, Any] | str],
-) -> tuple[ManifestFile, ...]:
-    files: list[ManifestFile] = []
+    manifest: Sequence[FileEntry | ManifestFile],
+) -> tuple[FileEntry, ...]:
+    """Accept ``FileEntry`` or the unique ``ManifestFile`` adapter only."""
+
+    files: list[FileEntry] = []
     for item in manifest:
-        if isinstance(item, ManifestFile):
-            files.append(item)
-            continue
-        if isinstance(item, str):
-            files.append(ManifestFile(relative_path=item, size=0))
-            continue
-        if not isinstance(item, Mapping):
-            raise TypeError(f"unsupported manifest entry type: {type(item)!r}")
-        relative = item.get("relative_path", item.get("path", item.get("name")))
-        if not isinstance(relative, str) or not relative:
-            _fail("manifest", "manifest entry is missing a relative path")
-        size_raw = item.get("size", item.get("uncompressed_size"))
-        if size_raw is None:
-            _fail("manifest", f"manifest entry {relative!r} is missing size")
-        sha_raw = item.get("sha256", item.get("sha256_hex"))
-        sha256 = str(sha_raw) if sha_raw else None
-        files.append(
-            ManifestFile(relative_path=relative, size=int(size_raw), sha256=sha256)
-        )
+        if isinstance(item, FileEntry):
+            entry = item
+        elif isinstance(item, ManifestFile):
+            entry = item.to_file_entry()
+        else:
+            _fail(
+                "manifest",
+                "unpack requires FileEntry from mf4_analyzer.extensions.contract "
+                "or the ManifestFile adapter; dict keys relative_path/path/name "
+                "are not accepted",
+            )
+        if entry.size < 0:
+            raise ValueError("manifest file size must be >= 0")
+        digest = str(entry.sha256 or "").strip().lower()
+        if not digest:
+            _fail("missing_hash", f"manifest entry {entry.relpath!r} is missing SHA-256")
+        files.append(FileEntry(relpath=entry.relpath, size=entry.size, sha256=digest))
     return tuple(files)
 
 
 def _index_manifest(
-    manifest: Sequence[ManifestFile | Mapping[str, Any] | str],
-) -> dict[str, ManifestFile]:
+    manifest: Sequence[FileEntry | ManifestFile],
+) -> dict[str, FileEntry]:
     files = coerce_manifest(manifest)
-    indexed: dict[str, ManifestFile] = {}
+    indexed: dict[str, FileEntry] = {}
     seen_case: dict[str, str] = {}
     for entry in files:
-        relative = normalize_zip_path(entry.relative_path, allow_directory=False)
+        relative = normalize_zip_path(entry.relpath, allow_directory=False)
         folded = _casefold_key(relative)
         if folded in seen_case:
             _fail(
@@ -304,8 +258,8 @@ def _index_manifest(
                 f"{seen_case[folded]!r} and {relative!r}",
             )
         seen_case[folded] = relative
-        indexed[relative] = ManifestFile(
-            relative_path=relative,
+        indexed[relative] = FileEntry(
+            relpath=relative,
             size=entry.size,
             sha256=entry.sha256,
         )
@@ -314,7 +268,7 @@ def _index_manifest(
 
 def validate_zip(
     archive: str | Path,
-    manifest: Sequence[ManifestFile | Mapping[str, Any] | str],
+    manifest: Sequence[FileEntry | ManifestFile],
     limits: UnpackLimits,
 ) -> ValidatedArchive:
     """Validate ZIP policy and manifest membership without writing files."""
@@ -472,10 +426,35 @@ def resolve_staging_directory(
     return staging
 
 
-def _cleanup_written(paths: Sequence[Path]) -> None:
-    for path in reversed(paths):
+def _cleanup_extract(
+    files: Sequence[Path],
+    dirs: Sequence[Path],
+    staging: Path | None = None,
+) -> None:
+    """Remove this attempt's files and created directories, including partial writes.
+
+    Cleanup-only: OSError is ignored so the original unpack failure propagates.
+    If ``staging`` is provided it must have been empty at the start of this
+    attempt; leftover files and empty directories are removed so a retry is
+    not blocked by a non-empty staging tree.
+    """
+
+    for path in reversed(list(files)):
         try:
-            if path.is_file() or path.is_symlink():
+            if path.is_symlink() or path.is_file():
+                path.unlink()
+        except OSError:
+            continue
+    for path in reversed(list(dirs)):
+        try:
+            path.rmdir()
+        except OSError:
+            continue
+    if staging is None or not staging.is_dir():
+        return
+    for path in sorted(staging.rglob("*"), key=lambda item: len(item.parts), reverse=True):
+        try:
+            if path.is_symlink() or path.is_file():
                 path.unlink()
             elif path.is_dir():
                 path.rmdir()
@@ -483,12 +462,24 @@ def _cleanup_written(paths: Sequence[Path]) -> None:
             continue
 
 
+def _mkdir_parents(dest: Path, staging: Path, created_dirs: list[Path]) -> None:
+    parent = dest.parent
+    relatives = parent.relative_to(staging).parts if parent != staging else ()
+    current = staging
+    for part in relatives:
+        current = current / part
+        existed = current.exists()
+        current.mkdir(exist_ok=True)
+        if not existed:
+            created_dirs.append(current)
+
+
 def _copy_limited(
     source,
     destination,
     *,
     declared_size: int,
-    expected_sha256: str | None,
+    expected_sha256: str,
 ) -> int:
     hasher = hashlib.sha256()
     copied = 0
@@ -509,13 +500,13 @@ def _copy_limited(
             "size_mismatch",
             f"decompressed size {copied} does not match declared size {declared_size}",
         )
-    if expected_sha256:
-        digest = hasher.hexdigest()
-        if digest.lower() != expected_sha256.lower().strip():
-            _fail(
-                "hash_mismatch",
-                f"SHA-256 mismatch: got {digest}, expected {expected_sha256}",
-            )
+    digest = hasher.hexdigest()
+    expected = expected_sha256.lower().strip()
+    if digest != expected:
+        _fail(
+            "hash_mismatch",
+            f"SHA-256 mismatch: got {digest}, expected {expected_sha256}",
+        )
     return copied
 
 
@@ -524,7 +515,7 @@ def extract_verified_zip(
     staging_dir: str | Path,
     *,
     extensions_root: str | Path,
-    manifest: Sequence[ManifestFile | Mapping[str, Any] | str],
+    manifest: Sequence[FileEntry | ManifestFile],
     limits: UnpackLimits,
     app_root: str | Path | None = None,
     extra_forbidden_roots: Sequence[str | Path] = (),
@@ -545,6 +536,7 @@ def extract_verified_zip(
     staging.mkdir(parents=True, exist_ok=True)
 
     written: list[Path] = []
+    created_dirs: list[Path] = []
     extracted: list[str] = []
     total = 0
     try:
@@ -556,11 +548,12 @@ def extract_verified_zip(
                         "destination",
                         f"resolved member path escaped staging: {member.relative_path!r}",
                     )
-                dest.parent.mkdir(parents=True, exist_ok=True)
+                _mkdir_parents(dest, staging, created_dirs)
                 if dest.exists() or dest.is_symlink():
                     _fail("destination", f"refusing to overwrite {str(dest)!r}")
                 with zip_file.open(member.zip_name, "r") as source:
                     with open(dest, "wb") as handle:
+                        written.append(dest)
                         copied = _copy_limited(
                             source,
                             handle,
@@ -568,11 +561,10 @@ def extract_verified_zip(
                             expected_sha256=member.sha256,
                         )
                 os.chmod(dest, 0o644)
-                written.append(dest)
                 extracted.append(member.relative_path)
                 total += copied
     except Exception:
-        _cleanup_written(written)
+        _cleanup_extract(written, created_dirs, staging=staging)
         raise
 
     extracted_sorted = tuple(sorted(extracted))
@@ -581,6 +573,51 @@ def extract_verified_zip(
         files=extracted_sorted,
         uncompressed_bytes=total,
     )
+
+
+def extract_verified_package(
+    archive: str | Path,
+    staging_dir: str | Path,
+    *,
+    extensions_root: str | Path,
+    verified: VerifiedPackage,
+    app_root: str | Path | None = None,
+    extra_forbidden_roots: Sequence[str | Path] = (),
+) -> UnpackedPackage:
+    """Unpack a snapshot-bound package and require ZIP package.json bytes to match."""
+
+    limits = UnpackLimits(
+        max_uncompressed_size=verified.package.max_extract_bytes,
+        max_file_count=len(verified.unpack_manifest()),
+    )
+    result = extract_verified_zip(
+        archive,
+        staging_dir,
+        extensions_root=extensions_root,
+        manifest=verified.unpack_manifest(),
+        limits=limits,
+        app_root=app_root,
+        extra_forbidden_roots=extra_forbidden_roots,
+    )
+    embedded = result.staging_dir / "package.json"
+    try:
+        if not embedded.is_file():
+            _fail("missing_manifest_entry", "extracted package is missing package.json")
+        if embedded.read_bytes() != verified.package_json_bytes:
+            _fail(
+                "hash_mismatch",
+                "ZIP package.json does not match the independently verified target",
+            )
+    except Exception:
+        files = [result.staging_dir / relative for relative in result.files]
+        dirs = sorted(
+            {path.parent for path in files if path.parent != result.staging_dir},
+            key=lambda item: len(item.parts),
+            reverse=True,
+        )
+        _cleanup_extract(files, dirs, staging=result.staging_dir)
+        raise
+    return result
 
 
 def default_free_space(path: str | Path) -> int:

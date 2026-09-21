@@ -1695,6 +1695,110 @@ def test_open_project_does_not_write_old_fft_pins_into_new_project(
     assert records == []
 
 
+def test_open_project_restores_fft_pin_records_without_qt_loop_error(
+    qapp, tmp_path,
+):
+    """Restoring an FFT pin must finish in the Qt loop and keep the source records."""
+    from mf4_analyzer.ui.main_window import MainWindow
+    from mf4_analyzer.ui.pinned_cursor_state import empty_collection, next_record
+
+    csv_old = tmp_path / "old.csv"
+    _write_csv(csv_old)
+    old_proj = tmp_path / "old.tlproj"
+
+    mw_old = MainWindow()
+    mw_old._load_one(str(csv_old))
+    old_fid = next(iter(mw_old.files))
+    page = mw_old.chart_stack.page_fft
+    canvas = page.pane_canvas(0)
+    collection = empty_collection()
+    collection, intent = next_record(collection, {
+        "mode": "single",
+        "domain": "frequency",
+        "x": 12.0,
+        "x_unit": "Hz",
+        "bindings": [{"fid": old_fid, "channel": "rpm"}],
+        "presentation": "full",
+    })
+    mw_old.chart_stack.set_pinned_cursors_for_canvas(canvas, collection)
+    page._overlay_session_bound = True
+    mw_old.save_project(old_proj)
+
+    mw = MainWindow()
+    mw.open_project(old_proj)
+    qapp.processEvents()
+    restored_page = mw.chart_stack.page_fft
+    restored_canvas = restored_page.pane_canvas(0)
+    live = mw.chart_stack.pinned_cursors_for_canvas(restored_canvas)
+    assert live is not None
+    assert len(live.records) == 1
+    assert live.records[0].domain == "frequency"
+    assert live.records[0].record_id == intent.record_id
+    assert live.records[0].mode == "single"
+
+
+def test_open_project_restores_fft_dual_pin_then_new_project_stays_empty(
+    qapp, tmp_path,
+):
+    """Dual-cursor FFT pin restore must not leak into a subsequently opened project."""
+    from mf4_analyzer.ui.main_window import MainWindow
+    from mf4_analyzer.ui.pinned_cursor_state import empty_collection, next_record
+
+    csv_old = tmp_path / "old.csv"
+    csv_new = tmp_path / "new.csv"
+    _write_csv(csv_old)
+    _write_csv(csv_new)
+    old_proj = tmp_path / "old.tlproj"
+    new_proj = tmp_path / "new.tlproj"
+
+    mw_old = MainWindow()
+    mw_old._load_one(str(csv_old))
+    old_fid = next(iter(mw_old.files))
+    page = mw_old.chart_stack.page_fft
+    canvas = page.pane_canvas(0)
+    collection = empty_collection()
+    collection, intent = next_record(collection, {
+        "mode": "dual",
+        "domain": "frequency",
+        "ax": 10.0,
+        "bx": 40.0,
+        "x_unit": "Hz",
+        "bindings": [{"fid": old_fid, "channel": "rpm"}],
+        "presentation": "full",
+    })
+    mw_old.chart_stack.set_pinned_cursors_for_canvas(canvas, collection)
+    page._overlay_session_bound = True
+    mw_old.save_project(old_proj)
+
+    mw_seed = MainWindow()
+    mw_seed._load_one(str(csv_new))
+    mw_seed.save_project(new_proj)
+
+    mw = MainWindow()
+    mw.open_project(old_proj)
+    qapp.processEvents()
+    live = mw.chart_stack.pinned_cursors_for_canvas(
+        mw.chart_stack.page_fft.pane_canvas(0),
+    )
+    assert live is not None
+    assert live.records[0].mode == "dual"
+    assert live.records[0].record_id == intent.record_id
+    assert live.records[0].ax == pytest.approx(10.0)
+    assert live.records[0].bx == pytest.approx(40.0)
+
+    mw.open_project(new_proj)
+    qapp.processEvents()
+    mw.save_project(new_proj)
+
+    raw = json.loads(new_proj.read_text(encoding="utf-8"))
+    records = (
+        raw["analysis_views"]["fft"]["views"][0]["panes"][0]
+        .get("pinned_cursors", {})
+        .get("records", [])
+    )
+    assert records == []
+
+
 def test_reopen_with_frf_view_keeps_time_dual_cursor_pill(qapp, tmp_path, qtbot):
     """Off-screen FRF restore must not clear the shared time-domain pill."""
     from mf4_analyzer.ui.main_window import MainWindow

@@ -11,7 +11,7 @@ import json
 import re
 import urllib.parse
 from collections.abc import Callable, Collection, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal, TypedDict
@@ -29,6 +29,17 @@ from tuf.api.metadata import TargetFile
 from tuf.ngclient import Updater, UpdaterConfig
 from tuf.ngclient.fetcher import FetcherInterface
 
+from mf4_analyzer.extensions.contract import (
+    ExtensionError,
+    ManagerStatusV1 as TrustedManagerStatus,
+    ReasonCode,
+    VerifiedPackage,
+    bind_verified_package,
+    compare_semver as contract_compare_semver,
+    parse_manager_status_v1,
+    sha256_hex,
+)
+
 from .download import (
     DownloadCancelled,
     DownloadPolicy,
@@ -38,55 +49,27 @@ from .download import (
     download_verified_file,
 )
 
-# --- Reason codes (spec S11.1 + repository-layer codes that are not not_installed)
-
-def _load_contract() -> Any | None:
-    try:
-        from mf4_analyzer.extensions import contract as contract_mod
-    except Exception:
-        return None
-    return contract_mod
-
-
-def _reason(name: str) -> str:
-    contract = _load_contract()
-    if contract is None:
-        return name
-    value = getattr(contract, name, None)
-    if isinstance(value, str):
-        return value
-    if value is not None and hasattr(value, "value") and isinstance(value.value, str):
-        return value.value
-    for holder_name in ("REASON_CODES", "ReasonCode", "ReasonCodes"):
-        holder = getattr(contract, holder_name, None)
-        if holder is None:
-            continue
-        if isinstance(holder, Mapping) and name in holder:
-            item = holder[name]
-            return str(item.value if hasattr(item, "value") else item)
-        item = getattr(holder, name, None)
-        if isinstance(item, str):
-            return item
-        if item is not None and hasattr(item, "value") and isinstance(item.value, str):
-            return item.value
-    return name
-
-
-COMPONENT_MISSING = _reason("COMPONENT_MISSING")
-COMPONENT_INCOMPATIBLE = _reason("COMPONENT_INCOMPATIBLE")
-COMPONENT_CORRUPT = _reason("COMPONENT_CORRUPT")
-MANAGER_TOO_OLD = _reason("MANAGER_TOO_OLD")
-PROTOCOL_UNSUPPORTED = _reason("PROTOCOL_UNSUPPORTED")
-NO_COMPATIBLE_PACKAGE = _reason("NO_COMPATIBLE_PACKAGE")
-CORE_INCONSISTENT = _reason("CORE_INCONSISTENT")
-APP_RUNNING = _reason("APP_RUNNING")
-UNSUPPORTED_FILESYSTEM = _reason("UNSUPPORTED_FILESYSTEM")
-VERIFICATION_FAILED = _reason("VERIFICATION_FAILED")
-PROBE_FAILED = _reason("PROBE_FAILED")
-TRANSACTION_RECOVERY_REQUIRED = _reason("TRANSACTION_RECOVERY_REQUIRED")
-NETWORK_CHECK_FAILED = _reason("NETWORK_CHECK_FAILED")
-METADATA_EXPIRED = _reason("METADATA_EXPIRED")
-TARGET_REVOKED = _reason("TARGET_REVOKED")
+# S11.1 reason codes come from the neutral contract. Repository-layer codes
+# below are not install-state names and are not a second schema fallback.
+COMPONENT_MISSING = ReasonCode.COMPONENT_MISSING
+COMPONENT_INCOMPATIBLE = ReasonCode.COMPONENT_INCOMPATIBLE
+COMPONENT_CORRUPT = ReasonCode.COMPONENT_CORRUPT
+MANAGER_TOO_OLD = ReasonCode.MANAGER_TOO_OLD
+PROTOCOL_UNSUPPORTED = ReasonCode.PROTOCOL_UNSUPPORTED
+NO_COMPATIBLE_PACKAGE = ReasonCode.NO_COMPATIBLE_PACKAGE
+CORE_INCONSISTENT = ReasonCode.CORE_INCONSISTENT
+APP_RUNNING = ReasonCode.APP_RUNNING
+UNSUPPORTED_FILESYSTEM = ReasonCode.UNSUPPORTED_FILESYSTEM
+VERIFICATION_FAILED = ReasonCode.VERIFICATION_FAILED
+PROBE_FAILED = ReasonCode.PROBE_FAILED
+TRANSACTION_RECOVERY_REQUIRED = ReasonCode.TRANSACTION_RECOVERY_REQUIRED
+NETWORK_CHECK_FAILED = "NETWORK_CHECK_FAILED"
+METADATA_EXPIRED = "METADATA_EXPIRED"
+TARGET_REVOKED = "TARGET_REVOKED"
+REVOCATION_CACHE_CORRUPT = "REVOCATION_CACHE_CORRUPT"
+DOWNLOAD_CANCELLED = "DOWNLOAD_CANCELLED"
+COMPONENT_CHANGE_KIND = "component_change"
+INSTALLER_UPDATE_KIND = "installer_update"
 
 # Install state names (spec S6.2). This module never reports not_installed
 # for a network or metadata-check failure, and never uninstalls anything.
@@ -104,11 +87,6 @@ CACHE_METADATA = Path("extensions") / "cache" / "metadata"
 CACHE_DOWNLOADS = Path("extensions") / "cache" / "downloads"
 CACHE_MANAGER_UPDATES = Path("extensions") / "cache" / "manager-updates"
 REVOCATION_STORE_NAME = "observed-revocations.json"
-
-_SEMVER_RE = re.compile(
-    r"^(?P<major>0|[1-9]\d*)\.(?P<minor>0|[1-9]\d*)\.(?P<patch>0|[1-9]\d*)"
-    r"(?:-(?P<pre>[0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$"
-)
 
 
 class ManagerStatusV1(TypedDict, total=False):
@@ -131,6 +109,9 @@ class PackageRecord(TypedDict, total=False):
     target: str
     sha256: str
     length: int
+    package_json_target: str
+    package_json_sha256: str
+    package_json_length: int
 
 
 class RevocationRecord(TypedDict, total=False):
@@ -176,6 +157,31 @@ class RefreshResult:
     # Repository checks are not component install states.
     component_install_state: None = None
     uninstalled: Literal[False] = False
+    snapshot: RepositorySnapshot | None = None
+
+
+@dataclass(frozen=True)
+class RepositorySnapshot:
+    """One verified refresh: display fields stay readable after later failure.
+
+    ``change_authorized`` is component install/upgrade/uninstall eligibility for
+    *this* snapshot. Last-success catalog/status remain for display even when
+    this flag is False. ``installer_update_authorized`` is the separate recovery
+    path that may stay true for a freshly verified manager-status when the
+    manager is too old or the catalog cannot be read.
+    """
+
+    snapshot_id: str
+    manager_status: TrustedManagerStatus
+    catalog: ComponentCatalogV1 | None
+    catalog_schema: str | None
+    installer_target: str
+    installer_sha256: str
+    change_authorized: bool = False
+    installer_update_authorized: bool = False
+    qualification_reason: str | None = None
+    metadata_expires: datetime | None = None
+    repository_generation: int | None = None
 
 
 @dataclass(frozen=True)
@@ -207,6 +213,29 @@ def _status_minimum(status: Mapping[str, Any]) -> str:
     )
 
 
+def _status_mapping(parsed: TrustedManagerStatus) -> ManagerStatusV1:
+    return {
+        "schema": parsed.schema,
+        "latest_manager_version": parsed.latest_manager_version,
+        "minimum_supported_manager_version": parsed.minimum_supported_manager_version,
+        "reason_code": parsed.reason_code or "",
+        "installer_filename": parsed.installer_filename,
+        "installer_target": parsed.installer_filename,
+        "installer_sha256": parsed.installer_sha256,
+        "help_page": parsed.help_page,
+    }
+
+
+def _target_sha256(info: TargetFile) -> str:
+    digest = info.hashes.get("sha256")
+    if not digest:
+        raise ExtensionRepositoryError(
+            "trusted target is missing sha256",
+            VERIFICATION_FAILED,
+        )
+    return str(digest).lower()
+
+
 class ExtensionRepositoryError(Exception):
     def __init__(self, message: str, reason_code: str) -> None:
         super().__init__(message)
@@ -216,60 +245,7 @@ class ExtensionRepositoryError(Exception):
 def compare_semver(left: str, right: str) -> int:
     """Strict SemVer compare: negative if left < right. Not string lexicographic."""
 
-    contract = _load_contract()
-    if contract is not None:
-        for name in ("compare_semver", "compare_manager_version", "manager_version_cmp"):
-            func = getattr(contract, name, None)
-            if callable(func):
-                return int(func(left, right))
-    return _compare_semver(left, right)
-
-
-def _parse_semver(value: str) -> tuple[int, int, int, tuple[str, ...]]:
-    match = _SEMVER_RE.fullmatch(value.strip())
-    if match is None:
-        raise ValueError(f"not a strict SemVer value: {value!r}")
-    pre_raw = match.group("pre")
-    pre = tuple(pre_raw.split(".")) if pre_raw else ()
-    return (
-        int(match.group("major")),
-        int(match.group("minor")),
-        int(match.group("patch")),
-        pre,
-    )
-
-
-def _pre_key(part: str) -> tuple[int, int | str]:
-    if part.isdigit():
-        return (0, int(part))
-    return (1, part)
-
-
-def _compare_semver(left: str, right: str) -> int:
-    lmaj, lmin, lpat, lpre = _parse_semver(left)
-    rmaj, rmin, rpat, rpre = _parse_semver(right)
-    core = (lmaj, lmin, lpat)
-    other = (rmaj, rmin, rpat)
-    if core < other:
-        return -1
-    if core > other:
-        return 1
-    if not lpre and not rpre:
-        return 0
-    if not lpre:
-        return 1
-    if not rpre:
-        return -1
-    for left_part, right_part in zip(lpre, rpre):
-        if _pre_key(left_part) < _pre_key(right_part):
-            return -1
-        if _pre_key(left_part) > _pre_key(right_part):
-            return 1
-    if len(lpre) < len(rpre):
-        return -1
-    if len(lpre) > len(rpre):
-        return 1
-    return 0
+    return int(contract_compare_semver(left, right))
 
 
 def manager_meets_minimum(manager_version: str, minimum: str) -> bool:
@@ -292,19 +268,44 @@ def revocation_store_path(app_root: Path) -> Path:
     return Path(app_root) / CACHE_METADATA / REVOCATION_STORE_NAME
 
 
+def _revocation_cache_corrupt(message: str, cause: BaseException | None = None) -> ExtensionRepositoryError:
+    error = ExtensionRepositoryError(message, REVOCATION_CACHE_CORRUPT)
+    if cause is not None:
+        error.__cause__ = cause
+    return error
+
+
 def load_observed_revocations(path: Path) -> ObservedRevocations:
+    """Load persisted revocations. A missing file means none were observed.
+
+    Corrupt JSON/schema is a diagnostic failure, not an empty store. Callers
+    must not treat this as "never learned any revocations".
+    """
+
     if not path.is_file():
         return ObservedRevocations()
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return ObservedRevocations()
-    items = payload.get("items") if isinstance(payload, dict) else None
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise _revocation_cache_corrupt(
+            "observed revocation cache is unreadable",
+            exc,
+        ) from exc
+    if not isinstance(payload, dict):
+        raise _revocation_cache_corrupt("observed revocation cache is not an object")
+    schema = payload.get("schema")
+    items = payload.get("items")
+    if schema is not None and schema != "observed-revocations-v1":
+        raise _revocation_cache_corrupt(
+            f"unsupported observed revocation schema {schema!r}",
+        )
+    if not isinstance(items, list):
+        raise _revocation_cache_corrupt("observed revocation cache is missing an items array")
     records: list[RevocationRecord] = []
-    if isinstance(items, list):
-        for item in items:
-            if isinstance(item, dict) and item.get("sha256"):
-                records.append(item)  # type: ignore[arg-type]
+    for item in items:
+        if not isinstance(item, dict) or not item.get("sha256"):
+            raise _revocation_cache_corrupt("observed revocation cache contains an invalid item")
+        records.append(item)  # type: ignore[arg-type]
     return ObservedRevocations(items=records)
 
 
@@ -350,10 +351,13 @@ def installed_component_may_run(
     unexpired metadata instead of this function.
     """
 
-    store = load_observed_revocations(revocation_store)
+    try:
+        store = load_observed_revocations(revocation_store)
+    except ExtensionRepositoryError as exc:
+        return InstalledTrust(may_run=False, reason_code=exc.reason_code)
     if is_hash_revoked(package_sha256, store):
         return InstalledTrust(may_run=False, reason_code=TARGET_REVOKED)
-    return InstalledTrust(may_run=True)
+    return InstalledTrust(may_run=True, required_fresh_metadata=False)
 
 
 def select_compatible_package(
@@ -516,18 +520,23 @@ class PolicyFetcher(FetcherInterface):
 
 
 def _map_tuf_error(exc: BaseException) -> ExtensionRepositoryError:
+    chain: list[BaseException] = []
     current: BaseException | None = exc
     seen: set[int] = set()
     while current is not None and id(current) not in seen:
         seen.add(id(current))
-        if isinstance(current, ExpiredMetadataError):
-            return ExtensionRepositoryError(str(current), METADATA_EXPIRED)
-        if isinstance(current, DownloadCancelled):
-            return ExtensionRepositoryError(str(current), NETWORK_CHECK_FAILED)
-        if isinstance(current, DownloadPolicyError):
-            return ExtensionRepositoryError(str(current), current.reason_code)
+        chain.append(current)
+        current = current.__cause__ or current.__context__
+    for item in chain:
+        if isinstance(item, ExpiredMetadataError):
+            return ExtensionRepositoryError(str(item), METADATA_EXPIRED)
+        if isinstance(item, DownloadCancelled):
+            return ExtensionRepositoryError(str(item), DOWNLOAD_CANCELLED)
+    for item in chain:
+        if isinstance(item, DownloadPolicyError):
+            return ExtensionRepositoryError(str(item), item.reason_code)
         if isinstance(
-            current,
+            item,
             (
                 UnsignedMetadataError,
                 LengthOrHashMismatchError,
@@ -535,13 +544,25 @@ def _map_tuf_error(exc: BaseException) -> ExtensionRepositoryError:
                 BadVersionNumberError,
             ),
         ):
-            return ExtensionRepositoryError(str(current), VERIFICATION_FAILED)
-        if isinstance(current, DownloadError):
-            return ExtensionRepositoryError(str(current), NETWORK_CHECK_FAILED)
-        if isinstance(current, TUFRepositoryError):
-            return ExtensionRepositoryError(str(current), VERIFICATION_FAILED)
-        current = current.__cause__ or current.__context__
-    return ExtensionRepositoryError(str(exc), NETWORK_CHECK_FAILED)
+            return ExtensionRepositoryError(str(item), VERIFICATION_FAILED)
+        if isinstance(item, DownloadError):
+            return ExtensionRepositoryError(str(item), NETWORK_CHECK_FAILED)
+        if isinstance(item, TUFRepositoryError):
+            return ExtensionRepositoryError(str(item), VERIFICATION_FAILED)
+    raise exc
+
+
+_KNOWN_REFRESH_ERRORS = (
+    ExpiredMetadataError,
+    DownloadCancelled,
+    DownloadPolicyError,
+    UnsignedMetadataError,
+    LengthOrHashMismatchError,
+    DownloadLengthMismatchError,
+    BadVersionNumberError,
+    DownloadError,
+    TUFRepositoryError,
+)
 
 
 class RepositoryClient:
@@ -594,6 +615,9 @@ class RepositoryClient:
         self._updater: Updater | None = None
         self._last_status: ManagerStatusV1 | None = None
         self._last_catalog: ComponentCatalogV1 | None = None
+        self._trusted_status: TrustedManagerStatus | None = None
+        self._snapshot: RepositorySnapshot | None = None
+        self._status_payload: bytes | None = None
 
     def _new_updater(self) -> Updater:
         return Updater(
@@ -610,14 +634,20 @@ class RepositoryClient:
         """Refresh trusted metadata. Failures are not ``not_installed``."""
 
         if not require_fresh:
-            status = self._last_status
+            snapshot = self._snapshot
+            authorized = bool(snapshot is not None and snapshot.change_authorized)
             catalog = self._last_catalog
             return RefreshResult(
-                ok=status is not None,
-                reason_code=None if status is not None else NETWORK_CHECK_FAILED,
-                manager_status=status,
+                ok=authorized,
+                reason_code=(
+                    None
+                    if authorized
+                    else (snapshot.qualification_reason if snapshot else NETWORK_CHECK_FAILED)
+                ),
+                manager_status=self._last_status,
                 catalog=catalog,
                 catalog_schema=(catalog or {}).get("schema") if catalog else None,
+                snapshot=snapshot,
             )
         try:
             updater = self._new_updater()
@@ -627,37 +657,172 @@ class RepositoryClient:
             catalog, catalog_reason = self._load_catalog(updater, status)
             self._last_catalog = catalog
             self._updater = updater
-            if catalog is not None:
-                merged = merge_revocations(
-                    load_observed_revocations(self.revocation_store),
-                    catalog,
-                )
-                save_observed_revocations(self.revocation_store, merged)
             reason = catalog_reason
             if reason is None and not manager_meets_minimum(
                 self.manager_version,
                 _status_minimum(status),
             ):
                 reason = MANAGER_TOO_OLD
-            ok = reason is None
+            if catalog is not None:
+                try:
+                    merged = merge_revocations(
+                        load_observed_revocations(self.revocation_store),
+                        catalog,
+                    )
+                    save_observed_revocations(self.revocation_store, merged)
+                except ExtensionRepositoryError as exc:
+                    if exc.reason_code != REVOCATION_CACHE_CORRUPT:
+                        raise
+                    reason = REVOCATION_CACHE_CORRUPT
+            snapshot = self._bind_verified_snapshot(
+                updater,
+                status,
+                catalog,
+                qualification_reason=reason,
+            )
             return RefreshResult(
-                ok=ok,
+                ok=reason is None,
                 reason_code=reason,
                 manager_status=status,
                 catalog=catalog,
                 catalog_schema=(catalog or {}).get("schema") if catalog else str(
                     status.get("schema") or MANAGER_STATUS_SCHEMA
                 ),
+                snapshot=snapshot,
             )
         except ExtensionRepositoryError as exc:
-            return RefreshResult(ok=False, reason_code=exc.reason_code, manager_status=self._last_status)
-        except Exception as exc:  # noqa: BLE001 — always a repository check, never uninstall
+            return self._refresh_failure(exc.reason_code)
+        except _KNOWN_REFRESH_ERRORS as exc:
             mapped = _map_tuf_error(exc)
-            return RefreshResult(
-                ok=False,
-                reason_code=mapped.reason_code,
-                manager_status=self._last_status,
+            return self._refresh_failure(mapped.reason_code)
+
+    def _refresh_failure(self, reason_code: str) -> RefreshResult:
+        snapshot = self._revoke_live_authorization(reason_code)
+        catalog = self._last_catalog
+        return RefreshResult(
+            ok=False,
+            reason_code=reason_code,
+            manager_status=self._last_status,
+            catalog=catalog,
+            catalog_schema=(catalog or {}).get("schema") if catalog else None,
+            snapshot=snapshot,
+        )
+
+    def _revoke_live_authorization(self, reason_code: str) -> RepositorySnapshot | None:
+        """Keep last-success data for display; drop current change eligibility."""
+
+        snapshot = self._snapshot
+        if snapshot is None:
+            return None
+        revoked = replace(
+            snapshot,
+            change_authorized=False,
+            installer_update_authorized=False,
+            qualification_reason=reason_code,
+        )
+        self._snapshot = revoked
+        return revoked
+
+    def _bind_verified_snapshot(
+        self,
+        updater: Updater,
+        status: ManagerStatusV1,
+        catalog: ComponentCatalogV1 | None,
+        *,
+        qualification_reason: str | None,
+    ) -> RepositorySnapshot | None:
+        trusted = self._trusted_status
+        if trusted is None or self._status_payload is None:
+            return None
+        catalog_identity = b""
+        if catalog is not None:
+            catalog_identity = json.dumps(
+                catalog,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        component_ok = qualification_reason is None
+        snapshot = RepositorySnapshot(
+            snapshot_id=sha256_hex(self._status_payload + b"\0" + catalog_identity),
+            manager_status=trusted,
+            catalog=catalog,
+            catalog_schema=(catalog or {}).get("schema") if catalog else str(
+                status.get("schema") or MANAGER_STATUS_SCHEMA
+            ),
+            installer_target=trusted.installer_filename,
+            installer_sha256=trusted.installer_sha256,
+            change_authorized=component_ok,
+            installer_update_authorized=True,
+            qualification_reason=qualification_reason,
+            metadata_expires=_trusted_metadata_expires(updater),
+            repository_generation=_trusted_generation(updater),
+        )
+        self._snapshot = snapshot
+        return snapshot
+
+    def _load_revocations(self) -> ObservedRevocations:
+        return load_observed_revocations(self.revocation_store)
+
+    def _assert_snapshot_preconditions(self, snapshot: RepositorySnapshot) -> None:
+        expires = snapshot.metadata_expires
+        if expires is not None and utcnow() >= expires:
+            self._revoke_live_authorization(METADATA_EXPIRED)
+            raise ExtensionRepositoryError("trusted metadata has expired", METADATA_EXPIRED)
+        updater = self._updater
+        if (
+            updater is not None
+            and snapshot.repository_generation is not None
+        ):
+            live_generation = _trusted_generation(updater)
+            if live_generation is not None and live_generation != snapshot.repository_generation:
+                self._revoke_live_authorization(VERIFICATION_FAILED)
+                raise ExtensionRepositoryError(
+                    "repository generation changed since this snapshot was verified",
+                    VERIFICATION_FAILED,
+                )
+
+    def _require_snapshot(self, *, kind: str) -> RepositorySnapshot:
+        snapshot = self._snapshot
+        if snapshot is None:
+            raise ExtensionRepositoryError(
+                "no verified repository snapshot is bound",
+                VERIFICATION_FAILED,
             )
+        self._assert_snapshot_preconditions(snapshot)
+        snapshot = self._snapshot
+        if snapshot is None:
+            raise ExtensionRepositoryError(
+                "no verified repository snapshot is bound",
+                VERIFICATION_FAILED,
+            )
+        if kind == COMPONENT_CHANGE_KIND:
+            if not snapshot.change_authorized:
+                raise ExtensionRepositoryError(
+                    "repository snapshot is not authorized for component changes",
+                    snapshot.qualification_reason or VERIFICATION_FAILED,
+                )
+            self._load_revocations()
+        elif kind == INSTALLER_UPDATE_KIND:
+            if not snapshot.installer_update_authorized:
+                raise ExtensionRepositoryError(
+                    "repository snapshot is not authorized for installer updates",
+                    snapshot.qualification_reason or VERIFICATION_FAILED,
+                )
+        else:
+            raise ExtensionRepositoryError(
+                f"unknown qualification kind {kind!r}",
+                VERIFICATION_FAILED,
+            )
+        return snapshot
+
+    def requalify_after_lock_wait(self, *, kind: str = COMPONENT_CHANGE_KIND) -> RepositorySnapshot:
+        """Re-run snapshot preconditions after a future W5 lock wait.
+
+        W3 does not implement transaction locking and this method does not wait.
+        W5 must call it after a lock is acquired and before commit.
+        """
+
+        return self._require_snapshot(kind=kind)
 
     def _load_status(self, updater: Updater) -> ManagerStatusV1:
         info = updater.get_targetinfo(MANAGER_STATUS_TARGET)
@@ -668,29 +833,24 @@ class RepositoryClient:
             )
         payload = self._read_target(updater, info)
         try:
-            from mf4_analyzer.extensions.contract import (
-                ExtensionError,
-                parse_manager_status_v1,
-            )
-
             parsed = parse_manager_status_v1(payload)
         except ExtensionError as exc:
             raise ExtensionRepositoryError(str(exc), exc.reason_code) from exc
-        except Exception as exc:
+        installer_info = updater.get_targetinfo(parsed.installer_filename)
+        if installer_info is None:
             raise ExtensionRepositoryError(
-                "manager-status-v1 is not a trusted v1 document",
+                f"unknown installer target {parsed.installer_filename}",
                 VERIFICATION_FAILED,
-            ) from exc
-        return {
-            "schema": parsed.schema,
-            "latest_manager_version": parsed.latest_manager_version,
-            "minimum_supported_manager_version": parsed.minimum_supported_manager_version,
-            "reason_code": parsed.reason_code or "",
-            "installer_filename": parsed.installer_filename,
-            "installer_target": parsed.installer_filename,
-            "installer_sha256": parsed.installer_sha256,
-            "help_page": parsed.help_page,
-        }
+            )
+        target_hash = _target_sha256(installer_info)
+        if parsed.installer_sha256 != target_hash:
+            raise ExtensionRepositoryError(
+                "manager-status installer sha256 does not match the trusted installer target",
+                VERIFICATION_FAILED,
+            )
+        self._trusted_status = parsed
+        self._status_payload = payload
+        return _status_mapping(parsed)
 
     def _load_catalog(
         self,
@@ -744,13 +904,18 @@ class RepositoryClient:
         python_tag: str | None = None,
         catalog: ComponentCatalogV1 | None = None,
     ) -> PackageSelection:
+        try:
+            snapshot = self._require_snapshot(kind=COMPONENT_CHANGE_KIND)
+            store = self._load_revocations()
+        except ExtensionRepositoryError as exc:
+            return PackageSelection(False, exc.reason_code)
         capabilities = core.get("capabilities") or {}
         extra = str(component)
         if extra not in capabilities:
             return PackageSelection(False, NO_COMPATIBLE_PACKAGE)
-        store = load_observed_revocations(self.revocation_store)
+        trusted_catalog = catalog if catalog is not None else snapshot.catalog
         return select_compatible_package(
-            catalog if catalog is not None else self._last_catalog,
+            trusted_catalog,
             component=component,
             runtime_id=str(core.get("runtime_id") or ""),
             component_api=str(capabilities[component]),
@@ -768,14 +933,47 @@ class RepositoryClient:
         *,
         cancel_event: Any | None = None,
     ) -> Path:
+        snapshot = self._require_snapshot(kind=COMPONENT_CHANGE_KIND)
+        store = self._load_revocations()
         digest = str(package.get("sha256") or "").lower()
         length = int(package.get("length") or -1)
         target = str(package.get("target") or "")
         if not digest or length < 0 or not target:
             raise ExtensionRepositoryError("package record is incomplete", VERIFICATION_FAILED)
+        if is_hash_revoked(digest, store):
+            raise ExtensionRepositoryError("package hash is revoked", TARGET_REVOKED)
+        catalog_revoked = {
+            str(item.get("sha256") or "").lower()
+            for item in (snapshot.catalog or {}).get("revoked") or []
+            if item.get("sha256")
+        }
+        if digest in catalog_revoked:
+            raise ExtensionRepositoryError("package hash is revoked", TARGET_REVOKED)
+        if snapshot.catalog is not None:
+            known = {
+                str(item.get("sha256") or "").lower()
+                for item in snapshot.catalog.get("packages") or []
+                if item.get("sha256")
+            }
+            if digest not in known:
+                raise ExtensionRepositoryError(
+                    "package is not in the authorized catalog",
+                    NO_COMPATIBLE_PACKAGE,
+                )
+        minimum = str(package.get("min_manager_version") or "")
+        if minimum and not manager_meets_minimum(self.manager_version, minimum):
+            raise ExtensionRepositoryError(
+                "package requires a newer extension manager",
+                MANAGER_TOO_OLD,
+            )
         dest = cache_download_path(app_root, digest)
         dest.parent.mkdir(parents=True, exist_ok=True)
-        updater = self._updater or self._new_updater()
+        updater = self._updater
+        if updater is None:
+            raise ExtensionRepositoryError(
+                "no verified repository snapshot is bound",
+                VERIFICATION_FAILED,
+            )
         info = updater.get_targetinfo(target)
         if info is None:
             raise ExtensionRepositoryError(f"unknown TUF target {target}", VERIFICATION_FAILED)
@@ -785,6 +983,78 @@ class RepositoryClient:
                 "package sha256 does not match trusted target metadata",
                 VERIFICATION_FAILED,
             )
+        try:
+            if self._http_download:
+                url = urllib.parse.urljoin(self.target_base_url, info.path)
+                download_verified_file(
+                    url,
+                    dest,
+                    expected_sha256=expected,
+                    expected_length=int(info.length),
+                    policy=self.policy,
+                    cancel_event=cancel_event or self.cancel_event,
+                    urlopen=self._urlopen,
+                )
+            else:
+                updater.download_target(info, filepath=str(dest))
+        except DownloadCancelled:
+            raise
+        except DownloadPolicyError as exc:
+            raise ExtensionRepositoryError(str(exc), exc.reason_code) from exc
+        payload = dest.read_bytes()
+        info.verify_length_and_hashes(payload)
+        if hashlib.sha256(payload).hexdigest() != digest:
+            dest.unlink(missing_ok=True)
+            raise ExtensionRepositoryError("package SHA-256 mismatch", VERIFICATION_FAILED)
+        return dest
+
+    def download_verified_package(
+        self,
+        package: PackageRecord,
+        app_root: Path,
+        *,
+        cancel_event: Any | None = None,
+    ) -> tuple[Path, VerifiedPackage]:
+        """Download ZIP + independent package.json and bind one VerifiedPackage."""
+
+        snapshot = self._require_snapshot(kind=COMPONENT_CHANGE_KIND)
+        zip_path = self.download_package(package, app_root, cancel_event=cancel_event)
+        manifest_target = str(package.get("package_json_target") or "")
+        manifest_sha256 = str(package.get("package_json_sha256") or "").lower()
+        try:
+            manifest_length = int(package.get("package_json_length") or -1)
+        except (TypeError, ValueError) as exc:
+            raise ExtensionRepositoryError(
+                "independent package.json length is missing",
+                VERIFICATION_FAILED,
+            ) from exc
+        if not manifest_target or not manifest_sha256 or manifest_length < 0:
+            raise ExtensionRepositoryError(
+                "independent package.json target is missing",
+                VERIFICATION_FAILED,
+            )
+        updater = self._updater
+        if updater is None:
+            raise ExtensionRepositoryError(
+                "no verified repository snapshot is bound",
+                VERIFICATION_FAILED,
+            )
+        info = updater.get_targetinfo(manifest_target)
+        if info is None:
+            raise ExtensionRepositoryError(
+                f"unknown TUF target {manifest_target}",
+                VERIFICATION_FAILED,
+            )
+        expected = _target_sha256(info)
+        if expected != manifest_sha256:
+            raise ExtensionRepositoryError(
+                "package.json sha256 does not match trusted target metadata",
+                VERIFICATION_FAILED,
+            )
+        dest = cache_download_path(app_root, manifest_sha256).with_name(
+            f"{manifest_sha256}.package.json"
+        )
+        dest.parent.mkdir(parents=True, exist_ok=True)
         if self._http_download:
             url = urllib.parse.urljoin(self.target_base_url, info.path)
             download_verified_file(
@@ -800,10 +1070,33 @@ class RepositoryClient:
             updater.download_target(info, filepath=str(dest))
         payload = dest.read_bytes()
         info.verify_length_and_hashes(payload)
-        if hashlib.sha256(payload).hexdigest() != digest:
+        if sha256_hex(payload) != manifest_sha256 or len(payload) != manifest_length:
             dest.unlink(missing_ok=True)
-            raise ExtensionRepositoryError("package SHA-256 mismatch", VERIFICATION_FAILED)
-        return dest
+            raise ExtensionRepositoryError("package.json SHA-256 mismatch", VERIFICATION_FAILED)
+        try:
+            verified = bind_verified_package(
+                snapshot_id=snapshot.snapshot_id,
+                component=str(package.get("component") or ""),
+                runtime_id=str(package.get("runtime_id") or ""),
+                package_revision=int(package.get("package_revision") or 0),
+                component_api=str(package.get("component_api") or ""),
+                min_manager_version=str(package.get("min_manager_version") or "0.0.0"),
+                zip_target=str(package.get("target") or ""),
+                zip_sha256=str(package.get("sha256") or ""),
+                zip_length=int(package.get("length") or -1),
+                manifest_target=manifest_target,
+                manifest_sha256=manifest_sha256,
+                manifest_length=manifest_length,
+                package_json_bytes=payload,
+            )
+        except ExtensionError as exc:
+            raise ExtensionRepositoryError(str(exc), exc.reason_code) from exc
+        if sha256_hex(zip_path.read_bytes()) != verified.zip.sha256:
+            raise ExtensionRepositoryError(
+                "ZIP hash does not match the verified package binding",
+                VERIFICATION_FAILED,
+            )
+        return zip_path, verified
 
     def download_manager_installer(
         self,
@@ -814,23 +1107,30 @@ class RepositoryClient:
     ) -> Path:
         """Download a verified installer next to cache/manager-updates/.
 
+        Display version and installer hash come from the verified snapshot.
+        Callers cannot inject a different manager-status document.
         Does not overwrite ``installer.exe`` in the application root.
         """
 
-        current = status or self._last_status
-        if current is None:
-            raise ExtensionRepositoryError("manager-status-v1 has not been verified", VERIFICATION_FAILED)
-        target = str(
-            current.get("installer_filename")
-            or current.get("installer_target")
-            or ""
-        )
-        version = str(current.get("latest_manager_version") or "unknown")
-        if not target:
-            raise ExtensionRepositoryError(
-                "manager-status-v1 has no installer artifact filename",
-                VERIFICATION_FAILED,
+        snapshot = self._require_snapshot(kind=INSTALLER_UPDATE_KIND)
+        trusted = snapshot.manager_status
+        if status is not None:
+            injected_hash = str(status.get("installer_sha256") or "").lower()
+            injected_name = str(
+                status.get("installer_filename") or status.get("installer_target") or ""
             )
+            injected_version = str(status.get("latest_manager_version") or "")
+            if (
+                injected_hash != trusted.installer_sha256
+                or injected_name != trusted.installer_filename
+                or injected_version != trusted.latest_manager_version
+            ):
+                raise ExtensionRepositoryError(
+                    "caller cannot inject a manager-status other than the verified snapshot",
+                    VERIFICATION_FAILED,
+                )
+        target = trusted.installer_filename
+        version = trusted.latest_manager_version
         dest = manager_update_path(app_root, version)
         if dest.resolve() == (Path(app_root) / "installer.exe").resolve():
             raise ExtensionRepositoryError(
@@ -838,25 +1138,44 @@ class RepositoryClient:
                 VERIFICATION_FAILED,
             )
         dest.parent.mkdir(parents=True, exist_ok=True)
-        updater = self._updater or self._new_updater()
+        updater = self._updater
+        if updater is None:
+            raise ExtensionRepositoryError(
+                "no verified repository snapshot is bound",
+                VERIFICATION_FAILED,
+            )
         info = updater.get_targetinfo(target)
         if info is None:
             raise ExtensionRepositoryError(f"unknown installer target {target}", VERIFICATION_FAILED)
-        if self._http_download:
-            url = urllib.parse.urljoin(self.target_base_url, info.path)
-            sha256 = str(info.hashes["sha256"])
-            download_verified_file(
-                url,
-                dest,
-                expected_sha256=sha256,
-                expected_length=int(info.length),
-                policy=self.policy,
-                cancel_event=cancel_event or self.cancel_event,
-                urlopen=self._urlopen,
+        target_hash = _target_sha256(info)
+        if target_hash != trusted.installer_sha256:
+            raise ExtensionRepositoryError(
+                "manager-status installer sha256 does not match the trusted installer target",
+                VERIFICATION_FAILED,
             )
-        else:
-            updater.download_target(info, filepath=str(dest))
-        info.verify_length_and_hashes(dest.read_bytes())
+        try:
+            if self._http_download:
+                url = urllib.parse.urljoin(self.target_base_url, info.path)
+                download_verified_file(
+                    url,
+                    dest,
+                    expected_sha256=trusted.installer_sha256,
+                    expected_length=int(info.length),
+                    policy=self.policy,
+                    cancel_event=cancel_event or self.cancel_event,
+                    urlopen=self._urlopen,
+                )
+            else:
+                updater.download_target(info, filepath=str(dest))
+        except DownloadCancelled:
+            raise
+        except DownloadPolicyError as exc:
+            raise ExtensionRepositoryError(str(exc), exc.reason_code) from exc
+        payload = dest.read_bytes()
+        info.verify_length_and_hashes(payload)
+        if sha256_hex(payload) != trusted.installer_sha256:
+            dest.unlink(missing_ok=True)
+            raise ExtensionRepositoryError("installer SHA-256 mismatch", VERIFICATION_FAILED)
         root_installer = Path(app_root) / "installer.exe"
         if dest.resolve() == root_installer.resolve():
             raise ExtensionRepositoryError(
@@ -866,7 +1185,7 @@ class RepositoryClient:
         return dest
 
     def observed_revocation_hashes(self) -> frozenset[str]:
-        return load_observed_revocations(self.revocation_store).hashes()
+        return self._load_revocations().hashes()
 
     @classmethod
     def from_offline_bundle(
@@ -903,3 +1222,26 @@ def file_sha256(data: bytes) -> str:
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _trusted_metadata_expires(updater: Updater) -> datetime | None:
+    times: list[datetime] = []
+    stored = getattr(updater._trusted_set, "_trusted_set", {})
+    if isinstance(stored, dict):
+        values = stored.values()
+    else:
+        values = ()
+    for signed in values:
+        expires = getattr(signed, "expires", None)
+        if isinstance(expires, datetime):
+            times.append(expires)
+    return min(times) if times else None
+
+
+def _trusted_generation(updater: Updater) -> int | None:
+    stored = getattr(updater._trusted_set, "_trusted_set", {})
+    if not isinstance(stored, dict):
+        return None
+    timestamp = stored.get("timestamp")
+    version = getattr(timestamp, "version", None)
+    return int(version) if version is not None else None

@@ -11,6 +11,7 @@ import sys
 import threading
 import time
 import urllib.parse
+import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -27,9 +28,17 @@ _win_site = _TUF_ROOT / "Lib" / "site-packages"
 if _win_site.is_dir() and str(_win_site) not in sys.path:
     sys.path.insert(0, str(_win_site))
 
-pytest.importorskip("tuf")
-pytest.importorskip("securesystemslib")
-pytest.importorskip("cryptography")
+try:
+    import tuf  # noqa: F401
+    import securesystemslib  # noqa: F401
+    import cryptography  # noqa: F401
+except ImportError:
+    pytest.fail(
+        "tuf/securesystemslib/cryptography are required for "
+        "tests/test_extension_repository.py. Install "
+        "tools/extension_manager/requirements.txt into "
+        ".state/extension-manager-tuf (do not install into the app .venv)."
+    )
 
 from securesystemslib.signer import CryptoSigner
 from tuf.api.exceptions import DownloadHTTPError
@@ -55,20 +64,27 @@ from tools.extension_manager.download import (
 )
 from tools.extension_manager.repository import (
     COMPONENT_CATALOG_V1_SCHEMA,
+    DOWNLOAD_CANCELLED,
     MANAGER_TOO_OLD,
+    METADATA_EXPIRED,
     NETWORK_CHECK_FAILED,
     NO_COMPATIBLE_PACKAGE,
     PROTOCOL_UNSUPPORTED,
+    REVOCATION_CACHE_CORRUPT,
     TARGET_REVOKED,
     VERIFICATION_FAILED,
     CoreIdentity,
+    ExtensionRepositoryError,
     LocalPathFetcher,
     RepositoryClient,
     compare_semver,
     installed_component_may_run,
+    load_observed_revocations,
     manager_update_path,
     select_compatible_package,
 )
+from mf4_analyzer.extensions.contract import generate_package_manifest
+from tools.extension_manager.unpack import extract_verified_package
 
 FIXTURES = _REPO_ROOT / "tests" / "fixtures" / "extension_repository"
 RUNTIME_ID = "cpython-3.12-win-amd64-numpy-2"
@@ -194,6 +210,7 @@ class LocalTUFRepo:
         extra_packages: list[dict[str, Any]] | None = None,
         catalog_overrides: dict[str, Any] | None = None,
         status_overrides: dict[str, Any] | None = None,
+        extra_targets: dict[str, bytes] | None = None,
         bump: bool = False,
     ) -> bytes:
         package_blob = blob if blob is not None else b"media-package-bytes"
@@ -211,6 +228,8 @@ class LocalTUFRepo:
             "packages/media-3.bin": package_blob,
             "installer-1.2.0.exe": installer_blob,
         }
+        if extra_targets:
+            self.target_bytes.update(extra_targets)
         self.publish(bump=bump)
         return package_blob
 
@@ -348,6 +367,9 @@ def test_trusted_happy_path(tmp_path: Path) -> None:
     result = client.refresh()
     assert result.ok
     assert result.reason_code is None
+    assert result.snapshot is not None
+    assert result.snapshot.change_authorized is True
+    assert result.snapshot.installer_update_authorized is True
     assert result.component_install_state is None
     assert result.uninstalled is False
     assert result.manager_status is not None
@@ -676,12 +698,19 @@ def test_expired_offline_bundle_blocks_new_install_not_installed_runtime(tmp_pat
     )
     result = client.refresh()
     assert not result.ok
-    assert result.reason_code in {"METADATA_EXPIRED", VERIFICATION_FAILED}
+    assert result.reason_code in {METADATA_EXPIRED, VERIFICATION_FAILED}
+    selected = client.select_package("media", CORE, platform_tag=PLATFORM)
+    assert not selected.ok
+    assert selected.reason_code in {METADATA_EXPIRED, VERIFICATION_FAILED}
+    with pytest.raises(ExtensionRepositoryError) as caught:
+        client.download_package(_media_package(blob), tmp_path / "app")
+    assert caught.value.reason_code in {METADATA_EXPIRED, VERIFICATION_FAILED}
     already = installed_component_may_run(
         _sha256(blob),
         revocation_store=tmp_path / "expired-revocations.json",
     )
     assert already.may_run
+    assert already.required_fresh_metadata is False
 
 
 def test_network_failure_is_not_not_installed(tmp_path: Path) -> None:
@@ -886,3 +915,577 @@ def test_https_required_blocks_local_http_even_if_server_exists(tmp_path: Path) 
 
 def test_local_path_fetcher_is_used_by_offline_helper() -> None:
     assert LocalPathFetcher.__mro__[1] is FetcherInterface
+
+
+def test_repository_imports_neutral_contract_explicitly() -> None:
+    source = (_REPO_ROOT / "tools" / "extension_manager" / "repository.py").read_text(
+        encoding="utf-8"
+    )
+    assert "_load_contract" not in source
+    assert "from mf4_analyzer.extensions.contract import" in source
+    unpack_source = (_REPO_ROOT / "tools" / "extension_manager" / "unpack.py").read_text(
+        encoding="utf-8"
+    )
+    assert "_verification_failed_code" not in unpack_source
+    assert "from mf4_analyzer.extensions.contract import" in unpack_source
+
+
+def _real_media_package() -> tuple[bytes, bytes, dict[str, Any]]:
+    payload_files = {
+        "site-packages/av/__init__.py": b"__version__ = '1'\n",
+        "native/av/lib.bin": b"dll-bytes",
+    }
+    manifest = generate_package_manifest(
+        component="media",
+        package_revision=3,
+        runtime_id=RUNTIME_ID,
+        component_api=MEDIA_API,
+        min_manager_version="1.0.0",
+        python_tag="cp312",
+        platform_tag=PLATFORM,
+        module_roots=["site-packages/av"],
+        dll_directories=["native/av"],
+        dependency_ownership={"av": "media"},
+        files=[
+            {"relpath": name, "size": len(data), "sha256": _sha256(data)}
+            for name, data in payload_files.items()
+        ],
+        max_extract_bytes=10_000,
+        probe_type="media_wav_mp4_v1",
+        required_features=["store_layout_v1", "native_probe_v1", "file_manifest_sha256"],
+    )
+    json_bytes = json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8")
+    import io
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("package.json", json_bytes)
+        for name, data in payload_files.items():
+            archive.writestr(name, data)
+    zip_bytes = buf.getvalue()
+    record = _media_package(
+        zip_bytes,
+        target="packages/media-3.zip",
+        package_json_target="packages/media-3.package.json",
+        package_json_sha256=_sha256(json_bytes),
+        package_json_length=len(json_bytes),
+    )
+    return zip_bytes, json_bytes, record
+
+
+def test_installer_declared_hash_must_match_tuf_target(tmp_path: Path) -> None:
+    repo = LocalTUFRepo()
+    repo.set_standard_targets(
+        status_overrides={"installer_artifact": {"sha256": "0" * 64}},
+    )
+    client = _client(repo, tmp_path)
+    result = client.refresh()
+    assert not result.ok
+    assert result.reason_code == VERIFICATION_FAILED
+    with pytest.raises(ExtensionRepositoryError) as caught:
+        client.download_manager_installer(tmp_path)
+    assert caught.value.reason_code == VERIFICATION_FAILED
+
+
+def test_download_manager_installer_rejects_injected_status(tmp_path: Path) -> None:
+    repo = LocalTUFRepo()
+    repo.set_standard_targets()
+    client = _client(repo, tmp_path)
+    assert client.refresh().ok
+    bogus = dict(client._last_status or {})
+    bogus["installer_sha256"] = "0" * 64
+    bogus["latest_manager_version"] = "9.9.9"
+    with pytest.raises(ExtensionRepositoryError) as caught:
+        client.download_manager_installer(tmp_path, status=bogus)
+    assert caught.value.reason_code == VERIFICATION_FAILED
+    installer = client.download_manager_installer(tmp_path)
+    assert installer == manager_update_path(tmp_path, "1.2.0")
+
+
+def test_verified_package_chain_unpacks_real_zip(tmp_path: Path) -> None:
+    zip_bytes, json_bytes, record = _real_media_package()
+    repo = LocalTUFRepo()
+    repo.set_standard_targets(
+        blob=zip_bytes,
+        catalog=_catalog_bytes([record]),
+        extra_targets={
+            record["target"]: zip_bytes,
+            record["package_json_target"]: json_bytes,
+        },
+    )
+    client = _client(repo, tmp_path)
+    result = client.refresh()
+    assert result.ok
+    assert result.snapshot is not None
+    assert result.snapshot.installer_sha256 == result.manager_status["installer_sha256"]
+    selected = client.select_package("media", CORE, platform_tag=PLATFORM)
+    assert selected.ok and selected.package is not None
+    zip_path, verified = client.download_verified_package(selected.package, tmp_path)
+    assert zip_path.read_bytes() == zip_bytes
+    assert verified.snapshot_id == result.snapshot.snapshot_id
+    assert verified.component == "media"
+    assert verified.runtime_id == RUNTIME_ID
+    assert verified.package_revision == 3
+    assert verified.component_api == MEDIA_API
+    assert verified.zip.sha256 == _sha256(zip_bytes)
+    assert verified.manifest.sha256 == _sha256(json_bytes)
+    assert verified.package_json_bytes == json_bytes
+
+    app_root, extensions = tmp_path / "app", tmp_path / "app" / "extensions"
+    staging = extensions / ".staging" / "txn-verified"
+    extensions.mkdir(parents=True)
+    unpacked = extract_verified_package(
+        zip_path,
+        staging,
+        extensions_root=extensions,
+        verified=verified,
+        app_root=app_root,
+    )
+    assert (unpacked.staging_dir / "package.json").read_bytes() == json_bytes
+    assert (unpacked.staging_dir / "site-packages/av/__init__.py").read_bytes() == (
+        b"__version__ = '1'\n"
+    )
+
+
+def test_independent_manifest_missing_is_rejected(tmp_path: Path) -> None:
+    repo = LocalTUFRepo()
+    blob = repo.set_standard_targets()
+    client = _client(repo, tmp_path)
+    assert client.refresh().ok
+    selected = client.select_package("media", CORE, platform_tag=PLATFORM)
+    assert selected.ok and selected.package is not None
+    with pytest.raises(ExtensionRepositoryError) as caught:
+        client.download_verified_package(selected.package, tmp_path)
+    assert caught.value.reason_code == VERIFICATION_FAILED
+    assert "package.json" in str(caught.value)
+    dest = client.download_package(selected.package, tmp_path)
+    assert dest.read_bytes() == blob
+
+
+def test_independent_manifest_mismatch_is_rejected(tmp_path: Path) -> None:
+    zip_bytes, json_bytes, record = _real_media_package()
+    other_json = json_bytes + b"\n"
+    record = dict(record)
+    record["package_json_sha256"] = _sha256(other_json)
+    record["package_json_length"] = len(other_json)
+    repo = LocalTUFRepo()
+    repo.set_standard_targets(
+        blob=zip_bytes,
+        catalog=_catalog_bytes([record]),
+        extra_targets={
+            record["target"]: zip_bytes,
+            record["package_json_target"]: json_bytes,
+        },
+    )
+    client = _client(repo, tmp_path)
+    result = client.refresh()
+    assert result.ok
+    selected = client.select_package("media", CORE, platform_tag=PLATFORM)
+    assert selected.ok and selected.package is not None
+    with pytest.raises(ExtensionRepositoryError) as caught:
+        client.download_verified_package(selected.package, tmp_path)
+    assert caught.value.reason_code == VERIFICATION_FAILED
+
+
+def _advance_tuf_clock(monkeypatch: pytest.MonkeyPatch, now: datetime, delta: timedelta) -> None:
+    import tuf.ngclient._internal.trusted_metadata_set as trusted_set
+
+    class _Clock:
+        timezone = timezone
+
+        class datetime(datetime):
+            @classmethod
+            def now(cls, tz: Any = None) -> datetime:
+                value = now + delta
+                return value if tz is None else value.astimezone(tz)
+
+    monkeypatch.setattr(trusted_set, "datetime", _Clock)
+
+
+def test_failed_refresh_revokes_select_and_download(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    repo = LocalTUFRepo(expires=now + timedelta(minutes=20))
+    blob = repo.set_standard_targets()
+    client = _client(repo, tmp_path)
+    first = client.refresh()
+    assert first.ok
+    assert first.snapshot is not None
+    assert first.snapshot.change_authorized is True
+    selected = client.select_package("media", CORE, platform_tag=PLATFORM)
+    assert selected.ok and selected.package is not None
+    assert client.download_package(selected.package, tmp_path / "before").read_bytes() == blob
+
+    _advance_tuf_clock(monkeypatch, now, timedelta(hours=2))
+    second = client.refresh()
+    assert not second.ok
+    assert second.reason_code == METADATA_EXPIRED
+    assert second.manager_status is not None
+    assert second.snapshot is not None
+    assert second.snapshot.change_authorized is False
+    assert second.snapshot.installer_update_authorized is False
+    assert second.catalog is not None
+
+    later = client.select_package("media", CORE, platform_tag=PLATFORM)
+    assert not later.ok
+    assert later.reason_code == METADATA_EXPIRED
+    with pytest.raises(ExtensionRepositoryError) as caught:
+        client.download_package(selected.package, tmp_path / "after")
+    assert caught.value.reason_code == METADATA_EXPIRED
+    with pytest.raises(ExtensionRepositoryError) as installer_caught:
+        client.download_manager_installer(tmp_path / "after")
+    assert installer_caught.value.reason_code == METADATA_EXPIRED
+
+
+def test_refresh_revocation_rejects_old_selection(tmp_path: Path) -> None:
+    repo = LocalTUFRepo()
+    blob = repo.set_standard_targets()
+    client = _client(repo, tmp_path)
+    first = client.refresh()
+    assert first.ok
+    selected = client.select_package("media", CORE, platform_tag=PLATFORM)
+    assert selected.ok and selected.package is not None
+    old_package = dict(selected.package)
+    assert client.download_package(old_package, tmp_path / "before").read_bytes() == blob
+
+    repo.set_standard_targets(
+        blob=blob,
+        catalog_overrides={"revoked": [{"sha256": _sha256(blob), "component": "media"}]},
+        bump=True,
+    )
+    later = client.refresh()
+    assert later.ok
+    assert later.snapshot is not None
+    assert later.snapshot.change_authorized is True
+    blocked = client.select_package("media", CORE, platform_tag=PLATFORM)
+    assert not blocked.ok
+    with pytest.raises(ExtensionRepositoryError) as caught:
+        client.download_package(old_package, tmp_path / "after")
+    assert caught.value.reason_code == TARGET_REVOKED
+
+
+def test_manager_minimum_bump_blocks_component_changes(tmp_path: Path) -> None:
+    repo = LocalTUFRepo()
+    blob = repo.set_standard_targets()
+    client = _client(repo, tmp_path, manager_version="1.0.0")
+    first = client.refresh()
+    assert first.ok
+    selected = client.select_package("media", CORE, platform_tag=PLATFORM)
+    assert selected.ok and selected.package is not None
+
+    repo.set_standard_targets(
+        blob=blob,
+        status_overrides={
+            "minimum_supported_manager_version": "9.0.0",
+            "latest_manager_version": "9.0.0",
+        },
+        bump=True,
+    )
+    later = client.refresh()
+    assert not later.ok
+    assert later.reason_code == MANAGER_TOO_OLD
+    assert later.manager_status is not None
+    assert later.snapshot is not None
+    assert later.snapshot.change_authorized is False
+    blocked = client.select_package("media", CORE, platform_tag=PLATFORM)
+    assert not blocked.ok
+    assert blocked.reason_code == MANAGER_TOO_OLD
+    with pytest.raises(ExtensionRepositoryError) as caught:
+        client.download_package(selected.package, tmp_path / "after")
+    assert caught.value.reason_code == MANAGER_TOO_OLD
+
+
+def test_unknown_catalog_still_shows_verified_update_status(tmp_path: Path) -> None:
+    repo = LocalTUFRepo()
+    repo.set_standard_targets(
+        catalog=_catalog_bytes([], schema="component-catalog-v2", protocol_major=2),
+        status_overrides={
+            "minimum_supported_manager_version": "9.0.0",
+            "latest_manager_version": "9.0.0",
+            "help_page": "https://example.test/help/manager-update",
+        },
+    )
+    client = _client(repo, tmp_path, manager_version="1.0.0")
+    result = client.refresh()
+    assert not result.ok
+    assert result.reason_code == MANAGER_TOO_OLD
+    assert result.catalog is None
+    assert result.manager_status is not None
+    assert result.manager_status["help_page"]
+    assert result.manager_status["minimum_supported_manager_version"] == "9.0.0"
+    assert result.snapshot is not None
+    assert result.snapshot.change_authorized is False
+    selected = client.select_package("media", CORE, platform_tag=PLATFORM)
+    assert not selected.ok
+    assert selected.reason_code == MANAGER_TOO_OLD
+
+
+def test_old_manager_can_download_installer_not_components(tmp_path: Path) -> None:
+    repo = LocalTUFRepo()
+    blob = repo.set_standard_targets(
+        status_overrides={
+            "minimum_supported_manager_version": "9.0.0",
+            "latest_manager_version": "1.2.0",
+            "help_page": "https://example.test/help/manager-update",
+        },
+    )
+    client = _client(repo, tmp_path, manager_version="1.0.0")
+    result = client.refresh()
+    assert not result.ok
+    assert result.reason_code == MANAGER_TOO_OLD
+    assert result.snapshot is not None
+    assert result.snapshot.change_authorized is False
+    assert result.snapshot.installer_update_authorized is True
+    selected = client.select_package("media", CORE, platform_tag=PLATFORM)
+    assert not selected.ok
+    assert selected.reason_code == MANAGER_TOO_OLD
+    with pytest.raises(ExtensionRepositoryError) as caught:
+        client.download_package(_media_package(blob), tmp_path)
+    assert caught.value.reason_code == MANAGER_TOO_OLD
+    installer = client.download_manager_installer(tmp_path)
+    assert installer == manager_update_path(tmp_path, "1.2.0")
+    assert installer.is_file()
+
+
+def test_metadata_expiry_during_download_rejects_without_lock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    expires = now + timedelta(minutes=20)
+    repo = LocalTUFRepo(expires=expires)
+    blob = repo.set_standard_targets()
+    client = _client(repo, tmp_path)
+    result = client.refresh()
+    assert result.ok
+    selected = client.select_package("media", CORE, platform_tag=PLATFORM)
+    assert selected.ok and selected.package is not None
+    monkeypatch.setattr(
+        "tools.extension_manager.repository.utcnow",
+        lambda: expires + timedelta(seconds=1),
+    )
+    with pytest.raises(ExtensionRepositoryError) as requalify:
+        client.requalify_after_lock_wait()
+    assert requalify.value.reason_code == METADATA_EXPIRED
+    with pytest.raises(ExtensionRepositoryError) as caught:
+        client.download_package(selected.package, tmp_path)
+    assert caught.value.reason_code == METADATA_EXPIRED
+    assert client._snapshot is not None
+    assert client._snapshot.change_authorized is False
+    later = client.select_package("media", CORE, platform_tag=PLATFORM)
+    assert not later.ok
+    assert later.reason_code == METADATA_EXPIRED
+    assert blob
+
+
+def test_valid_offline_bundle_authorizes_component_download(tmp_path: Path) -> None:
+    repo = LocalTUFRepo()
+    blob = repo.set_standard_targets()
+    bundle = tmp_path / "valid-bundle"
+    repo.write_offline_bundle(bundle)
+    client = RepositoryClient.from_offline_bundle(
+        bundle,
+        metadata_cache_dir=tmp_path / "valid-offline-cache",
+        bootstrap_root=repo.signed_roots[1],
+        manager_version="1.0.0",
+        revocation_store=tmp_path / "valid-offline-revocations.json",
+    )
+    result = client.refresh()
+    assert result.ok
+    assert result.snapshot is not None
+    assert result.snapshot.change_authorized is True
+    selected = client.select_package("media", CORE, platform_tag=PLATFORM)
+    assert selected.ok and selected.package is not None
+    dest = client.download_package(selected.package, tmp_path / "app")
+    assert dest.read_bytes() == blob
+
+
+def test_installed_component_runs_offline_without_fresh_metadata(tmp_path: Path) -> None:
+    digest = _sha256(b"already-installed-media")
+    store = tmp_path / "never-refreshed" / "observed-revocations.json"
+    trust = installed_component_may_run(digest, revocation_store=store)
+    assert trust.may_run
+    assert trust.required_fresh_metadata is False
+    assert trust.reason_code is None
+
+
+def test_corrupt_revocation_cache_is_diagnostic_not_empty(tmp_path: Path) -> None:
+    repo = LocalTUFRepo()
+    blob = repo.set_standard_targets()
+    client = _client(repo, tmp_path)
+    first = client.refresh()
+    assert first.ok
+    selected = client.select_package("media", CORE, platform_tag=PLATFORM)
+    assert selected.ok and selected.package is not None
+
+    client.revocation_store.write_text("{not-json", encoding="utf-8")
+    with pytest.raises(ExtensionRepositoryError) as loaded:
+        load_observed_revocations(client.revocation_store)
+    assert loaded.value.reason_code == REVOCATION_CACHE_CORRUPT
+    trust = installed_component_may_run(_sha256(blob), revocation_store=client.revocation_store)
+    assert not trust.may_run
+    assert trust.reason_code == REVOCATION_CACHE_CORRUPT
+    blocked = client.select_package("media", CORE, platform_tag=PLATFORM)
+    assert not blocked.ok
+    assert blocked.reason_code == REVOCATION_CACHE_CORRUPT
+    with pytest.raises(ExtensionRepositoryError) as caught:
+        client.download_package(selected.package, tmp_path)
+    assert caught.value.reason_code == REVOCATION_CACHE_CORRUPT
+
+
+def test_download_does_not_reclassify_programming_errors(tmp_path: Path) -> None:
+    dest = tmp_path / "extensions" / "cache" / "downloads" / "x.bin"
+
+    def boom(*args: Any, **kwargs: Any) -> Any:
+        raise TypeError("urlopen signature is wrong")
+
+    with pytest.raises(TypeError, match="urlopen signature is wrong"):
+        download_verified_file(
+            "https://example.test/x.bin",
+            dest,
+            expected_sha256=_sha256(b"x"),
+            expected_length=1,
+            policy=DownloadPolicy(trusted_origins=("example.test",), require_https=True),
+            urlopen=boom,
+            sleeper=lambda _s: None,
+        )
+
+
+def test_resume_uses_etag_if_range_and_content_range(tmp_path: Path) -> None:
+    body = b"ABCDEFGH" * 1024
+    digest = _sha256(body)
+    etag = '"pkg-v1"'
+    state: dict[str, Any] = {"requests": 0, "if_range": [], "ranges": []}
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, format: str, *args: Any) -> None:  # noqa: A003
+            return
+
+        def do_GET(self) -> None:  # noqa: N802
+            state["requests"] += 1
+            state["if_range"].append(self.headers.get("If-Range"))
+            range_header = self.headers.get("Range")
+            state["ranges"].append(range_header)
+            if range_header:
+                start = int(range_header.split("=")[1].split("-")[0])
+                chunk = body[start:]
+                self.send_response(206)
+                self.send_header("Content-Length", str(len(chunk)))
+                self.send_header("Content-Range", f"bytes {start}-{len(body) - 1}/{len(body)}")
+                self.send_header("ETag", etag)
+                self.end_headers()
+                self.wfile.write(chunk)
+                return
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("ETag", etag)
+            self.end_headers()
+            self.wfile.write(body[:120])
+
+    server, base = _serve(Handler)
+    policy = DownloadPolicy(
+        trusted_origins=("127.0.0.1",),
+        require_https=False,
+        max_retries=3,
+        retry_backoff_s=0.01,
+        connect_timeout_s=2,
+        read_timeout_s=2,
+    )
+    dest = tmp_path / "extensions" / "cache" / "downloads" / f"{digest}.bin"
+    try:
+        download_verified_file(
+            f"{base}/pkg.bin",
+            dest,
+            expected_sha256=digest,
+            expected_length=len(body),
+            policy=policy,
+            sleeper=lambda _s: None,
+        )
+        assert dest.read_bytes() == body
+        assert state["requests"] >= 2
+        assert etag in {item for item in state["if_range"] if item}
+        assert any(item and item.startswith("bytes=") for item in state["ranges"])
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_wrong_content_range_discards_part_and_redownloads(tmp_path: Path) -> None:
+    body = b"ABCDEFGH" * 256
+    digest = _sha256(body)
+    state = {"requests": 0}
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, format: str, *args: Any) -> None:  # noqa: A003
+            return
+
+        def do_GET(self) -> None:  # noqa: N802
+            state["requests"] += 1
+            range_header = self.headers.get("Range")
+            if range_header and state["requests"] == 2:
+                self.send_response(206)
+                self.send_header("Content-Length", "11")
+                self.send_header("Content-Range", "bytes 0-10/11")
+                self.send_header("ETag", '"other"')
+                self.end_headers()
+                self.wfile.write(b"wrong-range")
+                return
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("ETag", '"pkg-v1"')
+            self.end_headers()
+            if state["requests"] == 1:
+                self.wfile.write(body[:80])
+                return
+            self.wfile.write(body)
+
+    server, base = _serve(Handler)
+    policy = DownloadPolicy(
+        trusted_origins=("127.0.0.1",),
+        require_https=False,
+        max_retries=3,
+        retry_backoff_s=0.01,
+        connect_timeout_s=2,
+        read_timeout_s=2,
+    )
+    dest = tmp_path / "extensions" / "cache" / "downloads" / f"{digest}.bin"
+    try:
+        download_verified_file(
+            f"{base}/pkg.bin",
+            dest,
+            expected_sha256=digest,
+            expected_length=len(body),
+            policy=policy,
+            sleeper=lambda _s: None,
+        )
+        assert dest.read_bytes() == body
+        assert not dest.with_name(dest.name + ".part").exists()
+        assert state["requests"] >= 3
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_refresh_cancel_is_not_a_network_failure(tmp_path: Path) -> None:
+    repo = LocalTUFRepo()
+    repo.set_standard_targets()
+    cancel = threading.Event()
+    cancel.set()
+    client = RepositoryClient(
+        metadata_cache_dir=tmp_path / "metadata-cache",
+        bootstrap_root=repo.signed_roots[1],
+        metadata_base_url="https://example.test/metadata/",
+        target_base_url="https://example.test/targets/",
+        trusted_origins=("example.test",),
+        manager_version="1.0.0",
+        revocation_store=tmp_path / "observed-revocations.json",
+        cancel_event=cancel,
+        urlopen=lambda *args, **kwargs: (_ for _ in ()).throw(
+            DownloadCancelled("metadata fetch cancelled")
+        ),
+    )
+    result = client.refresh()
+    assert not result.ok
+    assert result.reason_code == DOWNLOAD_CANCELLED
+    selected = client.select_package("media", CORE, platform_tag=PLATFORM)
+    assert not selected.ok
+    assert selected.reason_code == DOWNLOAD_CANCELLED

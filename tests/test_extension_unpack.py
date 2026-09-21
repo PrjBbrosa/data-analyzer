@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 from pathlib import Path
 import stat
@@ -8,6 +9,12 @@ import zipfile
 
 import pytest
 
+from mf4_analyzer.extensions.contract import (
+    FileEntry,
+    bind_verified_package,
+    generate_package_manifest,
+    parse_package_manifest,
+)
 from tools.extension_manager.unpack import (
     VERIFICATION_FAILED,
     ManifestFile,
@@ -437,3 +444,150 @@ def test_default_free_space_probe_does_not_fill_the_disk(tmp_path: Path):
 def test_unix_symlink_mode_detection_does_not_need_windows():
     assert stat.S_ISLNK(0o120777)
     assert not stat.S_ISLNK(0o100644)
+
+
+def _real_package_bytes() -> tuple[bytes, dict[str, bytes]]:
+    files = {
+        "site-packages/av/__init__.py": b"__version__ = '1'\n",
+        "native/av/lib.bin": b"dll-bytes",
+    }
+    manifest = generate_package_manifest(
+        component="media",
+        package_revision=3,
+        runtime_id="rt1-0123456789abcdef0123456789abcdef",
+        component_api="1",
+        min_manager_version="1.0.0",
+        python_tag="cp311",
+        platform_tag="win_amd64",
+        module_roots=["site-packages/av"],
+        dll_directories=["native/av"],
+        dependency_ownership={"av": "media"},
+        files=[
+            {"relpath": name, "size": len(payload), "sha256": _sha256(payload)}
+            for name, payload in files.items()
+        ],
+        max_extract_bytes=10_000,
+        probe_type="media_wav_mp4_v1",
+        required_features=["store_layout_v1", "native_probe_v1", "file_manifest_sha256"],
+    )
+    json_bytes = json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8")
+    packed = dict(files)
+    packed["package.json"] = json_bytes
+    return json_bytes, packed
+
+
+def test_contract_file_entries_unpack_a_real_zip(tmp_path: Path):
+    json_bytes, packed = _real_package_bytes()
+    package = parse_package_manifest(json_bytes)
+    app_root, extensions, _internal, staging = _layout(tmp_path)
+    archive = _write_files_zip(tmp_path / "media.zip", packed)
+    entries = list(package.files) + [
+        FileEntry(relpath="package.json", size=len(json_bytes), sha256=_sha256(json_bytes))
+    ]
+    result = extract_verified_zip(
+        archive,
+        staging,
+        extensions_root=extensions,
+        manifest=entries,
+        limits=_limits(packed),
+        app_root=app_root,
+    )
+    assert set(result.files) == set(packed)
+    assert (staging / "package.json").read_bytes() == json_bytes
+    assert (staging / "site-packages/av/__init__.py").read_bytes() == packed["site-packages/av/__init__.py"]
+
+
+def test_fixture_relpath_dicts_are_not_accepted_as_unpack_manifest(tmp_path: Path):
+    fixture = json.loads(
+        (Path(__file__).resolve().parent / "fixtures" / "extensions" / "package-valid.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    error = _raises_verification(
+        tmp_path,
+        files={"site-packages/av/__init__.py": b"x" * 128},
+        manifest=fixture["files"],
+    )
+    assert error.detail == "manifest"
+
+
+def test_missing_hash_is_rejected(tmp_path: Path):
+    files = {"site-packages/av/__init__.py": b"ok"}
+    with pytest.raises((UnpackError, ValueError)):
+        _extract(
+            tmp_path,
+            files=files,
+            manifest=[ManifestFile(relative_path="site-packages/av/__init__.py", size=2, sha256="")],
+        )
+
+
+def test_hash_mismatch_during_extract_cleans_partial_files(tmp_path: Path):
+    files = {
+        "site-packages/av/a.py": b"ok-a",
+        "site-packages/av/b.py": b"ok-b-payload",
+    }
+    manifest = _manifest(files)
+    manifest[1] = ManifestFile(
+        relative_path="site-packages/av/b.py",
+        size=len(files["site-packages/av/b.py"]),
+        sha256="0" * 64,
+    )
+    app_root, extensions, _internal, staging = _layout(tmp_path)
+    archive = _write_files_zip(tmp_path / "pkg.zip", files)
+    with pytest.raises(UnpackError) as caught:
+        extract_verified_zip(
+            archive,
+            staging,
+            extensions_root=extensions,
+            manifest=manifest,
+            limits=_limits(files),
+            app_root=app_root,
+        )
+    assert caught.value.reason_code == VERIFICATION_FAILED
+    assert caught.value.detail == "hash_mismatch"
+    leftover = [path for path in staging.rglob("*") if path.is_file()] if staging.exists() else []
+    assert leftover == []
+    retry_manifest = _manifest(files)
+    result = extract_verified_zip(
+        archive,
+        staging,
+        extensions_root=extensions,
+        manifest=retry_manifest,
+        limits=_limits(files),
+        app_root=app_root,
+    )
+    assert set(result.files) == set(files)
+
+
+def test_verified_package_rejects_embedded_package_json_mismatch(tmp_path: Path):
+    json_bytes, packed = _real_package_bytes()
+    packed["package.json"] = json_bytes + b"\n"
+    verified = bind_verified_package(
+        snapshot_id="snap-1",
+        component="media",
+        runtime_id="rt1-0123456789abcdef0123456789abcdef",
+        package_revision=3,
+        component_api="1",
+        min_manager_version="1.0.0",
+        zip_target="packages/media-3.zip",
+        zip_sha256="a" * 64,
+        zip_length=16,
+        manifest_target="packages/media-3.package.json",
+        manifest_sha256=_sha256(json_bytes),
+        manifest_length=len(json_bytes),
+        package_json_bytes=json_bytes,
+    )
+    app_root, extensions, _internal, staging = _layout(tmp_path)
+    archive = _write_files_zip(tmp_path / "mismatch.zip", packed)
+    with pytest.raises(UnpackError) as caught:
+        extract_verified_zip(
+            archive,
+            staging,
+            extensions_root=extensions,
+            manifest=verified.unpack_manifest(),
+            limits=_limits(packed),
+            app_root=app_root,
+        )
+    assert caught.value.detail in {"size_mismatch", "hash_mismatch"}
+    leftover = [path for path in staging.rglob("*") if path.is_file()] if staging.exists() else []
+    assert leftover == []

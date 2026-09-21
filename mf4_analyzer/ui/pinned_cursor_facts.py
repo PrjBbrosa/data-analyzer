@@ -9,7 +9,11 @@ from __future__ import annotations
 import math
 from dataclasses import replace
 
-from .cursor_display_model import CursorDisplayChannel, PinnedCursorSample
+from .cursor_display_model import (
+    CursorDisplayChannel,
+    FrequencyCursorChannel,
+    PinnedCursorSample,
+)
 from .plot_helpers import _cursor_identity_parts
 
 
@@ -118,6 +122,14 @@ def _key_in(key, pool) -> bool:
 
 
 def _hidden_channel_row(binding, existing, diagnostic=HIDDEN_CHANNEL_TEXT):
+    """Build a non-numeric status row. Never mint a fake ``.value``.
+
+    Time-domain numeric samples are ``CursorDisplayChannel``. Frequency
+    numeric samples are ``FrequencyCursorChannel``, which has no diagnostic
+    field, so unchecked / unavailable / hidden frequency placeholders become
+    an explicit status ``CursorDisplayChannel``. Presentation must not read
+    ``.value`` on that status channel.
+    """
     if existing is not None and isinstance(existing, CursorDisplayChannel):
         return replace(
             existing,
@@ -129,6 +141,15 @@ def _hidden_channel_row(binding, existing, diagnostic=HIDDEN_CHANNEL_TEXT):
             branches=(),
             diagnostic=diagnostic,
         )
+    if existing is not None and isinstance(existing, FrequencyCursorChannel):
+        return CursorDisplayChannel(
+            identity=existing.identity,
+            source_label=existing.source_label,
+            channel_label=existing.channel_label,
+            color=existing.color,
+            unit_suffix=existing.unit_suffix,
+            diagnostic=diagnostic,
+        )
     return CursorDisplayChannel(
         identity=(
             (binding.fid, binding.channel, binding.binding_id)
@@ -137,6 +158,28 @@ def _hidden_channel_row(binding, existing, diagnostic=HIDDEN_CHANNEL_TEXT):
         source_label="",
         channel_label=binding.channel,
         diagnostic=diagnostic,
+    )
+
+
+def _frequency_sample_channel_kind(channel) -> str:
+    """Classify one frequency pin channel: ``numeric`` or ``status``.
+
+    Numeric FFT readouts are ``FrequencyCursorChannel``. Unchecked /
+    unavailable / hidden placeholders are ``CursorDisplayChannel`` with a
+    diagnostic. Any other object is a contract bug, not a missing value.
+    """
+    if isinstance(channel, FrequencyCursorChannel):
+        return "numeric"
+    if isinstance(channel, CursorDisplayChannel):
+        if str(channel.diagnostic or "").strip():
+            return "status"
+        raise TypeError(
+            "frequency pin sample used CursorDisplayChannel without "
+            "diagnostic; numeric FFT samples must be FrequencyCursorChannel"
+        )
+    raise TypeError(
+        "frequency pin sample requires FrequencyCursorChannel or a "
+        f"diagnostic CursorDisplayChannel, got {type(channel).__name__}"
     )
 
 

@@ -325,6 +325,7 @@ class Toolbar(QWidget):
         self._mode_segment = segment_frame
         self._mode_zone_dividers = (left_mode_divider, right_mode_divider)
         self._pending_mirror_sync = False
+        self._project_session_projection = None
         self._left_widget.installEventFilter(self)
         self._right_widget.installEventFilter(self)
         self._wire()
@@ -780,6 +781,13 @@ class Toolbar(QWidget):
         bound=False,
     ):
         """Project owner projection: name chip, tooltips, and action enablement."""
+        projection = (
+            display_name, tooltip, bool(dirty), bool(can_save),
+            bool(can_close), bool(bound),
+        )
+        if self._project_session_projection == projection:
+            return
+        self._project_session_projection = projection
         if bound:
             name = (display_name or "").strip() or "项目"
             mark = "*" if dirty else ""

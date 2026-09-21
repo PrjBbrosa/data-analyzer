@@ -14,6 +14,7 @@ from mf4_analyzer.ui.chart_stack.pinning.sampling import (
 )
 from mf4_analyzer.ui.cursor_display_model import (
     CursorDisplayChannel,
+    FrequencyCursorChannel,
     FrfCursorPoint,
     FrfCursorSample,
     PinnedCursorSample,
@@ -27,6 +28,15 @@ def _channel(fid="f0", name="torque", value=1.5):
         source_label="src",
         channel_label=name,
         current_value=value,
+    )
+
+
+def _freq_channel(fid="f1", name="vib", **values):
+    return FrequencyCursorChannel(
+        identity=(fid, name),
+        source_label="src",
+        channel_label=name,
+        **values,
     )
 
 
@@ -102,13 +112,13 @@ class FakeFrequencyCanvas:
     def evaluate_frequency_cursor_sample(self, x):
         return PinnedCursorSample(
             domain="frequency", mode="single", x=x,
-            channels=(_channel(fid="f1", name="vib", value=x),),
+            channels=(_freq_channel(value=x),),
         )
 
     def evaluate_dual_frequency_cursor_sample(self, ax, bx):
         return PinnedCursorSample(
             domain="frequency", mode="dual", ax=ax, bx=bx,
-            channels=(_channel(fid="f1", name="vib"),),
+            channels=(_freq_channel(a_value=ax, b_value=bx, delta_ab=bx - ax),),
         )
 
 
@@ -144,10 +154,10 @@ class LegacyTimeCanvas:
 
 class LegacyFrequencyCanvas:
     def evaluate_frequency_cursor(self, x):
-        return (x, (_channel(fid="f1", name="amp", value=x),))
+        return (x, (_freq_channel(fid="f1", name="amp", value=x),))
 
     def evaluate_dual_frequency_cursor(self, ax, bx):
-        return (ax, bx, (_channel(fid="f1", name="amp"),))
+        return (ax, bx, (_freq_channel(fid="f1", name="amp", a_value=ax, b_value=bx),))
 
 
 class LegacyFrfCanvas:
@@ -177,11 +187,15 @@ def test_fake_four_domain_single_and_dual_dispatch():
 
     freq = ev.evaluate(FakeFrequencyCanvas(), "frequency", mode="single", x=40.0)
     assert freq.domain == "frequency"
-    assert freq.channels[0].current_value == 40.0
+    assert isinstance(freq.channels[0], FrequencyCursorChannel)
+    assert freq.channels[0].value == 40.0
     dual_freq = ev.evaluate(
         FakeFrequencyCanvas(), "frequency", mode="dual", ax=10.0, bx=20.0,
     )
     assert dual_freq.ax == 10.0 and dual_freq.bx == 20.0
+    assert isinstance(dual_freq.channels[0], FrequencyCursorChannel)
+    assert dual_freq.channels[0].a_value == 10.0
+    assert dual_freq.channels[0].b_value == 20.0
 
     frf = ev.evaluate(FakeFrfCanvas(), "frf", mode="single", x=12.0)
     assert frf.domain == "frf"
@@ -201,6 +215,8 @@ def test_legacy_wrap_paths_and_sample_fn_cursor_fallback():
 
     freq = ev.evaluate(LegacyFrequencyCanvas(), "frequency", mode="single", x=8.0)
     assert freq.x == 8.0
+    assert isinstance(freq.channels[0], FrequencyCursorChannel)
+    assert freq.channels[0].value == 8.0
     assert freq.channels[0].channel_label == "amp"
     dual_freq = ev.evaluate(
         LegacyFrequencyCanvas(), "frequency", mode="dual", ax=1.0, bx=2.0,
@@ -331,3 +347,26 @@ def test_real_time_canvas_evaluate_parity(qapp):
     gen, rev = ev.canvas_generations(canvas)
     stamped = ev.stamp_sample(canvas, sample)
     assert ev.sample_matches_generation(stamped, gen, rev) is True
+
+
+def test_frequency_wrap_keeps_numeric_and_status_channel_types():
+    from mf4_analyzer.ui.pinned_cursor_facts import UNCHECKED_TEXT
+
+    ev = PinSampleEvaluator()
+    numeric = ev.wrap_channels(
+        "frequency", "single", x=12.0, channels=(_freq_channel(value=3.0),),
+    )
+    assert isinstance(numeric.channels[0], FrequencyCursorChannel)
+    assert numeric.channels[0].value == 3.0
+    status_row = CursorDisplayChannel(
+        identity=("f1", "vib"),
+        source_label="",
+        channel_label="vib",
+        diagnostic=UNCHECKED_TEXT,
+    )
+    wrapped = ev.wrap_channels(
+        "frequency", "single", x=12.0, channels=(status_row,),
+    )
+    assert isinstance(wrapped.channels[0], CursorDisplayChannel)
+    assert wrapped.channels[0].diagnostic == UNCHECKED_TEXT
+    assert not hasattr(wrapped.channels[0], "value")
