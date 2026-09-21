@@ -226,6 +226,7 @@ $QssIconFallbackDir = Join-Path $RepoRoot "mf4_analyzer\ui_kit\resources"
 $IconsDir = Join-Path $RepoRoot "assets\icons"
 $AppIcon = Join-Path $IconsDir "tracelab.ico"
 $RuntimeDependencyTool = Join-Path $PSScriptRoot "windows_runtime_dependencies.py"
+$BundlePolicyTool = Join-Path $PSScriptRoot "windows_bundle_policy.py"
 $BatchRenderSmokeTool = Join-Path $PSScriptRoot "verify_frozen_batch_render.py"
 $ImporterSmokeTool = Join-Path $PSScriptRoot "verify_lite_importer_runtime.py"
 $VenvDir = Join-Path $RepoRoot ".venv-build-win"
@@ -261,7 +262,7 @@ Copy-Item -LiteralPath $PSCommandPath -Destination $BuildEvidenceDir
 # Default output: dist\TraceLabAnalyzer8.3.1-modular\TraceLabAnalyzer8.3.1-modular.exe
 # (override with -Version or -AppName). Does not replace dist\TraceLabAnalyzer8.3.1\.
 
-foreach ($RequiredPath in @($EntryScript, $Requirements, $StyleQss, $RuntimeDependencyTool, $BatchRenderSmokeTool, $ImporterSmokeTool)) {
+foreach ($RequiredPath in @($EntryScript, $Requirements, $StyleQss, $RuntimeDependencyTool, $BundlePolicyTool, $BatchRenderSmokeTool, $ImporterSmokeTool)) {
     if (-not (Test-Path $RequiredPath)) {
         throw "Required file not found: $RequiredPath"
     }
@@ -309,6 +310,9 @@ try {
     throw "Frozen import dependency arguments were not valid JSON: $_"
 }
 Write-Step "Building analyzer-only modular folder-style exe with PyInstaller"
+$BundlePolicyArgsJson = Invoke-LoggedNative -Executable $VenvPython -Arguments @($BundlePolicyTool, "--pyinstaller-args-json", "--flavor", "lite") -CaptureStdout
+$BundlePolicyArgs = [string[]](ConvertFrom-Json -InputObject $BundlePolicyArgsJson)
+Copy-Item -LiteralPath $BundlePolicyTool -Destination $BuildEvidenceDir
 $AddDataStyle = "$StyleQss;mf4_analyzer\ui_kit"
 $AddDataQssIconFallbacks = "$QssIconFallbackDir;mf4_analyzer\ui_kit\resources"
 $AddDataIcons = "$IconsDir;assets\icons"
@@ -349,17 +353,11 @@ $HiddenImports = @(
     # logging.config / logging.handlers / timeit hidden imports are gone: they
     # existed only to satisfy pyxcp's rich / pya2l's SQLAlchemy closures.
 )
-# The whole repo (Analyzer + acquisition) only imports QtWidgets/QtCore/QtGui —
-# verified by grep across every .py. But --collect-submodules pyqtgraph (below)
-# drags in pyqtgraph's alternate-Qt-backend submodules, which import a pile of
-# Qt modules nothing here uses (biggest win: dropping QtQml/QtQuick removes the
-# ~20 MB qml tree). KEEP QtOpenGL (pyqtgraph GL render), QtSvg (icons) and
-# QtPrintSupport (pyqtgraph export) — pyqtgraph imports them INDIRECTLY, so they
-# never show up in an app-code grep; excluding them would break rendering.
-# QtNetwork is deliberately NOT excluded: pyqtgraph's remote view could import
-# it, and it costs only ~1-2 MB — not worth the risk. Re-verify chart curves +
-# icons render in the packaged exe after any change here.
+# Product charts use raster rendering; OpenGL is not enabled. Preserve SVG,
+# print/export and network support. The shared policy also checks and removes
+# unused native Qt payloads that module exclusions alone do not eliminate.
 $UnusedQtModules = @(
+    "PyQt5.QtOpenGL",
     "PyQt5.QtWebEngine",
     "PyQt5.QtWebEngineCore",
     "PyQt5.QtWebEngineWidgets",
@@ -427,10 +425,11 @@ $PyInstallerArgs += @(
     # Product rendering is Qt/pyqtgraph-only.  Keep a stale build environment
     # from reintroducing Matplotlib through PyInstaller's analysis graph.
     "--exclude-module", "matplotlib",
-    "--collect-submodules", "pyqtgraph",
-    "--collect-all", "qtawesome"
+    "--hidden-import", "pyqtgraph",
+    "--hidden-import", "qtawesome"
 )
 $PyInstallerArgs += $RuntimeDependencyArgs
+$PyInstallerArgs += $BundlePolicyArgs
 foreach ($HiddenImport in $HiddenImports) {
     $PyInstallerArgs += @("--hidden-import", $HiddenImport)
 }
@@ -488,6 +487,9 @@ foreach ($Name in $OptionalLeakNames) {
 if ($OptionalLeaks.Count -ne 0) {
     throw "Modular base leaked optional importer trees: $($OptionalLeaks -join '; ')"
 }
+
+Write-Step "Pruning unused bundle payloads"
+Invoke-LoggedNative -Executable $VenvPython -Arguments @($BundlePolicyTool, "--flavor", "lite", "--exe", $ExePath, "--report", (Join-Path $BuildEvidenceDir "bundle-prune.json"))
 
 $script:ExeGenerated = $true
 Write-Step "Verifying frozen batch rendering (independent post-checks)"

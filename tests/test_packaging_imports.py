@@ -98,7 +98,9 @@ def test_windows_build_script_lists_new_modules_and_widget_collection():
     assert "--collect-submodules" in text
     assert "mf4_analyzer.acquisition_ui.widgets" in text
     assert "pyqtgraph" in text
-    assert '"--collect-submodules", "pyqtgraph"' in text
+    # The upstream hook collects Qt templates; collecting every submodule also
+    # pulls in examples and their test dependencies.
+    assert '"--hidden-import", "pyqtgraph"' in text
 
 
 def test_windows_build_scripts_collect_packaged_qss_icon_fallbacks():

@@ -26,7 +26,7 @@ def test_windows_folder_build_script_uses_onedir_pyinstaller_contract():
         "--windowed",
         "--add-data",
         "style.qss",
-        "--collect-all",
+        "--hidden-import",
         "qtawesome",
         "MF4 Data Analyzer V1.py",
         "TraceLab8.3.1",
@@ -270,7 +270,7 @@ def test_lite_build_script_uses_onedir_pyinstaller_contract():
         "--add-data",
         "style.qss",
         "mf4_analyzer\\help",
-        "--collect-all",
+        "--hidden-import",
         "qtawesome",
         "MF4 Data Analyzer V1.py",
     ):
@@ -336,7 +336,8 @@ def test_lite_build_script_excludes_unused_qt_modules_but_keeps_render_deps():
         assert f'"{module}"' in text, f"lite build should exclude {module}"
 
     # Render/export/icon Qt deps must NOT be excluded (they are used).
-    for keep in ("PyQt5.QtOpenGL", "PyQt5.QtSvg", "PyQt5.QtPrintSupport"):
+    assert '"PyQt5.QtOpenGL"' in text  # Product charts do not enable OpenGL.
+    for keep in ("PyQt5.QtSvg", "PyQt5.QtPrintSupport"):
         assert keep not in text, (
             f"{keep} must NOT be excluded — pyqtgraph GL render / icons / export "
             f"depend on it"
@@ -363,7 +364,8 @@ def test_full_build_script_excludes_unused_qt_but_keeps_acquisition_and_render_d
         assert f'"{module}"' in text, f"full build should exclude {module}"
 
     # Render/export Qt deps must stay (pyqtgraph uses them indirectly).
-    for keep in ("PyQt5.QtOpenGL", "PyQt5.QtSvg", "PyQt5.QtPrintSupport"):
+    assert '"PyQt5.QtOpenGL"' in text
+    for keep in ("PyQt5.QtSvg", "PyQt5.QtPrintSupport"):
         assert keep not in text, f"{keep} must NOT be excluded in the full build"
 
     # Conservative: QtNetwork kept in BOTH builds.

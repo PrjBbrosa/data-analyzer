@@ -47,6 +47,7 @@ $IconsDir = Join-Path $RepoRoot "assets\icons"
 $AppIcon = Join-Path $IconsDir "tracelab.ico"
 $RuntimeHookPyxcp = Join-Path $PSScriptRoot "pyinstaller_rthook_pyxcp_vendor.py"
 $RuntimeDependencyTool = Join-Path $PSScriptRoot "windows_runtime_dependencies.py"
+$BundlePolicyTool = Join-Path $PSScriptRoot "windows_bundle_policy.py"
 $BatchRenderSmokeTool = Join-Path $PSScriptRoot "verify_frozen_batch_render.py"
 $VenvDir = Join-Path $RepoRoot ".venv-build-win"
 $VenvPython = Join-Path $VenvDir "Scripts\python.exe"
@@ -61,7 +62,7 @@ $EvidenceDir = Join-Path $RepoRoot "docs\analyzer\acquisition\evidence\vector-xc
 $BuildEvidenceDir = Join-Path $RepoRoot ".state\build-evidence"
 # Default output: dist\TraceLab8.3.1\TraceLab8.3.1.exe (override with -Version or -AppName)
 
-foreach ($RequiredPath in @($EntryScript, $Requirements, $AcquisitionRequirements, $RuntimeVerifier, $StyleQss, $RuntimeHookPyxcp, $RuntimeDependencyTool, $BatchRenderSmokeTool)) {
+foreach ($RequiredPath in @($EntryScript, $Requirements, $AcquisitionRequirements, $RuntimeVerifier, $StyleQss, $RuntimeHookPyxcp, $RuntimeDependencyTool, $BundlePolicyTool, $BatchRenderSmokeTool)) {
     if (-not (Test-Path $RequiredPath)) {
         throw "Required file not found: $RequiredPath"
     }
@@ -103,7 +104,7 @@ if ($LASTEXITCODE -ne 0) {
     throw "Could not resolve frozen import dependency arguments"
 }
 try {
-    $RuntimeDependencyArgs = @($RuntimeDependencyArgsJson | ConvertFrom-Json)
+    $RuntimeDependencyArgs = [string[]](ConvertFrom-Json -InputObject $RuntimeDependencyArgsJson)
 } catch {
     throw "Frozen import dependency arguments were not valid JSON: $_"
 }
@@ -162,6 +163,10 @@ foreach ($RequiredVendorPath in @($Pya2lPackage, $Pya2lMetadata)) {
 }
 
 Write-Step "Building folder-style exe with PyInstaller"
+$BundlePolicyArgsJson = & $VenvPython $BundlePolicyTool --pyinstaller-args-json --flavor full
+if ($LASTEXITCODE -ne 0) { throw "Could not resolve bundle policy arguments" }
+$BundlePolicyArgs = [string[]](ConvertFrom-Json -InputObject $BundlePolicyArgsJson)
+Copy-Item -LiteralPath $BundlePolicyTool -Destination $BuildEvidenceDir
 $AddDataStyle = "$StyleQss;mf4_analyzer\ui_kit"
 $AddDataQssIconFallbacks = "$QssIconFallbackDir;mf4_analyzer\ui_kit\resources"
 $AddDataIcons = "$IconsDir;assets\icons"
@@ -231,17 +236,11 @@ $HiddenImports = @(
     "mf4_analyzer.acquisition_ui.history_tab",
     "mf4_analyzer.acquisition_ui.replay_tab"
 )
-# Both the Analyzer AND the acquisition packages only import QtWidgets/QtCore/
-# QtGui — verified by grep across every .py (acquisition_ui widgets included).
-# --collect-submodules pyqtgraph otherwise drags in pyqtgraph's alternate-Qt-
-# backend submodules, which import a pile of Qt modules nothing here uses
-# (biggest win: dropping QtQml/QtQuick removes the ~20 MB qml tree). KEEP
-# QtOpenGL (pyqtgraph GL render), QtSvg (icons) and QtPrintSupport (pyqtgraph
-# export) — pyqtgraph imports them INDIRECTLY, so they never appear in an
-# app-code grep; excluding them would break rendering. QtNetwork is
-# deliberately NOT excluded (pyqtgraph remote view may import it; ~1-2 MB, not
-# worth the risk). Re-verify chart curves + icons render in the packaged exe.
+# Product charts use raster rendering; OpenGL is not enabled. Preserve SVG,
+# print/export and network support. The shared policy also checks and removes
+# unused native Qt payloads that module exclusions alone do not eliminate.
 $UnusedQtModules = @(
+    "PyQt5.QtOpenGL",
     "PyQt5.QtWebEngine",
     "PyQt5.QtWebEngineCore",
     "PyQt5.QtWebEngineWidgets",
@@ -311,10 +310,11 @@ $PyInstallerArgs += @(
     # from reintroducing Matplotlib through PyInstaller's analysis graph.
     "--exclude-module", "matplotlib",
     "--collect-submodules", "mf4_analyzer.acquisition_ui.widgets",
-    "--collect-submodules", "pyqtgraph",
-    "--collect-all", "qtawesome"
+    "--hidden-import", "pyqtgraph",
+    "--hidden-import", "qtawesome"
 )
 $PyInstallerArgs += $RuntimeDependencyArgs
+$PyInstallerArgs += $BundlePolicyArgs
 foreach ($HiddenImport in $HiddenImports) {
     $PyInstallerArgs += @("--hidden-import", $HiddenImport)
 }
@@ -370,6 +370,10 @@ foreach ($dllName in @("MSVCP140.dll", "MSVCP140_1.dll")) {
         }
     }
 }
+
+Write-Step "Pruning unused bundle payloads"
+& $VenvPython $BundlePolicyTool --flavor full --exe $ExePath --report (Join-Path $BuildEvidenceDir "$AppName-bundle-prune.json")
+if ($LASTEXITCODE -ne 0) { throw "Bundle pruning or dependency validation failed" }
 
 Write-Step "Verifying frozen batch rendering (offscreen + windows)"
 & $VenvPython $BatchRenderSmokeTool --exe $ExePath --platform offscreen --evidence-json $BatchRenderOffscreenSmokeEvidence
