@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TraceLab · Cursor 控件选型</title>
+<style>
+:root{--ink:#243448;--muted:#68788d;--blue:#2167c7;--line:#dbe3ec;--canvas:#fff;--paper:#f5f7fa;--mono:"SFMono-Regular",Consolas,monospace}
+*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:14px/1.65 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif}
+button,select{font:inherit;color:inherit}button{cursor:pointer}button:focus-visible,a:focus-visible{outline:3px solid #8eb6ee;outline-offset:3px}button{touch-action:manipulation}button:disabled{cursor:default;opacity:.45}
+header{max-width:1260px;margin:0 auto;padding:30px 32px 20px}.brand{display:flex;align-items:center;gap:10px;color:#476181;font-size:13px}.brand svg{width:25px;height:25px}h1{font-size:30px;letter-spacing:-.6px;line-height:1.3;margin:17px 0 10px;font-weight:650}header p{margin:0;color:var(--muted);max-width:850px}.prototype{margin-left:auto;border:1px solid #d1dae6;padding:2px 9px;border-radius:5px;color:#68788d;font-size:12px}
+main{max-width:1260px;margin:auto;padding:0 32px 40px}.tabs{display:flex;gap:27px;border-bottom:1px solid #ccd8e6;margin-bottom:20px}.tabs button{border:0;border-bottom:3px solid transparent;background:none;padding:12px 0;color:#6b7a8e;font-weight:600}.tabs button[aria-selected=true]{border-bottom-color:var(--blue);color:var(--blue)}
+.topic[hidden]{display:none}.intro{display:flex;gap:32px;align-items:flex-start;margin:20px 0}.intro h2{font-size:20px;line-height:1.4;margin:0 0 6px}.intro p{margin:0;color:var(--muted);max-width:800px}.count{font-size:12px;white-space:nowrap;margin-left:auto;padding-top:5px;color:#7f8da1}
+.options{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.options.two{grid-template-columns:repeat(2,minmax(0,1fr))}.option{background:white;border:1px solid var(--line);border-radius:10px;padding:18px;position:relative;display:flex;flex-direction:column;min-width:0}.option.chosen{border-color:#75a3df;box-shadow:inset 0 0 0 1px #75a3df}.option h3{font-size:15px;margin:0 0 4px}.option p{font-size:12px;color:var(--muted);margin:9px 0 12px;line-height:1.6;min-height:38px}.recommend{font-size:10px;color:#2167c7;background:#edf4ff;padding:2px 6px;border-radius:4px;margin-left:6px;font-weight:500;white-space:nowrap}.choose{margin-top:auto;border:1px solid #ccd8e6;border-radius:5px;background:#fff;padding:6px 9px;text-align:center;font-size:12px}.chosen>.choose{background:#edf4ff;border-color:#abc6eb;color:#174f99}
+.mini-panel{border:1px solid #d2dfee;border-radius:9px;padding:10px;margin:11px 0 0;min-height:137px;background:#fff}.mini-head{display:flex;align-items:center;justify-content:space-between;gap:4px;margin-bottom:8px}.mini-head strong{font-size:12px;color:#527395}.sample-time{font-weight:600;font-size:13px}.small-action{height:25px;display:inline-flex;align-items:center;justify-content:center;gap:4px;border:1px solid #c3cfdd;background:#f9fbfd;border-radius:5px;padding:0 7px;font-size:11px;line-height:1;white-space:nowrap}.small-action[aria-pressed=true]{color:#175598;background:#eaf2fe;border-color:#7fa8dc}.small-action.icononly{width:26px;padding:0}.icon{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round;flex-shrink:0}.seg{display:inline-flex;padding:2px;background:#edf1f6;border-radius:5px}.seg button{font-size:10px;padding:3px 6px;background:none;border:0;border-radius:3px;line-height:1.3}.seg button[aria-pressed=true]{background:white;color:#215997;box-shadow:0 1px 3px #33415520}.mini-row{display:flex;justify-content:space-between;gap:8px;font-size:12px;line-height:1.9}.mini-row .reading{font-variant-numeric:tabular-nums}.mini-row .name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px;background:currentColor}
+.recommendation{display:flex;gap:12px;padding:13px 16px;margin-top:16px;background:#edf3fa;border-left:3px solid #7599c7;border-radius:0 6px 6px 0;font-size:13px}.recommendation b{white-space:nowrap;color:#295581}.recommendation span{color:#526780}
+.state-labels,.state-samples{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;text-align:center}.state-labels{font-size:10px;color:#6d7c90;line-height:1.45;margin-top:14px}.state-samples{align-items:center;margin:14px 0}.state-samples>div{min-height:40px;display:flex;justify-content:center;align-items:center}.marker{min-width:48px;height:29px;border-radius:6px;border:1px solid #aab7c8;background:#f8fafc;color:#56657a;padding:0 7px;display:inline-flex;justify-content:center;align-items:center;gap:5px;font-size:14px;line-height:1;position:relative;font-weight:500;white-space:nowrap}
+.marker .pip{width:5px;height:5px;border:1px solid currentColor;border-radius:50%;flex-shrink:0}.marker.open .pip{background:currentColor}.marker.open{background:#e5efff;border-color:#6592cf;color:#164878}.marker.active{background:#2167c7;border-color:#174d98;color:white;box-shadow:0 0 0 2px #d3e2f7}.marker.active .pip{background:currentColor}
+.axis-marker:hover:not(.active){border-color:#467ab8;box-shadow:0 0 0 1px #d4e2f4}
+.palette-b .marker{background:#fff;border-color:#aab7c8;color:#66748a}.palette-b .marker .pip{border-radius:1px}.palette-b .marker.open{border-color:#5c8ece;background:#f1f6ff;color:#174c8c;box-shadow:inset 3px 0 #6592cf}.palette-b .marker.active{background:#e0ecff;border:2px solid #185bbc;color:#12447e;box-shadow:0 0 0 2px #d6e4f8}.palette-b .marker.active:after{content:"";position:absolute;bottom:-5px;left:19px;width:7px;height:3px;background:#185bbc;border-radius:2px}
+.palette-c .marker{background:#fff;border-color:#b5bfcd;color:#6d798b}.palette-c .marker.open{background:#e9edf3;border-color:#78889e;color:#354961}.palette-c .marker.active{background:#334a66;border-color:#23384f;color:#fff;box-shadow:0 0 0 2px #d6dfe9}
+.oldstrip{display:flex;align-items:center;justify-content:center;gap:12px;margin:0 0 15px;padding:9px;background:#eef2f7;border-radius:7px;font-size:12px;color:#718197}.oldchip{padding:0 7px;border:1px solid #bed0e9;border-radius:4px;background:#f1f6fd;color:#29394d;font-size:14px;line-height:25px}.oldchip.open{background:#c5dbf8;border-color:#5b8fd4}.oldchip.active{background:#dceaff;border-color:#729ee0}.current-note{font-size:12px;color:#6b7b90;margin:0 0 12px}
+.action-example{border:1px solid #d2dfee;border-radius:8px;background:#fff;padding:11px;margin:12px 0 2px}.action-example .mini-head{margin:0;min-height:28px}.pilltag{border:0;border-radius:4px;background:#edf3fa;color:#345e91;padding:1px 5px;font-weight:600;font-size:12px}.mini-actions{display:flex;gap:5px}.cross{font-size:17px}.outcome{font-size:12px;color:#577087;line-height:1.7;padding-top:7px}.semantics{border-collapse:collapse;width:100%;font-size:12px;margin-top:15px;background:#fff}.semantics td,.semantics th{padding:9px 12px;border-bottom:1px solid #e2e8f0;text-align:left}.semantics th{color:#7b8799;font-weight:500}.semantics td:first-child{white-space:nowrap;color:#365474}.semantics caption{text-align:left;font-weight:600;padding:0 0 8px;color:#526984}
+.lab{margin-top:27px;border:1px solid #cfdbe9;border-radius:12px;overflow:hidden;background:white}.lab-head{padding:14px 18px;border-bottom:1px solid #dce4ef;display:flex;align-items:center;justify-content:space-between;gap:12px}.lab-head strong{font-size:14px}.lab-head small{font-size:11px;color:#7a8799;margin-left:9px}.selection-summary{font-size:12px;color:#4d688c}.lab-tools{padding:10px 18px;display:flex;align-items:center;gap:8px;border-bottom:1px solid #e3e9f1;background:#f9fbfd;flex-wrap:wrap}.lab-tools>span{font-size:11px;color:#8793a3;margin-right:3px}.lab-tools button{font-size:12px;padding:4px 10px;border-radius:5px;border:1px solid #d3deeb;background:white}.lab-tools button[aria-pressed=true]{background:#e6effc;color:#1b589c;border-color:#8cb0df}.lab-tools .reset{margin-left:auto}
+.plot{position:relative;height:330px;margin:15px 22px 0 44px;border:1px solid #c2cedd;background:#fff;overflow:hidden;isolation:isolate}.waves,.tethers{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}.tethers{z-index:2}.legend{position:absolute;left:9px;top:7px;font-size:11px;background:#ffffffdc;padding:2px 6px;z-index:1}.legend span{margin-right:15px}.position-line{position:absolute;left:35%;top:0;height:100%;border-left:1.5px dashed #6787b1;z-index:1}.position-line.active{border-color:#2167c7;border-width:2px}.axis-marker{position:absolute;left:35%;bottom:8px;transform:translateX(-50%);z-index:5;touch-action:none;user-select:none}.axis-marker.grab{cursor:grabbing}.axis-ticks{display:flex;justify-content:space-between;margin:3px 24px 0 46px;color:#93a0af;font-size:11px}.axis-title{text-align:center;color:#8493a6;font-size:11px;margin:2px 0 10px}
+.cursor-panel{position:absolute;left:53%;top:41px;width:265px;background:#fff;border:1px solid #bacde6;border-radius:10px;z-index:4;box-shadow:0 2px 5px #45638110;padding:11px 12px 12px;font-size:13px;max-width:calc(100% - 16px)}.cursor-panel.active{border-color:#528bd1;box-shadow:0 0 0 1px #c3d8f3,0 2px 5px #45638110}.cursor-panel .panel-head{display:flex;justify-content:space-between;align-items:center;gap:6px;cursor:grab;touch-action:none;user-select:none}.cursor-panel .panel-head:active{cursor:grabbing}.panel-tools{display:flex;align-items:center;gap:5px}.panel-identity{font-weight:600;color:#416d9f;font-size:13px;white-space:nowrap}.panel-time{font-size:17px;font-weight:650;letter-spacing:-.3px;line-height:1.4;margin-top:7px;font-variant-numeric:tabular-nums}.col-head{display:flex;justify-content:space-between;color:#91a0b3;font-size:11px;margin-top:8px}.data-row{display:flex;justify-content:space-between;gap:15px;line-height:2;font-size:13px}.data-row .channel{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.data-row .num{font-family:var(--mono);font-size:12px;font-variant-numeric:tabular-nums}.unitonly .channel-name{display:none}.unitonly .channel-unit{display:inline}.channel-unit{display:none}.cursor-panel.unitonly{width:232px}.cursor-panel.live{border-style:solid;border-color:#c6d5e8;background:#fffffff5}
+.panel-menu{position:absolute;left:11px;top:41px;border:1px solid #c6d3e3;border-radius:7px;background:#fff;padding:5px;box-shadow:0 6px 18px #24344820;z-index:8;min-width:201px}.panel-menu button{display:block;width:100%;text-align:left;border:0;padding:7px 9px;background:none;border-radius:4px;font-size:12px}.panel-menu button:hover{background:#edf3fc}.panel-menu button.danger{color:#ac4146}.panel-menu[hidden],.cursor-panel[hidden],.position-line[hidden],.axis-marker[hidden]{display:none}
+.empty-message{position:absolute;top:45%;left:0;right:0;text-align:center;color:#697d96;font-size:13px;pointer-events:none;z-index:3}.empty-message[hidden]{display:none}.resultbar{display:flex;gap:12px;align-items:center;min-height:47px;border-top:1px solid #e5ebf3;background:#fbfcfe;padding:10px 17px;font-size:12px;color:#526b89}.resultbar .status-dot{width:6px;height:6px;border-radius:50%;background:#7b9ac1}.resultbar button{margin-left:auto;border:0;background:#eaf1fb;border-radius:4px;color:#235d9f;padding:3px 9px;white-space:nowrap}.resultbar button[hidden]{display:none}
+.notes{margin-top:24px;display:flex;gap:28px;color:#718197;font-size:12px;line-height:1.75}.notes>div{flex:1}.notes b{color:#4b617b;font-weight:600}.notes p{margin:5px 0}.notes details{margin-top:6px}.notes summary{cursor:pointer;color:#456a99}.notes code{font-size:11px;overflow-wrap:anywhere}.swatch-text{font-size:10px;color:#8a96a6;text-align:center;margin-top:3px}.demo-hint{font-size:11px;color:#8291a4}
+@media(max-width:900px){header,main{padding-left:18px;padding-right:18px}.options{gap:9px}.option{padding:12px}.mini-panel{padding:8px}.mini-head{flex-wrap:wrap}.mini-head .sample-time{display:none}.state-samples{gap:1px}.marker{min-width:42px;font-size:13px;padding:0 5px}.lab-head{flex-wrap:wrap}.cursor-panel{left:48%}.plot{margin-left:20px}.tabs{gap:20px}.intro{gap:10px}}
+@media(max-width:640px){header{padding-top:20px}h1{font-size:25px}.tabs{gap:17px}.tabs button{font-size:12px}.options,.options.two{grid-template-columns:1fr}.mini-head .sample-time{display:block}.mini-panel{max-width:none}.option p{min-height:0}.state-labels{font-size:12px}.marker{min-width:48px}.recommendation{display:block}.recommendation b{display:block;margin-bottom:3px}.count{display:none}.plot{height:340px;margin-right:10px;margin-left:10px}.cursor-panel{left:22%;top:48px}.notes{display:block}.notes>div{margin-bottom:15px}.selection-summary{font-size:11px}.lab-head small{display:block;margin-left:0}.oldstrip{gap:7px;font-size:10px}.semantics td,.semantics th{padding:7px 6px;font-size:11px}}
+@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important}}
+</style>
+</head>
+<body>
+<header><div class="brand"><svg viewBox="0 0 28 28" fill="none" aria-hidden="true"><rect x="1" y="1" width="26" height="26" rx="6" stroke="#9cb8da"/><path d="M4 17h4l3-9 5 14 3-9h5" stroke="#2167c7" stroke-width="1.8"/></svg><strong>TraceLab</strong><span>/ Cursor 控件选型</span><span class="prototype">交互原型</span></div><h1>少一个歧义，多一点状态感。</h1><p>三组可组合的选择：读数显示、Pn 状态、固定后的操作。选择方案后，下方图表会同步更新；所有数据为演示数据。</p></header>
+<main>
+<nav class="tabs" role="tablist" aria-label="设计问题"><button id="tab-display" role="tab" aria-selected="true" aria-controls="topic-display" data-tab="display">读数显示按钮</button><button id="tab-color" role="tab" aria-selected="false" aria-controls="topic-color" data-tab="color" tabindex="-1">Pn 三种状态</button><button id="tab-action" role="tab" aria-selected="false" aria-controls="topic-action" data-tab="action" tabindex="-1">P 与 × 的取舍</button></nav>
+<section class="topic" id="topic-display" role="tabpanel" aria-labelledby="tab-display">
+<div class="intro"><div><h2>把“收起窗口”与“少显示一些内容”分开。</h2><p>完整 / 精简改变的是读数内容。面板仍然打开，不应该借用窗口的 − / ＋。下面三个按钮都可以直接点。</p></div><span class="count">3 种方向</span></div>
+<div class="options" id="display-options"></div>
+<div class="recommendation"><b>倾向 A · 通道名</b><span>动作与内容直接对应。亮起表示显示通道名；关闭只保留色点、单位和数值。若必须维持当前窄按钮尺寸，选 B 的列图标。</span></div>
+</section>
+<section class="topic" id="topic-color" role="tabpanel" aria-labelledby="tab-color" hidden>
+<div class="intro"><div><h2>收起是中性，打开有底色，选中有明确重心。</h2><p>用底色、边框和小标记共同表达状态。选中样式更强，不再比“已打开”更浅；键盘焦点另用外环表达。</p></div><span class="count">3 组配色</span></div>
+<div class="oldstrip"><span>当前样式</span><span class="oldchip">P3</span><span>收起</span><span class="oldchip open">P3</span><span>打开</span><span class="oldchip active">P3</span><span>选中反而变浅</span></div>
+<div class="options" id="color-options"></div>
+<div class="recommendation"><b>倾向 A · 蓝色阶梯</b><span>空心点 → 实心点 → 白字实底。即使不敏感于浅蓝差异，也能认出“是否打开”和“正在操作哪一条”。选中强调只影响关联的按钮、面板边框和连接线。</span></div>
+</section>
+<section class="topic" id="topic-action" role="tabpanel" aria-labelledby="tab-action" hidden>
+<div class="intro"><div><h2>前台少一个按钮，两个动作仍然说清楚。</h2><p>当前 P 与 × 都移除固定记录，但 P 会恢复活动游标，× 不会。它们不是同一个功能，却有相似的第一眼结果。</p></div><span class="count">2 种取舍</span></div>
+<div class="options two" id="action-options"></div>
+<table class="semantics"><caption>推荐 A 的动作分工</caption><thead><tr><th>入口</th><th>结果</th><th>固定记录</th></tr></thead><tbody><tr><td>底部 P3</td><td>打开 / 收起这张面板</td><td>保留</td></tr><tr><td>面板 ×</td><td>删除 P3；不恢复活动游标</td><td>删除</td></tr><tr><td>P3 ▾ → 取消固定，继续调整</td><td>恢复为活动游标，继续查看</td><td>移除固定身份</td></tr><tr><td>活动面板的固定按钮 / P 键</td><td>把当前读数固定为 Pin</td><td>新建 / 恢复预留编号</td></tr></tbody></table>
+<div class="recommendation"><b>倾向 A · 移除已固定面板的 P</b><span>固定身份已经由 P3 标题和轴上 P3 表达。× 专职删除；不常用的“取消固定”移到标题编号菜单。活动面板仍保留固定入口。</span></div>
+</section>
+<section class="lab" aria-label="组合交互演示">
+<div class="lab-head"><div><strong>在图表里试一下</strong><small>点击 P3 开合 · 拖动面板 · 拖动轴标微调</small></div><div class="selection-summary" id="selection-summary"></div></div>
+<div class="lab-tools"><span>演示状态</span><button data-state="closed" aria-pressed="false">面板收起</button><button data-state="open" aria-pressed="false">面板打开</button><button data-state="active" aria-pressed="true">打开且选中</button><button data-state="live" aria-pressed="false">活动游标</button><button class="reset" id="reset">重置演示</button></div>
+<div class="plot palette-a" id="plot" tabindex="0" aria-label="演示图表，活动游标状态可按 P 固定"><svg class="waves" id="waves" viewBox="0 0 1000 330" preserveAspectRatio="none" aria-hidden="true"></svg><div class="legend"><span style="color:#0785e6">● L Pa</span><span style="color:#079e74">● R Pa</span><span style="color:#e24652">● MOTOR Y</span><span style="color:#e67c14">● MOTOR X</span></div><div id="position-line" class="position-line active"></div><svg id="tethers" class="tethers" aria-hidden="true"></svg><button id="axis-marker" class="marker axis-marker open active" aria-label="P3 面板已打开，点击收起"><span class="pip"></span>P3</button><article id="cursor-panel" class="cursor-panel active"><div class="panel-head" id="panel-head"><button id="identity-menu" class="pilltag" aria-label="P3 操作菜单" aria-haspopup="menu" aria-expanded="false">P3 ▾</button><div id="panel-tools" class="panel-tools"></div></div><div class="panel-time" id="panel-time">t=29.2437s</div><div class="col-head"><span id="name-heading">通道</span><span>Value</span></div><div id="panel-rows"></div><div id="panel-menu" class="panel-menu" role="menu" hidden></div></article><div class="empty-message" id="empty-message" hidden>P3 已删除。可撤销，或重置后继续比较。</div></div>
+<div class="axis-ticks"><span>28.0</span><span>28.5</span><span>29.0</span><span>29.5</span><span>30.0</span><span>30.5</span></div><div class="axis-title">Time (s)</div>
+<div class="resultbar" role="status" aria-live="polite"><span class="status-dot"></span><span id="feedback">P3 面板已打开且选中。试试“通道名”，不会收起面板。</span><button id="undo" hidden>撤销</button></div>
+</section>
+<div class="notes"><div><b>建议组合：A / A / A</b><p>通道名开关 + 蓝色阶梯 + 固定后移除 P。保留现有小面板、轴上 Pn 和 P 键，不增加产品工具条。上方选型卡和演示状态栏只属于本原型。</p><details><summary>状态与操作的边界</summary><p>“收起”不是删除；“精简”不是收起；“取消固定”不是删除。hover 使用小幅边框增强；键盘 focus 有独立外环。拖动时保持选中强调，不因指针离开按钮而变浅。</p></details></div><div><b>原型说明</b><p>可试开合、显示切换、删除 / 撤销、取消固定、重新固定及拖动。撤销是演示恢复入口，是否加入产品需另行决定。浏览器效果不等同 Qt 原生验收。</p><details><summary>当前实现核对依据</summary><p><code>cursor_pill.py::_update_toggle_button / _on_pin_clicked</code><br><code>pinning/commands.py::unpin / close</code><br><code>pinned_cursor_overlay.py::PinnedAxisLabel.paintEvent</code></p><p>当前完整/精简按钮是 +/−；选中会覆盖 open 样式。原型中的 P3 ▾ 菜单是建议的新入口，不是当前已实现功能。</p></details></div></div>
+</main>
+<script>
+const $=s=>document.querySelector(s);
+const icon='<svg class="icon" viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="3.5" width="15" height="13" rx="1.5"/><path d="M9 3.5v13M3 8h14M3 12.5h14"/></svg>';
+const pinicon='<svg class="icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M7 3h6l-1 6 3 3H5l3-3zM10 12v5"/></svg>';
+const unpinicon='<svg class="icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M7 3h6l-1 6 3 3H5l3-3M10 12v5M3 2l14 16"/></svg>';
+const displayNames={a:'通道名',b:'列图标',c:'双选项'};
+const colorNames={a:'蓝色阶梯',b:'轮廓强调',c:'石墨强调'};
+const actionNames={a:'保留 ×',b:'保留取消固定'};
+const state={display:'a',color:'a',action:'a',mode:'active',names:true,x:49.748,time:29.2437,menu:false};
+let undoState=null,drag=null;
+const values=[['L','Pa','#0785e6','−0.1279'],['R','Pa','#079e74','−0.1376'],['MOTOR Y','m/s²','#e24652','0.2822'],['MOTOR X','m/s²','#e67c14','−1.851']];
+function toggleHTML(variant,on,prefix){
+ if(variant==='c')return '<span class="seg"><button data-density="'+prefix+':0" aria-pressed="'+!on+'" title="仅保留数值和单位">数值</button><button data-density="'+prefix+':1" aria-pressed="'+on+'" title="显示通道名、单位和数值">完整</button></span>';
+ return '<button class="small-action '+(variant==='b'?'icononly':'')+'" data-density="'+prefix+':toggle" aria-pressed="'+on+'" aria-label="'+(prefix==='main'?'面板':'样例 '+variant.toUpperCase())+'：'+(on?'隐藏':'显示')+'通道名" title="'+(on?'隐藏通道名，只显示数值和单位':'显示通道名')+'">'+icon+(variant==='a'?'通道名':'')+'</button>';
+}
+function sampleRows(on){return values.slice(0,2).map(r=>'<div class="mini-row" style="color:'+r[2]+'"><span class="name"><i class="dot"></i>'+(on?r[0]+' ':'')+r[1]+'</span><span class="reading">'+r[3]+'</span></div>').join('')}
+const densitySamples={a:true,b:true,c:true};
+function renderOptions(){
+ $('#display-options').innerHTML=['a','b','c'].map((v,i)=>'<article class="option '+(state.display===v?'chosen':'')+'" data-option="display-'+v+'"><h3>'+v.toUpperCase()+' · '+displayNames[v]+(v==='a'?'<span class="recommend">推荐</span>':'')+'</h3><div class="mini-panel"><div class="mini-head"><strong>P3</strong>'+toggleHTML(v,densitySamples[v],v)+'</div><div class="sample-time">t=29.2437s</div>'+sampleRows(densitySamples[v])+'</div><p>'+['含义最直接，开关亮起即显示通道名。比单图标多占少量标题宽度。','维持小按钮占位，用表格列的图形表达内容显示。初次使用依赖 tooltip。','数值 / 完整直接并列，最容易理解；标题空间占用最多。'][i]+'</p><button class="choose" data-choose="display:'+v+'" aria-pressed="'+(state.display===v)+'">'+(state.display===v?'已用于下方演示':'在下方试用 '+v.toUpperCase())+'</button></article>').join('');
+ $('#color-options').innerHTML=['a','b','c'].map((v,i)=>'<article class="option palette-'+v+' '+(state.color===v?'chosen':'')+'" data-option="color-'+v+'"><h3>'+v.toUpperCase()+' · '+colorNames[v]+(v==='a'?'<span class="recommend">推荐</span>':'')+'</h3><div class="state-labels"><span>面板收起</span><span>面板打开</span><span>打开且选中</span></div><div class="state-samples">'+['closed','open','active'].map((m,j)=>'<div><button class="marker '+(j>0?'open ':'')+(j===2?'active':'')+'" data-swatch="'+v+':'+m+'" aria-label="配色 '+v.toUpperCase()+'：'+['面板收起','面板打开','打开且选中'][j]+'"><span class="pip"></span>P3</button></div>').join('')+'</div><div class="swatch-text">'+['#F8FAFC → #E5EFFF → #2167C7','#FFFFFF → #F1F6FF → 加粗轮廓','#FFFFFF → #E9EDF3 → #334A66'][i]+'</div><p>'+['明度层级最清楚。空 / 实心点区分开合；选中用白字蓝底与外环。','整体更轻，选中靠粗边框与底部短标记。适合避免大色块的偏好。','沉稳且低彩度，选中近深灰蓝；状态清晰，但与既有蓝色控件关联较弱。'][i]+'</p><button class="choose" data-choose="color:'+v+'" aria-pressed="'+(state.color===v)+'">'+(state.color===v?'已用于下方演示':'在下方试用 '+v.toUpperCase())+'</button></article>').join('');
+ $('#action-options').innerHTML=['a','b'].map((v,i)=>'<article class="option '+(state.action===v?'chosen':'')+'" data-option="action-'+v+'"><h3>'+v.toUpperCase()+' · '+(v==='a'?'移除 P，保留 ×':'移除 ×，保留取消固定')+(v==='a'?'<span class="recommend">推荐</span>':'')+'</h3><div class="action-example"><div class="mini-head"><span class="pilltag">P3 ▾</span><div class="mini-actions"><span class="small-action">'+icon+'通道名</span><button class="small-action '+(v==='a'?'cross':'icononly')+'" data-action-sample="'+v+'" aria-label="体验方案 '+v.toUpperCase()+(v==='a'?'：删除 Pin':'：取消固定')+'" title="'+(v==='a'?'删除 P3':'取消固定，继续调整')+'">'+(v==='a'?'×':unpinicon)+'</button></div></div></div><div class="outcome">'+(v==='a'?'× 删除这条 Pin。取消固定放在 P3 ▾ 菜单。':'图钉斜线：恢复活动游标。删除放在 P3 ▾ 菜单。')+'</div><p>'+(v==='a'?'适合以保留多个固定读数为主的使用习惯。标题 P3 已经说明固定身份，无需再放一个蓝色 P。':'适合经常取消固定、继续调位置。保留频繁动作，但删除入口会更深，图标也需要学习。')+'</p><button class="choose" data-choose="action:'+v+'" aria-pressed="'+(state.action===v)+'">'+(state.action===v?'已用于下方演示':'在下方试用 '+v.toUpperCase())+'</button></article>').join('');
+}
+function say(t){$('#feedback').textContent=t}
+function render(){
+ const live=state.mode==='live',gone=state.mode==='deleted',open=state.mode==='open'||state.mode==='active',active=state.mode==='active';
+ $('#selection-summary').textContent=state.display.toUpperCase()+' '+displayNames[state.display]+' / '+state.color.toUpperCase()+' '+colorNames[state.color]+' / '+state.action.toUpperCase()+' '+actionNames[state.action];
+ $('#plot').className='plot palette-'+state.color;
+ $('#cursor-panel').hidden=!open&&!live;$('#cursor-panel').className='cursor-panel'+(active?' active':'')+(live?' live':'')+(!state.names?' unitonly':'');
+ $('#axis-marker').hidden=live||gone;$('#axis-marker').className='marker axis-marker'+(open?' open':'')+(active?' active':'');
+ $('#axis-marker').style.left=state.x+'%';$('#axis-marker').setAttribute('aria-label','P3 面板'+(open?'已打开，点击收起':'已收起，点击打开'));$('#axis-marker').setAttribute('aria-expanded',String(open));
+ $('#position-line').hidden=gone;$('#position-line').className='position-line'+(active?' active':'');$('#position-line').style.left=state.x+'%';$('#position-line').style.borderStyle=live?'solid':'dashed';
+ $('#identity-menu').textContent=live?'活动游标':'P3 ▾';$('#identity-menu').disabled=live;$('#identity-menu').setAttribute('aria-expanded',String(state.menu));
+ $('#panel-time').textContent='t='+state.time.toFixed(4)+'s';
+ $('#name-heading').textContent=state.names?'通道':'单位';
+ $('#panel-tools').innerHTML=(live?'<button class="small-action icononly" data-command="pin" aria-label="固定当前读数" title="固定当前读数（P）">'+pinicon+'</button>':'')+toggleHTML(state.display,state.names,'main')+(!live?(state.action==='a'?'<button class="small-action cross" data-command="delete" aria-label="删除 P3" title="删除 P3">×</button>':'<button class="small-action icononly" data-command="unpin" aria-label="取消固定，继续调整" title="取消固定，继续调整">'+unpinicon+'</button>'):'');
+ $('#panel-rows').innerHTML=values.map(r=>'<div class="data-row" style="color:'+r[2]+'"><span class="channel"><i class="dot"></i><span class="channel-name">'+r[0]+' '+r[1]+'</span><span class="channel-unit">'+r[1]+'</span></span><span class="num">'+r[3]+'</span></div>').join('');
+ $('#panel-menu').hidden=!state.menu||live;
+ $('#panel-menu').innerHTML='<button role="menuitem" data-command="collapse">收起面板，保留 Pin</button><button role="menuitem" data-command="unpin">取消固定，继续调整</button><button role="menuitem" class="danger" data-command="delete">删除 P3</button>';
+ $('#empty-message').hidden=!gone;
+ document.querySelectorAll('[data-state]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.state===state.mode)));
+ $('#undo').hidden=!undoState;
+ requestAnimationFrame(layoutTether);
+}
+function layoutTether(){
+ const plot=$('#plot'),p=$('#cursor-panel'),svg=$('#tethers');
+ svg.setAttribute('viewBox','0 0 '+plot.clientWidth+' '+plot.clientHeight);
+ if(p.hidden||state.mode==='live'){svg.innerHTML='';return}
+ const x=p.offsetLeft+p.offsetWidth*.5,y=p.offsetTop+p.offsetHeight+7,tx=plot.clientWidth*state.x/100;
+ const active=state.mode==='active',color=active?'#365f92':'#7087a2';
+ svg.innerHTML='<path d="M'+x+' '+y+' V'+(y+9)+' H'+tx+'" fill="none" stroke="'+color+'" stroke-width="'+(active?1.8:1.3)+'" stroke-dasharray="4 3"/><circle cx="'+x+'" cy="'+y+'" r="2.4" fill="'+color+'"/>';
+}
+function clampPanel(){
+ const p=$('#cursor-panel'),plot=$('#plot');
+ if(p.hidden)return;
+ p.style.left=Math.max(8,Math.min(p.offsetLeft,plot.clientWidth-p.offsetWidth-8))+'px';
+ p.style.top=Math.max(28,Math.min(p.offsetTop,plot.clientHeight-p.offsetHeight-64))+'px';
+ layoutTether();
+}
+function command(c){
+ state.menu=false;
+ if(c==='collapse'){state.mode='closed';say('只收起面板：P3 和位置线都保留，点击底部 P3 可重新打开。')}
+ if(c==='unpin'){undoState={...state};state.mode='live';say('P3 已取消固定，恢复为活动游标。固定标记消失，读数面板继续保留。')}
+ if(c==='delete'){undoState={...state};state.mode='deleted';say('P3 已删除：面板、底部按钮和位置线一起移除；没有恢复活动游标。')}
+ if(c==='pin'){state.mode='closed';say('当前读数已固定为 P3，默认收起面板。点击轴上 P3 查看。')}
+ render();requestAnimationFrame(clampPanel);
+}
+function choose(group,v){state[group]=v;state.menu=false;renderOptions();render();say('已切换 '+({display:'显示方式',color:'Pn 配色',action:'操作方案'}[group])+' '+v.toUpperCase()+'，可在图表中体验。');requestAnimationFrame(clampPanel)}
+function tab(name){document.querySelectorAll('[data-tab]').forEach(b=>{const yes=b.dataset.tab===name;b.setAttribute('aria-selected',String(yes));b.tabIndex=yes?0:-1});document.querySelectorAll('.topic').forEach(s=>s.hidden=s.id!=='topic-'+name)}
+document.addEventListener('click',e=>{
+ const b=e.target.closest('button');if(!b)return;
+ if(b.dataset.tab){tab(b.dataset.tab);return}
+ if(b.dataset.choose){const [g,v]=b.dataset.choose.split(':');choose(g,v);return}
+ if(b.dataset.swatch){const [v,m]=b.dataset.swatch.split(':');state.mode=m;choose('color',v);return}
+ if(b.dataset.state){state.mode=b.dataset.state;state.menu=false;render();say({closed:'P3 已收起：空心点、中性底。记录和位置线保留。',open:'P3 已打开：实心点、浅色底。点击面板标题可选中。',active:'P3 已打开且选中：实底白字，面板和连接线同步加强。',live:'活动游标：保留固定入口。这里没有删除 Pin 的 ×。'}[state.mode]);requestAnimationFrame(clampPanel);return}
+ if(b.dataset.density){const [scope,v]=b.dataset.density.split(':');if(scope==='main'){state.names=v==='toggle'?!state.names:v==='1';render();say(state.names?'完整显示：通道名、单位、数值。面板仍然打开。':'精简显示：色点、单位、数值。面板仍然打开。');requestAnimationFrame(clampPanel)}else{densitySamples[scope]=v==='toggle'?!densitySamples[scope]:v==='1';renderOptions()}if(e.detail===0)document.querySelector('[data-density="'+scope+':'+v+'"]').focus({preventScroll:true});return}
+ if(b.dataset.command){command(b.dataset.command);return}
+ if(b.dataset.actionSample){state.action=b.dataset.actionSample;state.mode='active';renderOptions();command(state.action==='a'?'delete':'unpin');return}
+ if(b.id==='identity-menu'){state.menu=!state.menu;render();if(state.menu)$('#panel-menu button').focus();return}
+ if(b.id==='axis-marker'&&!b.dataset.dragged){state.mode=state.mode==='closed'?'active':'closed';state.menu=false;render();say(state.mode==='closed'?'P3 已收起，记录仍保留。':'P3 已打开并选中。');return}
+ if(b.id==='reset'){Object.assign(state,{mode:'active',names:true,x:49.748,time:29.2437,menu:false});undoState=null;$('#cursor-panel').style.left='53%';$('#cursor-panel').style.top='41px';render();requestAnimationFrame(clampPanel);say('演示已重置。当前选型保留。');return}
+ if(b.id==='undo'&&undoState){Object.assign(state,undoState);undoState=null;render();say('已恢复到操作前的 P3。');return}
+});
+document.addEventListener('pointerdown',e=>{
+ if(state.menu&&!e.target.closest('#panel-menu')&&!e.target.closest('#identity-menu')){state.menu=false;$('#panel-menu').hidden=true;$('#identity-menu').setAttribute('aria-expanded','false')}
+});
+$('#plot').addEventListener('keydown',e=>{
+ if(e.key.toLowerCase()==='p'&&state.mode==='live'){e.preventDefault();command('pin')}
+ if(e.key==='Escape'){state.menu=false;render();$('#identity-menu').focus()}
+});
+$('.tabs').addEventListener('keydown',e=>{
+ if(!['ArrowLeft','ArrowRight','Home','End'].includes(e.key))return;
+ const ids=['display','color','action'],i=ids.indexOf(e.target.dataset.tab);if(i<0)return;
+ const next=e.key==='Home'?0:e.key==='End'?2:(i+(e.key==='ArrowRight'?1:2))%3;e.preventDefault();tab(ids[next]);$('#tab-'+ids[next]).focus();
+});
+$('#panel-menu').addEventListener('keydown',e=>{
+ if(!['ArrowDown','ArrowUp'].includes(e.key))return;const bs=[...$('#panel-menu').querySelectorAll('button')],i=bs.indexOf(document.activeElement);e.preventDefault();bs[(i+(e.key==='ArrowDown'?1:bs.length-1))%bs.length].focus();
+});
+function startDrag(e,kind){
+ if(e.button!==0||(kind==='panel'&&e.target.closest('button')))return;
+ const target=e.currentTarget,p=$('#cursor-panel');drag={kind,startX:e.clientX,startY:e.clientY,left:p.offsetLeft,top:p.offsetTop,x:state.x,moved:false};
+ target.setPointerCapture(e.pointerId);
+ if(state.mode==='open'){state.mode='active';render()}
+}
+function moveDrag(e){
+ if(!drag)return;const dx=e.clientX-drag.startX,dy=e.clientY-drag.startY;
+ if(Math.abs(dx)+Math.abs(dy)>4)drag.moved=true;if(!drag.moved)return;
+ if(drag.kind==='panel'){const p=$('#cursor-panel');p.style.left=drag.left+dx+'px';p.style.top=drag.top+dy+'px';clampPanel()}
+ else{state.x=Math.max(4,Math.min(94,drag.x+dx/$('#plot').clientWidth*100));state.time=28+state.x/100*2.5;state.mode=state.mode==='closed'?'closed':'active';$('#axis-marker').dataset.dragged='true';render();say('正在微调 P3 · t='+state.time.toFixed(4)+'s（演示数值保持不变）')}
+}
+function endDrag(e){if(!drag)return;const was=drag;drag=null;if(e.currentTarget.hasPointerCapture(e.pointerId))e.currentTarget.releasePointerCapture(e.pointerId);if(was.moved){say(was.kind==='panel'?'面板位置已更新，固定坐标不变。':'P3 位置已更新。开合状态保持不变。');setTimeout(()=>delete $('#axis-marker').dataset.dragged,0)}}
+for(const [id,kind] of [['panel-head','panel'],['axis-marker','axis']]){const el=$('#'+id);el.addEventListener('pointerdown',e=>startDrag(e,kind));el.addEventListener('pointermove',moveDrag);el.addEventListener('pointerup',endDrag);el.addEventListener('pointercancel',endDrag)}
+$('#axis-marker').addEventListener('contextmenu',e=>{e.preventDefault();state.mode='active';state.menu=true;render();$('#panel-menu button').focus()});
+let grid='';for(let x=0;x<=1000;x+=50)grid+='<path d="M'+x+' 0V330"/>';for(let y=0;y<=330;y+=33)grid+='<path d="M0 '+y+'H1000"/>';
+let paths='';values.forEach((r,i)=>{let d='';for(let x=0;x<=1000;x+=2){const y=165+Math.sin(x/68+i*.35)*(70+i*13)+Math.sin(x/17+i)*5;d+=(x?'L':'M')+x+' '+y.toFixed(2)}paths+='<path d="'+d+'" fill="none" stroke="'+r[2]+'" stroke-width="1.25" vector-effect="non-scaling-stroke" opacity=".8"/>'});
+$('#waves').innerHTML='<g stroke="#e4e9f0" stroke-width="1">'+grid+'</g>'+paths;
+new ResizeObserver(()=>{clampPanel();layoutTether()}).observe($('#plot'));
+renderOptions();render();
+</script>
+</body>
+</html>
