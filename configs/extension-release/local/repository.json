@@ -1,0 +1,8 @@
+{
+  "schema": 1,
+  "distribution": "local-placeholder",
+  "bootstrap_root": "root.json",
+  "metadata_base_url": "https://updates.example.invalid/metadata/",
+  "target_base_url": "https://updates.example.invalid/targets/",
+  "trusted_origins": ["updates.example.invalid"]
+}

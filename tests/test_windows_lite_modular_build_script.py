@@ -8,6 +8,7 @@ MODULAR_BAT = ROOT / "tools" / "build_windows_folder_lite_modular.bat"
 EXTENSIONS = ROOT / "tools" / "build_windows_extensions.py"
 VERIFY = ROOT / "tools" / "verify_extension_installation.py"
 MANAGER_BUILD = ROOT / "tools" / "build_windows_extension_installer.ps1"
+MANAGER_BAT = ROOT / "tools" / "build_windows_extension_installer.bat"
 
 
 def test_original_lite_packager_stays_bundled():
@@ -63,6 +64,15 @@ def test_modular_packager_emits_manifests_zips_audit_and_manager_copy():
     assert "independent of APP_VERSION" in manager
     assert "does not generate production TUF keys" in manager
     assert r"dist\TraceLabAnalyzer" in manager
+    bat = MANAGER_BAT.read_text(encoding="utf-8")
+    assert MANAGER_BAT.is_file()
+    assert "build_windows_extension_installer.ps1" in bat
+    assert "build_windows_folder_lite" not in bat
+    assert "dist\\TraceLabExtensionManager\\installer.exe" in bat
+    assert "configs\\extension-release\\local\\repository.json" in bat
+    local_config = ROOT / "configs" / "extension-release" / "local"
+    assert (local_config / "repository.json").is_file()
+    assert (local_config / "root.json").is_file()
 
 
 def test_modular_importer_gates_are_split_and_not_skipped_as_success():

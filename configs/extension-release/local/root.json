@@ -1,0 +1,5 @@
+{
+  "purpose": "local-placeholder",
+  "signed": null,
+  "note": "Not a TUF trust root and not a production key. The installer builder only copies this file. Replace it with the publisher root.json before any public release."
+}
