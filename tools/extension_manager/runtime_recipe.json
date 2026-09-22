@@ -7,6 +7,7 @@
     "loader_contract_version",
     "python_implementation",
     "python_version",
+    "python_build_id",
     "python_abi",
     "arch",
     "numpy_version",
@@ -21,7 +22,28 @@
     "core_build_id"
   ],
   "core_shared_libraries": [
-    {"name": "python", "role": "cpython_shared"},
-    {"name": "numpy", "role": "capi"}
+    {
+      "name": "python",
+      "role": "cpython_shared",
+      "identity": "content_sha256",
+      "basename_patterns": [
+        "python3*.dll",
+        "libpython3*.so*",
+        "libpython3*.dylib"
+      ]
+    },
+    {
+      "name": "numpy",
+      "role": "capi",
+      "identity": "content_sha256",
+      "basename_patterns": ["*openblas*"]
+    },
+    {
+      "name": "msvc_runtime",
+      "role": "ucrt",
+      "identity": "content_sha256",
+      "required": false,
+      "basename_patterns": ["vcruntime*.dll", "msvcp140*.dll"]
+    }
   ]
 }

@@ -1,6 +1,7 @@
 """Contract schemas, reason codes, SemVer, and runtime_id isolation."""
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from mf4_analyzer.app_meta import APP_VERSION
 from mf4_analyzer.extensions.contract import (
     DISCOVERY_SCHEMA_V1,
     ExtensionError,
+    FileEntry,
     MANAGER_EXIT_CODES,
     ManagerExitCode,
     PRODUCT_ID,
@@ -31,25 +33,64 @@ from mf4_analyzer.extensions.contract import (
     sha256_hex,
     validate_relative_ref,
 )
+from mf4_analyzer.extensions.native_identity import SharedLibraryIdentity
 from mf4_analyzer.extensions.runtime_recipe import (
     RUNTIME_EXCLUDED_FIELDS,
+    RUNTIME_IDENTITY_FIELDS,
     RUNTIME_RECIPE,
+    RuntimeInputs,
     assert_recipe_json_matches_embedded,
+    collect_live_python_build_id,
+    compute_python_build_id,
+    identity_payload_for_tests,
     load_runtime_recipe,
+    runtime_id_from_inputs,
+    runtime_inputs_from_base_tree,
 )
 from mf4_analyzer.extensions.state import bind_core_identity, core_build_id_for_files
 
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "extensions"
 
+def _sha256_bytes(payload: bytes) -> str:
+    return hashlib.sha256(payload).hexdigest()
+
+
+_PYTHON_DLL_A = b"cpython-shared-artifact-build-a"
+_PYTHON_DLL_B = b"cpython-shared-artifact-build-b"
+_NUMPY_DLL_A = b"numpy-openblas-artifact-build-a"
+_NUMPY_DLL_B = b"numpy-openblas-artifact-build-b"
+
+_PYTHON_BUILD_A = compute_python_build_id(
+    implementation_name="CPython",
+    hexversion=0x030B09F0,
+    soabi="cp311",
+    compiler="MSC v.1938 64 bit (AMD64)",
+)
+
+
+def _library(name: str, role: str, basename: str, content: bytes) -> SharedLibraryIdentity:
+    return SharedLibraryIdentity(
+        name=name,
+        role=role,
+        basename=basename,
+        sha256=_sha256_bytes(content),
+        size=len(content),
+    )
+
+
 _RUNTIME_KWARGS = dict(
     python_implementation="CPython",
     python_version="3.11.9",
     python_abi="cp311",
+    python_build_id=_PYTHON_BUILD_A,
     arch="win-amd64",
     numpy_version="1.26.4",
     numpy_abi="cp311",
-    core_shared_libraries=("python", "numpy"),
+    core_shared_libraries=(
+        _library("python", "cpython_shared", "python311.dll", _PYTHON_DLL_A),
+        _library("numpy", "capi", "libopenblas.dll", _NUMPY_DLL_A),
+    ),
 )
 
 
@@ -71,6 +112,7 @@ def test_reason_codes_are_the_frozen_set_ui_must_match():
         "VERIFICATION_FAILED",
         "PROBE_FAILED",
         "TRANSACTION_RECOVERY_REQUIRED",
+        "NATIVE_DLL_CONFLICT",
     }
     chinese = ExtensionError(ReasonCode.MANAGER_TOO_OLD, "扩展管理器过旧，请更新")
     assert chinese.reason_code == "MANAGER_TOO_OLD"
@@ -94,6 +136,7 @@ def test_manager_exit_codes_match_spec():
     assert exit_code_for_reason(ReasonCode.VERIFICATION_FAILED) == 14
     assert exit_code_for_reason(ReasonCode.PROBE_FAILED) == 14
     assert exit_code_for_reason(ReasonCode.TRANSACTION_RECOVERY_REQUIRED) == 15
+    assert exit_code_for_reason(ReasonCode.NATIVE_DLL_CONFLICT) == 10
 
 
 def test_semver_is_not_dictionary_or_lexicographic_order():
@@ -122,8 +165,22 @@ def test_runtime_id_ignores_app_version_source_hash_and_build_time():
     )
     assert baseline == shifted
     assert baseline.startswith("rt1-")
+    recipe = load_runtime_recipe()
     for field in RUNTIME_EXCLUDED_FIELDS:
-        assert field in load_runtime_recipe()["excluded_fields"]
+        assert field in recipe["excluded_fields"]
+        assert field not in RUNTIME_IDENTITY_FIELDS
+        assert field not in recipe["identity_fields"]
+    identity = {
+        **{key: _RUNTIME_KWARGS[key] for key in ("python_version", "arch") if key in _RUNTIME_KWARGS},
+        "app_version": APP_VERSION,
+        "source_hash": "abc123",
+        "build_timestamp": "2026-09-21T00:00:00Z",
+        "exe_sha256": "f" * 64,
+        "core_build_id": "cb1-changed",
+    }
+    projected = identity_payload_for_tests(identity)
+    for field in RUNTIME_EXCLUDED_FIELDS:
+        assert field not in projected
 
 
 def test_runtime_id_changes_when_python_numpy_or_arch_changes():
@@ -140,6 +197,142 @@ def test_published_runtime_recipe_matches_embedded_copy():
     assert_recipe_json_matches_embedded()
     assert RUNTIME_RECIPE["match_policy"] == "exact"
     assert RUNTIME_RECIPE["loader_contract_version"] == 1
+    assert "python_build_id" in RUNTIME_RECIPE["identity_fields"]
+    for entry in RUNTIME_RECIPE["core_shared_libraries"]:
+        assert entry["identity"] == "content_sha256"
+
+
+def _file_entry(relpath: str, content: bytes) -> FileEntry:
+    return FileEntry(
+        relpath=relpath,
+        size=len(content),
+        sha256=_sha256_bytes(content),
+    )
+
+
+def test_ui_file_set_changes_core_build_id_not_runtime_id():
+    """Different core file sets (UI/help/algorithm) must not mint a new runtime."""
+    shared_python = _file_entry("_internal/python311.dll", _PYTHON_DLL_A)
+    shared_numpy = _file_entry("_internal/numpy.libs/libopenblas.dll", _NUMPY_DLL_A)
+    build_a = (
+        _file_entry("TraceLabAnalyzer.exe", b"ui-build-a"),
+        _file_entry("help/index.html", b"help-copy-a"),
+        shared_python,
+        shared_numpy,
+    )
+    build_b = (
+        _file_entry("TraceLabAnalyzer.exe", b"ui-build-b-algorithm-tweak"),
+        _file_entry("help/index.html", b"help-copy-b"),
+        shared_python,
+        shared_numpy,
+    )
+    core_a = core_build_id_for_files(build_a)
+    core_b = core_build_id_for_files(build_b)
+    assert core_a != core_b
+
+    inputs = RuntimeInputs(**_RUNTIME_KWARGS)
+    runtime_a = runtime_id_from_inputs(inputs, app_version="v8.3.1", core_build_id=core_a)
+    runtime_b = runtime_id_from_inputs(inputs, app_version="v8.4.0", core_build_id=core_b)
+    assert runtime_a == runtime_b
+    assert runtime_a == compute_runtime_id(**_RUNTIME_KWARGS)
+
+
+def test_same_version_different_native_bytes_change_runtime_id(tmp_path: Path):
+    """Same ABI version strings with different DLL bytes must change runtime_id."""
+    tree_a = tmp_path / "runtime-a"
+    tree_b = tmp_path / "runtime-b"
+    for tree, python_bytes, numpy_bytes in (
+        (tree_a, _PYTHON_DLL_A, _NUMPY_DLL_A),
+        (tree_b, _PYTHON_DLL_B, _NUMPY_DLL_A),
+    ):
+        (tree / "_internal").mkdir(parents=True)
+        (tree / "_internal" / "python311.dll").write_bytes(python_bytes)
+        numpy_dir = tree / "_internal" / "numpy.libs"
+        numpy_dir.mkdir()
+        (numpy_dir / "libopenblas.dll").write_bytes(numpy_bytes)
+        (tree / "help.html").write_text("ui-unrelated", encoding="utf-8")
+
+    inputs_a = runtime_inputs_from_base_tree(
+        tree_a,
+        python_implementation="CPython",
+        python_version="3.11.9",
+        python_abi="cp311",
+        python_build_id=_PYTHON_BUILD_A,
+        arch="win-amd64",
+        numpy_version="1.26.4",
+        numpy_abi="cp311",
+    )
+    inputs_b = runtime_inputs_from_base_tree(
+        tree_b,
+        python_implementation="CPython",
+        python_version="3.11.9",
+        python_abi="cp311",
+        python_build_id=_PYTHON_BUILD_A,
+        arch="win-amd64",
+        numpy_version="1.26.4",
+        numpy_abi="cp311",
+    )
+    assert inputs_a.python_version == inputs_b.python_version
+    assert inputs_a.numpy_version == inputs_b.numpy_version
+    assert inputs_a.python_abi == inputs_b.python_abi
+    python_a = next(lib for lib in inputs_a.core_shared_libraries if lib.name == "python")
+    python_b = next(lib for lib in inputs_b.core_shared_libraries if lib.name == "python")
+    assert python_a.sha256 == _sha256_bytes(_PYTHON_DLL_A)
+    assert python_b.sha256 == _sha256_bytes(_PYTHON_DLL_B)
+    assert python_a.sha256 != python_b.sha256
+    assert runtime_id_from_inputs(inputs_a) != runtime_id_from_inputs(inputs_b)
+
+
+def test_library_names_without_content_hash_refuse_to_mint_runtime_id():
+    with pytest.raises(ValueError, match="names alone"):
+        compute_runtime_id(
+            python_implementation="CPython",
+            python_version="3.11.9",
+            python_abi="cp311",
+            python_build_id=_PYTHON_BUILD_A,
+            arch="win-amd64",
+            numpy_version="1.26.4",
+            numpy_abi="cp311",
+            core_shared_libraries=("python", "numpy"),
+        )
+
+
+def test_conflicting_core_library_hashes_refuse_to_mint_runtime_id():
+    with pytest.raises(ValueError, match="conflicting sha256"):
+        compute_runtime_id(
+            **{
+                **_RUNTIME_KWARGS,
+                "core_shared_libraries": (
+                    _library("python", "cpython_shared", "python311.dll", _PYTHON_DLL_A),
+                    _library("python", "cpython_shared", "python311.dll", _PYTHON_DLL_B),
+                    _library("numpy", "capi", "libopenblas.dll", _NUMPY_DLL_A),
+                ),
+            }
+        )
+
+
+def test_python_build_id_tracks_compiler_not_app_version():
+    same_version_msvc = compute_python_build_id(
+        implementation_name="CPython",
+        hexversion=0x030B09F0,
+        soabi="cp311",
+        compiler="MSC v.1938 64 bit (AMD64)",
+    )
+    same_version_other_msvc = compute_python_build_id(
+        implementation_name="CPython",
+        hexversion=0x030B09F0,
+        soabi="cp311",
+        compiler="MSC v.1940 64 bit (AMD64)",
+    )
+    live = collect_live_python_build_id()
+    assert same_version_msvc != same_version_other_msvc
+    assert live == collect_live_python_build_id()
+    assert live.startswith("cpy-")
+    assert APP_VERSION not in live
+    shifted = compute_runtime_id(
+        **{**_RUNTIME_KWARGS, "python_build_id": same_version_other_msvc}
+    )
+    assert shifted != compute_runtime_id(**_RUNTIME_KWARGS)
 
 
 def test_valid_core_fixture_uses_exe_name_from_json_not_tracelab_exe():

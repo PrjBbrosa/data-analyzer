@@ -337,6 +337,7 @@ class MainWindow(
         from .command_coordinator import CommandCoordinator
         self._command_coordinator = CommandCoordinator(self)
         self._command_coordinator.publish_quit(self._on_quit)
+        self._bind_help_extension_menu()
         self._init_drop_import()
         self._connect()
 
@@ -676,7 +677,7 @@ class MainWindow(
         self._help_btn.setIconSize(QSize(18, 18))
         self._help_btn.setAutoRaise(True)
         self._help_btn.setCursor(Qt.PointingHandCursor)
-        self._help_btn.setToolTip("软件说明")
+        self._help_btn.setToolTip("软件说明 · 扩展管理")
         self._help_btn.clicked.connect(self._open_software_manual)
         self.statusBar.addPermanentWidget(self._help_btn)
 
@@ -870,11 +871,52 @@ class MainWindow(
             return f"{value / 10_000:.1f} 万{unit}"
         return f"{value} {unit}"
 
+    def _bind_help_extension_menu(self):
+        """Put「扩展管理…」on the existing help button after its QAction exists."""
+        from PyQt5.QtWidgets import QMenu, QToolButton
+
+        from ..command_registry import CommandId
+
+        button = getattr(self, "_help_btn", None)
+        coordinator = getattr(self, "_command_coordinator", None)
+        if button is None or coordinator is None:
+            return
+        menu = QMenu(button)
+        menu.addAction(coordinator.action(CommandId.MANAGE_EXTENSIONS))
+        button.setMenu(menu)
+        button.setPopupMode(QToolButton.MenuButtonPopup)
+
     def _open_software_manual(self):
         """Open the whole-app TraceLab usage manual in the default browser."""
         from ...help import open_guide
         if not open_guide('manual'):
             self.toast("找不到软件说明文件", 'warn')
+
+    def open_extension_manager(self):
+        """Launch the standalone Tk manager. Does not install or kill this app."""
+        import subprocess
+
+        from PyQt5.QtWidgets import QMessageBox
+
+        from .command_coordinator import current_app_root, extension_manager_argv
+
+        app_root = current_app_root()
+        argv = extension_manager_argv(app_root)
+        if not argv:
+            QMessageBox.information(
+                self,
+                "扩展管理",
+                "未找到扩展管理器。请把官方 installer.exe 放到：\n"
+                f"{app_root}\n\n"
+                "基础分析和已经装好的兼容扩展不受影响。",
+            )
+            return
+        subprocess.Popen(
+            list(argv),
+            cwd=str(app_root),
+            start_new_session=True,
+            close_fds=True,
+        )
 
     def _open_release_page(self):
         from PyQt5.QtCore import QUrl

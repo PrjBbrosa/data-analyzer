@@ -79,8 +79,11 @@ def _collect_h5py(fp):
     try:
         import h5py
     except ImportError as exc:
+        from mf4_analyzer.io.source_adapters import optional_native_import_message
+
         raise ImportError(
-            "该 .mat 是 v7.3(HDF5) 格式，需要 h5py 才能读取，请安装 h5py") from exc
+            optional_native_import_message("h5py", adapter_key="mat")
+        ) from exc
 
     series = []
     skipped = []
@@ -123,7 +126,11 @@ def load_mat_groups(fp):
     try:
         from scipy.io import loadmat
     except ImportError as exc:
-        raise ImportError("需要 scipy 才能读取 .mat 文件，请安装 scipy") from exc
+        from mf4_analyzer.io.source_adapters import optional_native_import_message
+
+        raise ImportError(
+            optional_native_import_message("scipy", adapter_key="mat")
+        ) from exc
 
     mat_version = _detect_version(fp)
     try:

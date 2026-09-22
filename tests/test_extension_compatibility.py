@@ -1,6 +1,7 @@
 """Install / load compatibility rules for optional extensions."""
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -22,6 +23,20 @@ from mf4_analyzer.extensions.contract import (
     parse_receipt,
     sha256_hex,
 )
+from mf4_analyzer.extensions.native_identity import (
+    KIND_NATIVE_SHARED,
+    KIND_PYTHON_MODULE,
+    NativeIdentityError,
+    OWNER_BASE,
+    OWNER_MATLAB,
+    OWNER_MEDIA,
+    REASON_NATIVE_DLL_CONFLICT,
+    SharedLibraryIdentity,
+    assert_native_combination,
+    collect_file_identities,
+    find_native_conflicts,
+)
+from mf4_analyzer.extensions.runtime_recipe import compute_python_build_id
 from mf4_analyzer.extensions.state import (
     bind_core_identity,
     bind_core_payloads,
@@ -33,13 +48,37 @@ from mf4_analyzer.extensions.state import (
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "extensions"
 
+_PYTHON_BUILD_A = compute_python_build_id(
+    implementation_name="CPython",
+    hexversion=0x030B09F0,
+    soabi="cp311",
+    compiler="MSC v.1938 64 bit (AMD64)",
+)
+_PYTHON_DLL = hashlib.sha256(b"cpython-shared-artifact-build-a").hexdigest()
+_NUMPY_DLL = hashlib.sha256(b"numpy-openblas-artifact-build-a").hexdigest()
+
 _RUNTIME_A = dict(
     python_implementation="CPython",
     python_version="3.11.9",
     python_abi="cp311",
+    python_build_id=_PYTHON_BUILD_A,
     arch="win-amd64",
     numpy_version="1.26.4",
     numpy_abi="cp311",
+    core_shared_libraries=(
+        SharedLibraryIdentity(
+            name="python",
+            role="cpython_shared",
+            basename="python311.dll",
+            sha256=_PYTHON_DLL,
+        ),
+        SharedLibraryIdentity(
+            name="numpy",
+            role="capi",
+            basename="libopenblas.dll",
+            sha256=_NUMPY_DLL,
+        ),
+    ),
 )
 
 
@@ -329,3 +368,120 @@ def test_active_store_symlink_is_rejected(tmp_path: Path):
     with pytest.raises(ExtensionError) as info:
         load_active_state(path, extensions_root=extensions_root)
     assert info.value.reason_code == ReasonCode.VERIFICATION_FAILED
+
+
+def _write_tree(root: Path, files: dict[str, bytes]) -> None:
+    for relpath, content in files.items():
+        path = root / relpath
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+
+
+def test_collect_file_identities_classifies_python_and_native(tmp_path: Path):
+    root = tmp_path / "base"
+    _write_tree(
+        root,
+        {
+            "site-packages/numpy/__init__.py": b"numpy-module",
+            "_internal/python311.dll": b"cpython-shared-artifact-build-a",
+            "_internal/Qt5Core.dll": b"qt-core-bytes",
+            "readme.txt": b"not-a-runtime-artifact",
+        },
+    )
+    identities = collect_file_identities(root, owner=OWNER_BASE)
+    by_relpath = {item.relpath: item for item in identities}
+    assert by_relpath["site-packages/numpy/__init__.py"].kind == KIND_PYTHON_MODULE
+    assert by_relpath["_internal/python311.dll"].kind == KIND_NATIVE_SHARED
+    assert by_relpath["_internal/Qt5Core.dll"].kind == KIND_NATIVE_SHARED
+    assert by_relpath["readme.txt"].kind == "other"
+    assert by_relpath["_internal/python311.dll"].sha256 == hashlib.sha256(
+        b"cpython-shared-artifact-build-a"
+    ).hexdigest()
+
+
+def test_same_basename_different_content_dll_is_refused(tmp_path: Path):
+    base = tmp_path / "base"
+    media = tmp_path / "media"
+    matlab = tmp_path / "matlab"
+    _write_tree(
+        base,
+        {
+            "_internal/python311.dll": b"cpython-shared-artifact-build-a",
+            "site-packages/numpy/__init__.py": b"numpy-base",
+        },
+    )
+    _write_tree(
+        media,
+        {
+            "site-packages/av/__init__.py": b"av-module",
+            "native/av.libs/zlib.dll": b"zlib-from-av",
+        },
+    )
+    _write_tree(
+        matlab,
+        {
+            "site-packages/h5py/__init__.py": b"h5py-module",
+            "native/h5py/zlib.dll": b"zlib-from-h5py-different-bytes",
+        },
+    )
+    trees = (
+        collect_file_identities(base, owner=OWNER_BASE),
+        collect_file_identities(media, owner=OWNER_MEDIA),
+        collect_file_identities(matlab, owner=OWNER_MATLAB),
+    )
+    conflicts = find_native_conflicts(*trees)
+    mismatch = [item for item in conflicts if item.kind == "basename_hash_mismatch"]
+    assert mismatch
+    assert mismatch[0].reason_code == ReasonCode.NATIVE_DLL_CONFLICT
+    assert mismatch[0].reason_code == REASON_NATIVE_DLL_CONFLICT
+    assert mismatch[0].basename.lower() == "zlib.dll"
+    assert mismatch[0].left_sha256 != mismatch[0].right_sha256
+    with pytest.raises(NativeIdentityError) as info:
+        assert_native_combination(*trees)
+    assert info.value.reason_code == ReasonCode.NATIVE_DLL_CONFLICT
+    assert info.value.conflicts
+
+
+def test_component_must_not_copy_base_shared_python_or_qt(tmp_path: Path):
+    base = tmp_path / "base"
+    media = tmp_path / "media"
+    _write_tree(
+        base,
+        {
+            "_internal/python311.dll": b"cpython-shared-artifact-build-a",
+            "_internal/Qt5Core.dll": b"qt-core-bytes",
+            "site-packages/numpy/__init__.py": b"numpy-base",
+        },
+    )
+    _write_tree(
+        media,
+        {
+            "site-packages/av/__init__.py": b"av-module",
+            "site-packages/numpy/core.py": b"copied-numpy",
+            "native/python311.dll": b"cpython-shared-artifact-build-a",
+        },
+    )
+    trees = (
+        collect_file_identities(base, owner=OWNER_BASE),
+        collect_file_identities(media, owner=OWNER_MEDIA),
+    )
+    conflicts = find_native_conflicts(*trees)
+    kinds = {item.kind for item in conflicts}
+    assert "base_owned_module" in kinds
+    assert "base_owned_native" in kinds
+    assert all(item.reason_code == ReasonCode.NATIVE_DLL_CONFLICT for item in conflicts)
+    with pytest.raises(NativeIdentityError) as info:
+        assert_native_combination(*trees)
+    assert info.value.reason_code == ReasonCode.NATIVE_DLL_CONFLICT
+
+
+def test_identical_zlib_bytes_are_not_a_basename_conflict(tmp_path: Path):
+    media = tmp_path / "media"
+    matlab = tmp_path / "matlab"
+    shared = b"zlib-identical-bytes"
+    _write_tree(media, {"native/av.libs/zlib.dll": shared, "site-packages/av/__init__.py": b"av"})
+    _write_tree(matlab, {"native/h5py/zlib.dll": shared, "site-packages/h5py/__init__.py": b"h5"})
+    assert_native_combination(
+        collect_file_identities(media, owner=OWNER_MEDIA),
+        collect_file_identities(matlab, owner=OWNER_MATLAB),
+    )

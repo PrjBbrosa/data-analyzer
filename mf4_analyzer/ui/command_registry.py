@@ -26,6 +26,7 @@ class CommandId(Enum):
     REDO = "redo"
     FIND = "find"
     QUICK_REFERENCE = "quick_reference"
+    MANAGE_EXTENSIONS = "manage_extensions"
     NEXT_VIEW = "next_view"
     PREVIOUS_VIEW = "previous_view"
     VIEW_BACK = "view_back"
@@ -139,6 +140,14 @@ _register(CommandMeta(
     "?",
     CommandScope.WINDOW,
     "打开或关闭操作速查",
+))
+_register(CommandMeta(
+    CommandId.MANAGE_EXTENSIONS,
+    "扩展管理…",
+    None,
+    None,
+    CommandScope.WINDOW,
+    "打开独立的扩展管理器，安装或修复音视频 / MATLAB 组件",
 ))
 _register(CommandMeta(
     CommandId.NEXT_VIEW,

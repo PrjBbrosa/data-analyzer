@@ -1,6 +1,9 @@
 param(
     [string]$Version = "8.3.1",
     [string]$AppName = "",
+    [string]$Flavor = "lite",
+    [string]$DependencyProfile = "modular",
+    [string]$ManagerSource = "",
     [switch]$Console,
     [switch]$SkipInstall,
     [switch]$KeepPrevious
@@ -13,13 +16,21 @@ param(
 # bundled and are not modified by this path.
 #
 # Differences from the lite product builder:
+# - flavor and dependency_profile are separate parameters. This experimental
+#   script only accepts lite+modular; unsupported combinations error out.
+#   The product lite/full scripts remain bundled and are not modified.
 # - Requests --profile modular so av/scipy/h5py are excluded from Analysis/PYZ
 #   (dropping --collect-all is not enough; asammdf can re-pull scipy/h5py).
 # - Writes a separate AppName, workpath, specpath, and evidence tree so it
 #   cannot wipe dist\TraceLabAnalyzer<version>\.
 # - Does not reuse the Lite SciPy OpenBLAS file-delete; a leftover scipy.libs
 #   is a leak, not something to prune into a false success.
-# - Skips the lite importer smoke that requires frozen av/MAT to succeed.
+# - Emits core.json / core-files.json, content-addressed component ZIPs,
+#   licenses, dependency lists, native-identity audit, and a tested-manager
+#   copy step (placeholder when no Windows installer.exe is supplied).
+# - Importer gates are split: base expected-missing vs installed-available.
+#   A permanent skip is not recorded as success. Frozen WAV/MP4 reads are
+#   not claimed without a frozen child.
 #
 # python-can / cantools are intentionally NOT excluded: the Analyzer itself uses
 # them to import BLF (Vector CAN log) files.
@@ -70,7 +81,7 @@ function Invoke-LoggedNative {
 
 function ConvertTo-Win32ArgumentList {
     param([string[]]$Arguments)
-    $parts = foreach ($Argument in @($Arguments)) {
+    $parts = @(foreach ($Argument in @($Arguments)) {
         if ($null -eq $Argument) { continue }
         $text = [string]$Argument
         if ($text -notmatch '[ \t"]') {
@@ -78,8 +89,62 @@ function ConvertTo-Win32ArgumentList {
         } else {
             '"' + ($text -replace '"', '\"') + '"'
         }
-    }
+    })
     return [string]($parts -join ' ')
+}
+
+function Stop-OwnedProcessTree {
+    param([System.Diagnostics.Process]$Process)
+    # Only descendants of the process this script started. Do not kill user
+    # TraceLab / unrelated python processes.
+    if ($null -eq $Process) { return }
+    $rootId = $Process.Id
+    $owned = New-Object System.Collections.Generic.List[int]
+    [void]$owned.Add($rootId)
+    try {
+        $pending = New-Object System.Collections.Generic.Queue[int]
+        $pending.Enqueue($rootId)
+        while ($pending.Count -gt 0) {
+            $parentId = $pending.Dequeue()
+            $children = @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$parentId" -ErrorAction SilentlyContinue)
+            foreach ($child in @($children)) {
+                if ($null -eq $child) { continue }
+                $childId = [int]$child.ProcessId
+                if ($owned.Contains($childId)) { continue }
+                [void]$owned.Add($childId)
+                $pending.Enqueue($childId)
+            }
+        }
+    } catch {
+        try {
+            $children = @(Get-WmiObject Win32_Process -Filter "ParentProcessId=$rootId" -ErrorAction SilentlyContinue)
+            foreach ($child in @($children)) {
+                if ($null -eq $child) { continue }
+                $childId = [int]$child.ProcessId
+                if ($owned.Contains($childId)) { continue }
+                [void]$owned.Add($childId)
+            }
+        } catch { }
+    }
+    $descendantRows = @(foreach ($procId in $owned) {
+        if ($procId -eq $rootId) { continue }
+        [pscustomobject]@{ ProcessId = $procId }
+    })
+    foreach ($row in $descendantRows) {
+        try { Stop-Process -Id $row.ProcessId -Force -ErrorAction SilentlyContinue } catch { }
+    }
+    try { $Process.Kill() } catch { }
+}
+
+function Wait-RedirectedOutput {
+    param($Task, [int]$TimeoutMs = 2000)
+    if ($null -eq $Task) { return "" }
+    try {
+        if ($Task.Wait($TimeoutMs)) {
+            return [string]$Task.Result
+        }
+    } catch { }
+    return ""
 }
 
 function Get-PostCheckRecord {
@@ -98,7 +163,7 @@ function Get-PostCheckStatus {
 }
 
 function Test-AllPostChecksPassed {
-    foreach ($name in @("offscreen", "windows")) {
+    foreach ($name in @("offscreen", "windows", "importer-base-missing")) {
         if ((Get-PostCheckStatus $name) -ne "passed") { return $false }
     }
     return $true
@@ -108,11 +173,16 @@ function Write-PostCheckSummary {
     $exeGenerated = [bool]$script:ExeGenerated
     $off = Get-PostCheckStatus "offscreen"
     $win = Get-PostCheckStatus "windows"
-    $imp = "skipped"
+    $impBase = Get-PostCheckStatus "importer-base-missing"
+    $impInstalled = Get-PostCheckStatus "importer-installed-contract"
+    $impFallback = Get-PostCheckStatus "importer-fallback-contract"
     Write-Host "EXE generated: $exeGenerated"
     Write-Host "offscreen: $off"
     Write-Host "windows: $win"
-    Write-Host "importer: skipped (modular base is not expected to load av/MAT)"
+    Write-Host "importer-base-missing: $impBase"
+    Write-Host "importer-installed-contract: $impInstalled"
+    Write-Host "importer-fallback-contract: $impFallback"
+    Write-Host "frozen WAV/MP4/MAT: not_run (not claimed as success without a frozen child read)"
 }
 
 function Invoke-IndependentPostCheck {
@@ -150,11 +220,7 @@ function Invoke-IndependentPostCheck {
         $stdoutTask = $process.StandardOutput.ReadToEndAsync()
         $stderrTask = $process.StandardError.ReadToEndAsync()
         if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
-            try { $process.Kill() } catch { }
-            try {
-                Get-WmiObject Win32_Process -Filter "ParentProcessId=$($process.Id)" -ErrorAction SilentlyContinue |
-                    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-            } catch { }
+            Stop-OwnedProcessTree -Process $process
             [void]$process.WaitForExit(10000)
             $record.TimedOut = $true
             $record.Status = "timeout"
@@ -169,12 +235,12 @@ function Invoke-IndependentPostCheck {
             }
             Write-Host "Post-check ${Name} exit code: $($record.ExitCode)"
         }
-        try {
-            $outText = $stdoutTask.Result
-            $errText = $stderrTask.Result
-            if ($outText) { Write-Host $outText }
-            if ($errText) { Write-Host $errText }
-        } catch { }
+        # Bound the redirected-stream drain. Never wait indefinitely on
+        # Task.Result after a timeout or a stuck child.
+        $outText = Wait-RedirectedOutput -Task $stdoutTask -TimeoutMs 2000
+        $errText = Wait-RedirectedOutput -Task $stderrTask -TimeoutMs 2000
+        if ($outText) { Write-Host $outText }
+        if ($errText) { Write-Host $errText }
     } catch {
         $record.Status = "failed"
         $record.Error = "$_"
@@ -228,7 +294,9 @@ $AppIcon = Join-Path $IconsDir "tracelab.ico"
 $RuntimeDependencyTool = Join-Path $PSScriptRoot "windows_runtime_dependencies.py"
 $BundlePolicyTool = Join-Path $PSScriptRoot "windows_bundle_policy.py"
 $BatchRenderSmokeTool = Join-Path $PSScriptRoot "verify_frozen_batch_render.py"
-$ImporterSmokeTool = Join-Path $PSScriptRoot "verify_lite_importer_runtime.py"
+$ExtensionBuildTool = Join-Path $PSScriptRoot "build_windows_extensions.py"
+$ExtensionVerifyTool = Join-Path $PSScriptRoot "verify_extension_installation.py"
+$ExtensionInstallerScript = Join-Path $PSScriptRoot "build_windows_extension_installer.ps1"
 $VenvDir = Join-Path $RepoRoot ".venv-build-win"
 $VenvPython = Join-Path $VenvDir "Scripts\python.exe"
 $DistDir = Join-Path $RepoRoot "dist"
@@ -253,7 +321,10 @@ Write-Host "Evidence: $BuildEvidenceDir"
 Write-Host "Repo: $RepoRoot"
 Write-Host "Working directory: $((Get-Location).Path)"
 Write-Host "PowerShell: $($PSVersionTable.PSVersion); OS: $([Environment]::OSVersion)"
-Write-Host "Version=$Version AppName=$AppName Console=$Console SkipInstall=$SkipInstall KeepPrevious=$KeepPrevious"
+Write-Host "Version=$Version AppName=$AppName Flavor=$Flavor DependencyProfile=$DependencyProfile Console=$Console SkipInstall=$SkipInstall KeepPrevious=$KeepPrevious ManagerSource=$ManagerSource"
+if ($Flavor -ne "lite" -or $DependencyProfile -ne "modular") {
+    throw "unsupported frozen delivery combination flavor=$Flavor dependency_profile=$DependencyProfile; first modular release accepts only lite+modular"
+}
 if (Get-Command git -ErrorAction SilentlyContinue) {
     & git -C $RepoRoot rev-parse HEAD | Out-Host
     & git -C $RepoRoot status --short | Out-Host
@@ -262,7 +333,7 @@ Copy-Item -LiteralPath $PSCommandPath -Destination $BuildEvidenceDir
 # Default output: dist\TraceLabAnalyzer8.3.1-modular\TraceLabAnalyzer8.3.1-modular.exe
 # (override with -Version or -AppName). Does not replace dist\TraceLabAnalyzer8.3.1\.
 
-foreach ($RequiredPath in @($EntryScript, $Requirements, $StyleQss, $RuntimeDependencyTool, $BundlePolicyTool, $BatchRenderSmokeTool, $ImporterSmokeTool)) {
+foreach ($RequiredPath in @($EntryScript, $Requirements, $StyleQss, $RuntimeDependencyTool, $BundlePolicyTool, $BatchRenderSmokeTool, $ExtensionBuildTool, $ExtensionVerifyTool, $ExtensionInstallerScript)) {
     if (-not (Test-Path $RequiredPath)) {
         throw "Required file not found: $RequiredPath"
     }
@@ -299,7 +370,7 @@ New-Item -ItemType Directory -Force -Path $DistDir, $WorkDir, $SpecDir, $BuildEv
 
 Write-Step "Verifying frozen import dependency contract"
 Invoke-LoggedNative -Executable $VenvPython -Arguments @($RuntimeDependencyTool, "--verify", "--require-installed", "--requirements", $Requirements, "--build-script", $PSCommandPath)
-$RuntimeDependencyArgsJson = Invoke-LoggedNative -Executable $VenvPython -Arguments (@($RuntimeDependencyTool) + ("--pyinstaller-args-json --flavor lite --profile modular" -split " ")) -CaptureStdout
+$RuntimeDependencyArgsJson = Invoke-LoggedNative -Executable $VenvPython -Arguments (@($RuntimeDependencyTool) + ("--pyinstaller-args-json --flavor $Flavor --profile $DependencyProfile" -split " ")) -CaptureStdout
 Write-Host "Runtime dependency arguments: $RuntimeDependencyArgsJson"
 try {
     # PowerShell 5.1 emits the JSON array as one pipeline object. An outer @()
@@ -310,7 +381,7 @@ try {
     throw "Frozen import dependency arguments were not valid JSON: $_"
 }
 Write-Step "Building analyzer-only modular folder-style exe with PyInstaller"
-$BundlePolicyArgsJson = Invoke-LoggedNative -Executable $VenvPython -Arguments @($BundlePolicyTool, "--pyinstaller-args-json", "--flavor", "lite") -CaptureStdout
+$BundlePolicyArgsJson = Invoke-LoggedNative -Executable $VenvPython -Arguments @($BundlePolicyTool, "--pyinstaller-args-json", "--flavor", $Flavor) -CaptureStdout
 $BundlePolicyArgs = [string[]](ConvertFrom-Json -InputObject $BundlePolicyArgsJson)
 Copy-Item -LiteralPath $BundlePolicyTool -Destination $BuildEvidenceDir
 $AddDataStyle = "$StyleQss;mf4_analyzer\ui_kit"
@@ -440,8 +511,7 @@ $PyInstallerArgs += $EntryScript
 
 $BatchRenderOffscreenSmokeEvidence = Join-Path $BuildEvidenceDir "$AppName-batch-render-offscreen-smoke.json"
 $BatchRenderWindowsSmokeEvidence = Join-Path $BuildEvidenceDir "$AppName-batch-render-windows-smoke.json"
-$ImporterSmokeEvidence = Join-Path $BuildEvidenceDir "$AppName-importer-smoke.json"
-foreach ($StaleEvidencePath in @($BatchRenderOffscreenSmokeEvidence, $BatchRenderWindowsSmokeEvidence, $ImporterSmokeEvidence)) {
+foreach ($StaleEvidencePath in @($BatchRenderOffscreenSmokeEvidence, $BatchRenderWindowsSmokeEvidence)) {
     if (Test-Path -LiteralPath $StaleEvidencePath) {
         Remove-Item -LiteralPath $StaleEvidencePath -Force
     }
@@ -489,13 +559,58 @@ if ($OptionalLeaks.Count -ne 0) {
 }
 
 Write-Step "Pruning unused bundle payloads"
-Invoke-LoggedNative -Executable $VenvPython -Arguments @($BundlePolicyTool, "--flavor", "lite", "--exe", $ExePath, "--report", (Join-Path $BuildEvidenceDir "bundle-prune.json"))
+Invoke-LoggedNative -Executable $VenvPython -Arguments @($BundlePolicyTool, "--flavor", $Flavor, "--exe", $ExePath, "--report", (Join-Path $BuildEvidenceDir "bundle-prune.json"))
+
+Write-Step "Emitting core manifests, component ZIPs, identity audit, and manager copy"
+$ExtensionOutputDir = Join-Path $BuildEvidenceDir "extension-delivery"
+New-Item -ItemType Directory -Force -Path $ExtensionOutputDir | Out-Null
+$SitePackagesJson = Invoke-LoggedNative -Executable $VenvPython -Arguments @("-c", "import json, site; print(json.dumps(site.getsitepackages()))") -CaptureStdout
+$SitePackagesList = @(ConvertFrom-Json -InputObject $SitePackagesJson)
+$SitePackages = [string]$SitePackagesList[0]
+$ExtensionEmitArgs = @(
+    $ExtensionBuildTool,
+    "--flavor", $Flavor,
+    "--profile", $DependencyProfile,
+    "--app-root", $OutputDir,
+    "--exe-relpath", "$AppName.exe",
+    "--site-packages", $SitePackages,
+    "--output-dir", $ExtensionOutputDir
+)
+if ($ManagerSource) {
+    $ExtensionEmitArgs += @("--manager-source", $ManagerSource)
+} else {
+    Write-Host "Manager copy: verified Windows installer.exe not supplied; writing placeholder (no fabricated hash). Independent entry: $ExtensionInstallerScript"
+}
+Invoke-LoggedNative -Executable $VenvPython -Arguments $ExtensionEmitArgs
 
 $script:ExeGenerated = $true
 Write-Step "Verifying frozen batch rendering (independent post-checks)"
 Invoke-IndependentPostCheck -Name "offscreen" -Executable $VenvPython -Arguments @($BatchRenderSmokeTool, "--exe", $ExePath, "--platform", "offscreen", "--evidence-json", $BatchRenderOffscreenSmokeEvidence, "--diagnostics-dir", (Join-Path $BuildEvidenceDir "render-offscreen")) -TimeoutSeconds 300
 Invoke-IndependentPostCheck -Name "windows" -Executable $VenvPython -Arguments @($BatchRenderSmokeTool, "--exe", $ExePath, "--platform", "windows", "--evidence-json", $BatchRenderWindowsSmokeEvidence, "--diagnostics-dir", (Join-Path $BuildEvidenceDir "render-windows")) -TimeoutSeconds 300
-Write-Host "Skipping lite importer smoke: modular base must not load av/MAT until an extension is installed."
+$CoreJson = Join-Path $OutputDir "core.json"
+$FirstPackageJson = $null
+$PackageJsonCandidates = @(
+    foreach ($item in @(Get-ChildItem -LiteralPath (Join-Path $ExtensionOutputDir "staging") -Filter "package.json" -Recurse -ErrorAction SilentlyContinue)) {
+        $item.FullName
+    }
+)
+if ($PackageJsonCandidates.Count -ge 1) { $FirstPackageJson = [string]$PackageJsonCandidates[0] }
+$BaseMissingEvidence = Join-Path $BuildEvidenceDir "importer-base-missing.json"
+$InstalledContractEvidence = Join-Path $BuildEvidenceDir "importer-installed-contract.json"
+$FallbackEvidence = Join-Path $BuildEvidenceDir "importer-fallback-contract.json"
+Invoke-IndependentPostCheck -Name "importer-base-missing" -Executable $VenvPython -Arguments @($ExtensionVerifyTool, "--mode", "combination-contract", "--core-json", $CoreJson, "--expect-missing", "--app-root", $OutputDir, "--evidence-json", $BaseMissingEvidence) -TimeoutSeconds 60
+if ($FirstPackageJson) {
+    Invoke-IndependentPostCheck -Name "importer-installed-contract" -Executable $VenvPython -Arguments @($ExtensionVerifyTool, "--mode", "combination-contract", "--core-json", $CoreJson, "--package-json", $FirstPackageJson, "--app-root", $OutputDir, "--evidence-json", $InstalledContractEvidence) -TimeoutSeconds 60
+} else {
+    Write-Host "importer-installed-contract: not_run (no component package.json; not claimed as WAV/MP4 success)"
+}
+if ($FirstPackageJson) {
+    Invoke-IndependentPostCheck -Name "importer-fallback-contract" -Executable $VenvPython -Arguments @($ExtensionVerifyTool, "--mode", "fallback-contract", "--core-json", $CoreJson, "--remaining-package-json", $FirstPackageJson, "--removed-component", "matlab", "--app-root", $OutputDir, "--evidence-json", $FallbackEvidence) -TimeoutSeconds 60
+} else {
+    Write-Host "importer-fallback-contract: not_run (no remaining package; not claimed as success)"
+}
+Write-Host "Not invoking verify_lite_importer_runtime.py: that gate requires frozen av/MAT success and is the bundled Lite path."
+Write-Host "frozen importer-base-missing / installed-available child reads: not_run (A1-A15 / four frozen combinations UNKNOWN)"
 Write-PostCheckSummary
 if (-not (Test-AllPostChecksPassed)) {
     throw "Post-build checks failed; EXE generated; see evidence under $BuildEvidenceDir"

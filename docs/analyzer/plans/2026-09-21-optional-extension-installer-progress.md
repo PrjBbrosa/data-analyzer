@@ -1,23 +1,24 @@
 # 2026-09-21 可选扩展安装器进度账本
 
-- 状态：**实施中（follow-up W0 起）**。
+- 状态：**PARTIAL / NEEDS REVISION（2026-09-22 复核）**。此前 W4–W6 focused 完成不能等同真实集成完成；[本轮完成度审查](../reviews/2026-09-22-grok-followup-completion-review.md)列出 R1–R7。
 - 权威执行计划：[后续优化计划](2026-09-21-grok-implementation-followup-plan.md)。
 - 原计划：[可选扩展包与稳定安装器](2026-09-21-optional-extension-installer-plan.md)（历史“待实施；本轮只写文档”头部保留为当时观察，不以它冒充当日完成）。
 - 审查：[实现结构与当日提交审查](../reviews/2026-09-21-grok-implementation-and-day-commits-review.md)。
 - 规格：[可选扩展与稳定安装器 spec](../specs/2026-09-21-optional-extension-installer-spec.md)。
 - 执行起点 HEAD：`5cea434b2c5c01dedf67b0d5dbbdca0ebbf564f1`（审查基线 `21a88687` 之后多了实验性 Lite modular packager）。
+- 本轮审查/提交前 HEAD：`bcb23bdb23f8eb8e736e64243cfdbea17383917d`（`Harden optional-extension install plumbing and repair grok follow-up defects.`）。中间还有 `aa3f2d89 optimize Windows bundle payloads`，与本 follow-up 并行，不计入 Task 5。
 - 本文件把原先只写在 `.state/extension-installer/` 的绑定决策提升为可提交记录。`.state/` 仍是实验证据，不是产品完成证明。
 
 ## 1. 执行时工作区
 
 | 项 | 值 |
 | --- | --- |
-| HEAD | `5cea434b` |
+| HEAD | `bcb23bdb`（执行起点 `5cea434b`） |
 | 审查基线 | `21a88687` |
-| HEAD 相对审查的增量 | `tools/build_windows_folder_lite_modular.{ps1,bat}` + `tests/test_windows_lite_modular_build_script.py`。提交说明为 experimental，**不等于原 Task 5 完成**。 |
-| Dirty（执行开始） | `docs/lessons-learned/INDEX.md`（既有，勿纳入本波）；本账本与 follow-up 计划为新文档。 |
+| HEAD 相对审查的增量 | 实验性 Lite modular packager（`5cea434b`，不等于 Task 5）+ Windows bundle payload 优化（`aa3f2d89`）+ W0–W3 focused 修复（`bcb23bdb`）。 |
+| Dirty | W4–W6 产品/测试/脚本未提交；W3 收尾 `download.py` 206/ETag 续传仍在；`docs/lessons-learned/INDEX.md` 既有脏文件勿纳入。另有无关未跟踪 `docs/analyzer/plans/2026-09-22-windows-startup-and-idle-preload-plan.md`。 |
 | pytest | 启动时未发现本 checkout 的全套 pytest。各波只跑 owner focused / boundary。 |
-| 全套门禁 | 未授权。集成负责人只在 W6 全部 owner 通过后跑。 |
+| 全套门禁 | 2026-09-22 全套运行约 2 小时 4 分，停于 52% 且已有失败标记；按用户授权终止，UNVERIFIED。Cursor 自动重跑的 pytest 亦已终止，其专属 shell 保持暂停防止重试；未获得完整通过结果。 |
 | 生产密钥 / 用户 dist | 不创建、不覆盖。 |
 
 ## 2. 原计划完成口径
@@ -31,13 +32,13 @@
 
 | 原任务 | source complete | focused verified | Windows frozen verified | 当前判断 |
 | --- | --- | --- | --- | --- |
-| Task 0 冻结可行性 | 审计与实验说明已写在 `.state/extension-feasibility/` | 源码审计 PASS；原生实验未跑 | **UNKNOWN / BLOCKED** | 审计完成，原生实验未完成。不得开始产品 Task 5。 |
-| Task 1 合同 / schema | schema、兼容、recipe、modular `--exclude-module` 已落地 | 审查时合同/兼容/import boundary 绿 | 真实 core 产物绑定无构建闭环 | **partial** |
-| Task 2 仓库 / TUF | repository + download + 本地测试仓库已落地；W2 接通 VerifiedPackage / FileEntry / installer 哈希 | 应用层 77 passed；manager gate 32 passed；**F1 仍开** | 未跑 | **needs revision**（W3 操作资格） |
-| Task 3 安装事务 | ZIP 解包已接 contract FileEntry；锁 / probe / active / 恢复未实现 | 解包 focused 绿 | 未跑 | 解包子项完成，事务未完成（W5） |
-| Task 4 启动桥接 | 未开始 | — | — | 未完成（W6） |
-| Task 5 构建拆分 | 仅有实验性 lite modular 启动器副本 | 源码合同测试存在，证明“另起脚本、默认 bundled 未改” | 无 PYZ/外置模块/core 清单产物 | **blocked / 非产品完成**。文件存在 ≠ Task 5。 |
-| Task 6 管理器 UI | 未开始 | — | — | 未完成（W6） |
+| Task 0 冻结可行性 | 审计与实验说明已写在 `.state/extension-feasibility/` | 源码审计 PASS；原生实验未跑 | **UNKNOWN / BLOCKED** | 审计完成，原生实验未完成。不得把 bundled 默认切到 modular，也不得宣称产品 Task 5 完成。 |
+| Task 1 合同 / schema | schema、兼容、recipe、modular excludes、**DLL 内容身份进入 runtime_id** | W4 focused 47 passed | 真实 core 产物绑定无构建闭环 | **partial**（身份合同 focused 完成；冻结闭环仍 UNKNOWN） |
+| Task 2 仓库 / TUF | repository + download + VerifiedPackage / FileEntry / installer 哈希 + `change_authorized` 操作资格 | 应用层与 manager gate focused 绿；W3 收尾 diff 未提交 | 未跑 | **focused 完成**；原生仓库/冻结仍 UNKNOWN |
+| Task 3 安装事务 | engine/transaction/locking/runtime/probe 已落地；active.json 唯一提交点 | focused 40 passed, 1 skipped（非 Windows 原生锁） | 真实 NTFS / 冻结 WAV/MP4 UNKNOWN | **partial**；R2 真实仓库 API 不匹配，R4 默认 probe 仍是文件 stand-in，不能称纵向完成 |
+| Task 4 启动桥接 | source/bundled/modular 分流、V1 probe hidden 组、`from mf4_analyzer.app import main` 仍在 pyxcp/a2l child 之后、importer/GUI 前 bootstrap | W6a focused + 启动器打包合同修复绿 | 冻结 EXE probe UNKNOWN | **needs revision**；R1 默认入口 NameError，R7 错误分类被吞，已有 focused 未覆盖 |
+| Task 5 构建拆分 | 独立 modular 脚本发出 core.json / 组件 ZIP / 审计 / 匹配 manager 副本；`build_windows_folder_lite.ps1` 仍是 bundled | 源码合同 focused 绿（含 Lite 默认未改） | 无 PYZ / 外置 av·MAT 冻结运行证据 | **partial**；R5 独立 manager 构建及冻结验收仍为占位；不得切换默认或发布 |
+| Task 6 管理器 UI | command `manage_extensions`、Tk presenter、hints/quickref/FAQ | W6b focused 64 passed | Tk 中文/DPI 前台 UNVERIFIED | **partial**；R3 仓库未接通、R6 Tk 同步阻塞，Windows Tk 真机未验 |
 | Task 7 A1–A15 | 未开始 | — | — | 未完成（W6） |
 
 `.state/extension-installer/WAVE1.md` 的 complete 只覆盖 Wave 1 有限子项（协议 + unpack 安全 + TUF 客户端测试）。它把 Task 0/3 标成 done，**不能**替代上表。
@@ -46,7 +47,7 @@
 
 | ID | 严重度 | Owner 波次 | 状态 |
 | --- | --- | --- | --- |
-| F1 刷新失败仍复用旧安装授权 | P1 | W3 | 未修。确定性复现：过期 / `MANAGER_TOO_OLD` 后 `select_package`/`download_package` 仍成功。 |
+| F1 刷新失败仍复用旧安装授权 | P1 | W3 | **focused 已修**（`change_authorized` / `installer_update_authorized`；`tests/test_extension_repository.py` 45 passed）。锁等待重验留给 W5。 |
 | F2 FFT Pin 时域 DTO 进入频域展示 | P1 | W1a | **focused 已修**（占位行走 diagnostic 状态通道，FFT 展示按 numeric/status 分支）。计划指定命令 103 passed；前台 Cocoa UNVERIFIED。 |
 | F3 contract 清单与 unpack API 未接通 | P2 | W2 | **focused 已修**。unpack 只消费 `FileEntry` 或唯一 `ManifestFile` 适配器，强制 size+SHA-256。应用层 77 passed。 |
 | F4 installer 下载未绑定 manager-status 哈希 | P2 | W2 | **focused 已修**。status sha256 必须与 TUF installer target 一致，否则 `VERIFICATION_FAILED`。manager gate 32 passed。 |
@@ -77,18 +78,21 @@
 - 应用普通测试（合同、unpack 纯逻辑、import boundary）使用仓库 `.venv`，**不**安装 TUF。
 - 专用 manager gate（`tests/test_extension_repository.py` 及后续 engine 测试）必须在固定依赖的独立环境运行，当前约定：`.state/extension-manager-tuf/` + `tools/extension_manager/requirements.txt`。
 - 缺 TUF 依赖时该 gate **必须失败**（非零退出或明确 error），不能因为 `.state` 目录不存在就整组 `importorskip` 后声称通过。
-- 当前测试文件在 import 时 `pytest.importorskip("tuf")`。W2/W3 修改该文件时改为：独立环境可运行；在默认 `.venv` 下缺依赖则失败而不是静默 skip-pass。协调者验收以专用环境命令为准。
+- 2026-09-22 当前测试文件通过桥接加载专用环境 site-packages，缺少依赖会失败；本轮应用 runner 获得 45 passed。专用解释器缺 pytest，直接执行失败，故独立解释器 gate 尚未通过。
 - 测试仓库只使用本地签名夹具，禁止访问生产仓库或生成生产密钥。
 
-## 6. 实验性 modular 脚本审查（非 Task 5）
+## 6. 实验性 modular 脚本审查（非产品 Task 5）
 
-`5cea434b` 合同测试只钉住：
+`5cea434b` 合同测试仍钉住：原 `build_windows_folder_lite.ps1` 是 bundled，不含 `--profile modular`。
 
-- 原 `build_windows_folder_lite.ps1` 仍是 bundled，不含 `--profile modular`。
-- 新脚本是独立副本，调用 `--flavor lite --profile modular`，独立 build/spec/evidence 目录，输出名带 `-modular`。
-- 不复用 Lite `libscipy_openblas*.dll` 删除；跳过 lite importer smoke，不把它算进独立后置检查。
+W6c 已加入部分产物生成源码；以下不表示 manager 构建或冻结验收已打通：
 
-缺口（保持 blocked）：无 core.json / 组件 ZIP / 清单审计 / 匹配 manager 复制；无 Windows PYZ 与外置 av/MAT 运行证据；新脚本不是产品默认路径。W4 未完成前不得把默认发布切到 modular。
+- 调用 `--flavor lite --profile modular`，独立 build/spec/evidence 目录，输出名带 `-modular`。
+- `build_windows_extensions.py` 发出 core.json / core-files.json、内容寻址组件 ZIP、清单审计。
+- `build_windows_extension_installer.ps1` 当前仅打印构建说明，不执行冻结、不生成 manager；独立 modular 脚本仅能复制已提供的 manager，缺失时写占位（R5）。
+- 后置检查拆成 base-missing / installed-contract / fallback-contract；不把 lite importer smoke skip 记成成功。
+
+缺口（保持 blocked）：无 Windows PYZ 与外置 av/MAT 冻结运行证据；新脚本不是产品默认路径。不得把默认发布切到 modular。
 
 ## 7. 本轮波次与文件所有权
 
@@ -99,9 +103,15 @@
 | W0 | 本账本、环境、指纹 | 协调者 |
 | W1a–W1d | F2 / F5+digest / F6 / F7 | 文件不重叠，可并行 |
 | W2 | F3/F4 合同与受信解包链 | 与 W1 并行；独占 repository/unpack/contract |
-| W3 | F1 操作资格 | **W2 之后**（同读 `repository.py`） |
-| W4 | Windows 冻结与 runtime 身份 | 需 x64 NTFS；本机 macOS 只能准备脚本/账本 |
-| W5 | media 纵向事务 | W3+W4 之后 |
-| W6 | UI / 打包 / A1–A15 | W5 之后 |
+| W3 | F1 操作资格 | **focused 完成**（W2 之后） |
+| W4 | Windows 冻结与 runtime 身份 | **partial；身份子项 focused 有证据**：`runtime_id` 含 `python_build_id` + DLL SHA-256；`NATIVE_DLL_CONFLICT`。PYZ/LockFileEx/Tk DPI 仍 UNKNOWN。bundled 默认未改。 |
+| W5 | media 纵向事务 | **needs revision**。历史 focused 40 passed, 1 skipped；R2 真实仓库接口与 R4 原生探针未打通，不能视为纵向完成。 |
+| W6 | UI / 打包 / A1–A15 | **needs revision**（R1/R3/R5/R6/R7）。已有 focused 未覆盖真实入口。启动器已恢复 `from mf4_analyzer.app import main`（hidden child 之后、importer/GUI 之前 bootstrap）。bundled 默认未改。Tk 前台 / A1–A15 / 冻结 EXE UNVERIFIED。 |
 
 不授权直接发布。bundled Lite 仍是可交付回退。
+
+## 8. 2026-09-22 完成度复核
+
+[审查报告](../reviews/2026-09-22-grok-followup-completion-review.md)覆盖 R1–R7：默认 modular 启动 NameError、真实仓库下载签名不匹配、manager 仓库/离线入口未接、原生 probe 为 stand-in、构建/验证占位、Tk 阻塞、启动错误分类丢失。以上为实现缺口，不是仅缺 Windows 实测。
+
+本轮已有 focused/boundary 测试合计 **249 passed, 12 skipped**，四个额外探针仍复现 R1/R2/R4/R7；全套被终止，状态 UNVERIFIED。没有重跑全套，没有补产品代码。提交仅保存当前成果及真实待办，不发布 modular 产物。历史 focused 数字保留为历史记录，当前完成度以本节及审查报告为准。

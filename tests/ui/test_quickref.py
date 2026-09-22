@@ -569,6 +569,16 @@ def test_catalog_bottom_bar_is_question_mark_quickref():
     assert "📖" not in manual.gesture
 
 
+def test_quickref_documents_extension_manager():
+    row = _row_by_desc("扩展管理…")
+    assert "安装器" in row.sub
+    assert "关闭" in row.sub
+    assert "HDF" in row.sub and "MAT" in row.sub
+    assert "离线" in row.sub
+    assert "磁盘" in row.sub
+    assert "状态栏" in (row.gesture or "")
+
+
 def test_catalog_channel_editor_create_and_param_help():
     """422cbc87: both forms say「创建通道」; sliding-average window is 样点数."""
     group = next(g for g in quickref.QUICKREF if g.title == "通道编辑（派生通道）")

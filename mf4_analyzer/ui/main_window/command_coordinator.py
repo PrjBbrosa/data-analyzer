@@ -7,6 +7,9 @@ Task 3 / Task 4 owners).
 """
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 from PyQt5.QtCore import QObject, Qt
 from PyQt5.QtWidgets import QAction, QApplication
 
@@ -18,6 +21,67 @@ from ..command_registry import (
     object_name_for,
     tooltip_for,
 )
+
+_EXTENSION_MANAGER_REASONS = frozenset(
+    {
+        "COMPONENT_MISSING",
+        "COMPONENT_INCOMPATIBLE",
+        "COMPONENT_CORRUPT",
+        "NO_COMPATIBLE_PACKAGE",
+        "TRANSACTION_RECOVERY_REQUIRED",
+    }
+)
+
+
+def extension_import_offers_manager(exc: BaseException) -> bool:
+    """True when import feedback should offer the extension-manager command.
+
+    Consumes a ``reason_code`` left on the exception (W6a / contract). Display
+    names and pip wording are not eligibility rules.
+    """
+
+    reason = getattr(exc, "reason_code", None)
+    if isinstance(reason, str) and reason in _EXTENSION_MANAGER_REASONS:
+        return True
+    availability = getattr(exc, "availability", None)
+    nested = getattr(availability, "reason_code", None)
+    return isinstance(nested, str) and nested in _EXTENSION_MANAGER_REASONS
+
+
+def current_app_root(*, frozen: bool | None = None, executable: Path | None = None) -> Path:
+    """Install root the manager should target. Source checkouts use the repo."""
+
+    if frozen is None:
+        frozen = bool(getattr(sys, "frozen", False))
+    exe = Path(executable or sys.executable).expanduser().resolve()
+    if frozen:
+        return exe.parent
+    return Path(__file__).resolve().parents[3]
+
+
+def extension_manager_argv(
+    app_root: str | Path,
+    *,
+    frozen: bool | None = None,
+    executable: Path | None = None,
+    repo_root: Path | None = None,
+) -> tuple[str, ...] | None:
+    """Return the process argv that opens the standalone manager, or None if missing."""
+
+    root = Path(app_root).expanduser().resolve()
+    if frozen is None:
+        frozen = bool(getattr(sys, "frozen", False))
+    exe = Path(executable or sys.executable).expanduser().resolve()
+    if frozen:
+        installer = exe.parent / "installer.exe"
+        if not installer.is_file():
+            return None
+        return (str(installer), "--app-root", str(root))
+    repo = Path(repo_root) if repo_root is not None else current_app_root(frozen=False)
+    script = repo / "tools" / "extension_installer.py"
+    if not script.is_file():
+        return None
+    return (str(exe), str(script), "--app-root", str(root))
 
 # Window-scoped commands whose shortcuts this coordinator may install.
 # Chart camera and View cycling stay unregistered here so they cannot fight
@@ -87,6 +151,9 @@ class CommandCoordinator(QObject):
         self._actions[CommandId.FIND].triggered.connect(self._on_find)
         self._actions[CommandId.QUICK_REFERENCE].triggered.connect(
             self._on_quick_reference
+        )
+        self._actions[CommandId.MANAGE_EXTENSIONS].triggered.connect(
+            self._on_manage_extensions
         )
         # Quit stays disconnected until MainWindow.publish_quit after the
         # dirty guard exists. Undo/Redo stay disconnected until Task 3
@@ -159,6 +226,11 @@ class CommandCoordinator(QObject):
         toggle = getattr(self._host, "toggle_quickref_panel", None)
         if callable(toggle):
             toggle()
+
+    def _on_manage_extensions(self, checked=False) -> None:
+        method = getattr(self._host, "open_extension_manager", None)
+        if callable(method):
+            method()
 
     @staticmethod
     def _focus_quickref_search(panel) -> None:

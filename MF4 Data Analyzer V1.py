@@ -1,10 +1,76 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 import argparse
+import sys
 from pathlib import Path
 
+from mf4_analyzer.extensions.probe import PROBE_ARGV_FLAGS
+
+
+class _WindowedArgumentParser(argparse.ArgumentParser):
+    """Hidden children must not depend on console streams (windowed EXE)."""
+
+    def _print_message(self, message, file=None):
+        if not message:
+            return
+        stream = sys.stderr if file is None else file
+        writer = getattr(stream, "write", None)
+        if not callable(writer):
+            return
+        try:
+            writer(str(message))
+        except (OSError, ValueError, AttributeError):
+            return
+
+
+def _reject_abbreviated_probe_flags(argv) -> None:
+    """Exact ``--extension-probe-*`` flags only.  Abbreviations must not route."""
+
+    allowed = frozenset(PROBE_ARGV_FLAGS)
+    for token in argv:
+        if not token.startswith("--"):
+            continue
+        name = token.split("=", 1)[0]
+        if name.startswith("--extension-probe") and name not in allowed:
+            raise SystemExit(2)
+
+
+def _probe_child_argv(args) -> list[str]:
+    argv = [
+        "--extension-probe-request",
+        str(args.extension_probe_request),
+    ]
+    if args.extension_probe_result is not None:
+        argv.extend(["--extension-probe-result", str(args.extension_probe_result)])
+    if args.extension_probe_staging is not None:
+        argv.extend(["--extension-probe-staging", str(args.extension_probe_staging)])
+    if args.extension_probe_staging_nonce is not None:
+        argv.extend(
+            ["--extension-probe-staging-nonce", str(args.extension_probe_staging_nonce)]
+        )
+    if args.extension_probe_staging_handle is not None:
+        argv.extend(
+            [
+                "--extension-probe-staging-handle",
+                str(int(args.extension_probe_staging_handle)),
+            ]
+        )
+    return argv
+
+
+def _probe_app_root(staging: Path | None) -> Path | None:
+    if staging is None:
+        return None
+    resolved = Path(staging).expanduser().resolve()
+    try:
+        return resolved.parents[2]
+    except IndexError:
+        return resolved.parent
+
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
+    _reject_abbreviated_probe_flags(sys.argv[1:])
+    parser = _WindowedArgumentParser(add_help=False, allow_abbrev=False)
     hidden_mode = parser.add_mutually_exclusive_group()
     hidden_mode.add_argument("--acquisition-runtime-smoke", action="store_true")
     hidden_mode.add_argument("--pyxcp-import-probe-child", action="store_true")
@@ -21,7 +87,41 @@ if __name__ == "__main__":
     parser.add_argument("--frozen-smoke-json", type=Path)
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--json", type=Path)
+    # Probe *mode* token joins the exclusive hidden group.  Sibling payload
+    # flags share allow_abbrev=False; they must not appear without the mode.
+    hidden_mode.add_argument("--extension-probe-request", type=Path)
+    parser.add_argument("--extension-probe-result", type=Path)
+    parser.add_argument("--extension-probe-staging", type=Path)
+    parser.add_argument("--extension-probe-staging-nonce")
+    parser.add_argument("--extension-probe-staging-handle", type=int)
     args, _unknown = parser.parse_known_args()
+    probe_payload_present = any(
+        (
+            args.extension_probe_result is not None,
+            args.extension_probe_staging is not None,
+            args.extension_probe_staging_nonce is not None,
+            args.extension_probe_staging_handle is not None,
+        )
+    )
+    if probe_payload_present and args.extension_probe_request is None:
+        raise SystemExit(2)
+    if args.extension_probe_request is not None:
+        from mf4_analyzer.extensions.probe import (
+            ProbeError,
+            assert_result_path_safe,
+            child_main,
+        )
+
+        if args.extension_probe_result is not None:
+            try:
+                assert_result_path_safe(
+                    args.extension_probe_result,
+                    app_root=_probe_app_root(args.extension_probe_staging),
+                    extra_protected=(Path(sys.executable),),
+                )
+            except ProbeError:
+                raise SystemExit(2)
+        raise SystemExit(child_main(_probe_child_argv(args)))
     if args.pyxcp_import_probe_child:
         from mf4_analyzer.acquisition_capture.runtime_smoke import (
             run_import_probe_child,
@@ -49,6 +149,13 @@ if __name__ == "__main__":
         from mf4_analyzer.acquisition_capture.runtime_smoke import run
 
         raise SystemExit(run(args.json))
+    from mf4_analyzer.app import main
+
+    bootstrap = getattr(
+        sys.modules["mf4_analyzer.app"], "bootstrap_extension_runtime", None
+    )
+    if callable(bootstrap):
+        bootstrap()
     if args.importer_runtime_smoke:
         if args.json is None or not args.import_path:
             raise SystemExit(
@@ -89,6 +196,4 @@ if __name__ == "__main__":
                 frozen_smoke_json=args.frozen_smoke_json,
             )
         )
-    from mf4_analyzer.app import main
-
     main()

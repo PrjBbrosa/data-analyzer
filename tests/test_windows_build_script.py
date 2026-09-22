@@ -214,6 +214,7 @@ def test_windows_build_scripts_request_their_collection_flavors():
 
     assert "--pyinstaller-args-json --flavor full" in full
     assert "--pyinstaller-args-json --flavor lite" in lite
+    assert "--profile modular" not in lite
     assert '"--collect-all", "scipy"' not in lite
 
 

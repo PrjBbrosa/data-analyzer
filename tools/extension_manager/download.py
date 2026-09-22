@@ -354,48 +354,53 @@ def _download_attempt(
 
         headers_obj = response.info() if hasattr(response, "info") else getattr(response, "headers", None)
         content_length = _header_int(headers_obj, "Content-Length")
-        if content_length is not None:
-            total = resume_from + content_length if status == 206 else content_length
-            if total > policy.max_length:
-                raise DownloadPolicyError("server length exceeds download cap", "VERIFICATION_FAILED")
-            if total != expected_length:
-                raise DownloadPolicyError(
-                    "Content-Length does not match trusted expected_length",
-                    "VERIFICATION_FAILED",
-                )
-
         etag = _header_str(headers_obj, "ETag")
         if resume_from and status == 206:
             range_start, range_end, range_total = _parse_content_range(
                 _header_str(headers_obj, "Content-Range")
             )
-            if range_start != resume_from:
+            range_ok = (
+                range_start == resume_from
+                and range_end + 1 <= expected_length
+                and (range_total is None or range_total == expected_length)
+                and (
+                    not saved_etag
+                    or not etag
+                    or _normalize_etag(saved_etag) == _normalize_etag(etag)
+                )
+            )
+            if not range_ok:
                 part_path.unlink(missing_ok=True)
                 meta_path.unlink(missing_ok=True)
                 raise DownloadPolicyError(
-                    "Content-Range start does not match the requested resume offset",
+                    "resumed entity does not match Content-Range or ETag",
                     "NETWORK_CHECK_FAILED",
                 )
-            if range_total is not None and range_total != expected_length:
+            expected_chunk = range_end - range_start + 1
+            if content_length is not None and content_length != expected_chunk:
+                part_path.unlink(missing_ok=True)
+                meta_path.unlink(missing_ok=True)
+                raise DownloadPolicyError(
+                    "206 Content-Length does not match Content-Range",
+                    "NETWORK_CHECK_FAILED",
+                )
+            total = range_total if range_total is not None else resume_from + (
+                content_length if content_length is not None else expected_chunk
+            )
+            if total != expected_length:
                 part_path.unlink(missing_ok=True)
                 meta_path.unlink(missing_ok=True)
                 raise DownloadPolicyError(
                     "Content-Range total does not match trusted expected_length",
                     "VERIFICATION_FAILED",
                 )
-            if range_end + 1 > expected_length:
-                part_path.unlink(missing_ok=True)
-                meta_path.unlink(missing_ok=True)
+        elif content_length is not None:
+            if content_length > policy.max_length:
+                raise DownloadPolicyError("server length exceeds download cap", "VERIFICATION_FAILED")
+            if content_length != expected_length:
                 raise DownloadPolicyError(
-                    "Content-Range end exceeds trusted expected_length",
+                    "Content-Length does not match trusted expected_length",
                     "VERIFICATION_FAILED",
-                )
-            if saved_etag and etag and _normalize_etag(saved_etag) != _normalize_etag(etag):
-                part_path.unlink(missing_ok=True)
-                meta_path.unlink(missing_ok=True)
-                raise DownloadPolicyError(
-                    "ETag changed for a resumed download",
-                    "NETWORK_CHECK_FAILED",
                 )
         _write_part_meta(
             meta_path,

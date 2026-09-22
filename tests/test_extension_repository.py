@@ -1468,24 +1468,22 @@ def test_wrong_content_range_discards_part_and_redownloads(tmp_path: Path) -> No
 def test_refresh_cancel_is_not_a_network_failure(tmp_path: Path) -> None:
     repo = LocalTUFRepo()
     repo.set_standard_targets()
-    cancel = threading.Event()
-    cancel.set()
-    client = RepositoryClient(
-        metadata_cache_dir=tmp_path / "metadata-cache",
-        bootstrap_root=repo.signed_roots[1],
-        metadata_base_url="https://example.test/metadata/",
-        target_base_url="https://example.test/targets/",
-        trusted_origins=("example.test",),
-        manager_version="1.0.0",
-        revocation_store=tmp_path / "observed-revocations.json",
-        cancel_event=cancel,
-        urlopen=lambda *args, **kwargs: (_ for _ in ()).throw(
-            DownloadCancelled("metadata fetch cancelled")
-        ),
-    )
+    client = _client(repo, tmp_path)
+    first = client.refresh()
+    assert first.ok
+    selected = client.select_package("media", CORE, platform_tag=PLATFORM)
+    assert selected.ok
+
+    class _CancelFetcher(FetcherInterface):
+        def _fetch(self, url: str):  # type: ignore[override]
+            raise DownloadCancelled("metadata fetch cancelled")
+
+    client.fetcher = _CancelFetcher()
     result = client.refresh()
     assert not result.ok
     assert result.reason_code == DOWNLOAD_CANCELLED
-    selected = client.select_package("media", CORE, platform_tag=PLATFORM)
-    assert not selected.ok
-    assert selected.reason_code == DOWNLOAD_CANCELLED
+    assert result.snapshot is not None
+    assert result.snapshot.change_authorized is False
+    blocked = client.select_package("media", CORE, platform_tag=PLATFORM)
+    assert not blocked.ok
+    assert blocked.reason_code == DOWNLOAD_CANCELLED

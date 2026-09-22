@@ -1131,9 +1131,40 @@ class ProjectIOMixin:
             )
             report(1.0, "已加载")
         except ImportError as e:
-            QMessageBox.critical(self, "错误", self._format_load_import_error(e))
+            self._show_load_import_error(e)
         except Exception as e:
-            QMessageBox.critical(self, "错误", str(e))
+            if self._offer_extension_manager_for(e):
+                self._show_load_import_error(e)
+            else:
+                QMessageBox.critical(self, "错误", str(e))
+
+    def _offer_extension_manager_for(self, exc) -> bool:
+        from .command_coordinator import extension_import_offers_manager
+
+        return extension_import_offers_manager(exc)
+
+    def _show_load_import_error(self, exc) -> None:
+        text = (
+            self._format_load_import_error(exc)
+            if isinstance(exc, ImportError)
+            else (str(exc).strip() or "无法加载该文件")
+        )
+        if not self._offer_extension_manager_for(exc):
+            QMessageBox.critical(self, "错误", text)
+            return
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Critical)
+        box.setWindowTitle("错误")
+        box.setText(text)
+        box.setInformativeText("可打开扩展管理安装或修复对应组件；安装前请先关闭本程序。")
+        open_btn = box.addButton("打开扩展管理", QMessageBox.ActionRole)
+        box.addButton("关闭", QMessageBox.RejectRole)
+        fit_message_box_buttons_to_text(box)
+        box.exec_()
+        if box.clickedButton() is open_btn:
+            opener = getattr(self, "open_extension_manager", None)
+            if callable(opener):
+                opener()
 
     def _format_load_import_error(self, exc: ImportError) -> str:
         """User-facing text for a missing optional loader dependency.

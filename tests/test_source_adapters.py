@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -14,6 +15,7 @@ from mf4_analyzer.io.source_adapters import (
     SourceDescriptor,
     SourceUnavailableError,
     UnsupportedSourceFormatError,
+    bind_extension_runtime,
 )
 from tests._helpers.mf4_factory import write_single_channel_mf4
 
@@ -22,6 +24,13 @@ REQUIRED_EXTENSIONS = {
     ".mf4", ".mdf", ".blf", ".tdms", ".csv", ".fdc", ".asc",
     ".xlsx", ".xls", ".hdf", ".wwt", ".zfd", ".mat",
 } | AUDIO_VIDEO_EXTS
+
+
+@pytest.fixture(autouse=True)
+def _reset_extension_runtime_binding():
+    bind_extension_runtime(None)
+    yield
+    bind_extension_runtime(None)
 
 
 def _single3():
@@ -409,3 +418,124 @@ def test_zfd_adapter_and_filedata_share_verified_axis(tmp_path):
     assert fd.fs == pytest.approx(other.fs) == pytest.approx(0.5)
     assert "zfd:count=5:dt=" in loaded[0].group_id
     assert "t0=" not in loaded[0].group_id
+
+
+def _modular_snapshot(tmp_path, *, media_status: str, matlab_status: str = "not_installed"):
+    from mf4_analyzer.extensions.contract import ReasonCode
+    from mf4_analyzer.extensions.runtime import (
+        ComponentAvailability,
+        MODE_MODULAR,
+        RuntimeSnapshot,
+        STATUS_READY,
+    )
+
+    def _one(name: str, status: str) -> ComponentAvailability:
+        return ComponentAvailability(
+            component=name,
+            status=status,
+            reason_code=None if status == STATUS_READY else ReasonCode.COMPONENT_MISSING,
+        )
+
+    return RuntimeSnapshot(
+        mode=MODE_MODULAR,
+        app_root=tmp_path,
+        core=None,
+        active=None,
+        lease=None,
+        components={
+            "media": _one("media", media_status),
+            "matlab": _one("matlab", matlab_status),
+        },
+    )
+
+
+def test_modular_media_ignores_find_spec_success_when_component_missing(
+    tmp_path, monkeypatch,
+):
+    from mf4_analyzer.extensions.runtime import STATUS_NOT_INSTALLED
+    from mf4_analyzer.io.source_adapters import OPEN_EXTENSION_MANAGER_ACTION
+
+    monkeypatch.setattr(
+        "mf4_analyzer.io.source_adapters._package_available", lambda _name: True
+    )
+    bind_extension_runtime(
+        _modular_snapshot(tmp_path, media_status=STATUS_NOT_INSTALLED)
+    )
+    availability = SourceAdapterRegistry.default().adapter_for("clip.wav").availability()
+
+    assert availability.status == "unavailable"
+    assert availability.component == "media"
+    assert availability.component_status == STATUS_NOT_INSTALLED
+    assert availability.action == OPEN_EXTENSION_MANAGER_ACTION
+    assert availability.action_label == "打开扩展管理"
+    assert availability.missing_packages == ()
+    with pytest.raises(SourceUnavailableError, match="打开扩展管理"):
+        SourceAdapterRegistry.default().adapter_for("clip.wav").load_sources("clip.wav")
+
+
+def test_modular_ready_media_does_not_require_find_spec(tmp_path, monkeypatch):
+    from mf4_analyzer.extensions.runtime import STATUS_READY
+
+    monkeypatch.setattr(
+        "mf4_analyzer.io.source_adapters._package_available", lambda _name: False
+    )
+    bind_extension_runtime(_modular_snapshot(tmp_path, media_status=STATUS_READY))
+    availability = SourceAdapterRegistry.default().adapter_for("clip.mp4").availability()
+
+    assert availability.status == "ready"
+    assert availability.component == "media"
+    assert availability.action == ""
+
+
+def test_modular_ready_media_does_not_require_manager_or_network(tmp_path):
+    from mf4_analyzer.extensions.runtime import STATUS_READY
+
+    bind_extension_runtime(_modular_snapshot(tmp_path, media_status=STATUS_READY))
+    availability = SourceAdapterRegistry.default().adapter_for("clip.wav").availability()
+    matlab = SourceAdapterRegistry.default().adapter_for("run.mat").availability()
+
+    assert availability.status == "ready"
+    assert matlab.status == "unavailable"
+    assert matlab.action == "open_extension_manager"
+
+
+def test_source_and_bundled_still_use_find_spec_for_optional_readers(monkeypatch):
+    from mf4_analyzer.extensions.runtime import MODE_BUNDLED, RuntimeSnapshot
+
+    monkeypatch.setattr(
+        "mf4_analyzer.io.source_adapters._package_available",
+        lambda name: name != "av",
+    )
+    source_media = SourceAdapterRegistry.default().adapter_for("clip.wav").availability()
+    assert source_media.status == "unavailable"
+    assert source_media.missing_packages == ("av",)
+    assert source_media.action == ""
+
+    bind_extension_runtime(
+        RuntimeSnapshot(
+            mode=MODE_BUNDLED,
+            app_root=Path("."),
+            core=None,
+            active=None,
+            lease=None,
+            components={},
+        )
+    )
+    bundled_media = SourceAdapterRegistry.default().adapter_for("clip.wav").availability()
+    assert bundled_media.status == "unavailable"
+    assert bundled_media.missing_packages == ("av",)
+    assert bundled_media.action == ""
+
+
+def test_modular_does_not_change_base_mdf_find_spec_gate(tmp_path, monkeypatch):
+    from mf4_analyzer.extensions.runtime import STATUS_READY
+
+    monkeypatch.setattr(
+        "mf4_analyzer.io.source_adapters._package_available",
+        lambda name: name != "asammdf",
+    )
+    bind_extension_runtime(_modular_snapshot(tmp_path, media_status=STATUS_READY))
+    mdf = SourceAdapterRegistry.default().adapter_for("run.mf4").availability()
+    assert mdf.status == "unavailable"
+    assert mdf.missing_packages == ("asammdf",)
+    assert mdf.action == ""

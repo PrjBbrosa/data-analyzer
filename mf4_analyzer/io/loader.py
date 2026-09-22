@@ -525,7 +525,14 @@ class DataLoader:
 
     @staticmethod
     def load_audio_video(fp):
-        import av
+        try:
+            import av
+        except ImportError as exc:
+            from .source_adapters import optional_native_import_message
+
+            raise ImportError(
+                optional_native_import_message("av", adapter_key="media")
+            ) from exc
 
         container = av.open(str(fp))
         stream = None

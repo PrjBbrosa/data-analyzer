@@ -281,6 +281,12 @@ _HINTS = (
         priority=42,
     ),
     Hint(
+        id="file.extension_manager",
+        text="音视频和 MAT 可经扩展管理安装",
+        surface="discovery",
+        priority=27,
+    ),
+    Hint(
         id="time.custom_x_paths",
         text="显示设置：极值点/差值；数值/完整；X↑/X↓",
         surface="discovery",

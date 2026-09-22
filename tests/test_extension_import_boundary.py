@@ -46,6 +46,10 @@ import mf4_analyzer.extensions
 import mf4_analyzer.extensions.contract
 import mf4_analyzer.extensions.state
 import mf4_analyzer.extensions.runtime_recipe
+import mf4_analyzer.extensions.native_identity
+import mf4_analyzer.extensions.runtime
+import mf4_analyzer.extensions.locking
+import mf4_analyzer.extensions.probe
 from mf4_analyzer.extensions import ReasonCode, parse_discovery_envelope  # noqa: F401
 
 blocked = sorted(

@@ -64,6 +64,25 @@ class SourceIdentityError(RuntimeError):
     """Raised when a loader returns colliding logical group identities."""
 
 
+OPEN_EXTENSION_MANAGER_ACTION = "open_extension_manager"
+OPEN_EXTENSION_MANAGER_LABEL = "打开扩展管理"
+_ADAPTER_EXTENSION_COMPONENT = {"media": "media", "mat": "matlab"}
+_COMPONENT_DISPLAY_NAME = {"media": "音视频", "matlab": "MATLAB"}
+
+_EXTENSION_RUNTIME = None
+
+
+def bind_extension_runtime(snapshot) -> None:
+    """Attach the process runtime snapshot.  Adapters consume it; they do not manage directories."""
+
+    global _EXTENSION_RUNTIME
+    _EXTENSION_RUNTIME = snapshot
+
+
+def current_extension_runtime():
+    return _EXTENSION_RUNTIME
+
+
 @dataclass(frozen=True)
 class AdapterAvailability:
     """Current readiness of one adapter for an optional execution context."""
@@ -72,6 +91,11 @@ class AdapterAvailability:
     reason: str = ""
     missing_packages: tuple[str, ...] = ()
     missing_context: tuple[str, ...] = ()
+    component: str = ""
+    component_status: str = ""
+    reason_code: str = ""
+    action: str = ""
+    action_label: str = ""
 
     def __post_init__(self) -> None:
         if self.status not in {"ready", "limited", "unavailable"}:
@@ -117,6 +141,99 @@ def _package_available(package: str) -> bool:
         return importlib.util.find_spec(package) is not None
     except (ImportError, ModuleNotFoundError, ValueError):
         return False
+
+
+def _runtime_mode(snapshot=None) -> str:
+    from mf4_analyzer.extensions.runtime import detect_runtime_mode
+
+    current = snapshot if snapshot is not None else _EXTENSION_RUNTIME
+    if current is not None:
+        return str(current.mode)
+    return detect_runtime_mode()
+
+
+def _map_extension_component(adapter_key: str, availability) -> AdapterAvailability:
+    from mf4_analyzer.extensions.runtime import (
+        STATUS_CORRUPT,
+        STATUS_INCOMPATIBLE,
+        STATUS_NOT_INSTALLED,
+        STATUS_READY,
+        STATUS_REPAIR_REQUIRED,
+        STATUS_REVOKED,
+    )
+
+    display = _COMPONENT_DISPLAY_NAME.get(availability.component, availability.component)
+    fields = {
+        "component": availability.component,
+        "component_status": availability.status,
+        "reason_code": str(availability.reason_code or ""),
+    }
+    if availability.status == STATUS_READY:
+        return AdapterAvailability("ready", **fields)
+    if availability.status == STATUS_NOT_INSTALLED:
+        reason = (
+            f"未安装{display}扩展（{availability.component}）。"
+            f"{OPEN_EXTENSION_MANAGER_LABEL}可安装该组件。"
+        )
+        return AdapterAvailability(
+            "unavailable",
+            reason,
+            action=OPEN_EXTENSION_MANAGER_ACTION,
+            action_label=OPEN_EXTENSION_MANAGER_LABEL,
+            **fields,
+        )
+    if availability.status == STATUS_INCOMPATIBLE:
+        reason = (
+            f"已安装的{display}扩展与当前运行时不兼容。"
+            f"{OPEN_EXTENSION_MANAGER_LABEL}可安装匹配此版本的扩展。"
+        )
+        return AdapterAvailability(
+            "unavailable",
+            reason,
+            action=OPEN_EXTENSION_MANAGER_ACTION,
+            action_label=OPEN_EXTENSION_MANAGER_LABEL,
+            **fields,
+        )
+    if availability.status in {STATUS_CORRUPT, STATUS_REPAIR_REQUIRED, STATUS_REVOKED}:
+        reason = (
+            f"已安装的{display}扩展损坏或需要修复"
+            f"（{availability.status}）。"
+            f"{OPEN_EXTENSION_MANAGER_LABEL}可修复或重新安装。"
+        )
+        return AdapterAvailability(
+            "unavailable",
+            reason,
+            action=OPEN_EXTENSION_MANAGER_ACTION,
+            action_label=OPEN_EXTENSION_MANAGER_LABEL,
+            **fields,
+        )
+    return AdapterAvailability(
+        "unavailable",
+        f"{display}扩展不可用（{availability.status}）。",
+        action=OPEN_EXTENSION_MANAGER_ACTION,
+        action_label=OPEN_EXTENSION_MANAGER_LABEL,
+        **fields,
+    )
+
+
+def optional_native_import_message(package: str, *, adapter_key: str) -> str:
+    """Import-time copy for av/SciPy/h5py.  Modular never recommends pip."""
+
+    from mf4_analyzer.extensions.runtime import MODE_MODULAR
+
+    snapshot = current_extension_runtime()
+    if _runtime_mode(snapshot) == MODE_MODULAR:
+        component = _ADAPTER_EXTENSION_COMPONENT.get(adapter_key, adapter_key)
+        display = _COMPONENT_DISPLAY_NAME.get(component, component)
+        return (
+            f"无法加载{display}支持（{package}）。"
+            f"{OPEN_EXTENSION_MANAGER_LABEL}可安装或修复对应扩展。"
+        )
+    if adapter_key == "media":
+        return f"无法读取音视频：未安装 {package}"
+    if package == "h5py":
+        return "该 .mat 是 v7.3(HDF5) 格式，需要 h5py 才能读取，请安装 h5py"
+    return f"需要 {package} 才能读取 .mat 文件，请安装 {package}"
 
 
 def canonical_source_path(path: os.PathLike[str] | str) -> str:
@@ -392,6 +509,47 @@ class SourceAdapter:
         self, context: Mapping[str, object] | None = None,
     ) -> AdapterAvailability:
         context = dict(context or {})
+        snapshot = current_extension_runtime()
+        from mf4_analyzer.extensions.runtime import MODE_MODULAR
+
+        component_name = _ADAPTER_EXTENSION_COMPONENT.get(self.key)
+        if component_name is not None and _runtime_mode(snapshot) == MODE_MODULAR:
+            # Modular: component health is the proof.  find_spec is not.
+            if snapshot is None:
+                display = _COMPONENT_DISPLAY_NAME.get(component_name, component_name)
+                return AdapterAvailability(
+                    "unavailable",
+                    f"{display}扩展运行时尚未初始化。{OPEN_EXTENSION_MANAGER_LABEL}可查看组件状态。",
+                    component=component_name,
+                    component_status="not_installed",
+                    reason_code="CORE_INCONSISTENT",
+                    action=OPEN_EXTENSION_MANAGER_ACTION,
+                    action_label=OPEN_EXTENSION_MANAGER_LABEL,
+                )
+            mapped = _map_extension_component(
+                self.key, snapshot.availability(component_name),
+            )
+            if mapped.status != "ready":
+                return mapped
+            missing_context = tuple(
+                key for key in self.context_requirements if not context.get(key)
+            )
+            if missing_context:
+                reason = (
+                    "CAN 日志（BLF/CANoe ASC）需要 DBC 解码上下文，raw CAN frame "
+                    "不作为批处理信号来源"
+                    if self.key == "blf"
+                    else "缺少来源上下文: " + ", ".join(missing_context)
+                )
+                return AdapterAvailability(
+                    "limited",
+                    reason,
+                    missing_context=missing_context,
+                    component=mapped.component,
+                    component_status=mapped.component_status,
+                    reason_code=mapped.reason_code,
+                )
+            return mapped
         missing_packages = tuple(
             package for package in self.optional_packages
             if not _package_available(package)
@@ -711,12 +869,17 @@ __all__ = [
     "AdapterAvailability",
     "DEFAULT_SOURCE_ADAPTER_REGISTRY",
     "LoadedSource",
+    "OPEN_EXTENSION_MANAGER_ACTION",
+    "OPEN_EXTENSION_MANAGER_LABEL",
     "SourceAdapter",
     "SourceAdapterRegistry",
     "SourceDescriptor",
     "SourceIdentityError",
     "SourceUnavailableError",
     "UnsupportedSourceFormatError",
+    "bind_extension_runtime",
+    "current_extension_runtime",
+    "optional_native_import_message",
     "canonical_source_path",
     "stable_source_id",
 ]
