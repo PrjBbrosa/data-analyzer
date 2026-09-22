@@ -137,6 +137,7 @@ class _PresentationState:
     panel_endpoints: dict = field(default_factory=dict)
     hover_target: object = None
     capture_target: object = None
+    reveal_hold: object = None
 
 
 class PinPanelProjector(QObject):
@@ -208,6 +209,42 @@ class PinPanelProjector(QObject):
         if destroy_widgets:
             self.clear_widgets(key)
         self._states.pop(key, None)
+
+    def begin_reveal_hold(self, key, token) -> None:
+        """Keep this canvas's pins unpublished until one commit."""
+        self.state_for(key).reveal_hold = token
+
+    def cancel_reveal_hold(self, key, token) -> None:
+        state = self._states.get(key)
+        if state is None or state.reveal_hold != token:
+            return
+        state.reveal_hold = None
+
+    def finish_reveal_hold(self, key, token) -> bool:
+        """Allow the next layout pass to publish every held pin together."""
+        state = self._states.get(key)
+        if state is None or state.reveal_hold != token:
+            return False
+        state.reveal_hold = None
+        return True
+
+    def input_widgets(self, key) -> tuple:
+        state = self._states.get(key)
+        if state is None:
+            return ()
+        widgets = []
+        for widget in (*state.pills.values(), *state.axis_labels.values()):
+            if _widget_alive(widget):
+                widgets.append(widget)
+        return tuple(widgets)
+
+    def _reveal_held(self, state) -> bool:
+        return state is not None and state.reveal_hold is not None
+
+    def _keep_transition_mask_above(self) -> None:
+        restack = getattr(self._ports, "restack_page_transition_overlay", None)
+        if callable(restack):
+            restack()
 
     def state_for(self, key) -> _PresentationState:
         state = self._states.get(key)
@@ -374,16 +411,21 @@ class PinPanelProjector(QObject):
                     state, pill, intent, collection, record_id,
                     safe_changed=safe_changed,
                 )
+                if self._reveal_held(state):
+                    pill.setVisible(False)
+                    continue
                 pill.setVisible(True)
                 pill.raise_()
             if on_screen:
                 self.arrange_pinned_panels(key, canvas, collection)
-            if on_screen:
+            if on_screen and not self._reveal_held(state):
                 self.nudge_live_from_pins(key, canvas)
             overlay = getattr(canvas, "_pinned_overlay", None)
             if overlay is not None:
                 overlay.reproject()
             self.sync_tethers(key, canvas)
+            if not self._reveal_held(state):
+                self._keep_transition_mask_above()
 
     def project_record(
         self,
@@ -433,6 +475,8 @@ class PinPanelProjector(QObject):
         pill.mark_user_placed(intent.anchor != DEFAULT_ANCHOR)
         self._bump_content_revision(state, intent.record_id)
 
+        held = self._reveal_held(state)
+
         def update():
             if projection is not None:
                 self._set_primary_original(pill, primary)
@@ -440,17 +484,22 @@ class PinPanelProjector(QObject):
             else:
                 pill.set_display_projection(None)
                 pill.set_primary(primary)
-            pill.setVisible(expanded)
+            pill.setVisible(False if held else expanded)
 
         ports.update_pill_content(pill, card, update)
         self._remember_typeset(state, pill, intent)
-        if expanded:
+        if expanded and not held:
             if pill.is_user_placed() and not pill.is_dragging():
                 self.apply_anchor(
                     pill, collection, pill_record_id=intent.record_id,
                 )
             pill.raise_()
             self.nudge_live_from_pins(key, canvas)
+            self._keep_transition_mask_above()
+        elif expanded and pill.is_user_placed() and not pill.is_dragging():
+            self.apply_anchor(
+                pill, collection, pill_record_id=intent.record_id,
+            )
 
     def pill_content(self, intent, sample, status):
         if status == PIN_STATUS_PENDING:
@@ -503,11 +552,14 @@ class PinPanelProjector(QObject):
         self.arrange_pinned_panels(key, canvas, collection)
 
     def raise_record(self, key, canvas, record_id) -> None:
+        if self._reveal_held(self.state_for(key)):
+            return
         pill = self.pill_for(key, record_id)
         if _widget_alive(pill):
             pill.raise_()
             pill.flash_highlight()
         self._publish_highlight(canvas)
+        self._keep_transition_mask_above()
 
     def set_panel_endpoint(self, key, record_id, endpoint) -> None:
         """Remember only the current visual target of an expanded panel."""
@@ -792,12 +844,16 @@ class PinPanelProjector(QObject):
         placed, missing = place(preserve=same_safe)
         if missing and len(candidates) > 1:
             placed, missing = place(preserve=False)
+        held = self._reveal_held(state)
         for intent, pill in candidates:
             rect = placed.get(intent.record_id)
             if rect is None:
                 pill._set_space_hidden(True)
                 continue
             pill.move(rect.topLeft())
+            if held:
+                pill.setVisible(False)
+                continue
             pill._set_space_hidden(False)
             pill.raise_()
         state.auto_panel_rects = {
@@ -805,6 +861,8 @@ class PinPanelProjector(QObject):
         }
         state.auto_panel_safe_rect = QRect(safe)
         self.sync_tethers(key, canvas)
+        if not held:
+            self._keep_transition_mask_above()
 
     def apply_anchor(self, pill, collection, *, pill_record_id) -> None:
         if collection is None:
@@ -1060,10 +1118,16 @@ class PinPanelProjector(QObject):
                 )),
                 expanded_ids.intersection(str(item) for item in geom.record_ids),
             )
-            label.setVisible(True)
+            if self._reveal_held(state):
+                label.setVisible(False)
+            else:
+                label.setVisible(True)
             highlight = self._hover_matches(canvas, geom.record_ids)
             label.set_highlighted(highlight)
-            label.raise_()
+            if not self._reveal_held(state):
+                label.raise_()
+        if not self._reveal_held(state):
+            self._keep_transition_mask_above()
 
     def apply_offscreen(self, key, layout) -> None:
         offscreen = layout.offscreen_ids if layout is not None else frozenset()

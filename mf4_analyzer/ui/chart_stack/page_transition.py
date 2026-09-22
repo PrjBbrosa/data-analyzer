@@ -467,6 +467,11 @@ class PageTransitionController(QObject):
             self._input_target_destroyed_slots.append((widget, slot))
         return bool(self._input_targets)
 
+    def raise_overlay(self) -> None:
+        """Keep the local cover above sibling pin widgets."""
+        if self._overlay.isVisible():
+            self._overlay.raise_()
+
     def accept_target(
         self, token: PresentationToken, pixmap: QPixmap | None = None,
     ) -> bool:

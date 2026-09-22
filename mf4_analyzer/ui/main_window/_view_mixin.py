@@ -998,6 +998,36 @@ class ViewMixin:
                 ranges[axis_id] = (min(existing[0], lo), max(existing[1], hi))
         return ranges
 
+    def _pinned_cursor_controller(self):
+        stack = getattr(self, "chart_stack", None)
+        controller = getattr(stack, "_pinned_cursors", None) if stack is not None else None
+        begin = getattr(controller, "begin_restore_presentation", None)
+        if not callable(begin):
+            return None
+        return controller
+
+    def _begin_pinned_view_restore(self, canvas, state):
+        controller = self._pinned_cursor_controller()
+        if controller is None or canvas is None:
+            return None
+        return controller.begin_restore_presentation(
+            canvas, getattr(state, "view_id", None),
+        )
+
+    def _commit_pinned_view_restore(self, canvas, token) -> bool:
+        controller = self._pinned_cursor_controller()
+        commit = getattr(controller, "commit_restore_presentation", None)
+        if token is None or not callable(commit):
+            return False
+        return bool(commit(canvas, token))
+
+    def _cancel_pinned_view_restore(self, canvas, token) -> None:
+        controller = self._pinned_cursor_controller()
+        cancel = getattr(controller, "cancel_restore_presentation", None)
+        if token is None or not callable(cancel):
+            return
+        cancel(canvas, token)
+
     def _render_view_to_canvas(self, idx, canvas, *, update_primary_ui):
         """Project View ``idx`` onto ``canvas``, serialized against re-entry.
 
@@ -1039,7 +1069,9 @@ class ViewMixin:
         if dirty is not None:
             dirty.begin_restore()
         rendered = None
+        pin_token = None
         try:
+            pin_token = self._begin_pinned_view_restore(canvas, state)
             self._view_bridge.apply_controls_from_state(state, self, canvas)
             if update_primary_ui and state.cursor_mode == 'off':
                 self.chart_stack.clear_cursor_pill()
@@ -1095,7 +1127,13 @@ class ViewMixin:
                     restore_placement(state.cursor_placement)
                 if update_primary_ui:
                     self._sync_record_curve_tree(state)
+                if pin_token is not None and self._commit_pinned_view_restore(
+                    canvas, pin_token,
+                ):
+                    pin_token = None
         finally:
+            if pin_token is not None:
+                self._cancel_pinned_view_restore(canvas, pin_token)
             self._applying_view = old_applying_view
             if dirty is not None:
                 dirty.end_restore()

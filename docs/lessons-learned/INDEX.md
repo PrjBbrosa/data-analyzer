@@ -268,6 +268,8 @@ lesson by default.
 | [Main Toolbar Chrome Belongs In The Mirrored Left Host](toolbar-mirrored-hosts-own-chrome.md) | Adding a label, chip, or other chrome to the main Analyzer toolbar, especially beside 打开 / 保存 / 批处理, or changing `_mode_zone_budget` / left-right mirroring. | See lesson |
 | [Extension Production Boundaries Need Real Collaborators](extension-production-boundaries-need-real-collaborators.md) | Implementing or reviewing extension installation, native probes, and completion claims. | See lesson |
 
+| [Pin View Restore Publishes One Frame](pin-view-restore-publishes-one-frame.md) | Changing time-domain View restore, pinned-cursor projection, or the page-transition accept path. | See lesson |
+
 ## Selection Rules
 
 - Use keywords, file paths, failing test names, and user prompt terms to select

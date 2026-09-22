@@ -120,6 +120,8 @@ class _OwnerState:
     signal_conns: list = field(default_factory=list)
     projected_generation: tuple | None = None
     skip_stale_invalidation: bool = False
+    restore_hold: object = None
+    restore_commit_waiting: object = None
 
 
 class _PinHostPorts:
@@ -253,6 +255,12 @@ class _PinHostPorts:
     def log_unavailable(self, canvas, intent):
         return self._c._log_unavailable(canvas, intent)
 
+    def restack_page_transition_overlay(self):
+        host = self._c._host
+        restack = getattr(host, "restack_page_transition_overlay", None)
+        if callable(restack):
+            restack()
+
 
 _PinnedAxisEdit = PinnedAxisEdit
 
@@ -262,6 +270,7 @@ class PinnedCursorController(QObject):
 
     pin_feedback = pyqtSignal(str)
     intent_changed = pyqtSignal()
+    restore_presentation_committed = pyqtSignal(object)
     # ``False`` is emitted only after the committed or restored projection is
     # in place.  Capture owners use this to defer their own idle work while a
     # preview can differ from the serializable collection.
@@ -376,12 +385,133 @@ class PinnedCursorController(QObject):
         owner.availability.clear()
         owner.projected_generation = None
         owner.skip_stale_invalidation = False
+        if owner.restore_hold is not None:
+            # The leaving view stays on screen until one commit publishes the
+            # target collection. Sampling waits until that commit so it cannot
+            # read the canvas bindings this replacement is about to replace.
+            owner.samples.clear()
+            return
         self._clear_pills(owner)
         if collection.records:
             self._mark_records_pending(owner)
             self._schedule_reproject(owner)
             return
         self._publish_empty_projection(owner)
+
+    def begin_restore_presentation(self, canvas, identity):
+        """Hold one canvas's pin publication for the current view restore.
+
+        Returns a token that ``commit_restore_presentation`` must present.
+        A newer begin drops the previous hold without publishing it.
+        """
+        owner = self._owner(canvas, create=True)
+        if owner is None:
+            return None
+        if owner.restore_hold is not None:
+            self._drop_restore_hold(owner, owner.restore_hold, publish=False)
+        owner.pending_epoch += 1
+        token = ("pin-restore", id(canvas), identity, owner.pending_epoch)
+        owner.restore_hold = token
+        owner.restore_commit_waiting = None
+        self._cancel_reproject(owner)
+        self._projector.begin_reveal_hold(id(canvas), token)
+        return token
+
+    def commit_restore_presentation(self, canvas, token) -> bool:
+        """Sample the settled canvas once and publish every target pin."""
+        owner = self._owner(canvas)
+        if owner is None or owner.restore_hold != token:
+            return False
+        if (
+            owner.collection is not None
+            and owner.collection.records
+            and self._canvas_compute_pending(canvas)
+        ):
+            owner.restore_commit_waiting = token
+            self._schedule_reproject(owner)
+            return True
+        return self._publish_restore_presentation(owner, token)
+
+    def cancel_restore_presentation(self, canvas, token) -> None:
+        """Release a hold and show the collection that is already installed."""
+        owner = self._owner(canvas)
+        if owner is None:
+            return
+        self._drop_restore_hold(owner, token, publish=True)
+
+    def cancel_all_restore_presentations(self) -> None:
+        for owner in list(self._owners.values()):
+            token = owner.restore_hold
+            if token is not None:
+                self.cancel_restore_presentation(owner.canvas, token)
+
+    def restore_presentation_blocking(self, canvas) -> bool:
+        owner = self._owner(canvas)
+        return owner is not None and owner.restore_hold is not None
+
+    def restore_presentation_blocking_any(self, canvases) -> bool:
+        return any(self.restore_presentation_blocking(canvas) for canvas in canvases)
+
+    def presentation_input_widgets(self, canvas) -> tuple:
+        if canvas is None:
+            return ()
+        return self._projector.input_widgets(id(canvas))
+
+    def _drop_restore_hold(self, owner, token, *, publish: bool) -> None:
+        if owner is None or owner.restore_hold != token:
+            return
+        owner.restore_hold = None
+        owner.restore_commit_waiting = None
+        self._projector.cancel_reveal_hold(id(owner.canvas), token)
+        if not publish:
+            return
+        self._cancel_reproject(owner)
+        self._clear_pills(owner)
+        collection = owner.collection
+        if collection is not None and collection.records:
+            self._mark_records_pending(owner)
+            self._schedule_reproject(owner)
+            return
+        self._publish_empty_projection(owner)
+
+    def _publish_restore_presentation(self, owner, token) -> bool:
+        if owner.restore_hold != token:
+            return False
+        canvas = owner.canvas
+        if not _widget_alive(canvas):
+            self._drop_restore_hold(owner, token, publish=False)
+            return False
+        key = id(canvas)
+        collection = owner.collection
+        self._projector.clear_widgets(key)
+        self._cancel_reproject(owner)
+        owner.samples.clear()
+        owner.availability.clear()
+        owner.projected_generation = None
+        owner.restore_commit_waiting = None
+        if collection is not None and collection.records:
+            self._reproject_now(owner)
+        else:
+            self._publish_empty_projection(owner)
+        if not self._projector.finish_reveal_hold(key, token):
+            owner.restore_hold = None
+            return False
+        owner.restore_hold = None
+        if collection is not None and collection.records:
+            self.flush_layout(canvas)
+        restack = getattr(self._host, "restack_page_transition_overlay", None)
+        if callable(restack):
+            restack()
+        self.restore_presentation_committed.emit(canvas)
+        return True
+
+    def _finish_waiting_restore(self, owner) -> bool:
+        token = owner.restore_commit_waiting
+        if token is None or owner.restore_hold != token:
+            return False
+        if self._canvas_compute_pending(owner.canvas):
+            return False
+        return self._publish_restore_presentation(owner, token)
 
     def availability_for(self, canvas, record_id: str) -> str:
         owner = self._owner(canvas)
@@ -398,6 +528,11 @@ class PinnedCursorController(QObject):
         """
         self._projector.invalidate_tokens()
         for owner in list(self._owners.values()):
+            token = owner.restore_hold
+            owner.restore_hold = None
+            owner.restore_commit_waiting = None
+            if token is not None:
+                self._projector.cancel_reveal_hold(id(owner.canvas), token)
             self._cancel_axis_edit(owner, render=False)
             self._cancel_reproject(owner)
             overlay = getattr(owner.canvas, "_pinned_overlay", None)
@@ -1652,6 +1787,11 @@ class PinnedCursorController(QObject):
             return
         if owner.skip_stale_invalidation:
             return
+        if owner.restore_commit_waiting == owner.restore_hold and owner.restore_hold is not None:
+            self._finish_waiting_restore(owner)
+            return
+        if owner.restore_hold is not None:
+            return
         self._mark_records_pending(owner)
         if self._bound_identity_keys(owner.canvas) or getattr(
             owner.canvas, "chart_rebuilt", None,
@@ -1664,6 +1804,17 @@ class PinnedCursorController(QObject):
             return
         self._cancel_axis_edit(owner, render=True)
         if not _widget_alive(owner.canvas):
+            return
+        if owner.restore_commit_waiting == owner.restore_hold and owner.restore_hold is not None:
+            self._cancel_reproject(owner)
+            if not self._finish_waiting_restore(owner):
+                owner.skip_stale_invalidation = True
+                QTimer.singleShot(0, partial(self._clear_skip_stale, key))
+            return
+        if owner.restore_hold is not None:
+            self._cancel_reproject(owner)
+            owner.skip_stale_invalidation = True
+            QTimer.singleShot(0, partial(self._clear_skip_stale, key))
             return
         self._cancel_reproject(owner)
         self._reproject_now(owner)
@@ -1695,6 +1846,10 @@ class PinnedCursorController(QObject):
     def _mark_records_pending(self, owner) -> None:
         if owner.collection is None:
             return
+        if owner.restore_hold is not None:
+            for intent in owner.collection.records:
+                owner.availability[intent.record_id] = PIN_STATUS_PENDING
+            return
         for intent in owner.collection.records:
             owner.availability[intent.record_id] = PIN_STATUS_PENDING
             self._project_record(
@@ -1707,6 +1862,15 @@ class PinnedCursorController(QObject):
     def _reproject_now(self, owner) -> None:
         canvas = owner.canvas
         if not _widget_alive(canvas) or owner.collection is None:
+            return
+        if (
+            owner.restore_commit_waiting is not None
+            and owner.restore_commit_waiting == owner.restore_hold
+        ):
+            if self._canvas_compute_pending(canvas):
+                self._mark_records_pending(owner)
+                return
+            self._publish_restore_presentation(owner, owner.restore_hold)
             return
         if not owner.collection.records:
             self._publish_empty_projection(owner)

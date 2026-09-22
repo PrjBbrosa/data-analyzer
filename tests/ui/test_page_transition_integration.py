@@ -192,6 +192,37 @@ def test_light_transition_waits_for_natural_paint_then_fades_to_live_target(
     assert chart_stack.page_transition().image_bytes() == 0
 
 
+def test_paint_ack_waits_for_pin_restore_commit_then_fades(qtbot, monkeypatch):
+    chart_stack = _stack(qtbot)
+    token, calls = _begin_light_transition(chart_stack, monkeypatch)
+    fence = _NaturalPaintFence()
+    pins = chart_stack._pinned_cursors
+    hold = pins.begin_restore_presentation(fence, "view-B")
+
+    assert chart_stack.request_page_transition_target(token, [fence])
+    fence.acknowledge()
+    assert not chart_stack.page_transition().is_active()
+    assert calls == [(chart_stack.stack, False, False)]
+
+    assert pins.commit_restore_presentation(fence, hold)
+    assert chart_stack.page_transition().is_active()
+
+
+def test_pin_restore_committed_before_paint_still_fades_on_ack(qtbot, monkeypatch):
+    chart_stack = _stack(qtbot)
+    token, calls = _begin_light_transition(chart_stack, monkeypatch)
+    fence = _NaturalPaintFence()
+    pins = chart_stack._pinned_cursors
+    hold = pins.begin_restore_presentation(fence, "view-B")
+    assert chart_stack.request_page_transition_target(token, [fence])
+    assert pins.commit_restore_presentation(fence, hold)
+    assert not chart_stack.page_transition().is_active()
+
+    fence.acknowledge()
+    assert chart_stack.page_transition().is_active()
+    assert calls == [(chart_stack.stack, False, False)]
+
+
 def test_explicit_presentation_capture_cancels_active_transition(qtbot, monkeypatch):
     chart_stack = _stack(qtbot)
     token, _calls = _begin_light_transition(chart_stack, monkeypatch)

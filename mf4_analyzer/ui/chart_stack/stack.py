@@ -93,7 +93,9 @@ class ChartStack(QWidget):
     channel_drop_requested = pyqtSignal(object, object, str)
     pin_feedback = pyqtSignal(str)
 
-    def __init__(self, parent=None, *, cursor_settings=None):
+    def __init__(
+        self, parent=None, *, cursor_settings=None, defer_analysis_charts=False,
+    ):
         super().__init__(parent)
         self._cursor_display_store = CursorDisplaySettingsStore(cursor_settings)
         self._cursor_display_options = self._cursor_display_store.load()
@@ -103,6 +105,9 @@ class ChartStack(QWidget):
         self._pending_cursor_primary = {}
         self._frequency_layout_hooks = weakref.WeakSet()
         self._source_label_resolver = None
+        self._defer_analysis_charts = bool(defer_analysis_charts)
+        self._analysis_page_bound = set()
+        self._analysis_ready_hooks = []
         # QSS (ChartStack { border-radius:10px; background:#fff }) only paints on
         # a plain QWidget subclass once WA_StyledBackground is set; without it Qt
         # skips the styled fill/border and the rounded card never renders.
@@ -129,11 +134,15 @@ class ChartStack(QWidget):
         self._page_transition_ready_acks = set()
         self._page_transition_ready_slots = []
         self._page_transition_content_slots = []
+        self._page_transition_awaiting_pin_commit = False
         self._page_transition.transition_finished.connect(
             self._clear_page_transition_ready_fence,
         )
         self._page_transition.transition_cancelled.connect(
             self._clear_page_transition_ready_fence,
+        )
+        self._page_transition.transition_cancelled.connect(
+            self._abandon_pin_restore_after_transition_cancel,
         )
         self.canvas_time = TimeDomainCanvasPG(self)
         self._time_card = TimeChartCard(self.canvas_time)
@@ -250,18 +259,22 @@ class ChartStack(QWidget):
         self.page_fft = AnalysisSectionPage(
             section='fft', manager=self.analysis_managers['fft'],
             card_factory=_fft_card_factory, parent=self,
+            defer_charts=self._defer_analysis_charts,
         )
         self.page_fft_time = AnalysisSectionPage(
             section='fft_time', manager=self.analysis_managers['fft_time'],
             card_factory=_fft_time_card_factory, parent=self,
+            defer_charts=self._defer_analysis_charts,
         )
         self.page_frf = AnalysisSectionPage(
             section='frf', manager=self.analysis_managers['frf'],
             card_factory=_frf_card_factory, parent=self,
+            defer_charts=self._defer_analysis_charts,
         )
         self.page_order = AnalysisSectionPage(
             section='order', manager=self.analysis_managers['order'],
             card_factory=_order_card_factory, parent=self,
+            defer_charts=self._defer_analysis_charts,
         )
         self.stack.addWidget(self._time_page)
         self.stack.addWidget(self.page_fft)
@@ -280,7 +293,11 @@ class ChartStack(QWidget):
             page.setAttribute(Qt.WA_TranslucentBackground, True)
             page.setAttribute(Qt.WA_NoSystemBackground, True)
             page.setAutoFillBackground(False)
-            self._connect_analysis_card_signals(page._cards[0])
+            # Manager/tabbar/UltraView entry stay early-bound; chart card
+            # signals wait for ensure_analysis_page_ready (deferred) or the
+            # eager bind below.
+            if not self._defer_analysis_charts:
+                self._bind_analysis_page_card(page)
             page.tabbar.add_to_ultraview_requested.connect(
                 self.add_to_ultraview_requested.emit
             )
@@ -342,9 +359,15 @@ class ChartStack(QWidget):
         self._pill_secondary = None  # created/destroyed with enter/exit_split
         self._pinned_cursors = PinnedCursorController(self)
         self._pinned_cursors.pin_feedback.connect(self.pin_feedback.emit)
+        self._pinned_cursors.restore_presentation_committed.connect(
+            self._on_pin_restore_committed_for_transition,
+        )
         self._pinned_cursors.bind_canvas(self.canvas_time)
-        self._pinned_cursors.bind_canvas(self.canvas_fft)
-        self._pinned_cursors.bind_canvas(self.canvas_frf)
+        if not self._defer_analysis_charts:
+            # FFT / FRF pin hosts; heatmap sections bind when their page
+            # becomes ready (and on pane_added via split hooks).
+            self._pinned_cursors.bind_canvas(self.canvas_fft)
+            self._pinned_cursors.bind_canvas(self.canvas_frf)
         self._install_analysis_pin_split_hooks()
         self._active_cursor_card = self._time_card
         # Pass the SOURCE canvas so the pill picks the right per-pane cursor
@@ -402,13 +425,80 @@ class ChartStack(QWidget):
     # keep the pre-V7 attribute names (canvas_fft / _fft_card / ...) pointing at
     # pane 0 so MainWindow's render/copy/annotation/tick call surface and the
     # existing test suite stay unchanged while single-pane behaviour is
-    # byte-identical to before.
+    # byte-identical to before. Under defer_analysis_charts they explicitly
+    # ensure readiness (compatibility consumers); startup/tick iteration must
+    # use peek_* instead so they do not re-eager every page.
+    def register_analysis_page_ready_hook(self, hook):
+        """Register ``hook(section, page)`` after stack-level card bind.
+
+        MainWindow uses this for markup / viewport / levels wiring that must
+        not run during deferred construction. Hooks run once per section.
+        """
+        if hook is None or hook in self._analysis_ready_hooks:
+            return
+        self._analysis_ready_hooks.append(hook)
+        # Catch up for pages already bound (eager ChartStack / late register).
+        for section in list(self._analysis_page_bound):
+            page = self.page_for_mode.get(section)
+            if page is not None and page.is_ready():
+                hook(section, page)
+
+    def peek_analysis_page(self, section):
+        return self.page_for_mode.get(section)
+
+    def peek_analysis_card(self, section):
+        page = self.peek_analysis_page(section)
+        if page is None:
+            return None
+        cards = page.peek_cards()
+        return cards[0] if cards else None
+
+    def peek_analysis_canvas(self, section):
+        page = self.peek_analysis_page(section)
+        if page is None:
+            return None
+        return page.peek_pane_canvas(0)
+
+    def ensure_analysis_page_ready(self, section):
+        """Materialize + bind one analysis page (idempotent, synchronous)."""
+        page = self.page_for_mode.get(section)
+        if page is None:
+            raise KeyError(section)
+        page.ensure_ready()
+        if section not in self._analysis_page_bound:
+            self._bind_analysis_page_card(page)
+            self._analysis_page_bound.add(section)
+            for hook in list(self._analysis_ready_hooks):
+                hook(section, page)
+        return page
+
+    def _bind_analysis_page_card(self, page):
+        """One-shot stack bind for pane-0: signals, pin host, readiness mark.
+
+        Split pane-1 continues to use ``_connect_analysis_card_signals`` via
+        MainWindow._connect_new_pane so both panes share the same connect list.
+        """
+        cards = page.peek_cards()
+        if not cards:
+            return
+        card = cards[0]
+        self._connect_analysis_card_signals(card)
+        # During eager __init__ this runs before PinnedCursorController exists;
+        # that path still binds fft/frf pins after the controller is created.
+        pinned = getattr(self, "_pinned_cursors", None)
+        if pinned is not None and page.section in {"fft", "frf"}:
+            canvas = getattr(card, "canvas", None)
+            if canvas is not None:
+                pinned.bind_canvas(canvas)
+        if not self._defer_analysis_charts:
+            self._analysis_page_bound.add(page.section)
+
     def _connect_analysis_card_signals(self, card):
         """Wire copy + annotation relays for an analysis pane card.
 
-        Called for pane 0 at construction and (via MainWindow re-wiring) is the
-        single place a freshly split pane's card would be hooked. ``_chart_mode``
-        is the card's section key ('fft'/'fft_time'/'frf'/'order')."""
+        Called for pane 0 at construction/ensure and (via MainWindow re-wiring)
+        for a freshly split pane. ``_chart_mode`` is the card's section key
+        ('fft'/'fft_time'/'frf'/'order')."""
         card.copy_image_requested.connect(
             lambda c=card: self._copy_card_image(c)
         )
@@ -459,7 +549,7 @@ class ChartStack(QWidget):
         for page in (
             self.page_fft, self.page_fft_time, self.page_frf, self.page_order,
         ):
-            cards.extend(page._cards)
+            cards.extend(page.peek_cards())
         return [card for card in cards if card is not None]
 
     def _on_card_tick_density_changed(self, x, y):
@@ -483,34 +573,42 @@ class ChartStack(QWidget):
 
     @property
     def _fft_card(self):
-        return self.page_fft._cards[0]
+        self.ensure_analysis_page_ready('fft')
+        return self.page_fft.peek_cards()[0]
 
     @property
     def _fft_time_card(self):
-        return self.page_fft_time._cards[0]
+        self.ensure_analysis_page_ready('fft_time')
+        return self.page_fft_time.peek_cards()[0]
 
     @property
     def _frf_card(self):
-        return self.page_frf._cards[0]
+        self.ensure_analysis_page_ready('frf')
+        return self.page_frf.peek_cards()[0]
 
     @property
     def _order_card(self):
-        return self.page_order._cards[0]
+        self.ensure_analysis_page_ready('order')
+        return self.page_order.peek_cards()[0]
 
     @property
     def canvas_fft(self):
+        self.ensure_analysis_page_ready('fft')
         return self.page_fft.pane_canvas(0)
 
     @property
     def canvas_fft_time(self):
+        self.ensure_analysis_page_ready('fft_time')
         return self.page_fft_time.pane_canvas(0)
 
     @property
     def canvas_frf(self):
+        self.ensure_analysis_page_ready('frf')
         return self.page_frf.pane_canvas(0)
 
     @property
     def canvas_order(self):
+        self.ensure_analysis_page_ready('order')
         return self.page_order.pane_canvas(0)
 
     def _configure_time_hint_bar(self):
@@ -1535,6 +1633,13 @@ class ChartStack(QWidget):
             for widget in widgets or ():
                 if isinstance(widget, QWidget) and widget not in real_input_targets:
                     real_input_targets.append(widget)
+            pin_widgets = getattr(
+                self._pinned_cursors, "presentation_input_widgets", None,
+            )
+            if callable(pin_widgets):
+                for widget in pin_widgets(canvas) or ():
+                    if isinstance(widget, QWidget) and widget not in real_input_targets:
+                        real_input_targets.append(widget)
         real_input_targets = tuple(real_input_targets)
         if real_input_targets and not self._page_transition.watch_input_targets(
             token, real_input_targets,
@@ -1660,6 +1765,16 @@ class ChartStack(QWidget):
             self._page_transition_ready_canvases
         ):
             return
+        if self._pin_restore_blocks_transition():
+            # Natural paint can arrive before the pin batch commits. Keep the
+            # ack and accept only after that same token's pins are published.
+            self._page_transition_awaiting_pin_commit = True
+            return
+        self._accept_prepared_page_transition(token)
+
+    def _accept_prepared_page_transition(self, token) -> None:
+        """Fade once both the paint fence and the pin batch have committed."""
+        self._page_transition_awaiting_pin_commit = False
         # The ordinary GraphicsView paint has now proved the live target is
         # underneath the transparent overlay.  Fading the retained source out
         # over that live surface is visually the selected B crossfade, without
@@ -1669,6 +1784,39 @@ class ChartStack(QWidget):
         self._clear_page_transition_ready_fence(keep_target=True)
         if not self._page_transition.accept_target(token):
             self._page_transition.cancel("target-paint-not-accepted")
+
+    def _pin_restore_blocks_transition(self) -> bool:
+        blocking = getattr(
+            self._pinned_cursors, "restore_presentation_blocking_any", None,
+        )
+        if not callable(blocking):
+            return False
+        return bool(blocking(self._page_transition_ready_canvases))
+
+    def _on_pin_restore_committed_for_transition(self, canvas) -> None:
+        if not self._page_transition_awaiting_pin_commit:
+            return
+        token = self._page_transition_target
+        if token is None or canvas not in self._page_transition_ready_canvases:
+            return
+        if self._pin_restore_blocks_transition():
+            return
+        self._accept_prepared_page_transition(token)
+
+    def _abandon_pin_restore_after_transition_cancel(self, _reason=None) -> None:
+        """A dropped cover must not leave pins unpublished."""
+        self._page_transition_awaiting_pin_commit = False
+        cancel = getattr(
+            self._pinned_cursors, "cancel_all_restore_presentations", None,
+        )
+        if callable(cancel):
+            cancel()
+
+    def restack_page_transition_overlay(self) -> None:
+        """Pin widgets share the stacked host; the cover stays above them."""
+        raise_overlay = getattr(self._page_transition, "raise_overlay", None)
+        if callable(raise_overlay):
+            raise_overlay()
 
     def _on_page_transition_content_invalidated(self, token, *_args):
         if token != self._page_transition_target:
@@ -1693,6 +1841,7 @@ class ChartStack(QWidget):
         self._page_transition_ready_canvases = ()
         self._page_transition_ready_acks = set()
         if not keep_target:
+            self._page_transition_awaiting_pin_commit = False
             self._clear_page_transition_content_watch()
             self._page_transition_target = None
 
@@ -1842,24 +1991,27 @@ class ChartStack(QWidget):
         self.cursor_mode_changed.emit(mode)
 
     def mark_discovered(self, hint_id):
-        for card in (
-            self._time_card,
-            self._fft_card,
-            self._fft_time_card,
-            self._frf_card,
-            self._order_card,
-        ):
-            card.mark_discovered(hint_id)
+        cards = [self._time_card]
+        for section in ("fft", "fft_time", "frf", "order"):
+            card = self.peek_analysis_card(section)
+            if card is not None:
+                cards.append(card)
+        for card in cards:
+            if card is not None:
+                card.mark_discovered(hint_id)
 
     def set_annotation_enabled(self, mode, enabled, notify=False):
-        cards = {
-            'time': self._time_card,
-            'fft': self._fft_card,
-            'fft_time': self._fft_time_card,
-            'frf': self._frf_card,
-            'order': self._order_card,
-        }
-        card = cards.get(mode)
+        if mode == "time":
+            card = self._time_card
+        elif mode in self.page_for_mode:
+            # Prefer peek so incidental calls do not construct siblings;
+            # an explicit annotation toggle for that section still ensures.
+            card = self.peek_analysis_card(mode)
+            if card is None:
+                self.ensure_analysis_page_ready(mode)
+                card = self.peek_analysis_card(mode)
+        else:
+            card = None
         if card is not None:
             card.set_annotation_enabled(enabled, notify=notify)
 
@@ -1868,10 +2020,10 @@ class ChartStack(QWidget):
         self.canvas_time.full_reset()
         if self._secondary_card is not None:
             self._secondary_card.canvas.full_reset()
-        self.canvas_fft.full_reset()
-        self.canvas_fft_time.full_reset()
-        self.canvas_frf.full_reset()
-        self.canvas_order.full_reset()
+        for section in ("fft", "fft_time", "frf", "order"):
+            canvas = self.peek_analysis_canvas(section)
+            if canvas is not None and hasattr(canvas, "full_reset"):
+                canvas.full_reset()
 
     def _set_secondary_time_controls_enabled(self, enabled):
         """Enable/disable the secondary card's own split/overlay/cursor

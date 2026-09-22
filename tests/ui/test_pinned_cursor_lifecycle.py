@@ -886,3 +886,112 @@ def test_pending_nonempty_then_empty_does_not_resurrect_old_pins(
         f"(had_queued_reproject={pending_before_empty}): {failures}"
     )
     assert ctl.pills_for(canvas) == ()
+
+
+def _expanded_pins(count=3):
+    collection = empty_collection()
+    for index in range(count):
+        collection, _intent = next_record(
+            collection,
+            {
+                "mode": "single",
+                "domain": "time",
+                "x": 0.15 + (0.2 * index),
+                "x_unit": "s",
+                "bindings": [{"fid": "fid-a", "channel": "speed"}],
+                "presentation": "full",
+                "panel_expanded": True,
+            },
+        )
+    return collection
+
+
+def _visible_pills(controller, canvas):
+    return tuple(
+        pill for pill in controller.pills_for(canvas) if pill.isVisible()
+    )
+
+
+def test_direct_collection_replace_still_shows_pending_before_sample(qapp, qtbot):
+    """Ordinary recompute keeps the pending readout. Only a view-restore batch hides it."""
+    cs = _make_stack(qtbot, qapp)
+    cs.set_pinned_cursors_for_canvas(cs.canvas_time, _expanded_pins(1))
+    html = _pill_html(cs)
+    assert PENDING_TEXT in html
+    assert _visible_pills(cs._pinned_cursors, cs.canvas_time)
+    _flush(qapp)
+    assert PENDING_TEXT not in _pill_html(cs)
+    assert cs._pinned_cursors.availability_for(
+        cs.canvas_time,
+        cs.pinned_cursors_for_canvas(cs.canvas_time).records[0].record_id,
+    ) == PIN_STATUS_READY
+
+
+def test_restore_batch_reveals_every_pin_without_a_pending_frame(qapp, qtbot):
+    cs = _make_stack(qtbot, qapp)
+    canvas = cs.canvas_time
+    controller = cs._pinned_cursors
+    visible_during_project = []
+    original = controller._projector.project_record
+
+    def _project(*args, **kwargs):
+        original(*args, **kwargs)
+        visible_during_project.append(len(_visible_pills(controller, canvas)))
+
+    controller._projector.project_record = _project
+    token = controller.begin_restore_presentation(canvas, "view-b")
+    try:
+        cs.set_pinned_cursors_for_canvas(canvas, _expanded_pins(3))
+        _flush(qapp)
+        assert visible_during_project == []
+        assert _visible_pills(controller, canvas) == ()
+        assert controller.commit_restore_presentation(canvas, token)
+        token = None
+    finally:
+        if token is not None:
+            controller.cancel_restore_presentation(canvas, token)
+
+    _flush(qapp)
+    visible = _visible_pills(controller, canvas)
+    assert len(visible) == 3
+    assert visible_during_project
+    assert set(visible_during_project) <= {0}
+    texts = [pill.primary_text() or "" for pill in visible]
+    assert all(PENDING_TEXT not in text for text in texts)
+    assert [pill.ordinal() for pill in visible] == [1, 2, 3]
+    assert all(
+        controller.availability_for(canvas, record.record_id) == PIN_STATUS_READY
+        for record in cs.pinned_cursors_for_canvas(canvas).records
+    )
+
+
+def test_stale_restore_commit_does_not_publish_or_drop_the_hold(qapp, qtbot):
+    cs = _make_stack(qtbot, qapp)
+    canvas = cs.canvas_time
+    controller = cs._pinned_cursors
+    token = controller.begin_restore_presentation(canvas, "view-b")
+    cs.set_pinned_cursors_for_canvas(canvas, _expanded_pins(2))
+    assert controller.commit_restore_presentation(canvas, ("stale",)) is False
+    assert _visible_pills(controller, canvas) == ()
+    assert controller.restore_presentation_blocking(canvas)
+    assert controller.commit_restore_presentation(canvas, token)
+    _flush(qapp)
+    assert len(_visible_pills(controller, canvas)) == 2
+    assert not controller.restore_presentation_blocking(canvas)
+
+
+def test_restore_batch_empty_replacement_clears_on_commit(qapp, qtbot):
+    cs = _make_stack(qtbot, qapp)
+    canvas = cs.canvas_time
+    controller = cs._pinned_cursors
+    _install_pins(cs, _expanded_pins(2))
+    assert _visible_pills(controller, canvas)
+    token = controller.begin_restore_presentation(canvas, "view-empty")
+    cs.set_pinned_cursors_for_canvas(canvas, empty_collection())
+    assert _visible_pills(controller, canvas)
+    assert controller.commit_restore_presentation(canvas, token)
+    _flush(qapp)
+    assert controller.pills_for(canvas) == ()
+    assert cs.pinned_cursors_for_canvas(canvas).records == ()
+    overlay = canvas._pinned_overlay
+    assert overlay.records() == ()
