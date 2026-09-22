@@ -282,7 +282,7 @@ _HINTS = (
     ),
     Hint(
         id="file.extension_manager",
-        text="音视频和 MAT 可经扩展管理安装",
+        text="模块化版本可管理音视频和 MAT 扩展",
         surface="discovery",
         priority=27,
     ),

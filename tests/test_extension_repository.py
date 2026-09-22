@@ -1487,3 +1487,91 @@ def test_refresh_cancel_is_not_a_network_failure(tmp_path: Path) -> None:
     blocked = client.select_package("media", CORE, platform_tag=PLATFORM)
     assert not blocked.ok
     assert blocked.reason_code == DOWNLOAD_CANCELLED
+
+
+def test_real_repository_engine_boundary_selects_verified_package(tmp_path):
+    from tests.test_extension_transaction import _write_core, _make_verified_zip
+    from mf4_analyzer.extensions.locking import MemoryLockBackend
+    from tools.extension_manager.engine import InstallEngine
+    from tools.extension_manager.transaction import TransactionHooks
+
+    root = tmp_path / 'TraceLab'
+    _write_core(root)
+    source = _make_verified_zip(tmp_path, 'media')
+    package = source.verified
+    record = _media_package(source.zip_path.read_bytes(),
+        target=package.zip.target, sha256=package.zip.sha256, length=package.zip.length,
+        runtime_id=package.runtime_id, component_api=package.component_api,
+        python_tag=package.package.python_tag, platform_tag=package.package.platform_tag,
+        package_json_target=package.manifest.target,
+        package_json_sha256=package.manifest.sha256,
+        package_json_length=package.manifest.length)
+    repo = LocalTUFRepo()
+    repo.set_standard_targets(catalog=_catalog_bytes([record]), extra_targets={
+        package.zip.target: source.zip_path.read_bytes(),
+        package.manifest.target: package.package_json_bytes,
+    })
+    client = _client(repo, tmp_path)
+    assert client.refresh().ok
+    engine = InstallEngine(root, lock_backend=MemoryLockBackend())
+    # This test proves the real trust/download/transaction boundary. Native
+    # decoding is covered separately; only the child runner is substituted.
+    hooks = TransactionHooks(probe_runner=lambda *args, **kwargs: {'ok': True})
+    result = engine.install_from_repository(client, ['media'], hooks=hooks)
+    assert result.outcome == 'installed'
+    assert result.active['by_runtime'][package.runtime_id]['media']['package_sha256'] == package.zip.sha256
+
+
+def test_manager_offline_entry_uses_bundled_trust_and_real_repository(tmp_path):
+    from tools.extension_manager.app import ManagerPresenter
+    from tools.extension_manager.engine import InstallEngine
+    from tools.extension_manager.transaction import TransactionHooks
+    from mf4_analyzer.extensions.locking import MemoryLockBackend
+    from tests.test_extension_transaction import _write_core, _make_verified_zip
+
+    root = tmp_path / 'TraceLab'
+    _write_core(root)
+    source = _make_verified_zip(tmp_path, 'media')
+    pkg = source.verified
+    record = _media_package(source.zip_path.read_bytes(), target=pkg.zip.target,
+        runtime_id=pkg.runtime_id, component_api=pkg.component_api,
+        python_tag=pkg.package.python_tag, platform_tag=pkg.package.platform_tag,
+        package_json_target=pkg.manifest.target,
+        package_json_sha256=pkg.manifest.sha256, package_json_length=pkg.manifest.length)
+    repo = LocalTUFRepo()
+    repo.set_standard_targets(catalog=_catalog_bytes([record]), extra_targets={
+        pkg.zip.target: source.zip_path.read_bytes(), pkg.manifest.target: pkg.package_json_bytes})
+    bundle = tmp_path / 'offline'
+    repo.write_offline_bundle(bundle)
+    config = tmp_path / 'repository.json'
+    (tmp_path / 'root.json').write_bytes(repo.md_root.to_bytes())
+    config.write_text(json.dumps({'schema': 1, 'bootstrap_root': 'root.json',
+        'metadata_base_url': 'https://example.test/metadata/',
+        'target_base_url': 'https://example.test/targets/', 'trusted_origins': ['example.test']}))
+    engine = InstallEngine(root, lock_backend=MemoryLockBackend())
+    presenter = ManagerPresenter(root, engine=engine, repository_config=config)
+    online = presenter._try_make_repository()
+    assert isinstance(online, RepositoryClient)
+    assert online.cancel_event is presenter._cancel
+    from mf4_analyzer.extensions.revocations import revocation_store_path
+    assert online.revocation_store == revocation_store_path(root)
+    hooks = TransactionHooks(probe_runner=lambda *args, **kwargs: {'ok': True})
+    result = presenter.run_local_install(str(bundle), components=['media'], hooks=hooks)
+    assert result.outcome == 'installed'
+    assert presenter.repository is None  # offline authorization does not bless online state
+
+
+def test_engine_preserves_repository_specific_failure_reason(tmp_path):
+    from tools.extension_manager.engine import InstallEngine
+    from tests.test_extension_transaction import _write_core
+
+    root = tmp_path / "TraceLab"
+    _write_core(root)
+    repo = LocalTUFRepo()
+    repo.set_standard_targets()
+    client = _client(repo, tmp_path)
+    assert client.refresh().ok
+    client.revocation_store.write_text("{bad-json", encoding="utf-8")
+    with pytest.raises(ExtensionRepositoryError) as caught:
+        InstallEngine(root).install_from_repository(client, ["media"])
+    assert caught.value.reason_code == REVOCATION_CACHE_CORRUPT

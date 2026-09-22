@@ -42,7 +42,6 @@ from mf4_analyzer.extensions.probe import (
     build_probe_request,
     probe_command,
     run_authorized_probe,
-    standin_executable,
     write_result_json,
 )
 from mf4_analyzer.extensions.runtime import (
@@ -52,6 +51,8 @@ from mf4_analyzer.extensions.runtime import (
     empty_active,
     ensure_install_id,
     identify_core,
+    verify_core_files,
+    verify_package_tree,
     load_optional_active,
     read_json,
     require_same_volume_staging,
@@ -87,6 +88,7 @@ class TransactionHooks:
     after_active_replace: Callable[["InstallTransaction"], None] | None = None
     before_log_close: Callable[["InstallTransaction"], None] | None = None
     on_cleanup_unlink: Callable[[Path], None] | None = None
+    on_phase: Callable[[str], None] | None = None
     probe_runner: Callable[..., dict[str, Any]] | None = None
     cancel_requested: Callable[[], bool] | None = None
 
@@ -133,7 +135,8 @@ class InstallTransaction:
         self.app_root = Path(app_root).expanduser().resolve()
         self.packages = tuple(packages)
         self.lock_backend = lock_backend
-        self.probe_executable = list(probe_executable or standin_executable())
+        self.probe_executable = (list(probe_executable) if probe_executable is not None
+                                 else [str(self.app_root / identify_core(self.app_root).exe_relpath)])
         self.hooks = hooks or TransactionHooks()
         self.manager_version = manager_version
         self.probe_timeout_seconds = probe_timeout_seconds
@@ -180,6 +183,7 @@ class InstallTransaction:
         if stage not in TRANSACTION_STAGES:
             raise ExtensionError(ReasonCode.PROTOCOL_UNSUPPORTED, f"unknown stage {stage}")
         self.stage = stage
+        _call_hook(self.hooks.on_phase, stage)
         payload: dict[str, Any] = {
             "schema": TRANSACTION_SCHEMA_V1,
             "transaction_id": self.transaction_id,
@@ -226,7 +230,6 @@ class InstallTransaction:
 
     def prepare(self) -> None:
         refuse_unsupported_filesystem(self.app_root)
-        ensure_install_id(self.app_root)
         self.core = identify_core(self.app_root)
         existing = load_optional_active(self.app_root)
         if existing is None:
@@ -263,6 +266,14 @@ class InstallTransaction:
             generation=new_generation,
             by_runtime=self._expected_selection_map(),
         )
+    def prepare_staging(self) -> None:
+        # Only the exclusive holder may mutate the shared journal or store.
+        ensure_install_id(self.app_root)
+        path = self._log_path()
+        if path.is_file():
+            previous = read_json(path)
+            if previous.get("stage") not in {"committed", "cleanup"} or previous.get("repair_required"):
+                raise ExtensionError(ReasonCode.TRANSACTION_RECOVERY_REQUIRED, "recover previous transaction first")
         store = store_root(self.app_root)
         store.mkdir(parents=True, exist_ok=True)
         self.staging_dir.mkdir(parents=True, exist_ok=True)
@@ -285,6 +296,7 @@ class InstallTransaction:
         if requalify is not None:
             requalify(kind=REQUALIFY_KIND)
         current = identify_core(self.app_root)
+        verify_core_files(self.app_root, current)
         if current.core_build_id != self.core.core_build_id or current.runtime_id != self.core.runtime_id:
             raise ExtensionError(
                 ReasonCode.CORE_INCONSISTENT,
@@ -328,15 +340,23 @@ class InstallTransaction:
         self._raise_if_cancelled()
         _call_hook(self.hooks.before_probe, self)
         assert self.core is not None
+        selection = self.expected_new_active["by_runtime"][self.core.runtime_id]
+        names = sorted(selection)
         request = build_probe_request(
             core_build_id=self.core.core_build_id,
             runtime_id=self.core.runtime_id,
             transaction_id=self.transaction_id,
-            components=self._affected_components(),
-            package_hashes=self._package_hashes(),
+            components=names,
+            package_hashes=[selection[name]["package_sha256"] for name in names],
             staging_relpath=f".staging/{self.transaction_id}",
             staging_nonce=self.staging_nonce,
         )
+        request["app_root"] = str(self.app_root)
+        request["package_roots"] = {
+            name: (f".staging/{self.transaction_id}/{name}" if name in self._affected_components()
+                   else selection[name]["package_relpath"])
+            for name in names
+        }
         request_path = self.staging_dir / "probe-request.json"
         result_path = self.staging_dir / "probe-result.json"
         write_json_atomic(request_path, request)
@@ -372,6 +392,7 @@ class InstallTransaction:
 
     def publish_store(self) -> None:
         self._raise_if_cancelled()
+        _call_hook(self.hooks.on_phase, "publish")
         _call_hook(self.hooks.before_store_publish, self)
         assert self.core is not None
         for source in self.packages:
@@ -384,8 +405,22 @@ class InstallTransaction:
             dest.parent.mkdir(parents=True, exist_ok=True)
             src = self.component_staging(source.verified.component)
             if dest.exists():
-                shutil.rmtree(src, ignore_errors=True)
-                continue
+                try:
+                    verify_package_tree(dest, source.verified.package.files, extensions=self.extensions)
+                    verify_receipt(parse_receipt((dest / "receipt.json").read_bytes()),
+                                   package_json_bytes=(dest / "package.json").read_bytes(),
+                                   package=source.verified.package,
+                                   package_sha256=source.verified.zip.sha256,
+                                   trusted_target_id=source.verified.manifest.sha256)
+                except (ExtensionError, OSError, ValueError):
+                    # Preserve damaged bytes for diagnosis/recovery under the held lock.
+                    quarantine = self.extensions / ".quarantine" / self.transaction_id / source.verified.component
+                    quarantine.parent.mkdir(parents=True, exist_ok=True)
+                    os.replace(dest, quarantine)
+                    self.cleanup_pending.append(quarantine.relative_to(self.extensions).as_posix())
+                else:
+                    shutil.rmtree(src)
+                    continue
             os.replace(src, dest)
             receipt = generate_receipt(
                 core_build_id=self.core.core_build_id,
@@ -405,7 +440,9 @@ class InstallTransaction:
         _call_hook(self.hooks.after_store_publish, self)
 
     def commit_active(self) -> None:
+        self._raise_if_cancelled()
         self._in_commit_critical = True
+        _call_hook(self.hooks.on_phase, "commit")
         try:
             _call_hook(self.hooks.before_active_replace, self)
             write_json_atomic(active_path(self.app_root), self.expected_new_active)
@@ -471,10 +508,11 @@ class InstallTransaction:
                 active=_load_active_payload(self.app_root),
                 cleanup_pending=tuple(self.cleanup_pending),
             )
-        write_json_atomic(active_path(self.app_root), self.old_active)
+        if self.lease is None:
+            return TransactionResult("prepared", self.transaction_id, "cancelled", active=self.old_active)
         if self.staging_dir.exists():
             shutil.rmtree(self.staging_dir, ignore_errors=True)
-        if self._log_path().exists():
+        if self._log_path().exists() and read_json(self._log_path()).get("transaction_id") == self.transaction_id:
             self._log_path().unlink()
         return TransactionResult(
             stage="prepared",
@@ -488,17 +526,18 @@ class InstallTransaction:
         try:
             self.acquire_lock()
             self.requalify_after_lock()
+            self.prepare_staging()
             self.verify()
             self.probe()
             self.publish_store()
             self.commit_active()
             self.mark_committed()
+            self.cleanup()
         except TransactionCancelled:
             result = self.cancel()
             return result
         finally:
             self.release_lock()
-        self.cleanup()
         return TransactionResult(
             stage=self.stage,
             transaction_id=self.transaction_id,
@@ -609,10 +648,16 @@ def _new_packages_verify(app_root: Path, raw: Mapping[str, Any]) -> bool:
         for selection in parsed.iter_selections():
             package_root = resolve_inside(extensions_root(app_root), selection.package_relpath)
             manifest = package_root / "package.json"
-            if not manifest.is_file():
+            from mf4_analyzer.extensions.contract import parse_package_manifest
+            package = parse_package_manifest(manifest.read_bytes())
+            receipt = parse_receipt((package_root / "receipt.json").read_bytes())
+            verify_receipt(receipt, package_json_bytes=manifest.read_bytes(), package=package,
+                           package_sha256=selection.package_sha256)
+            if not receipt.probe_ok:
                 return False
+            verify_package_tree(package_root, package.files, extensions=extensions_root(app_root))
         return True
-    except ExtensionError:
+    except (ExtensionError, OSError, ValueError):
         return False
 
 
@@ -666,10 +711,11 @@ def uninstall_components(
 
     root = Path(app_root).expanduser().resolve()
     hooks = hooks or TransactionHooks()
-    core = identify_core(root)
     names = tuple(str(item) for item in components)
     lease = acquire_exclusive_lock(root, backend=lock_backend)
     try:
+        core = identify_core(root)
+        verify_core_files(root, core)
         if requalify is not None:
             requalify(kind=REQUALIFY_KIND)
         elif hooks.requalify is not None:

@@ -1,7 +1,7 @@
 # 2026-09-21 实现收敛与扩展安装器后续优化计划
 
-- 状态：**PARTIAL / NEEDS REVISION（2026-09-22 复核）**。W4–W6 仅有部分实现及 focused 证据，真实启动、仓库接线、原生探针、manager 构建与 UI 线程仍有缺口；详见[完成度审查](../reviews/2026-09-22-grok-followup-completion-review.md)。bundled Lite 仍是默认；本轮提交为工作检查点，不代表产品 Task 5 或 A1–A15 完成。
-- 审查基线：`21a8868763c88d54ded73a01f50e3ee3c0af9d06`。执行起点：`5cea434b`。当前 HEAD：`bcb23bdb`（已含大部分 W0–W3）。实验性 Lite modular packager 不等于 Task 5 完成。
+- 状态：**源码修复与专项验证完成；Windows/Tk 原生验收 BLOCKED（2026-09-22 接管）**。审查 R1–R7 的真实入口、仓库、原生探针实现、构建脚本与工作线程已补齐。详见[接管交付记录](../verify/2026-09-22-extension-installer-takeover.md)。串行集成遇到已在修改前复现的渲染/采集失败，未获得完整全套绿；产品 Task 0/5/7 与 A1–A15 仍未全部验收。bundled Lite 保持默认。
+- 审查基线：`21a8868763c88d54ded73a01f50e3ee3c0af9d06`。执行起点：`5cea434b`。接管前历史 HEAD：`bcb23bdb`（已含大部分 W0–W3）。实验性 Lite modular packager 不等于 Task 5 完成。
 - 输入：[本轮审查](../reviews/2026-09-21-grok-implementation-and-day-commits-review.md)、[扩展规格](../specs/2026-09-21-optional-extension-installer-spec.md)、[原执行计划](2026-09-21-optional-extension-installer-plan.md)、[Lite 渲染计划](2026-09-21-lite-packaging-render-hardening-plan.md)。
 - 目标：修复已确认缺陷，把独立模块打通为最小可验证链路，然后继续原 Task 0–7；保留主程序／installer／组件独立版本策略。
 - 默认顺序执行；不要求多代理，不批量重构，不修改 DSP。历史代码缺陷与今天引入的问题分别记录。

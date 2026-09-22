@@ -1,7 +1,7 @@
 """Neutral extension runtime identity, availability, and start-up lease.
 
-Does not import Qt, UI, av, SciPy, h5py, or TUF.  Source adapters are not
-wired here (W6).  A staging directory name is never treated as verified.
+Does not import Qt, UI, av, SciPy, h5py, or TUF. Source adapters consume the
+bootstrap snapshot. A staging directory name is never treated as verified.
 """
 from __future__ import annotations
 
@@ -24,6 +24,7 @@ from mf4_analyzer.extensions.contract import (
     evaluate_load_compatibility,
     generate_active_state,
     parse_package_manifest,
+    parse_receipt,
     parse_transaction_log,
     sha256_hex,
     store_package_relpath,
@@ -36,11 +37,13 @@ from mf4_analyzer.extensions.locking import (
     same_volume,
 )
 from mf4_analyzer.extensions.native_identity import sha256_file
+from mf4_analyzer.extensions.revocations import load_revocation_records, revocation_store_path
 from mf4_analyzer.extensions.state import (
     CoreIdentity,
     bind_core_payloads,
     load_active_state,
     resolve_inside,
+    verify_receipt,
 )
 
 
@@ -97,7 +100,7 @@ def install_id_path(app_root: str | Path) -> Path:
 def write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
+    tmp = path.with_name(path.name + "." + secrets.token_hex(8) + ".tmp")
     data = dumps_json(dict(payload)).encode("utf-8")
     with open(tmp, "wb") as handle:
         handle.write(data)
@@ -135,7 +138,7 @@ def detect_runtime_mode(
         return MODE_BUNDLED if is_frozen else MODE_SOURCE
     if not is_frozen and not use_extensions:
         return MODE_SOURCE
-    if app_root is not None and install_id_path(app_root).is_file():
+    if app_root is not None and ((app_root / "core.json").is_file() or install_id_path(app_root).is_file()):
         return MODE_MODULAR
     return MODE_BUNDLED if is_frozen else MODE_SOURCE
 
@@ -154,6 +157,13 @@ def identify_core(app_root: str | Path) -> CoreIdentity:
             f"identified exe {identity.exe_relpath!r} is missing",
         )
     return identity
+
+
+def verify_core_files(app_root: Path, core: CoreIdentity) -> None:
+    for entry in core.files.files:
+        path = resolve_inside(app_root, entry.relpath)
+        if not path.is_file() or path.stat().st_size != entry.size or sha256_file(path) != entry.sha256:
+            raise ExtensionError(ReasonCode.CORE_INCONSISTENT, f"core file changed: {entry.relpath}")
 
 
 def ensure_install_id(app_root: str | Path) -> str:
@@ -311,9 +321,14 @@ def availability_for(
             package_relpath=selection.package_relpath,
         )
     try:
+        receipt = parse_receipt((package_root / "receipt.json").read_bytes())
+        verify_receipt(receipt, package_json_bytes=(package_root / "package.json").read_bytes(),
+                       package=package, package_sha256=selection.package_sha256)
+        if package.component != component or not receipt.probe_ok:
+            raise ExtensionError(ReasonCode.COMPONENT_CORRUPT, "package receipt is not a successful matching install")
         verify_package_tree(package_root, package.files, extensions=extensions_root(app_root))
         files_verified = True
-    except ExtensionError:
+    except (ExtensionError, OSError, ValueError):
         files_verified = False
     decision = evaluate_load_compatibility(
         core=core.envelope,
@@ -346,7 +361,7 @@ def planned_search_path(app_root: Path, snapshot_components: Mapping[str, Compon
             continue
         package_root, package = loaded
         for rel in package.module_roots:
-            module_roots.append(package_root / rel)
+            module_roots.append(resolve_inside(package_root, rel).parent)
         for rel in package.dll_directories:
             dll_dirs.append(package_root / rel)
     return PlannedSearchPath(module_roots=tuple(module_roots), dll_directories=tuple(dll_dirs))
@@ -369,7 +384,7 @@ def load_runtime(
     repair_required = False
     affected: tuple[str, ...] = ()
     components: dict[str, ComponentAvailability] = {}
-    if mode == MODE_SOURCE and not use_extensions:
+    if mode in {MODE_SOURCE, MODE_BUNDLED} and not use_extensions:
         for name in sorted(OFFICIAL_COMPONENTS):
             components[name] = ComponentAvailability(
                 component=name,
@@ -384,45 +399,59 @@ def load_runtime(
             lease=None,
             components=components,
         )
-    core = identify_core(root)
     if acquire_lease:
         lease = acquire_shared_lease(root, backend=lock_backend)
-    if mode == MODE_MODULAR or use_extensions:
-        repair_required, affected = _transaction_repair_flag(root)
-        try:
-            active = load_optional_active(root)
-        except ExtensionError:
-            repair_required = True
-            active = None
-        for name in sorted(OFFICIAL_COMPONENTS):
-            components[name] = availability_for(
-                core=core,
-                active=active,
-                component=name,
-                app_root=root,
-                repair_required=repair_required,
-                affected=affected,
-                revoked_hashes=revoked_hashes,
-            )
-    else:
-        for name in sorted(OFFICIAL_COMPONENTS):
-            components[name] = ComponentAvailability(
-                component=name,
-                status=STATUS_NOT_INSTALLED,
-                reason_code=ReasonCode.COMPONENT_MISSING,
-            )
-    planned = planned_search_path(root, components) if mode == MODE_MODULAR or use_extensions else PlannedSearchPath()
-    return RuntimeSnapshot(
-        mode=mode,
-        app_root=root,
-        core=core,
-        active=active,
-        lease=lease,
-        components=components,
-        repair_required=repair_required,
-        affected_components=affected,
-        planned=planned,
-    )
+    try:
+        core = identify_core(root)
+        verify_core_files(root, core)
+    except BaseException:
+        if lease is not None:
+            lease.release()
+        raise
+    try:
+        if mode == MODE_MODULAR or use_extensions:
+            records = load_revocation_records(revocation_store_path(root))
+            revoked_hashes = tuple({str(item["sha256"]).lower() for item in records}
+                                   | {digest.lower() for digest in revoked_hashes})
+            repair_required, affected = _transaction_repair_flag(root)
+            try:
+                active = load_optional_active(root)
+            except ExtensionError:
+                repair_required = True
+                active = None
+            for name in sorted(OFFICIAL_COMPONENTS):
+                components[name] = availability_for(
+                    core=core,
+                    active=active,
+                    component=name,
+                    app_root=root,
+                    repair_required=repair_required,
+                    affected=affected,
+                    revoked_hashes=revoked_hashes,
+                )
+        else:
+            for name in sorted(OFFICIAL_COMPONENTS):
+                components[name] = ComponentAvailability(
+                    component=name,
+                    status=STATUS_NOT_INSTALLED,
+                    reason_code=ReasonCode.COMPONENT_MISSING,
+                )
+        planned = planned_search_path(root, components) if mode == MODE_MODULAR or use_extensions else PlannedSearchPath()
+        return RuntimeSnapshot(
+            mode=mode,
+            app_root=root,
+            core=core,
+            active=active,
+            lease=lease,
+            components=components,
+            repair_required=repair_required,
+            affected_components=affected,
+            planned=planned,
+        )
+    except BaseException:
+        if lease is not None:
+            lease.release()
+        raise
 
 
 def active_payload_from_state(state: ActiveState) -> dict[str, Any]:

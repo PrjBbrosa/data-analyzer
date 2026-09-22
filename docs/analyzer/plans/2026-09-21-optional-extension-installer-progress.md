@@ -1,6 +1,6 @@
 # 2026-09-21 可选扩展安装器进度账本
 
-- 状态：**PARTIAL / NEEDS REVISION（2026-09-22 复核）**。此前 W4–W6 focused 完成不能等同真实集成完成；[本轮完成度审查](../reviews/2026-09-22-grok-followup-completion-review.md)列出 R1–R7。
+- 状态：**源码修复与专项验证完成；Windows/Tk 原生验收 BLOCKED（2026-09-22 接管）**。R1–R7 源码缺口已补齐，完整交付仍未验收。当前证据见[接管交付记录](../verify/2026-09-22-extension-installer-takeover.md)及本文件 §9；§1–§8 保留 `f42c91ed` 检查点时的历史状态，不代表接管后的当前实现。
 - 权威执行计划：[后续优化计划](2026-09-21-grok-implementation-followup-plan.md)。
 - 原计划：[可选扩展包与稳定安装器](2026-09-21-optional-extension-installer-plan.md)（历史“待实施；本轮只写文档”头部保留为当时观察，不以它冒充当日完成）。
 - 审查：[实现结构与当日提交审查](../reviews/2026-09-21-grok-implementation-and-day-commits-review.md)。
@@ -115,3 +115,20 @@ W6c 已加入部分产物生成源码；以下不表示 manager 构建或冻结�
 [审查报告](../reviews/2026-09-22-grok-followup-completion-review.md)覆盖 R1–R7：默认 modular 启动 NameError、真实仓库下载签名不匹配、manager 仓库/离线入口未接、原生 probe 为 stand-in、构建/验证占位、Tk 阻塞、启动错误分类丢失。以上为实现缺口，不是仅缺 Windows 实测。
 
 本轮已有 focused/boundary 测试合计 **249 passed, 12 skipped**，四个额外探针仍复现 R1/R2/R4/R7；全套被终止，状态 UNVERIFIED。没有重跑全套，没有补产品代码。提交仅保存当前成果及真实待办，不发布 modular 产物。历史 focused 数字保留为历史记录，当前完成度以本节及审查报告为准。
+
+
+## 9. 2026-09-22 接管后的当前状态
+
+用户授权直接替代 Grok 并提交推送。本轮修复 R1–R7 源码、锁内事务写入、真实文件/receipt 校验、同 hash 修复和已知撤回启动连接。完整 owner、边界、测试命令、基线失败归因及构建配置见[接管交付记录](../verify/2026-09-22-extension-installer-takeover.md)。
+
+| 原任务 | source complete / focused verified | Windows frozen verified / 当前判断 |
+| --- | --- | --- |
+| Task 0 | 原生探针与可重复构建/四组合 gate 实现 | BLOCKED：VM 无法执行，原生可行性仍未证明 |
+| Task 1–2 | 合同保留；真实仓库选择/下载与离线入口接通；独立解释器 repository gate 已通过；撤回事实应用于启动 | 发布方配置和正式元数据尚缺，不能发布 |
+| Task 3 | 真实 target EXE 探针接口、锁内写入/恢复、修复重装；source native 解码与事务专项通过 | NTFS/LockFileEx、异常终止恢复与冻结组合仍未验收 |
+| Task 4 | 默认 bootstrap 和错误分类修复；首次/core/hash 变化健康重验；neutral import gate 通过 | Windows 启动/更新仍未验收 |
+| Task 5 | 独立 manager 冻结脚本、自检、artifact 绑定及强制组合 gate 实现；缺 manager 发布失败 | PowerShell 构建未实跑，产品交付仍 BLOCKED；bundled 默认不变 |
+| Task 6 | 实际仓库与离线入口、工作线程/取消/关闭协调、帮助文案；专项通过 | Tk 中文/DPI/慢下载前台 UNVERIFIED |
+| Task 7 | 本机执行一次两阶段集成门禁，遇修改前已存在的渲染/采集失败；没有再次卡数小时 | A1–A15 尚未完成，全套不绿，不满足发布验收 |
+
+历史“独立解释器缺 pytest”已解除：仅在专用 `.state/extension-manager-tuf/` 环境添加 pytest，最终运行 repository 48 passed。历史源码占位已替换，不能继续用 §6 的旧占位描述判断当前实现；但也不能把新实现当成已运行的冻结产物。最后的撤回连接补充另跑 owner/import 专项，未把更早的集成快照冒充最终全套结果。

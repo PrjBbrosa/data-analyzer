@@ -32,6 +32,7 @@ from mf4_analyzer.io.source_adapters import (
     bind_extension_runtime,
     current_extension_runtime,
 )
+from mf4_analyzer.extensions.runtime import identify_core
 from tests.test_extension_transaction import RUNTIME_ID, _write_core
 
 
@@ -257,7 +258,7 @@ def test_launcher_probe_rejects_result_alias_of_exe_and_active(tmp_path, monkeyp
     nonce = "nonce-boot"
     write_staging_auth(staging, nonce)
     request = build_probe_request(
-        core_build_id="cb1-test",
+        core_build_id=identify_core(app_root).core_build_id,
         runtime_id=RUNTIME_ID,
         transaction_id="txn-boot",
         components=["media"],
@@ -340,13 +341,16 @@ def test_launcher_probe_rejects_result_alias_of_exe_and_active(tmp_path, monkeyp
 
 
 def test_launcher_probe_windowed_none_streams_use_exit_and_json(tmp_path, monkeypatch):
+    monkeypatch.setattr("mf4_analyzer.extensions.probe._verify_inherited_grant", lambda *args: None)
+    monkeypatch.setattr("mf4_analyzer.extensions.probe.evaluate_staging_probe",
+                        lambda request, staging: {"ok": True, "components": request["components"]})
     app_root = tmp_path / "TraceLab"
     _write_core(app_root)
     staging = _staging(app_root)
     nonce = "nonce-windowed"
     write_staging_auth(staging, nonce)
     request = build_probe_request(
-        core_build_id="cb1-test",
+        core_build_id=identify_core(app_root).core_build_id,
         runtime_id=RUNTIME_ID,
         transaction_id="txn-boot",
         components=["media"],
@@ -437,3 +441,32 @@ def test_launcher_importer_bootstraps_before_runtime_smoke(tmp_path, monkeypatch
         runpy.run_path(str(LAUNCHER), run_name="__main__")
     assert stopped.value.code == 0
     assert calls == ["boot", "importer"]
+
+
+def test_default_frozen_argument_uses_real_modular_entry(tmp_path, monkeypatch):
+    from mf4_analyzer.app import bootstrap_extension_runtime
+
+    root = tmp_path / 'TraceLab'
+    _write_core(root)
+    (root / 'extensions' / 'install-id').write_text('id\n')
+    monkeypatch.setattr(sys, 'frozen', True, raising=False)
+    snapshot = bootstrap_extension_runtime(app_root=root)
+    assert snapshot.mode == MODE_MODULAR
+    assert snapshot.lease is not None
+
+
+@pytest.mark.parametrize('reason', ['APP_RUNNING', 'CORE_INCONSISTENT', 'TRANSACTION_RECOVERY_REQUIRED'])
+def test_bootstrap_preserves_runtime_failure_reason(tmp_path, monkeypatch, caplog, reason):
+    from mf4_analyzer.app import bootstrap_extension_runtime
+    from mf4_analyzer.extensions.contract import ExtensionError
+    from mf4_analyzer.extensions.runtime import STATUS_REPAIR_REQUIRED
+
+    def fail(*args, **kwargs):
+        raise ExtensionError(reason, 'specific diagnostic')
+
+    monkeypatch.setattr('mf4_analyzer.extensions.runtime.load_runtime', fail)
+    snapshot = bootstrap_extension_runtime(app_root=tmp_path, frozen=True, use_extensions=True)
+    assert snapshot.availability('media').reason_code == reason
+    assert snapshot.availability('media').status == STATUS_REPAIR_REQUIRED
+    assert not snapshot.planned.module_roots
+    assert 'specific diagnostic' in caplog.text

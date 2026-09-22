@@ -184,8 +184,12 @@ def is_base_protected(identity: FileIdentity) -> bool:
     root = python_module_root(identity.relpath)
     if root is not None and root.lower() in BASE_PROTECTED_MODULE_ROOTS:
         return True
-    parts = {part.lower() for part in identity.relpath.replace("\\", "/").split("/")}
-    if parts & BASE_PROTECTED_PATH_PARTS:
+    parts = [part.lower() for part in identity.relpath.replace("\\", "/").split("/")]
+    # Only import/search roots own namespaces. scipy's vendored */numpy code
+    # is not a replacement for top-level numpy.
+    if parts and parts[0] == "_internal":
+        parts = parts[1:]
+    if parts and parts[0] in BASE_PROTECTED_PATH_PARTS:
         return True
     basename = identity.basename.lower()
     return any(basename.startswith(prefix) for prefix in BASE_PROTECTED_NATIVE_PREFIXES)
@@ -315,7 +319,12 @@ def find_native_conflicts(
     for identity in identities:
         if identity.kind != KIND_NATIVE_SHARED:
             continue
-        natives_by_name.setdefault(identity.basename.lower(), []).append(identity)
+        name = identity.basename.lower()
+        # Python imports qualified extension paths explicitly. av.stream and
+        # av.video.stream legitimately have distinct same-basename .pyd files.
+        if name.endswith(".pyd") or (name.endswith(".so") and (".cpython-" in name or ".abi3." in name)):
+            continue
+        natives_by_name.setdefault(name, []).append(identity)
     for basename, items in natives_by_name.items():
         hashes = {item.sha256 for item in items}
         if len(hashes) < 2:

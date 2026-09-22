@@ -641,6 +641,16 @@ def copy_tested_manager(
     source = Path(manager_source)
     if not source.is_file():
         raise ExtensionBuildError(f"manager source is not a file: {source}")
+    evidence_path = source.parent / "manager-build.json"
+    if not evidence_path.is_file():
+        raise ExtensionBuildError("manager source needs manager-build.json from its frozen build")
+    evidence = json.loads(evidence_path.read_text(encoding="utf-8-sig"))
+    check = evidence.get("self_test") or {}
+    if (evidence.get("sha256") != sha256_file(source)
+            or evidence.get("size") != source.stat().st_size
+            or check.get("ok") is not True or check.get("frozen") is not True
+            or check.get("manager_version") != evidence.get("manager_version")):
+        raise ExtensionBuildError("manager source differs from its successful frozen self-test")
     shutil.copy2(source, dest)
     payload = {
         "copied": True,
@@ -650,7 +660,7 @@ def copy_tested_manager(
         "sha256": sha256_file(dest),
         "size": dest.stat().st_size,
         "source": str(source),
-        "manager_version": None,
+        "manager_version": evidence["manager_version"],
         "note": (
             "manager_version is independent of APP_VERSION; supply it from "
             "the manager release, never from the current app build"

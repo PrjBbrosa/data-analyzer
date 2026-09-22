@@ -485,3 +485,16 @@ def test_identical_zlib_bytes_are_not_a_basename_conflict(tmp_path: Path):
         collect_file_identities(media, owner=OWNER_MEDIA),
         collect_file_identities(matlab, owner=OWNER_MATLAB),
     )
+
+
+def test_vendored_namespace_and_qualified_extension_names_are_not_dll_collisions(tmp_path):
+    media, matlab = tmp_path / 'media', tmp_path / 'matlab'
+    _write_tree(media, {
+        'site-packages/av/stream.cp312-win_amd64.pyd': b'outer-extension',
+        'site-packages/av/video/stream.cp312-win_amd64.pyd': b'video-extension',
+    })
+    _write_tree(matlab, {
+        'site-packages/scipy/_external/array_api_compat/numpy/_typing.py': b'vendored scipy code',
+    })
+    assert_native_combination(collect_file_identities(media, owner=OWNER_MEDIA),
+                              collect_file_identities(matlab, owner=OWNER_MATLAB))

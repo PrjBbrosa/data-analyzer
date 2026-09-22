@@ -76,3 +76,37 @@ def test_in_progress_transaction_is_repair_required_not_ready(tmp_path: Path):
 def test_frozen_exe_wav_mp4_read_is_unknown():
     assert WINDOWS_FROZEN_MEDIA_READ == "UNKNOWN"
     assert detect_runtime_mode(frozen=True, use_extensions=False) == "bundled"
+
+
+def test_startup_consumes_persisted_revocation_without_repository_import(tmp_path):
+    from tests.test_extension_transaction import _engine, _make_verified_zip
+
+    app_root = tmp_path / "TraceLab"
+    _write_core(app_root)
+    backend = MemoryLockBackend()
+    media = _make_verified_zip(tmp_path, "media")
+    assert _engine(app_root, backend).install([media]).outcome == "installed"
+    write_json_atomic(
+        app_root / "extensions/cache/metadata/observed-revocations.json",
+        {"schema": "observed-revocations-v1", "items": [
+            {"sha256": media.verified.zip.sha256, "component": "media"}
+        ]},
+    )
+    snapshot = load_runtime(app_root, frozen=True, lock_backend=backend)
+    try:
+        assert snapshot.availability("media").status == "revoked"
+        assert not snapshot.planned.module_roots
+    finally:
+        snapshot.lease.release()
+
+
+def test_corrupt_revocation_cache_is_not_treated_as_empty(tmp_path):
+    import pytest
+    from mf4_analyzer.extensions.contract import ExtensionError
+
+    _write_core(tmp_path)
+    path = tmp_path / "extensions/cache/metadata/observed-revocations.json"
+    path.parent.mkdir(parents=True)
+    path.write_text("{bad-json", encoding="utf-8")
+    with pytest.raises(ExtensionError, match="revocation cache"):
+        load_runtime(tmp_path, frozen=True, acquire_lease=False)

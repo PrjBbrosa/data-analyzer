@@ -167,6 +167,10 @@ def test_manager_copy_uses_real_bytes_and_does_not_invent_hash(tmp_path):
     app_root = _core_tree(tmp_path / "app")
     site = _site_packages(tmp_path / "site-packages")
     manager = _write(tmp_path / "tested-installer.exe", b"MZ-tested-manager")
+    (tmp_path / "manager-build.json").write_text(json.dumps({
+        "sha256": sha256_file(manager), "size": manager.stat().st_size,
+        "manager_version": "1.0.0", "self_test": {"ok": True, "frozen": True, "manager_version": "1.0.0"},
+    }))
     delivery = emit_delivery(
         flavor="lite",
         profile="modular",
@@ -184,7 +188,7 @@ def test_manager_copy_uses_real_bytes_and_does_not_invent_hash(tmp_path):
     assert delivery["manager"]["sha256"] == sha256_file(copied)
     assert delivery["manager"]["placeholder"] is False
     payload = json.loads((app_root / "manager-delivery.json").read_text(encoding="utf-8"))
-    assert payload["manager_version"] is None
+    assert payload["manager_version"] == "1.0.0"
     assert APP_VERSION not in str(payload["manager_version"])
 
 

@@ -45,6 +45,17 @@ def _write_core(app_root: Path) -> None:
     (app_root / "_internal").mkdir(exist_ok=True)
     (app_root / "_internal" / "python311.dll").write_bytes(b"Y" * 2048)
     (app_root / "extensions").mkdir(exist_ok=True)
+    from mf4_analyzer.extensions.contract import generate_core_files, parse_core_files
+    core_files = json.loads((app_root / "core-files.json").read_bytes())
+    for entry in core_files["files"]:
+        data = (app_root / entry["relpath"]).read_bytes()
+        entry.update(size=len(data), sha256=_sha256(data))
+    (app_root / "core-files.json").write_text(json.dumps(core_files))
+    digest = parse_core_files(core_files).digest
+    core = json.loads((app_root / "core.json").read_bytes())
+    core.update(core_files_digest=digest, core_build_id=f"cb1-{digest}",
+                exe_sha256=_sha256((app_root / "TraceLabAnalyzer.exe").read_bytes()))
+    (app_root / "core.json").write_text(json.dumps(core))
 
 
 def _package_files(component: str) -> dict[str, bytes]:
@@ -113,7 +124,32 @@ def _make_verified_zip(tmp_path: Path, component: str) -> PackageSource:
 
 
 def _engine(app_root: Path, backend: MemoryLockBackend, **kwargs) -> InstallEngine:
-    return InstallEngine(app_root, lock_backend=backend, manager_version="1.0.0", **kwargs)
+    engine = InstallEngine(app_root, lock_backend=backend, manager_version="1.0.0", **kwargs)
+    original = engine._hooks
+    def fixture_hooks(extra):
+        hooks = original(extra)
+        if hooks.probe_runner is None:
+            hooks.probe_runner = _fixture_probe_runner
+        return hooks
+    engine._hooks = fixture_hooks
+    return engine
+
+
+def _fixture_probe_runner(command, **kwargs):
+    # State machine fixture only. Never used by production or native acceptance.
+    request = json.loads(Path(command[command.index("--extension-probe-request") + 1]).read_bytes())
+    staging = Path(command[command.index("--extension-probe-staging") + 1])
+    for name in request["components"]:
+        root = staging.parents[1] / request["package_roots"][name]
+        from mf4_analyzer.extensions.contract import parse_package_manifest
+        from mf4_analyzer.extensions.runtime import verify_package_tree
+        try:
+            package = parse_package_manifest((root / "package.json").read_bytes())
+            verify_package_tree(root, package.files, extensions=staging.parents[1])
+        except (OSError, ExtensionError) as exc:
+            raise ExtensionError(ReasonCode.PROBE_FAILED, "fixture package invalid") from exc
+    return {"ok": True, "test_double": True}
+
 
 
 def test_media_install_commits_active_once_and_ignores_stage_directory_name(tmp_path: Path):
@@ -383,3 +419,36 @@ def test_staging_directory_named_verified_is_not_an_active_selection(tmp_path: P
         use_extensions=True,
     )
     assert snapshot.availability("media").status == STATUS_NOT_INSTALLED
+
+
+def test_busy_install_cannot_overwrite_another_transactions_journal(tmp_path):
+    root = tmp_path / 'TraceLab'
+    _write_core(root)
+    source = _make_verified_zip(tmp_path, 'media')
+    backend = MemoryLockBackend()
+    from mf4_analyzer.extensions.locking import acquire_exclusive_lock
+    lease = acquire_exclusive_lock(root, backend=backend)
+    journal = transaction_log_path(root)
+    original = b'owner transaction journal'
+    journal.write_bytes(original)
+    try:
+        with pytest.raises(ExtensionError):
+            _engine(root, backend).install([source])
+        assert journal.read_bytes() == original
+        assert not staging_root(root).exists()
+    finally:
+        lease.release()
+
+
+def test_reinstall_repairs_corrupted_existing_store(tmp_path):
+    root = tmp_path / 'TraceLab'
+    _write_core(root)
+    backend = MemoryLockBackend()
+    source = _make_verified_zip(tmp_path, 'media')
+    engine = _engine(root, backend)
+    installed = engine.install([source])
+    relative = installed.active['by_runtime'][RUNTIME_ID]['media']['package_relpath']
+    marker = root / 'extensions' / relative / 'site-packages' / 'av' / '__init__.py'
+    marker.write_text('damaged')
+    engine.install([source])
+    assert marker.read_bytes() == _package_files('media')['site-packages/av/__init__.py']

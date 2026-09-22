@@ -40,6 +40,8 @@ from mf4_analyzer.extensions.contract import (
     sha256_hex,
 )
 
+from mf4_analyzer.extensions.revocations import REVOCATION_STORE_NAME, revocation_store_path
+
 from .download import (
     DownloadCancelled,
     DownloadPolicy,
@@ -86,7 +88,6 @@ SUPPORTED_PROTOCOL_MAJOR = 1
 CACHE_METADATA = Path("extensions") / "cache" / "metadata"
 CACHE_DOWNLOADS = Path("extensions") / "cache" / "downloads"
 CACHE_MANAGER_UPDATES = Path("extensions") / "cache" / "manager-updates"
-REVOCATION_STORE_NAME = "observed-revocations.json"
 
 
 class ManagerStatusV1(TypedDict, total=False):
@@ -264,10 +265,6 @@ def manager_update_path(app_root: Path, manager_version: str) -> Path:
     return Path(app_root) / CACHE_MANAGER_UPDATES / f"installer-{safe}.exe"
 
 
-def revocation_store_path(app_root: Path) -> Path:
-    return Path(app_root) / CACHE_METADATA / REVOCATION_STORE_NAME
-
-
 def _revocation_cache_corrupt(message: str, cause: BaseException | None = None) -> ExtensionRepositoryError:
     error = ExtensionRepositoryError(message, REVOCATION_CACHE_CORRUPT)
     if cause is not None:
@@ -276,36 +273,12 @@ def _revocation_cache_corrupt(message: str, cause: BaseException | None = None) 
 
 
 def load_observed_revocations(path: Path) -> ObservedRevocations:
-    """Load persisted revocations. A missing file means none were observed.
+    from mf4_analyzer.extensions.revocations import load_revocation_records
 
-    Corrupt JSON/schema is a diagnostic failure, not an empty store. Callers
-    must not treat this as "never learned any revocations".
-    """
-
-    if not path.is_file():
-        return ObservedRevocations()
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise _revocation_cache_corrupt(
-            "observed revocation cache is unreadable",
-            exc,
-        ) from exc
-    if not isinstance(payload, dict):
-        raise _revocation_cache_corrupt("observed revocation cache is not an object")
-    schema = payload.get("schema")
-    items = payload.get("items")
-    if schema is not None and schema != "observed-revocations-v1":
-        raise _revocation_cache_corrupt(
-            f"unsupported observed revocation schema {schema!r}",
-        )
-    if not isinstance(items, list):
-        raise _revocation_cache_corrupt("observed revocation cache is missing an items array")
-    records: list[RevocationRecord] = []
-    for item in items:
-        if not isinstance(item, dict) or not item.get("sha256"):
-            raise _revocation_cache_corrupt("observed revocation cache contains an invalid item")
-        records.append(item)  # type: ignore[arg-type]
+        records = load_revocation_records(path)
+    except ExtensionError as exc:
+        raise _revocation_cache_corrupt(str(exc), exc) from exc
     return ObservedRevocations(items=records)
 
 

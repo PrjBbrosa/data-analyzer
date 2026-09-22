@@ -22,6 +22,7 @@ from mf4_analyzer.extensions.probe import (
     standin_executable,
     write_result_json,
 )
+from mf4_analyzer.extensions.runtime import identify_core
 from tests.test_extension_transaction import RUNTIME_ID, _write_core
 
 
@@ -39,13 +40,16 @@ def test_probe_flags_are_documented_for_w6_hidden_group():
 
 
 def test_child_survives_none_console_streams(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr("mf4_analyzer.extensions.probe._verify_inherited_grant", lambda *args: None)
+    monkeypatch.setattr("mf4_analyzer.extensions.probe.evaluate_staging_probe",
+                        lambda request, staging: {"ok": True, "components": request["components"]})
     app_root = tmp_path / "TraceLab"
     _write_core(app_root)
     staging = _staging(app_root)
     nonce = "nonce-1"
     write_staging_auth(staging, nonce)
     request = build_probe_request(
-        core_build_id="cb1-test",
+        core_build_id=identify_core(app_root).core_build_id,
         runtime_id=RUNTIME_ID,
         transaction_id="txn-probe",
         components=["media"],
@@ -83,7 +87,7 @@ def test_env_skip_is_rejected(tmp_path: Path, monkeypatch):
     nonce = "nonce-2"
     write_staging_auth(staging, nonce)
     request = build_probe_request(
-        core_build_id="cb1-test",
+        core_build_id=identify_core(app_root).core_build_id,
         runtime_id=RUNTIME_ID,
         transaction_id="txn-probe",
         components=["media"],
@@ -113,14 +117,15 @@ def test_env_skip_is_rejected(tmp_path: Path, monkeypatch):
     assert payload["reason_code"] == ReasonCode.VERIFICATION_FAILED
 
 
-def test_joint_probe_fails_closed_when_matlab_marker_missing(tmp_path: Path):
+def test_joint_probe_rejects_unverified_package_trees(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr("mf4_analyzer.extensions.probe._verify_inherited_grant", lambda *args: None)
     app_root = tmp_path / "TraceLab"
     _write_core(app_root)
     staging = _staging(app_root)
     nonce = "nonce-3"
     write_staging_auth(staging, nonce)
     request = build_probe_request(
-        core_build_id="cb1-test",
+        core_build_id=identify_core(app_root).core_build_id,
         runtime_id=RUNTIME_ID,
         transaction_id="txn-probe",
         components=["media", "matlab"],
@@ -146,7 +151,7 @@ def test_joint_probe_fails_closed_when_matlab_marker_missing(tmp_path: Path):
     assert code == ManagerExitCode.VERIFY_OR_PROBE
     payload = json.loads(result_path.read_text(encoding="utf-8"))
     assert payload["ok"] is False
-    assert payload["failed_component"] == "matlab"
+    assert payload["reason_code"] == ReasonCode.PROBE_FAILED
 
 
 def test_result_path_cannot_alias_exe(tmp_path: Path):
@@ -166,7 +171,7 @@ def test_timeout_reaps_only_the_probe_child(tmp_path: Path):
     nonce = "nonce-4"
     write_staging_auth(staging, nonce)
     request = build_probe_request(
-        core_build_id="cb1-test",
+        core_build_id=identify_core(app_root).core_build_id,
         runtime_id=RUNTIME_ID,
         transaction_id="txn-probe",
         components=["media"],
@@ -174,12 +179,11 @@ def test_timeout_reaps_only_the_probe_child(tmp_path: Path):
         staging_relpath=".staging/txn-probe",
         staging_nonce=nonce,
     )
-    request["sleep_seconds"] = 30
     request_path = staging / "request.json"
     result_path = staging / "result.json"
     write_result_json(request_path, request)
     command = probe_command(
-        standin_executable(),
+        [sys.executable, "-c", "import time; time.sleep(30)"],
         request_path=request_path,
         result_path=result_path,
         staging_dir=staging,
@@ -208,7 +212,7 @@ def test_real_launcher_routes_probe_flags_to_child_main(tmp_path, monkeypatch):
     nonce = "nonce-launcher"
     write_staging_auth(staging, nonce)
     request = build_probe_request(
-        core_build_id="cb1-test",
+        core_build_id=identify_core(app_root).core_build_id,
         runtime_id=RUNTIME_ID,
         transaction_id="txn-probe",
         components=["media"],

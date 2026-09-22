@@ -53,7 +53,8 @@ def test_modular_packager_emits_manifests_zips_audit_and_manager_copy():
     assert "--exe-relpath" in text
     assert "--site-packages" in text
     assert "--manager-source" in text
-    assert "verified Windows installer.exe not supplied; writing placeholder (no fabricated hash)" in text
+    assert "modular release refuses a placeholder manager" in text
+    assert '"--mode", "base-expected-missing", "--exe", $ExePath' in text
     assert "do not mint manager_version from APP_VERSION" not in LITE.read_text(encoding="utf-8")
     assert EXTENSIONS.is_file()
     assert VERIFY.is_file()
@@ -72,7 +73,8 @@ def test_modular_importer_gates_are_split_and_not_skipped_as_success():
     assert 'combination-contract' in text
     assert "Skipping lite importer smoke" not in text
     assert 'importer: skipped' not in text
-    assert "frozen WAV/MP4/MAT: not_run" in text
+    assert 'Invoke-IndependentPostCheck -Name "extension-combinations"' in text
+    assert "verify_extension_delivery.py" in text
     assert "Not invoking verify_lite_importer_runtime.py" in text
     assert 'Invoke-IndependentPostCheck -Name "importer"' not in text
     assert 'importer-base-missing' in text[

@@ -149,7 +149,7 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             QuickRow("软件说明书", gesture="状态栏右侧书本图标"),
             QuickRow(
                 "扩展管理…",
-                sub="状态栏说明书旁打开独立安装器。安装或卸载需先关闭 TraceLab。更新扩展与更新安装器分开。HEAD HDF 不是 MAT。需本机可写磁盘；离线要用有效官方包。",
+                sub="状态栏说明书旁打开独立安装器。安装或卸载需先关闭 TraceLab。更新扩展与更新安装器分开。HEAD HDF 不是 MAT。需本机可写磁盘；离线选择有效官方发行集合目录。下载可取消，提交时不可取消。常规 Full/Lite 使用内置支持。",
                 gesture="状态栏说明书旁「扩展管理…」",
             ),
         ),

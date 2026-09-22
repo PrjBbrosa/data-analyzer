@@ -168,6 +168,10 @@ def _map_extension_component(adapter_key: str, availability) -> AdapterAvailabil
         "component_status": availability.status,
         "reason_code": str(availability.reason_code or ""),
     }
+    if availability.reason_code == "APP_RUNNING":
+        return AdapterAvailability("unavailable", "扩展正在更新，请关闭本程序，等待更新完成后重新启动。", **fields)
+    if availability.reason_code == "CORE_INCONSISTENT":
+        return AdapterAvailability("unavailable", "主程序文件不完整或混合了不同版本，请重新安装完整的 TraceLab。", **fields)
     if availability.status == STATUS_READY:
         return AdapterAvailability("ready", **fields)
     if availability.status == STATUS_NOT_INSTALLED:

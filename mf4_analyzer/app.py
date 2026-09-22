@@ -1,5 +1,6 @@
 """Application entry point."""
 import importlib
+import logging
 import os
 import sys
 from pathlib import Path
@@ -158,12 +159,13 @@ def bootstrap_extension_runtime(
         ComponentAvailability,
         MODE_BUNDLED,
         MODE_MODULAR,
+        MODE_SOURCE,
         RuntimeSnapshot,
         STATUS_NOT_INSTALLED,
+        STATUS_REPAIR_REQUIRED,
         detect_runtime_mode,
         load_runtime,
     )
-    from mf4_analyzer.io.source_adapters import bind_extension_runtime
 
     root = Path(app_root) if app_root is not None else resolve_install_root()
     root = root.expanduser().resolve()
@@ -178,12 +180,13 @@ def bootstrap_extension_runtime(
                 frozen=frozen if frozen is not None else mode != MODE_SOURCE,
                 use_extensions=True if use_extensions else None,
             )
-        except ExtensionError:
+        except ExtensionError as exc:
+            logging.getLogger(__name__).error("Extension bootstrap failed (%s): %s", exc.reason_code, exc)
             components = {
                 name: ComponentAvailability(
                     component=name,
-                    status=STATUS_NOT_INSTALLED,
-                    reason_code=ReasonCode.COMPONENT_MISSING,
+                    status=STATUS_REPAIR_REQUIRED,
+                    reason_code=exc.reason_code,
                 )
                 for name in sorted(OFFICIAL_COMPONENTS)
             }
@@ -196,6 +199,9 @@ def bootstrap_extension_runtime(
                 components=components,
             )
         _RUNTIME_LEASE = snapshot.lease
+        if snapshot.lease is not None:
+            from mf4_analyzer.extensions.health import ensure_runtime_health
+            snapshot = ensure_runtime_health(snapshot)
         apply_extension_search_path(snapshot.planned)
     elif mode == MODE_BUNDLED:
         # Historical Full/Lite have no core.json.  Do not scan nearby extensions.
@@ -217,6 +223,7 @@ def bootstrap_extension_runtime(
         )
     else:
         snapshot = load_runtime(root, acquire_lease=False, frozen=False)
+    from mf4_analyzer.io.source_adapters import bind_extension_runtime
     bind_extension_runtime(snapshot)
     _LAST_RUNTIME_SNAPSHOT = snapshot
     _BOOTSTRAPPED = True

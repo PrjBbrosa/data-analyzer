@@ -9,9 +9,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
-from mf4_analyzer.extensions.contract import ExtensionError, VerifiedPackage
+from mf4_analyzer.extensions.contract import ExtensionError, REASON_CODES, ReasonCode, VerifiedPackage
 from mf4_analyzer.extensions.locking import LockBackend
-from mf4_analyzer.extensions.probe import standin_executable
+from mf4_analyzer.extensions.runtime import identify_core
 
 from .transaction import (
     InstallTransaction,
@@ -38,7 +38,7 @@ class InstallEngine:
     ) -> None:
         self.app_root = Path(app_root).expanduser().resolve()
         self.lock_backend = lock_backend
-        self.probe_executable = list(probe_executable or standin_executable())
+        self.probe_executable = list(probe_executable) if probe_executable is not None else None
         self.requalify = requalify
         self.manager_version = manager_version
         self.probe_timeout_seconds = probe_timeout_seconds
@@ -102,18 +102,34 @@ class InstallEngine:
         *,
         hooks: TransactionHooks | None = None,
     ) -> TransactionResult:
-        """Optional TUF path.  Lazy-import only; not used by fixture tests."""
+        """Select against the target core, then consume the real verified API."""
 
-        download = getattr(repository, "download_verified_package", None)
-        if not callable(download):
-            raise TypeError("repository must provide download_verified_package")
+        core = identify_core(self.app_root)
+        target = {
+            "runtime_id": core.runtime_id,
+            "capabilities": {
+                name: capability.component_api
+                for name, capability in core.envelope.component_capabilities.items()
+                if capability.available
+            },
+        }
         sources: list[PackageSource] = []
-        try:
-            for component in components:
-                zip_path, verified = download(component)
-                sources.append(PackageSource(verified=verified, zip_path=Path(zip_path)))
-        except ExtensionError:
-            raise
+        for component in components:
+            if hooks is not None and hooks.cancel_requested is not None and hooks.cancel_requested():
+                from .transaction import TransactionCancelled
+                raise TransactionCancelled("download cancelled")
+            selection = repository.select_package(component, target, platform_tag="win_amd64")
+            if not selection.ok or selection.package is None:
+                reason = selection.reason_code or ReasonCode.NO_COMPATIBLE_PACKAGE
+                message = f"Package selection failed for {component}: {reason}"
+                if reason in REASON_CODES:
+                    raise ExtensionError(reason, message)
+                from .repository import ExtensionRepositoryError
+                raise ExtensionRepositoryError(message, reason)
+            zip_path, verified = repository.download_verified_package(
+                selection.package, self.app_root, cancel_event=repository.cancel_event,
+            )
+            sources.append(PackageSource(verified=verified, zip_path=Path(zip_path)))
         extra = self._hooks(hooks)
         if extra.requalify is None:
             extra.requalify = getattr(repository, "requalify_after_lock_wait", None)

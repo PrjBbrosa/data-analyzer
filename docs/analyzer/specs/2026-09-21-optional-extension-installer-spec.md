@@ -160,6 +160,8 @@ TraceLab/
 
 Windows DLL 目录由 `os.add_dll_directory()` 等受控加载方式注册，句柄不提前释放。目录顺序不能解决同名不同内容 DLL 冲突：包构建／联合安装必须检测基础与组件间、两个组件间的 DLL 冲突；无法证明兼容则拒绝组合或改变构建，不引入按运气加载的 fallback。
 
+2026-09-22 实现澄清：上述同名原生库检查针对按库名解析的共享 DLL；Python 按完整模块路径加载的扩展（如 `av.stream` 与 `av.video.stream` 的同名 `.pyd`）仍须验证实际来源与文件哈希，但不能仅按文件 basename 判冲突。基础依赖命名空间保护针对顶级导入根；SciPy 私有目录中的 vendored `array_api_compat/numpy` 不等于覆盖顶级 NumPy。
+
 ### 6.2 可用性与失败语义
 
 组件状态至少有 `not_installed`、`ready`、`incompatible`、`corrupt`、`repair_required`、`revoked`；管理事务状态与运行状态分开。首次安装和核心 build 变化后，在目标冻结解释器的隔离 child 中运行固定导入探针。成功证据绑定 core_build_id + 组件 hash 组合；同一 runtime 的 UI 更新可复用包，只需重新快速验证，不需要下载。

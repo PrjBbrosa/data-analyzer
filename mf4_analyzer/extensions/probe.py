@@ -2,13 +2,15 @@
 
 Truth is carried by exit code + a dedicated JSON result file.  Windowed
 executables may expose ``sys.stdout`` / ``sys.stderr`` as ``None``; this
-module must not depend on console streams.  W5 ships the protocol and a
-file-based stand-in.  Wiring these flags into ``MF4 Data Analyzer V1.py``
-is W6.
+module must not depend on console streams. The launcher dispatches this child
+before GUI/importer startup. A request digest is delivered through an inherited
+pipe; only the target interpreter performs native reads.
 """
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -34,7 +36,7 @@ PROBE_STAGING_FLAG = "--extension-probe-staging"
 PROBE_STAGING_NONCE_FLAG = "--extension-probe-staging-nonce"
 PROBE_STAGING_HANDLE_FLAG = "--extension-probe-staging-handle"
 
-# Documented for W6's mutually exclusive, allow_abbrev=False hidden group.
+# Shared with the mutually exclusive, allow_abbrev=False launcher group.
 PROBE_ARGV_FLAGS = (
     PROBE_RESULT_FLAG,
     PROBE_REQUEST_FLAG,
@@ -213,35 +215,67 @@ def _expected_marker(component: str) -> str:
 
 
 def evaluate_staging_probe(request: Mapping[str, Any], staging_dir: Path) -> dict[str, Any]:
-    """File-level stand-in used until W6 wires the frozen EXE hidden child.
+    """Run real native reads; a directory or import marker is never success."""
+    from .native_probe import run_native_reads
+    from .state import resolve_inside
 
-    Does not import av / scipy / h5py.  Joint requests fail closed: any
-    missing component fails the whole probe.
-    """
+    try:
+        roots = request.get("package_roots")
+        if roots:
+            extensions = Path(staging_dir).resolve().parents[1]
+            packages = {name: resolve_inside(extensions, roots[name]) for name in request["components"]}
+        else:
+            packages = {name: Path(staging_dir) / name for name in request["components"]}
+        payload = run_native_reads(packages)
+    except Exception as exc:
+        # Child boundary: retain the actual exception, never turn it into success.
+        payload = {"ok": False, "reason_code": ReasonCode.PROBE_FAILED,
+                   "detail": f"{type(exc).__name__}: {exc}"}
+    payload.update({key: request.get(key) for key in
+                    ("core_build_id", "runtime_id", "components", "package_hashes", "probe_types")})
+    return payload
 
-    components = [str(item) for item in request["components"]]
-    checked: list[str] = []
-    for component in components:
-        marker = staging_dir / component / _expected_marker(component)
-        if not marker.is_file():
-            return {
-                "ok": False,
-                "reason_code": ReasonCode.PROBE_FAILED,
-                "components": components,
-                "failed_component": component,
-                "probe_types": list(request.get("probe_types") or []),
-                "checked": checked,
-            }
-        checked.append(component)
-    return {
-        "ok": True,
-        "reason_code": None,
-        "components": components,
-        "probe_types": list(request.get("probe_types") or []),
-        "checked": checked,
-        "core_build_id": request.get("core_build_id"),
-        "package_hashes": list(request.get("package_hashes") or []),
-    }
+
+def _verify_inherited_grant(handle: int | None, request_bytes: bytes) -> None:
+    if handle is None:
+        raise ProbeError(ReasonCode.VERIFICATION_FAILED, "missing inherited probe authorization")
+    if os.name == "nt":
+        import msvcrt
+        fd = msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY)
+    else:
+        fd = handle
+    with os.fdopen(fd, "rb") as reader:
+        grant = reader.read(65)
+    if grant != hashlib.sha256(request_bytes).hexdigest().encode("ascii"):
+        raise ProbeError(ReasonCode.VERIFICATION_FAILED, "probe request differs from inherited authorization")
+
+
+@contextmanager
+def _authorized_child_args(command: Sequence[str]):
+    """Pass just one read handle/FD; no environment variable bypass."""
+    args = list(command)
+    request_path = Path(args[args.index(PROBE_REQUEST_FLAG) + 1])
+    read_fd, write_fd = os.pipe()
+    try:
+        os.write(write_fd, hashlib.sha256(request_path.read_bytes()).hexdigest().encode("ascii"))
+    finally:
+        os.close(write_fd)
+    try:
+        kwargs: dict[str, Any] = {}
+        if os.name == "nt":
+            import msvcrt
+            handle = msvcrt.get_osfhandle(read_fd)
+            os.set_handle_inheritable(handle, True)
+            startup = subprocess.STARTUPINFO()
+            startup.lpAttributeList = {"handle_list": [handle]}
+            kwargs.update(startupinfo=startup, close_fds=True)
+        else:
+            handle = read_fd
+            kwargs.update(pass_fds=(read_fd,), start_new_session=True)
+        args.extend([PROBE_STAGING_HANDLE_FLAG, str(handle)])
+        yield args, kwargs
+    finally:
+        os.close(read_fd)
 
 
 class _ProbeParser(argparse.ArgumentParser):
@@ -255,8 +289,8 @@ def child_main(argv: Sequence[str] | None = None) -> int:
     parser = _ProbeParser(add_help=False, allow_abbrev=False)
     parser.add_argument(PROBE_REQUEST_FLAG, dest="request_path", required=True)
     parser.add_argument(PROBE_RESULT_FLAG, dest="result_path", required=True)
-    parser.add_argument(PROBE_STAGING_FLAG, dest="staging_dir", required=True)
-    parser.add_argument(PROBE_STAGING_NONCE_FLAG, dest="staging_nonce", required=True)
+    parser.add_argument(PROBE_STAGING_FLAG, dest="staging_dir")
+    parser.add_argument(PROBE_STAGING_NONCE_FLAG, dest="staging_nonce")
     parser.add_argument(PROBE_STAGING_HANDLE_FLAG, dest="staging_handle", type=int, default=None)
     try:
         args, extra = parser.parse_known_args(list(argv) if argv is not None else sys.argv[1:])
@@ -265,40 +299,69 @@ def child_main(argv: Sequence[str] | None = None) -> int:
     if extra:
         _write_text_line(sys.stderr, "unexpected probe arguments")
         return ManagerExitCode.BAD_ARGS
-    for name in _SKIP_ENV_NAMES:
-        if os.environ.get(name):
-            payload = {
-                "ok": False,
-                "reason_code": ReasonCode.VERIFICATION_FAILED,
-                "detail": f"{name} is not a valid probe authorization",
-            }
-            try:
-                write_result_json(Path(args.result_path), payload)
-            except OSError:
-                pass
-            return ManagerExitCode.VERIFY_OR_PROBE
     result_path = Path(args.result_path)
+    safe_result = False
     try:
-        request = parse_request(Path(args.request_path).read_bytes())
-        extensions_root = Path(args.staging_dir).expanduser().resolve().parents[1]
-        staging = verify_staging_auth(
-            Path(args.staging_dir),
-            args.staging_nonce,
-            extensions_root_path=extensions_root,
-            transaction_id=str(request.get("transaction_id") or ""),
-        )
-        sleep_seconds = request.get("sleep_seconds")
-        if isinstance(sleep_seconds, (int, float)) and sleep_seconds > 0:
-            import time
-
-            time.sleep(float(sleep_seconds))
-        payload = evaluate_staging_probe(request, staging)
+        request_bytes = Path(args.request_path).read_bytes()
+        request = parse_request(request_bytes)
+        app_root = Path(request.get("app_root") or
+                        Path(args.staging_dir).resolve().parents[2])
+        assert_result_path_safe(result_path, app_root=app_root,
+                                extra_protected=(Path(args.request_path),))
+        if result_path.exists():
+            raise ProbeError(ReasonCode.VERIFICATION_FAILED, "result already exists", ManagerExitCode.BAD_ARGS)
+        safe_result = True
+        _verify_inherited_grant(args.staging_handle, request_bytes)
+        for name in _SKIP_ENV_NAMES:
+            if os.environ.get(name):
+                raise ProbeError(ReasonCode.VERIFICATION_FAILED, f"{name} is not a valid probe authorization")
+        from .runtime import identify_core, verify_core_files
+        core = identify_core(app_root)
+        verify_core_files(app_root, core)
+        if (request["core_build_id"], request["runtime_id"]) != (core.core_build_id, core.runtime_id):
+            raise ProbeError(ReasonCode.CORE_INCONSISTENT, "probe target core changed")
+        if getattr(sys, "frozen", False) and Path(sys.executable).resolve() != (app_root / core.exe_relpath).resolve():
+            raise ProbeError(ReasonCode.CORE_INCONSISTENT, "probe is not running in the target executable")
+        if request.get("mode") in {"installed", "availability"}:
+            from .runtime import load_runtime, STATUS_READY
+            from .state import resolve_inside
+            from .native_probe import run_native_reads
+            snapshot = load_runtime(app_root, frozen=True, use_extensions=True)
+            try:
+                names = request["components"]
+                available = [snapshot.availability(name) for name in names]
+                if request.get("mode") == "availability":
+                    payload = {"ok": True, "native_reads": False,
+                               "frozen": bool(getattr(sys, "frozen", False)),
+                               "availability": {item.component: {"status": item.status, "reason_code": item.reason_code}
+                                                for item in available}}
+                else:
+                    if any(item.status != STATUS_READY for item in available):
+                        raise ProbeError(ReasonCode.PROBE_FAILED, "installed selection unavailable")
+                    if [item.package_sha256 for item in available] != request["package_hashes"]:
+                        raise ProbeError(ReasonCode.PROBE_FAILED, "installed selection changed")
+                    payload = run_native_reads({item.component: resolve_inside(app_root / "extensions", item.package_relpath)
+                                                for item in available})
+                payload.update({key: request.get(key) for key in
+                                ("core_build_id", "runtime_id", "components", "package_hashes", "probe_types")})
+            finally:
+                if snapshot.lease is not None:
+                    snapshot.lease.release()
+        else:
+            staging = verify_staging_auth(
+                Path(args.staging_dir), args.staging_nonce,
+                extensions_root_path=app_root / "extensions",
+                transaction_id=request["transaction_id"],
+            )
+            payload = evaluate_staging_probe(request, staging)
         payload["schema"] = PROBE_SCHEMA
         write_result_json(result_path, payload)
         if payload.get("ok"):
             return ManagerExitCode.SUCCESS
         return ManagerExitCode.VERIFY_OR_PROBE
     except ProbeError as exc:
+        if not safe_result or exc.exit_code == ManagerExitCode.BAD_ARGS:
+            return exc.exit_code
         try:
             write_result_json(
                 result_path,
@@ -308,6 +371,8 @@ def child_main(argv: Sequence[str] | None = None) -> int:
             pass
         return exc.exit_code
     except ExtensionError as exc:
+        if not safe_result:
+            return ManagerExitCode.VERIFY_OR_PROBE
         try:
             write_result_json(
                 result_path,
@@ -318,6 +383,8 @@ def child_main(argv: Sequence[str] | None = None) -> int:
         return ManagerExitCode.VERIFY_OR_PROBE
     except Exception as exc:
         # Programming errors stay visible; they are not network failures.
+        if not safe_result:
+            return ManagerExitCode.VERIFY_OR_PROBE
         try:
             write_result_json(
                 result_path,
@@ -365,9 +432,9 @@ def run_authorized_probe(
         "stdout": subprocess.PIPE,
         "stderr": subprocess.PIPE,
     }
-    if os.name != "nt":
-        kwargs["start_new_session"] = True
-    proc = subprocess.Popen(list(command), **kwargs)
+    Path(result_path).unlink(missing_ok=True)
+    with _authorized_child_args(command) as (args, authorization):
+        proc = subprocess.Popen(args, **kwargs, **authorization)
     try:
         proc.communicate(timeout=timeout_seconds)
     except subprocess.TimeoutExpired as exc:
@@ -385,11 +452,17 @@ def run_authorized_probe(
             str(payload.get("reason_code") or ReasonCode.PROBE_FAILED),
             str(payload.get("detail") or "probe failed"),
         )
+    request = parse_request(Path(command[list(command).index(PROBE_REQUEST_FLAG) + 1]).read_bytes())
+    for key in ("core_build_id", "runtime_id", "components", "package_hashes"):
+        if payload.get(key) != request[key]:
+            raise ProbeError(ReasonCode.PROBE_FAILED, f"probe result does not bind {key}")
+    if request.get("mode") != "availability" and not payload.get("native_reads"):
+        raise ProbeError(ReasonCode.PROBE_FAILED, "probe result has no native read evidence")
     return payload
 
 
 def standin_executable() -> list[str]:
-    """Test / W5 stand-in: this module as ``python -m``, not V1.py."""
+    """Explicit source-test entry; executes the same real native protocol."""
 
     return [sys.executable, "-m", "mf4_analyzer.extensions.probe"]
 

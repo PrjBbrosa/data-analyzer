@@ -11,11 +11,13 @@ from pathlib import Path
 import re
 import sys
 import threading
+from functools import partial
 from typing import Any, Callable, Mapping, Sequence
 
 from mf4_analyzer.app_meta import APP_VERSION
 from mf4_analyzer.extensions.contract import (
     OFFICIAL_COMPONENTS,
+    ExtensionError,
     ReasonCode,
     compare_semver,
 )
@@ -269,6 +271,7 @@ class ManagerPresenter:
         *,
         engine: InstallEngine | None = None,
         repository: Any | None = None,
+        repository_config: Path | None = None,
         runtime_loader: Callable[..., Any] = load_runtime,
         app_version: str = APP_VERSION,
         manager_version: str = MANAGER_VERSION,
@@ -278,10 +281,12 @@ class ManagerPresenter:
             self.app_root, manager_version=manager_version
         )
         self.repository = repository
+        self.repository_config = repository_config
         self.runtime_loader = runtime_loader
         self.app_version = app_version
         self.manager_version = manager_version
         self._phase = "idle"
+        self._phase_lock = threading.Lock()
         self._cancel = threading.Event()
         self._last_refresh: Any | None = None
 
@@ -290,16 +295,21 @@ class ManagerPresenter:
         return self._phase
 
     def note_phase(self, phase: str) -> None:
-        self._phase = str(phase)
+        with self._phase_lock:
+            if phase == "commit" and self._cancel.is_set():
+                from .transaction import TransactionCancelled
+                raise TransactionCancelled("cancelled before commit")
+            self._phase = str(phase)
 
     def can_cancel(self) -> bool:
         return self._phase in {"idle", "download", *CANCELABLE_STAGES}
 
     def request_cancel(self) -> CancelDecision:
-        if self._phase in COMMIT_PHASES or not self.can_cancel():
-            return CancelDecision(False, "正在完成安装，无法取消。")
-        self._cancel.set()
-        return CancelDecision(True, "已请求取消。下载尚未提交，现有组件不变。")
+        with self._phase_lock:
+            if self._phase in COMMIT_PHASES or not self.can_cancel():
+                return CancelDecision(False, "正在完成安装，无法取消。")
+            self._cancel.set()
+            return CancelDecision(True, "已请求取消。提交前取消不会改变现有组件。")
 
     def cancel_requested(self) -> bool:
         return self._cancel.is_set()
@@ -320,7 +330,7 @@ class ManagerPresenter:
         return path
 
     def load_local_snapshot(self) -> Any:
-        return self.runtime_loader(self.app_root, acquire_lease=False)
+        return self.runtime_loader(self.app_root, acquire_lease=False, frozen=True)
 
     def header(self, snapshot: Any | None = None) -> HeaderView:
         snapshot = snapshot if snapshot is not None else self.load_local_snapshot()
@@ -355,7 +365,8 @@ class ManagerPresenter:
                     status_line = "无法检查更新，仍显示本地真实状态。"
         return HeaderView(
             app_root=str(self.app_root),
-            app_version=self.app_version,
+            app_version=(snapshot.core.envelope.app_version if getattr(snapshot, "core", None) is not None
+                         else self.app_version),
             manager_version=self.manager_version,
             banner=banner,
             status_line=status_line,
@@ -387,7 +398,8 @@ class ManagerPresenter:
                 revision = package.get("package_revision")
                 version = str(revision) if revision is not None else "—"
                 size = format_download_size(package.get("length"))
-            has_update = status == STATUS_READY and package is not None
+            has_update = (status == STATUS_READY and package is not None
+                          and package.get("sha256") != getattr(availability, "package_sha256", None))
             label, purpose = COMPONENT_COPY.get(name, (name, name))
             rows.append(
                 ComponentRow(
@@ -473,7 +485,7 @@ class ManagerPresenter:
         stage: str | None = None,
     ) -> ErrorView | None:
         if isinstance(result, TransactionResult):
-            if result.outcome in {"installed", "uninstalled", "recovered"}:
+            if result.outcome in {"installed", "uninstalled", "recovered", "idle", "kept_old", "completed_new"}:
                 return None
             if result.outcome == "cancelled":
                 return interpret_failure(
@@ -515,14 +527,13 @@ class ManagerPresenter:
                 log_path=self.log_path_for(),
             )
         self.note_phase("download")
-        self.reset_cancel()
         try:
             dest = Path(
                 repo.download_manager_installer(
                     self.app_root, cancel_event=self._cancel
                 )
             )
-        except BaseException as exc:
+        except Exception as exc:
             self.note_phase("idle")
             return self.result_to_error(exc, stage="download")
         self.note_phase("idle")
@@ -555,18 +566,26 @@ class ManagerPresenter:
         components: Sequence[str] = (),
         hooks: Any | None = None,
     ) -> TransactionResult:
-        self.reset_cancel()
         extra = hooks
         if extra is None:
             from tools.extension_manager.transaction import TransactionHooks
 
-            extra = TransactionHooks(cancel_requested=self.cancel_requested)
+            extra = TransactionHooks(cancel_requested=self.cancel_requested, on_phase=self.note_phase)
         if action == "uninstall":
+            if self.repository is None:
+                raise ExtensionError(ReasonCode.VERIFICATION_FAILED, "请先检查更新以验证管理器操作资格。")
+            extra.requalify = self.repository.requalify_after_lock_wait
             self.note_phase("prepared")
             result = self.engine.uninstall(components, hooks=extra)
         elif action == "repair":
             self.note_phase("prepared")
             result = self.engine.recover()
+            if components and result.outcome in {"idle", "kept_old", "completed_new", "recovered"}:
+                local = self.load_local_snapshot()
+                if any(local.availability(name).status != STATUS_READY for name in components):
+                    if self.repository is None:
+                        raise ExtensionError(ReasonCode.VERIFICATION_FAILED, "恢复已完成；修复损坏组件前请检查更新或选择官方离线集合。")
+                    result = self.engine.install_from_repository(self.repository, components, hooks=extra)
         elif action == "install_from_repository":
             self.note_phase("download")
             result = self.engine.install_from_repository(
@@ -588,21 +607,32 @@ class ManagerPresenter:
         return repo.refresh()
 
     def _try_make_repository(self) -> Any | None:
-        # Production freeze supplies a bound repository. Tests inject fakes.
-        # Never import TUF here so the app venv can load this presenter.
-        return None
+        from .config import create_repository
 
-    def run_local_install(self, path: str) -> TransactionResult | ErrorView:
-        loader = getattr(self.repository, "load_offline_bundle", None)
-        if not callable(loader):
-            return interpret_failure(
-                stage="prepared",
-                reason_code=ReasonCode.VERIFICATION_FAILED,
-                detail="从本地安装需要附带受信元数据的官方离线集合，不能导入任意 ZIP 或 pip 包。",
-                log_path=self.log_path_for(),
-            )
-        packages = loader(path)
-        return self.run_engine("install", packages=packages)
+        return create_repository(self.app_root, manager_version=self.manager_version,
+                                 cancel_event=self._cancel, config_path=self.repository_config)
+
+    def run_local_install(self, path: str, *, components: Sequence[str] = (),
+                          hooks=None) -> TransactionResult:
+        from .config import create_repository
+        from .transaction import TransactionHooks
+
+        if not Path(path).is_dir():
+            return interpret_failure(stage="prepared", reason_code=ReasonCode.VERIFICATION_FAILED,
+                                     detail="请选择包含受信元数据的官方离线发行集合目录。",
+                                     log_path=self.log_path_for())
+        self.note_phase("download")
+        repository = create_repository(
+            self.app_root, manager_version=self.manager_version,
+            cancel_event=self._cancel, config_path=self.repository_config,
+            offline_bundle=path,
+        )
+        refresh = repository.refresh()
+        if not refresh.ok:
+            raise ExtensionError(refresh.reason_code or ReasonCode.VERIFICATION_FAILED,
+                                 "离线发行集合验证失败")
+        extra = hooks or TransactionHooks(cancel_requested=self.cancel_requested, on_phase=self.note_phase)
+        return self.engine.install_from_repository(repository, components, hooks=extra)
 
 
 def _status_latest(status: Any) -> str:
@@ -633,6 +663,7 @@ def run_app(
     *,
     manager_version: str | None = None,
     presenter: ManagerPresenter | None = None,
+    repository_config: Path | None = None,
 ) -> int:
     """Create the Tk window. Foreground DPI / CJK on this host is UNVERIFIED."""
 
@@ -641,7 +672,8 @@ def run_app(
 
     root_dir = default_app_root(app_root)
     view = presenter or ManagerPresenter(
-        root_dir, manager_version=manager_version or MANAGER_VERSION
+        root_dir, manager_version=manager_version or MANAGER_VERSION,
+        repository_config=repository_config,
     )
 
     class ManagerWindow(tk.Tk):
@@ -651,6 +683,10 @@ def run_app(
             self.geometry("760x480")
             self._rows: dict[str, ComponentRow] = {}
             self._busy = False
+            self._close_pending = False
+            from .worker import BackgroundOperation
+            self._worker = BackgroundOperation()
+            self.protocol("WM_DELETE_WINDOW", self._on_close)
             self._build()
             self.reload()
 
@@ -698,13 +734,52 @@ def run_app(
             self.status = tk.Label(self, justify="left", anchor="w")
             self.status.pack(fill="x", **pad)
 
-        def reload(self) -> None:
-            try:
-                snapshot = view.load_local_snapshot()
-            except Exception as exc:
-                error = view.result_to_error(exc, stage="load")
-                self._show_error(error)
+        def _start(self, operation, completed) -> None:
+            if self._busy:
                 return
+            self._busy = True
+            self._completed = completed
+            view.reset_cancel()
+            view.note_phase("prepared")
+            for button in self._buttons.values():
+                button.configure(state="disabled")
+            self._worker.start(operation)
+            self.after(50, self._poll)
+
+        def _poll(self) -> None:
+            event = self._worker.poll()
+            if event is None:
+                self.cancel_btn.configure(state="normal" if view.can_cancel() else "disabled")
+                self.after(50, self._poll)
+                return
+            self._busy = False
+            for button in self._buttons.values():
+                button.configure(state="normal")
+            self.cancel_btn.configure(state="disabled")
+            if self._close_pending:
+                self.destroy()
+                return
+            kind, value = event
+            phase = view.phase
+            view.note_phase("idle")
+            if kind == "error":
+                self._show_error(view.result_to_error(value, stage=phase))
+                return
+            self._completed(value)
+
+        def _on_close(self) -> None:
+            if not self._busy:
+                self.destroy()
+                return
+            decision = view.request_cancel()
+            self.status.configure(text=decision.message)
+            if decision.accepted:
+                self._close_pending = True
+
+        def reload(self) -> None:
+            self._start(view.load_local_snapshot, self._apply_snapshot)
+
+        def _apply_snapshot(self, snapshot) -> None:
             header = view.header(snapshot)
             self.header.configure(
                 text=(
@@ -741,7 +816,9 @@ def run_app(
             return choice[0] if choice else None
 
         def _on_check(self) -> None:
-            result = view.check_updates()
+            self._start(view.check_updates, self._checked)
+
+        def _checked(self, result) -> None:
             parts = [result.manager_message, *result.component_messages]
             if result.check_failed:
                 parts.insert(0, result.check_failed)
@@ -761,7 +838,7 @@ def run_app(
             self._run_write("repair")
 
         def _on_install_local(self) -> None:
-            path = filedialog.askopenfilename(title="选择本地扩展包")
+            path = filedialog.askdirectory(title="选择官方离线发行集合目录")
             if not path:
                 return
             messagebox.showinfo(
@@ -771,7 +848,9 @@ def run_app(
             self._run_write("install_local", detail=path)
 
         def _on_manager_update(self) -> None:
-            result = view.download_manager_update()
+            self._start(view.download_manager_update, self._manager_updated)
+
+        def _manager_updated(self, result) -> None:
             if isinstance(result, ErrorView):
                 self._show_error(result)
                 return
@@ -789,7 +868,7 @@ def run_app(
                 messagebox.showinfo("扩展管理", "请先选择一个组件。")
                 return
             row = self._rows.get(component or "")
-            if row is not None and action not in row.actions and action != "repair":
+            if row is not None and action not in row.actions and action not in {"repair", "install_local"}:
                 messagebox.showinfo(
                     "扩展管理",
                     "当前不能执行该操作。请先检查更新，或按顶部说明处理管理器版本。",
@@ -807,21 +886,17 @@ def run_app(
             if not messagebox.askokcancel("确认计划", text):
                 return
             self.status.configure(text="正在完成…请勿关闭。")
-            try:
-                if action == "install_local":
-                    result = view.run_local_install(detail)
-                elif action in {"install", "update"}:
-                    result = view.run_engine(
-                        "install_from_repository",
-                        components=(component,) if component else (),
-                    )
-                elif action == "uninstall":
-                    result = view.run_engine("uninstall", components=(component,))
-                else:
-                    result = view.run_engine("repair")
-            except Exception as exc:
-                self._show_error(view.result_to_error(exc, stage=view.phase))
-                return
+            if action == "install_local":
+                operation = partial(view.run_local_install, detail, components=(component,))
+            elif action in {"install", "update"}:
+                operation = partial(view.run_engine, "install_from_repository", components=(component,))
+            elif action == "uninstall":
+                operation = partial(view.run_engine, "uninstall", components=(component,))
+            else:
+                operation = partial(view.run_engine, "repair", components=(component,) if component else ())
+            self._start(operation, self._write_completed)
+
+        def _write_completed(self, result) -> None:
             if isinstance(result, ErrorView):
                 self._show_error(result)
                 self.reload()

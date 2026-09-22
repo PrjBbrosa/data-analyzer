@@ -27,7 +27,7 @@ param(
 #   is a leak, not something to prune into a false success.
 # - Emits core.json / core-files.json, content-addressed component ZIPs,
 #   licenses, dependency lists, native-identity audit, and a tested-manager
-#   copy step (placeholder when no Windows installer.exe is supplied).
+#   copy step (refuse publication without a self-tested Windows installer.exe).
 # - Importer gates are split: base expected-missing vs installed-available.
 #   A permanent skip is not recorded as success. Frozen WAV/MP4 reads are
 #   not claimed without a frozen child.
@@ -163,7 +163,7 @@ function Get-PostCheckStatus {
 }
 
 function Test-AllPostChecksPassed {
-    foreach ($name in @("offscreen", "windows", "importer-base-missing")) {
+    foreach ($name in @("offscreen", "windows", "importer-base-missing", "extension-combinations")) {
         if ((Get-PostCheckStatus $name) -ne "passed") { return $false }
     }
     return $true
@@ -182,7 +182,7 @@ function Write-PostCheckSummary {
     Write-Host "importer-base-missing: $impBase"
     Write-Host "importer-installed-contract: $impInstalled"
     Write-Host "importer-fallback-contract: $impFallback"
-    Write-Host "frozen WAV/MP4/MAT: not_run (not claimed as success without a frozen child read)"
+    Write-Host "frozen combinations: $(Get-PostCheckStatus 'extension-combinations')"
 }
 
 function Invoke-IndependentPostCheck {
@@ -297,6 +297,9 @@ $BatchRenderSmokeTool = Join-Path $PSScriptRoot "verify_frozen_batch_render.py"
 $ExtensionBuildTool = Join-Path $PSScriptRoot "build_windows_extensions.py"
 $ExtensionVerifyTool = Join-Path $PSScriptRoot "verify_extension_installation.py"
 $ExtensionInstallerScript = Join-Path $PSScriptRoot "build_windows_extension_installer.ps1"
+if (-not $ManagerSource -or -not (Test-Path -LiteralPath $ManagerSource -PathType Leaf)) {
+    throw "ManagerSource must point to a tested installer.exe; modular release refuses a placeholder manager."
+}
 $VenvDir = Join-Path $RepoRoot ".venv-build-win"
 $VenvPython = Join-Path $VenvDir "Scripts\python.exe"
 $DistDir = Join-Path $RepoRoot "dist"
@@ -485,6 +488,7 @@ $PyInstallerArgs += @(
     "--add-data", $AddDataBranding,
     "--add-data", $AddDataWwt,
     "--add-data", $AddDataHelp,
+    "--add-data", "$(Join-Path $RepoRoot 'assets\extension-probe');assets/extension-probe",
     # Belt-and-suspenders: keep the acquisition packages and their native-only
     # deps out even if some indirect reference appears. The Analyzer never needs
     # them at runtime (cockpit is lazy-imported and guarded).
@@ -576,11 +580,7 @@ $ExtensionEmitArgs = @(
     "--site-packages", $SitePackages,
     "--output-dir", $ExtensionOutputDir
 )
-if ($ManagerSource) {
-    $ExtensionEmitArgs += @("--manager-source", $ManagerSource)
-} else {
-    Write-Host "Manager copy: verified Windows installer.exe not supplied; writing placeholder (no fabricated hash). Independent entry: $ExtensionInstallerScript"
-}
+$ExtensionEmitArgs += @("--manager-source", $ManagerSource)
 Invoke-LoggedNative -Executable $VenvPython -Arguments $ExtensionEmitArgs
 
 $script:ExeGenerated = $true
@@ -598,7 +598,7 @@ if ($PackageJsonCandidates.Count -ge 1) { $FirstPackageJson = [string]$PackageJs
 $BaseMissingEvidence = Join-Path $BuildEvidenceDir "importer-base-missing.json"
 $InstalledContractEvidence = Join-Path $BuildEvidenceDir "importer-installed-contract.json"
 $FallbackEvidence = Join-Path $BuildEvidenceDir "importer-fallback-contract.json"
-Invoke-IndependentPostCheck -Name "importer-base-missing" -Executable $VenvPython -Arguments @($ExtensionVerifyTool, "--mode", "combination-contract", "--core-json", $CoreJson, "--expect-missing", "--app-root", $OutputDir, "--evidence-json", $BaseMissingEvidence) -TimeoutSeconds 60
+Invoke-IndependentPostCheck -Name "importer-base-missing" -Executable $VenvPython -Arguments @($ExtensionVerifyTool, "--mode", "base-expected-missing", "--exe", $ExePath, "--core-json", $CoreJson, "--expect-missing", "--app-root", $OutputDir, "--evidence-json", $BaseMissingEvidence) -TimeoutSeconds 60
 if ($FirstPackageJson) {
     Invoke-IndependentPostCheck -Name "importer-installed-contract" -Executable $VenvPython -Arguments @($ExtensionVerifyTool, "--mode", "combination-contract", "--core-json", $CoreJson, "--package-json", $FirstPackageJson, "--app-root", $OutputDir, "--evidence-json", $InstalledContractEvidence) -TimeoutSeconds 60
 } else {
@@ -610,7 +610,8 @@ if ($FirstPackageJson) {
     Write-Host "importer-fallback-contract: not_run (no remaining package; not claimed as success)"
 }
 Write-Host "Not invoking verify_lite_importer_runtime.py: that gate requires frozen av/MAT success and is the bundled Lite path."
-Write-Host "frozen importer-base-missing / installed-available child reads: not_run (A1-A15 / four frozen combinations UNKNOWN)"
+$DeliveryVerifyTool = Join-Path $PSScriptRoot "verify_extension_delivery.py"
+Invoke-IndependentPostCheck -Name "extension-combinations" -Executable $VenvPython -Arguments @($DeliveryVerifyTool, "--app-root", $OutputDir, "--delivery-audit", (Join-Path $ExtensionOutputDir "delivery-audit.json"), "--evidence-json", (Join-Path $BuildEvidenceDir "extension-combinations.json")) -TimeoutSeconds 600
 Write-PostCheckSummary
 if (-not (Test-AllPostChecksPassed)) {
     throw "Post-build checks failed; EXE generated; see evidence under $BuildEvidenceDir"

@@ -7,6 +7,8 @@ it.  Missing a frozen executable is not a media-import pass.
 from __future__ import annotations
 
 import argparse
+import json
+import tempfile
 from pathlib import Path
 import sys
 from typing import Any, Mapping
@@ -66,11 +68,12 @@ def planned_protected_files(
         protected.append(canonical_path(exe))
     if app_root is not None:
         root = canonical_path(app_root)
+        protected.extend(root.glob("*.exe"))
         protected.extend(
             (
                 root / "core.json",
                 root / "core-files.json",
-                root / "active.json",
+                root / "extensions" / "active.json",
                 root / "installer.exe",
             )
         )
@@ -196,7 +199,8 @@ def is_frozen_executable_claim(exe: Path) -> bool:
         return False
     # PE MZ header is required before any media-success claim.
     try:
-        header = exe.read_bytes()[:2]
+        with exe.open("rb") as stream:
+            header = stream.read(2)
     except OSError:
         return False
     return header == b"MZ"
@@ -261,43 +265,59 @@ def verify(
         )
         return (0 if payload["ok"] else 10), payload
 
-    if mode == "base-expected-missing":
-        # Frozen EXE exists (checked above).  A later Windows gate can spawn
-        # the child; this module still refuses to invent a successful read.
-        payload = {
-            "ok": False,
-            "mode": mode,
-            "reason_code": "FROZEN_BASE_MISSING_CHECK_NOT_RUN",
-            "frozen_media_read": False,
-            "wav_ok": False,
-            "mp4_ok": False,
-            "mat_ok": False,
-            "note": (
-                "frozen EXE is present but the live importer child was not "
-                "executed in this source-level helper; do not treat skip as success"
-            ),
-            "exe": str(canonical_path(exe)),
-        }
-        return 14, payload
-
-    if mode == "installed-available":
-        payload = {
-            "ok": False,
-            "mode": mode,
-            "reason_code": "FROZEN_INSTALLED_CHECK_NOT_RUN",
-            "frozen_media_read": False,
-            "wav_ok": False,
-            "mp4_ok": False,
-            "mat_ok": False,
-            "note": (
-                "installed-available requires a frozen child that actually "
-                "reads WAV/MP4/MAT from the extension tree; this host did not"
-            ),
-            "exe": str(canonical_path(exe)),
-        }
-        return 14, payload
+    if mode in {"base-expected-missing", "installed-available"}:
+        return verify_frozen(mode=mode, exe=exe, app_root=app_root or exe.parent)
 
     return 2, {"ok": False, "error": f"unknown mode {mode!r}", "mode": mode}
+
+
+def verify_frozen(*, mode: str, exe: Path, app_root: Path):
+    from mf4_analyzer.extensions.runtime import load_runtime, STATUS_READY, STATUS_NOT_INSTALLED
+    from mf4_analyzer.extensions.health import probe_installed
+    from mf4_analyzer.extensions.probe import (build_probe_request, run_authorized_probe,
+        PROBE_REQUEST_FLAG, PROBE_RESULT_FLAG, ProbeError, ProbeTimeout)
+    from mf4_analyzer.extensions.contract import ExtensionError
+
+    snapshot = None
+    payload = {"ok": False, "mode": mode, "frozen_media_read": False,
+               "wav_ok": False, "mp4_ok": False, "mat_ok": False}
+    try:
+        snapshot = load_runtime(app_root, frozen=True, use_extensions=True)
+        if canonical_path(exe) != canonical_path(app_root / snapshot.core.exe_relpath):
+            raise ExtensionError(ReasonCode.CORE_INCONSISTENT, "EXE does not match target core")
+        if mode == "installed-available":
+            names = sorted(name for name, item in snapshot.components.items() if item.status == STATUS_READY)
+            if not names:
+                raise ExtensionError(ReasonCode.COMPONENT_MISSING, "no ready components to verify")
+            result = probe_installed(snapshot, names, executable=[str(exe)])
+        else:
+            names = sorted(snapshot.components)
+            request = build_probe_request(core_build_id=snapshot.core.core_build_id,
+                runtime_id=snapshot.core.runtime_id, transaction_id="availability", components=names,
+                package_hashes=[snapshot.availability(name).package_sha256 for name in names],
+                staging_relpath="", staging_nonce="")
+            request.update(mode="availability", app_root=str(app_root.resolve()))
+            with tempfile.TemporaryDirectory(prefix="tracelab-verify-") as directory:
+                request_path, result_path = Path(directory)/"request.json", Path(directory)/"result.json"
+                write_json(request_path, request)
+                result = run_authorized_probe([str(exe), PROBE_REQUEST_FLAG, str(request_path),
+                    PROBE_RESULT_FLAG, str(result_path)], timeout_seconds=45,
+                    result_path=result_path, app_root=app_root)
+            if any(result.get("availability", {}).get(name, {}).get("status") != STATUS_NOT_INSTALLED for name in names):
+                raise ExtensionError(ReasonCode.VERIFICATION_FAILED, "base has unexpected component state")
+        if result.get("frozen") is not True:
+            raise ExtensionError(ReasonCode.PROBE_FAILED, "child is not frozen")
+        files = {entry["name"] for entry in result.get("files", [])}
+        payload.update(ok=True, probe=result, wav_ok="sample.wav" in files, mp4_ok="sample.mp4" in files,
+                       mat_ok={"legacy.mat", "sample-v73.mat"}.issubset(files),
+                       frozen_media_read={"sample.wav", "sample.mp4"}.issubset(files))
+        return 0, payload
+    except (ExtensionError, ProbeError, ProbeTimeout, OSError, ValueError) as exc:
+        payload.update(reason_code=getattr(exc, "reason_code", ReasonCode.PROBE_FAILED), error=str(exc))
+        return 14, payload
+    finally:
+        if snapshot is not None and snapshot.lease is not None:
+            snapshot.lease.release()
 
 
 def main(argv: list[str] | None = None) -> int:
