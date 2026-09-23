@@ -16,6 +16,8 @@ from mf4_analyzer.app_meta import APP_CREDIT, APP_NAME, APP_VERSION
 from mf4_analyzer.ui.startup_splash import (
     CARD_HEIGHT,
     CARD_WIDTH,
+    DISPLAY_SCALE,
+    SHADOW_PAD,
     STAGE_LOADING_COMPONENTS,
     STAGE_PREPARING,
     STAGE_PREPARING_WORKSPACE,
@@ -227,6 +229,23 @@ def test_close_stops_timer_and_blocks_callbacks(splash_host, qtbot):
     tip_before = splash.tip_index
     splash._on_tick()
     assert splash.tip_index == tip_before
+
+
+def test_panel_draws_larger_than_the_html_card_without_changing_ratio(splash_host):
+    splash, _host = splash_host
+    card = splash.card_rect_logical()
+    assert abs(card.width() / card.height() - CARD_WIDTH / CARD_HEIGHT) < 0.02
+    screen = splash._target_screen()
+    assert screen is not None
+    avail = screen.availableGeometry()
+    natural_w = (CARD_WIDTH + 2 * SHADOW_PAD) * DISPLAY_SCALE
+    natural_h = (CARD_HEIGHT + 2 * SHADOW_PAD) * DISPLAY_SCALE
+    if natural_w <= avail.width() - 24 and natural_h <= avail.height() - 24:
+        assert abs(splash._scale - DISPLAY_SCALE) < 0.02
+    else:
+        assert splash._scale < DISPLAY_SCALE
+    assert splash.width() <= avail.width()
+    assert splash.height() <= avail.height()
 
 
 def test_card_logical_width_and_frameless(splash_host):

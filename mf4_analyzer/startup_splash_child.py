@@ -377,6 +377,20 @@ def _install_paint_watcher(splash, session: _SplashSession):
     return watcher
 
 
+def create_splash_application():
+    """Create this process's ``QApplication`` after high-DPI setup.
+
+    The splash child is a separate process. Attributes set later in the parent
+    do not resize this window.
+    """
+
+    from mf4_analyzer.qt_app_support import configure_high_dpi
+    from PyQt5.QtWidgets import QApplication
+
+    configure_high_dpi()
+    return QApplication.instance() or QApplication([])
+
+
 def child_main(argv: list[str] | None = None) -> int:
     """Entry for ``--startup-splash-child``. Returns a process exit code."""
 
@@ -417,12 +431,12 @@ def child_main(argv: list[str] | None = None) -> int:
 
     # Qt / view imports stay below the connect gate so the import-closure probe
     # can prove the child entry stays light until a validated session exists.
+    # High-DPI attributes must be set before this process creates QApplication;
+    # the parent configures them only for its own later QApplication.
+    app = create_splash_application()
     from PyQt5.QtCore import QTimer
-    from PyQt5.QtWidgets import QApplication
 
     from mf4_analyzer.ui.startup_splash import StartupSplash
-
-    app = QApplication.instance() or QApplication([])
 
     def schedule(callback: Callable[[], None]) -> None:
         QTimer.singleShot(0, callback)

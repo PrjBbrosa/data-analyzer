@@ -20,6 +20,7 @@ from PyQt5.QtCore import (
 )
 from PyQt5.QtGui import (
     QColor,
+    QCursor,
     QFont,
     QFontMetrics,
     QGuiApplication,
@@ -92,6 +93,10 @@ _SPECTRUM_STOPS = (
 
 CARD_WIDTH = 640
 CARD_HEIGHT = 470
+# The HTML demo card is 640 CSS px. On a Windows desktop that size reads as a
+# small dialog, so the product panel uses the same layout at 1.5× and only
+# shrinks when the work area cannot hold it.
+DISPLAY_SCALE = 1.5
 CORNER_RADIUS = 13.0
 CONTENT_PAD_X = 32.0
 SHADOW_PAD = 18.0
@@ -250,7 +255,7 @@ class StartupSplash(QWidget):
         self._breathe_phase = 0.0
         self._rail_phase = 0.0
         self._spinner_phase = 0.0
-        self._scale = 1.0
+        self._scale = DISPLAY_SCALE
         self._path_build_count = 0
         self._cached_paths: list[QPainterPath] = []
         self._cached_path_key: Optional[Tuple[float, float, float, float, float]] = None
@@ -314,6 +319,8 @@ class StartupSplash(QWidget):
         if self._closed:
             return
         # Readable on first show — no fade-in wait.
+        self._apply_preferred_size()
+        self._center_on_screen()
         if not self._timer.isActive() and not self._reduced_motion:
             self._last_tick_ms = float(self._clock.elapsed())
             self._timer.start()
@@ -378,23 +385,40 @@ class StartupSplash(QWidget):
 
     # --- Geometry -----------------------------------------------------------
 
+    def _target_screen(self):
+        if QGuiApplication.instance() is None:
+            return None
+        screen = None
+        if hasattr(QGuiApplication, "screenAt"):
+            screen = QGuiApplication.screenAt(QCursor.pos())
+        if screen is None:
+            screen = QGuiApplication.primaryScreen()
+        return screen
+
     def _apply_preferred_size(self) -> None:
-        w = int(round(CARD_WIDTH + 2 * SHADOW_PAD))
-        h = int(round(CARD_HEIGHT + 2 * SHADOW_PAD))
-        self.setFixedSize(w, h)
-        self._scale = 1.0
-        screen = QGuiApplication.primaryScreen()
+        self._scale = DISPLAY_SCALE
+        screen = self._target_screen()
+        if screen is not None:
+            avail = screen.availableGeometry()
+            # Leave a little breathing room so shadow corners stay on-screen.
+            max_w = max(160, avail.width() - 24)
+            max_h = max(160, avail.height() - 24)
+            natural_w = (CARD_WIDTH + 2 * SHADOW_PAD) * DISPLAY_SCALE
+            natural_h = (CARD_HEIGHT + 2 * SHADOW_PAD) * DISPLAY_SCALE
+            if natural_w > max_w or natural_h > max_h:
+                self._scale = DISPLAY_SCALE * min(max_w / natural_w, max_h / natural_h)
+        w = int(round((CARD_WIDTH + 2 * SHADOW_PAD) * self._scale))
+        h = int(round((CARD_HEIGHT + 2 * SHADOW_PAD) * self._scale))
+        self.setFixedSize(max(1, w), max(1, h))
+
+    def _center_on_screen(self) -> None:
+        screen = self._target_screen()
         if screen is None:
             return
         avail = screen.availableGeometry()
-        # Leave a little breathing room so shadow corners stay on-screen.
-        max_w = max(160, avail.width() - 24)
-        max_h = max(160, avail.height() - 24)
-        if w <= max_w and h <= max_h:
-            return
-        scale = min(max_w / w, max_h / h)
-        self._scale = scale
-        self.setFixedSize(int(round(w * scale)), int(round(h * scale)))
+        frame = self.frameGeometry()
+        frame.moveCenter(avail.center())
+        self.move(frame.topLeft())
 
     def _s(self, value: float) -> float:
         return value * self._scale

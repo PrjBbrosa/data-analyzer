@@ -24,10 +24,18 @@ from mf4_analyzer.startup_feedback import (
 from mf4_analyzer.startup_splash_child import (
     _SplashSession,
     child_main,
+    create_splash_application,
     reject_abbreviated_splash_flags,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_splash_application_configures_high_dpi_before_qapplication():
+    import inspect
+
+    source = inspect.getsource(create_splash_application)
+    assert source.index("configure_high_dpi()") < source.index("QApplication(")
 
 
 class _FakeSplash:
