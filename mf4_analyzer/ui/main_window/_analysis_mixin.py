@@ -21,6 +21,14 @@ from PyQt5.QtCore import QTimer
 
 from .ultraview_coordinator import notify_ultraview_plot
 from . import view_activation
+from ._state_holders import (
+    HeatmapRevealBook,
+    finish_heatmap_render_inputs,
+    heatmap_level_writeback_blocks_retain,
+    heatmap_render_signature,
+    optional_float_pair,
+    widget_raster_metrics,
+)
 
 from ...ui_kit.message_box_buttons import fit_message_box_buttons_to_text
 
@@ -2492,6 +2500,155 @@ class AnalysisMixin:
         active = mgr.get(mgr.active)
         return str(ctx.get("view_id") or "") == str(active.view_id)
 
+    def _ensure_heatmap_reveal(self):
+        """The one construction site for order / FFT-vs-Time reveal signatures.
+
+        ``HeatmapRevealBook`` starts with epoch 0 and an empty signature map.
+        ``getattr`` only covers a window whose holder has not been built yet;
+        the signature slots themselves are initialized inside the holder.
+        """
+        book = getattr(self, "_heatmap_reveal", None)
+        if book is None:
+            book = HeatmapRevealBook()
+            self._heatmap_reveal = book
+        return book
+
+    def _heatmap_tick_counts(self):
+        xt, yt = self.inspector.top.tick_density()
+        return int(xt), int(yt)
+
+    def _heatmap_viewport_snapshot(self, section, canvas):
+        """Pane viewport the heatmap restore path will apply.
+
+        A canvas that is not a live pane (render-test doubles) contributes
+        the untouched auto/None viewport so two paints of the same double
+        still compare equal.
+        """
+        default = ("auto", None, "auto", None)
+        try:
+            page = self._analysis_page(section)
+            managers = getattr(self, "analysis_managers", None) or {}
+            mgr = managers.get(section)
+            if page is None or mgr is None or not mgr.views or canvas is None:
+                return default
+            state = mgr.get(mgr.active)
+            count = min(page.pane_count(), len(state.panes))
+            for pane_idx in range(count):
+                if page.pane_canvas(pane_idx) is not canvas:
+                    continue
+                pane = state.panes[pane_idx]
+                origin = pane.viewport_origin or {}
+                return (
+                    str(origin.get("x", "auto")),
+                    optional_float_pair(getattr(pane, "xlim", None)),
+                    str(origin.get("y", "auto")),
+                    optional_float_pair(getattr(pane, "ylim", None)),
+                )
+        except (AttributeError, IndexError, TypeError, RuntimeError):
+            return default
+        return default
+
+    def _canvas_holds_heatmap(self, canvas) -> bool:
+        has = getattr(canvas, "has_result", None)
+        if not callable(has):
+            return False
+        try:
+            return bool(has())
+        except RuntimeError:
+            return False
+
+    def _clear_heatmap_picture_token(self, canvas) -> None:
+        try:
+            canvas._tracelab_heatmap_picture = None
+        except (AttributeError, TypeError):
+            pass
+
+    def _commit_heatmap_reveal(self, section, canvas, inputs, result) -> None:
+        """Remember the picture this paint left, when a later entry can reuse it.
+
+        A paint that rewrites the Inspector Z spins is not remembered: the
+        next entry applies the saved View params first, and those spins would
+        no longer describe the picture.
+        """
+        book = self._ensure_heatmap_reveal()
+        if heatmap_level_writeback_blocks_retain(inputs):
+            book.forget_canvas(canvas)
+            self._clear_heatmap_picture_token(canvas)
+            return
+        finished = finish_heatmap_render_inputs(inputs, canvas)
+        x_origin, x_lim, y_origin, y_lim = self._heatmap_viewport_snapshot(
+            section, canvas,
+        )
+        width, height, dpr = widget_raster_metrics(canvas)
+        finished = replace(
+            finished,
+            x_origin=x_origin,
+            x_lim=x_lim,
+            y_origin=y_origin,
+            y_lim=y_lim,
+            canvas_width=width,
+            canvas_height=height,
+            canvas_dpr=dpr,
+        )
+        if not self._canvas_holds_heatmap(canvas):
+            book.forget_canvas(canvas)
+            self._clear_heatmap_picture_token(canvas)
+            return
+        identity = book.result_identity(result)
+        book.remember(section, canvas, heatmap_render_signature(finished, identity))
+        try:
+            canvas._tracelab_heatmap_picture = (str(section), identity)
+        except (AttributeError, TypeError):
+            book.forget_canvas(canvas)
+            return
+        self._watch_heatmap_canvas(section, canvas)
+
+    def _watch_heatmap_canvas(self, section, canvas) -> None:
+        if getattr(canvas, "_heatmap_reveal_destroy_wired", False):
+            return
+        destroyed = getattr(canvas, "destroyed", None)
+        connect = getattr(destroyed, "connect", None)
+        if not callable(connect):
+            return
+        connect(partial(
+            self._on_heatmap_canvas_destroyed, str(section), id(canvas),
+        ))
+        canvas._heatmap_reveal_destroy_wired = True
+
+    def _on_heatmap_canvas_destroyed(self, section, canvas_id, *_args) -> None:
+        book = getattr(self, "_heatmap_reveal", None)
+        if book is not None:
+            book.forget_id(section, canvas_id)
+
+    def _heatmap_picture_is_current(self, section, page, canvas, result, source) -> bool:
+        """True when this single pane already shows ``result`` for the current inputs.
+
+        Split panes are excluded: level lock and linked viewboxes write pixels
+        outside this input object. A pending Z-spin writeback is excluded too.
+        """
+        if page is None or page.pane_count() != 1:
+            return False
+        try:
+            if section == "order":
+                inputs = self._current_order_heatmap_inputs(canvas, result, source)
+            elif section == "fft_time":
+                params = self.inspector.fft_time_ctx.get_params()
+                inputs = self._current_fft_time_heatmap_inputs(
+                    canvas, result, params, source,
+                )
+            else:
+                return False
+        except (AttributeError, TypeError, ValueError, IndexError):
+            # A result the painter cannot snapshot is not a reason to skip.
+            # The existing render path still runs, including test doubles.
+            return False
+        if heatmap_level_writeback_blocks_retain(inputs):
+            return False
+        book = self._ensure_heatmap_reveal()
+        identity = book.result_identity(result)
+        signature = heatmap_render_signature(inputs, identity)
+        return book.keeps(section, canvas, signature, identity)
+
     def _store_analysis_result(self, section, view_id, pane_idx, key, result):
         """Single write funnel: cache put always, pin append only when
         ``view_id`` names a real View (spec §4.1/§4.1 footnote).
@@ -2505,6 +2662,10 @@ class AnalysisMixin:
         pin, and log so a future dispatch path that forgets to carry
         view_id is not a silent permanent-pin leak.
         """
+        if section in ("order", "fft_time"):
+            book = self._ensure_heatmap_reveal()
+            book.bump_result(result)
+            book.forget_section(section)
         self.analysis_caches[section].put(key, result)
         if view_id is None:
             logger.warning(
@@ -2527,6 +2688,10 @@ class AnalysisMixin:
 
     def _clear_analysis_section_pins(self, section):
         self._analysis_pins.clear_section(section)
+        if section in ("order", "fft_time"):
+            book = getattr(self, "_heatmap_reveal", None)
+            if book is not None:
+                book.forget_section(section)
 
     def _render_analysis_view_from_cache(self, section, state):
         """Render each pane from cached results; panes whose sources are not all
@@ -2574,6 +2739,8 @@ class AnalysisMixin:
         page = self._analysis_page(section)
         any_missing = False
         enumerated_panes = set()
+        heatmap_panes = 0
+        retained_panes = 0
         for pane_idx in range(page.pane_count()):
             if pane_idx >= len(state.panes):
                 break
@@ -2637,8 +2804,18 @@ class AnalysisMixin:
                     self._rebind_pane_overlay(canvas, pane)
                     self._show_analysis_empty_hint(canvas)
                 else:
-                    self._render_cached_heatmap(
-                        section, canvas, result, source=(fid, ch))
+                    heatmap_panes += 1
+                    source = (fid, ch)
+                    if self._heatmap_picture_is_current(
+                        section, page, canvas, result, source,
+                    ):
+                        retained_panes += 1
+                        # The image stays. The saved viewport can still move
+                        # the existing picture; that is not a cache replot.
+                        self._restore_analysis_canvas_viewport(section, canvas)
+                    else:
+                        self._render_cached_heatmap(
+                            section, canvas, result, source=source)
         # Panes not visited this render (e.g. split cleared) drop their pins.
         for pane_idx in range(len(state.panes)):
             if pane_idx not in enumerated_panes:
@@ -2646,7 +2823,8 @@ class AnalysisMixin:
                     section, state.view_id, pane_idx, ())
         if any_missing:
             self.statusBar.showMessage("参数/源已就绪，点击计算")
-        notify_ultraview_plot(self, section, "analysis-restore-plot")
+        if heatmap_panes == 0 or retained_panes != heatmap_panes:
+            notify_ultraview_plot(self, section, "analysis-restore-plot")
         self._sync_section_effective_facts(section, state)
         return True
 
@@ -2659,6 +2837,10 @@ class AnalysisMixin:
         canvas.show_empty_hint("点击『计算』生成")
 
     def _clear_analysis_canvas(self, canvas):
+        book = getattr(self, "_heatmap_reveal", None)
+        if book is not None:
+            book.forget_canvas(canvas)
+        self._clear_heatmap_picture_token(canvas)
         if hasattr(canvas, 'full_reset'):
             try:
                 canvas.full_reset()

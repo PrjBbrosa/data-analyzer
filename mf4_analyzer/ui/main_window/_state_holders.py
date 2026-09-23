@@ -15,7 +15,7 @@ time-domain plotting, which spec D-E3 puts out of scope for this package.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import astuple, dataclass, field, replace
 from typing import Any
 
 from ..time_xaxis import EXACT_SOURCE, CustomXAxisSpec
@@ -248,3 +248,282 @@ class ProjectRestoreHealth:
             or self.dropped_time_refs
             or self.dropped_analysis_refs
         )
+
+
+def optional_float(value) -> float | None:
+    """Finite float, or ``None`` when the value cannot be one.
+
+    NaN and infinities are ``None`` so a signature compares equal to itself.
+    """
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number != number or number in (float("inf"), float("-inf")):
+        return None
+    return number
+
+
+def optional_float_pair(value) -> tuple[float, float] | None:
+    if value is None:
+        return None
+    try:
+        lo, hi = value
+    except (TypeError, ValueError):
+        return None
+    lo_f = optional_float(lo)
+    hi_f = optional_float(hi)
+    if lo_f is None or hi_f is None:
+        return None
+    return (lo_f, hi_f)
+
+
+def composite_source_id(source) -> tuple[str, str] | None:
+    """``(fid, channel)`` identity. Display names are not part of the key."""
+    if not isinstance(source, (tuple, list)) or len(source) != 2:
+        return None
+    fid, channel = source
+    if fid is None or channel is None:
+        return None
+    return (str(fid), str(channel))
+
+
+def widget_raster_metrics(widget) -> tuple[int, int, float]:
+    """``(width, height, device-pixel-ratio)`` when the widget exposes them."""
+    width = _call_int(getattr(widget, "width", None))
+    height = _call_int(getattr(widget, "height", None))
+    dpr = 1.0
+    dpr_fn = getattr(widget, "devicePixelRatioF", None)
+    if callable(dpr_fn):
+        number = optional_float(dpr_fn())
+        if number is not None and number > 0.0:
+            dpr = number
+    return width, height, dpr
+
+
+def _call_int(fn) -> int:
+    if not callable(fn):
+        return 0
+    try:
+        return int(fn())
+    except (TypeError, ValueError):
+        return 0
+
+
+def heatmap_slice_snapshot(canvas) -> tuple[str | None, float | None, float | None]:
+    direction = getattr(canvas, "_slice_dir", None)
+    if direction is not None:
+        direction = str(direction)
+    return (
+        direction,
+        optional_float(getattr(canvas, "_slice_x_val", None)),
+        optional_float(getattr(canvas, "_slice_y_val", None)),
+    )
+
+
+def canvas_previous_db_reference(canvas) -> float | None:
+    if not hasattr(canvas, "_last_db_reference"):
+        return None
+    return optional_float(canvas._last_db_reference)
+
+
+def heatmap_result_identity(result) -> tuple:
+    """``(epoch, id)``. Epoch is stamped when a result is stored; id alone is not reused as a generation."""
+    epoch = getattr(result, "_heatmap_reveal_epoch", None)
+    if not isinstance(epoch, int):
+        epoch = None
+    return (epoch, id(result))
+
+
+def heatmap_render_signature(inputs, result_identity: tuple) -> tuple:
+    """Stable signature: every input field, then result identity/generation."""
+    return (astuple(inputs), result_identity)
+
+
+def heatmap_level_writeback_blocks_retain(inputs) -> bool:
+    """True when a paint would rewrite the Inspector Z spins.
+
+    Section entry applies the saved View params before this check. Skipping
+    the plot in that window must not leave the spins on the saved values
+    while the canvas shows a shifted or auto window.
+    """
+    if inputs.amplitude_mode != "amplitude_db":
+        return False
+    if inputs.z_auto:
+        return True
+    previous = inputs.previous_db_reference
+    if previous is None:
+        return False
+    return previous != inputs.db_value
+
+
+def finish_heatmap_render_inputs(inputs, canvas):
+    """Snapshot the canvas fields a later entry will read back.
+
+    Seeding the slice and stamping the dB reference happen during paint and
+    are not reset when the View's params are applied on the next entry.
+    """
+    direction, slice_x, slice_y = heatmap_slice_snapshot(canvas)
+    previous = inputs.previous_db_reference
+    if hasattr(canvas, "_last_db_reference"):
+        previous = canvas_previous_db_reference(canvas)
+    return replace(
+        inputs,
+        slice_dir=direction,
+        slice_x=slice_x,
+        slice_y=slice_y,
+        previous_db_reference=previous,
+    )
+
+
+@dataclass(frozen=True)
+class OrderHeatmapRenderInputs:
+    """Display inputs ``_paint_order_heatmap`` reads. No widgets or diagnostics."""
+
+    signal_title: str
+    order_resolution_text: str
+    amplitude_mode: str
+    weighting: str
+    db_reference_mode: str
+    db_value: float
+    db_unit: str
+    db_quantity: str
+    db_source: str
+    db_warning: str
+    z_auto: bool
+    z_floor: float
+    z_ceiling: float
+    x_auto: bool
+    x_min: float
+    x_max: float
+    y_auto: bool
+    y_min: float
+    y_max: float
+    cmap: str
+    interp: str
+    tick_x: int
+    tick_y: int
+    source_id: tuple[str, str] | None
+    x_origin: str
+    y_origin: str
+    x_lim: tuple[float, float] | None
+    y_lim: tuple[float, float] | None
+    slice_dir: str | None
+    slice_x: float | None
+    slice_y: float | None
+    seed_slice: bool
+    canvas_width: int
+    canvas_height: int
+    canvas_dpr: float
+    previous_db_reference: float | None
+    x_extent: tuple[float, float]
+    y_extent: tuple[float, float]
+
+    def signature_tuple(self) -> tuple:
+        return astuple(self)
+
+
+@dataclass(frozen=True)
+class FftTimeHeatmapRenderInputs:
+    """Display inputs ``_paint_fft_time_heatmap`` reads. No widgets or diagnostics."""
+
+    amplitude_mode: str
+    weighting: str
+    db_reference_mode: str
+    db_value: float
+    db_unit: str
+    db_quantity: str
+    db_source: str
+    db_warning: str
+    z_auto: bool
+    z_floor: float
+    z_ceiling: float
+    x_auto: bool
+    x_min: float
+    x_max: float
+    y_auto: bool
+    y_min: float
+    y_max: float
+    freq_range: tuple[float, float] | None
+    cmap: str
+    interp: str
+    tick_x: int
+    tick_y: int
+    source_id: tuple[str, str] | None
+    x_origin: str
+    y_origin: str
+    x_lim: tuple[float, float] | None
+    y_lim: tuple[float, float] | None
+    slice_dir: str | None
+    slice_x: float | None
+    slice_y: float | None
+    seed_slice: bool
+    canvas_width: int
+    canvas_height: int
+    canvas_dpr: float
+    previous_db_reference: float | None
+    time_extent: tuple[float, float] | None
+    frequency_extent: tuple[float, float] | None
+    channel_name: str
+    channel_unit: str
+
+    def signature_tuple(self) -> tuple:
+        return astuple(self)
+
+
+@dataclass
+class HeatmapRevealBook:
+    """Last painted order / FFT-vs-Time signature for each live canvas.
+
+    Constructed once. Signature slots start empty (``None`` when missing),
+    which means "do not retain". Epochs start at 0 and only increase.
+    """
+
+    _epoch: int = 0
+    _signatures: dict = field(default_factory=dict)
+
+    def bump_result(self, result) -> tuple:
+        """New generation for a stored result. Clears any previous epoch on it."""
+        self._epoch += 1
+        try:
+            result._heatmap_reveal_epoch = self._epoch
+        except (AttributeError, TypeError):
+            pass
+        return heatmap_result_identity(result)
+
+    def result_identity(self, result) -> tuple:
+        return heatmap_result_identity(result)
+
+    def remember(self, section: str, canvas, signature: tuple) -> None:
+        self._signatures[(str(section), id(canvas))] = signature
+
+    def signature_for(self, section: str, canvas):
+        return self._signatures.get((str(section), id(canvas)))
+
+    def forget_canvas(self, canvas) -> None:
+        canvas_id = id(canvas)
+        for key in [key for key in self._signatures if key[1] == canvas_id]:
+            del self._signatures[key]
+
+    def forget_id(self, section: str, canvas_id: int) -> None:
+        self._signatures.pop((str(section), int(canvas_id)), None)
+
+    def forget_section(self, section: str) -> None:
+        section = str(section)
+        for key in [key for key in self._signatures if key[0] == section]:
+            del self._signatures[key]
+
+    def keeps(self, section: str, canvas, signature: tuple, identity: tuple) -> bool:
+        if self.signature_for(section, canvas) != signature:
+            return False
+        if getattr(canvas, "_tracelab_heatmap_picture", None) != (str(section), identity):
+            return False
+        has = getattr(canvas, "has_result", None)
+        if not callable(has):
+            return False
+        try:
+            return bool(has())
+        except RuntimeError:
+            return False

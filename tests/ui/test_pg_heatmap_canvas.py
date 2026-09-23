@@ -1680,12 +1680,33 @@ def _slice_curve_aa_enabled(canvas):
     )
 
 
-def test_heatmap_slice_curve_aa_drops_until_idle(qapp, monkeypatch):
-    """The 1D slice curve should mirror TimeDomain/FFT interaction quality:
-    crisp at rest, non-AA while the user pans/drags, then crisp again after
-    a hands-off idle tick."""
-    from PyQt5.QtWidgets import QApplication
+def _assert_slice_rebuild_is_aa_off_and_discrete_armed(canvas):
+    """plot_result / seed returns before the 0 ms settle runs."""
+    assert canvas._slice_aa_on is False
+    assert _slice_curve_aa_enabled(canvas) == (False, False)
+    discrete = canvas._slice._slice_discrete_aa_timer
+    assert discrete.isActive()
+    assert discrete.interval() == 0
+    assert canvas._slice._slice_discrete_settle_pending is True
+    assert canvas._slice_aa_idle_timer.interval() == 150
+    assert canvas._slice_aa_idle_timer.isActive() is False
 
+
+def _settle_slice_discrete(canvas, qapp):
+    _assert_slice_rebuild_is_aa_off_and_discrete_armed(canvas)
+    qapp.processEvents()
+
+
+def _restore_slice_aa_from_idle(canvas, monkeypatch):
+    monkeypatch.setattr(
+        QApplication, "mouseButtons", staticmethod(lambda: Qt.NoButton))
+    canvas._slice_aa_idle_timer.stop()
+    canvas.try_enable_idle_quality()
+
+
+def test_heatmap_slice_curve_aa_drops_until_idle(qapp, monkeypatch):
+    """Rebuild returns AA-off. The next turn upgrades a cheap slice; a real
+    pan drops AA onto the 150 ms idle timer, which brings it back."""
     c = PgHeatmapCanvas(with_slice=True)
     try:
         c.resize(640, 480)
@@ -1693,19 +1714,24 @@ def test_heatmap_slice_curve_aa_drops_until_idle(qapp, monkeypatch):
         qapp.processEvents()
         c.plot_result(_spec_result(), amplitude_mode='amplitude_db', z_auto=True)
 
+        _settle_slice_discrete(c, qapp)
+        assert c._slice_aa_on is True
         assert _slice_curve_aa_enabled(c) == (True, True)
+        assert c._slice_aa_idle_timer.interval() == 150
+        # The rebuild's own marker move must not have been the thing that
+        # settled AA; the discrete timer did, and it is no longer armed.
+        assert c._slice._slice_discrete_aa_timer.isActive() is False
 
         vb = c._slice_plot.vb
         vb.sigRangeChangedManually.emit(vb.state['mouseEnabled'])
 
         assert c._slice_aa_on is False
         assert c._slice_aa_idle_timer.isActive()
+        assert c._slice_aa_idle_timer.interval() == 150
+        assert c._slice._slice_discrete_aa_timer.isActive() is False
         assert _slice_curve_aa_enabled(c) == (False, False)
 
-        monkeypatch.setattr(
-            QApplication, "mouseButtons", staticmethod(lambda: Qt.NoButton))
-        c._slice_aa_idle_timer.stop()
-        c.try_enable_idle_quality()
+        _restore_slice_aa_from_idle(c, monkeypatch)
 
         assert c._slice_aa_on is True
         assert _slice_curve_aa_enabled(c) == (True, True)
@@ -1713,13 +1739,16 @@ def test_heatmap_slice_curve_aa_drops_until_idle(qapp, monkeypatch):
         c.deleteLater()
 
 
-def test_heatmap_slice_ctrl_wheel_drops_curve_aa(qapp):
+def test_heatmap_slice_ctrl_wheel_drops_curve_aa(qapp, monkeypatch):
     c = PgHeatmapCanvas(with_slice=True)
     try:
         c.resize(640, 480)
+        c.show()
+        qapp.processEvents()
         c.plot_result(_spec_result(), amplitude_mode='amplitude_db', z_auto=True)
-
+        _settle_slice_discrete(c, qapp)
         assert _slice_curve_aa_enabled(c) == (True, True)
+
         consumed = c._handle_wheel_dispatch(
             delta=120,
             modifiers=Qt.ControlModifier,
@@ -1731,23 +1760,163 @@ def test_heatmap_slice_ctrl_wheel_drops_curve_aa(qapp):
         assert consumed is True
         assert c._slice_aa_on is False
         assert c._slice_aa_idle_timer.isActive()
+        assert c._slice_aa_idle_timer.interval() == 150
+        assert c._slice._slice_discrete_aa_timer.isActive() is False
         assert _slice_curve_aa_enabled(c) == (False, False)
+
+        _restore_slice_aa_from_idle(c, monkeypatch)
+        assert c._slice_aa_on is True
+        assert _slice_curve_aa_enabled(c) == (True, True)
     finally:
         c.deleteLater()
 
 
-def test_heatmap_slice_marker_drag_drops_curve_aa(qapp):
+def test_heatmap_slice_marker_drag_drops_curve_aa(qapp, monkeypatch):
     c = PgHeatmapCanvas(with_slice=True)
     try:
         c.resize(640, 480)
+        c.show()
+        qapp.processEvents()
         c.plot_result(_spec_result(), amplitude_mode='amplitude_db', z_auto=True)
-
+        _settle_slice_discrete(c, qapp)
         assert _slice_curve_aa_enabled(c) == (True, True)
+        # A later programmatic reslice still must not look like a drag.
+        c.select_time_index(1)
+        assert c._slice_aa_on is True
+        assert c._slice_aa_idle_timer.isActive() is False
+
         c._slice_marker.setValue(float(c._slice_marker.value()) + 0.2)
 
         assert c._slice_aa_on is False
         assert c._slice_aa_idle_timer.isActive()
+        assert c._slice_aa_idle_timer.interval() == 150
         assert _slice_curve_aa_enabled(c) == (False, False)
+
+        _restore_slice_aa_from_idle(c, monkeypatch)
+        assert c._slice_aa_on is True
+        assert _slice_curve_aa_enabled(c) == (True, True)
+    finally:
+        c.deleteLater()
+
+
+def test_heatmap_slice_high_ink_does_not_upgrade(qapp, monkeypatch):
+    """A full-scale oscillation stays non-AA, and the gate really measures ink."""
+    import mf4_analyzer.ui.pg_canvas.slice_panel as slice_mod
+    from mf4_analyzer.render_profile import envelope_ink_dev_px
+    from mf4_analyzer.ui.pg_canvas.line_canvas import _SPECTRUM_INK_AA_OFF
+
+    n = 20_000
+    column = np.where(np.arange(n) % 2 == 0, 0.0, 1.0)
+    matrix = np.tile(column.reshape(-1, 1), (1, 4))
+    calls = {"n": 0}
+    real = slice_mod.envelope_ink_dev_px
+
+    def _counting(samples, **kwargs):
+        calls["n"] += 1
+        return real(samples, **kwargs)
+
+    monkeypatch.setattr(slice_mod, "envelope_ink_dev_px", _counting)
+    c = PgHeatmapCanvas(with_slice=True)
+    try:
+        c.resize(900, 700)
+        c.show()
+        qapp.processEvents()
+        c.plot_or_update_heatmap(
+            matrix=matrix,
+            x_extent=(0.0, 3.0),
+            y_extent=(0.0, 1.0),
+            x_label="Time (s)",
+            y_label="Frequency (Hz)",
+            amplitude_mode="amplitude",
+            z_auto=True,
+        )
+        c._seed_slice()
+        assert c._slice_plot.vb.sceneBoundingRect().height() > 0
+        _assert_slice_rebuild_is_aa_off_and_discrete_armed(c)
+        qapp.processEvents()
+
+        assert calls["n"] >= 1
+        _x, y_data = c._slice_curve.getData()
+        view_box = c._slice_plot.vb
+        y_range = view_box.viewRange()[1]
+        direct = envelope_ink_dev_px(
+            y_data,
+            y_span=abs(float(y_range[1]) - float(y_range[0])),
+            row_height_px=float(view_box.sceneBoundingRect().height()),
+            dpr=float(c._glw.devicePixelRatioF()),
+        )
+        assert c._slice._slice_ink_dev_px == pytest.approx(direct)
+        assert direct > _SPECTRUM_INK_AA_OFF
+        assert c._slice_aa_on is False
+        assert _slice_curve_aa_enabled(c) == (False, False)
+        status = c._slice.slice_quality_status()
+        assert status["state"] == "preview"
+        assert status["block_reason"] == "high-ink"
+    finally:
+        c.deleteLater()
+
+
+def test_heatmap_slice_backstop_blacklists_signature(qapp):
+    c = PgHeatmapCanvas(with_slice=True)
+    try:
+        c.resize(900, 700)
+        c.show()
+        qapp.processEvents()
+        c.plot_result(_spec_result(), amplitude_mode='amplitude_db', z_auto=True)
+        _settle_slice_discrete(c, qapp)
+        assert c._slice_aa_on is True
+        assert c._aa_backstop_armed is True
+        signature = c._slice._slice_view_signature()
+        assert signature is not None
+
+        c._note_aa_frame(5_000.0)
+        assert c._slice._slice_backstop_timer.isActive()
+        qapp.processEvents()
+
+        assert c._slice_aa_on is False
+        assert _slice_curve_aa_enabled(c) == (False, False)
+        assert signature in c._slice._slice_aa_latch.blacklist
+        status = c._slice.slice_quality_status()
+        assert status["state"] == "red"
+        assert status["block_reason"] == "aa-backstop"
+
+        c._slice._arm_slice_discrete_aa()
+        assert c._slice._slice_discrete_aa_timer.isActive()
+        qapp.processEvents()
+        assert c._slice_aa_on is False
+        assert _slice_curve_aa_enabled(c) == (False, False)
+        assert c._slice.slice_quality_status()["block_reason"] == "aa-backstop"
+    finally:
+        c.deleteLater()
+
+
+def test_heatmap_slice_clear_resets_latch_and_grab_does_not_force_aa(qapp):
+    c = PgHeatmapCanvas(with_slice=True)
+    try:
+        c.resize(640, 480)
+        c.show()
+        qapp.processEvents()
+        c.plot_result(_spec_result(), amplitude_mode='amplitude_db', z_auto=True)
+        _assert_slice_rebuild_is_aa_off_and_discrete_armed(c)
+        c._slice._slice_discrete_aa_timer.stop()
+        c._slice._slice_discrete_settle_pending = False
+        pix = c.grab_pixmap(scale=1.0)
+        assert not pix.isNull()
+        assert c._slice_aa_on is False
+        assert _slice_curve_aa_enabled(c) == (False, False)
+
+        c._slice._arm_slice_discrete_aa()
+        qapp.processEvents()
+        c._note_aa_frame(5_000.0)
+        qapp.processEvents()
+        assert c._slice._slice_aa_latch.blacklist
+
+        c.full_reset()
+        assert len(c._slice._slice_aa_latch.blacklist) == 0
+        assert c._slice._slice_discrete_settle_pending is False
+        assert c._slice._slice_discrete_aa_timer.isActive() is False
+        assert c._slice_aa_on is False
+        assert c._aa_backstop_armed is False
     finally:
         c.deleteLater()
 

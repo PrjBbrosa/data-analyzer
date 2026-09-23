@@ -94,6 +94,24 @@ _PIXEL_AFFECTING_SIGNALS = frozenset(
         "manual_zoom_changed",
     }
 )
+# Section/View switches call these while UltraView is closed. They have no
+# immediate thumbnail or inspect consumer, so a hidden Board only marks the
+# ref deferred. User sync, add-to-board, pin commit, focus inspect, leaving
+# for UltraView, resolution/focus residency, and unknown reasons still grab.
+_AUTOMATIC_SWITCH_PREVIEW_REASONS = frozenset(
+    {
+        "time-render",
+        "plot",
+        "order-plot",
+        "frf-plot",
+        "frf-restore-plot",
+        "fft-time-plot",
+        "fft-plot",
+        "fft-single-plot",
+        "analysis-restore-plot",
+        "idle",
+    }
+)
 _HTML_TAG = re.compile(r"<[^>]+>")
 _CAPTURE_SKIP_LEVELS = {
     "no-result": logging.DEBUG,
@@ -186,6 +204,96 @@ def read_markup_revision(widget) -> int:
     if widget is None or not _alive(widget):
         return 0
     return collect_widget_capture_facts(widget).markup_revision
+
+
+def _freeze_pair(value):
+    """Exact ``(lo, hi)`` floats, or None.
+
+    Canvases compare viewports with ``!=`` on the tuples they already
+    captured (line ``capture_xy_viewport``, heatmap ``viewRange``). This
+    does not add a tolerance.
+    """
+    if value is None:
+        return None
+    try:
+        lo, hi = value
+    except (TypeError, ValueError):
+        return None
+    lo_f = finite_or_none(lo)
+    hi_f = finite_or_none(hi)
+    if lo_f is None or hi_f is None:
+        return None
+    return (lo_f, hi_f)
+
+
+def _freeze_viewport(value):
+    if value is None:
+        return None
+    try:
+        first, second = value
+    except (TypeError, ValueError):
+        return None
+    if isinstance(first, (tuple, list)):
+        return (_freeze_pair(first), _freeze_pair(second))
+    return _freeze_pair(value)
+
+
+def _visible_range_fact(host):
+    capture = getattr(host, "capture_xy_viewport", None)
+    if callable(capture):
+        try:
+            return _freeze_viewport(capture())
+        except (RuntimeError, TypeError, ValueError):
+            return None
+    xlim = None
+    ylims = ()
+    xlim_fn = getattr(host, "get_visible_xlim", None)
+    ylim_fn = getattr(host, "get_visible_ylims", None)
+    if callable(xlim_fn):
+        try:
+            xlim = _freeze_pair(xlim_fn())
+        except (RuntimeError, TypeError, ValueError):
+            xlim = None
+    if callable(ylim_fn):
+        try:
+            raw = ylim_fn() or {}
+            ylims = tuple(
+                sorted(
+                    (repr(key), _freeze_pair(span))
+                    for key, span in dict(raw).items()
+                )
+            )
+        except (RuntimeError, TypeError, ValueError, AttributeError):
+            ylims = ()
+    if xlim is None and not ylims and not callable(xlim_fn) and not callable(ylim_fn):
+        return _freeze_viewport(getattr(host, "visible_range", None))
+    return (xlim, ylims)
+
+
+def _markup_fact(host):
+    reader = getattr(host, "capture_markup_revision", None)
+    if callable(reader):
+        try:
+            return int(reader() or 0)
+        except (RuntimeError, TypeError, ValueError):
+            return 0
+    try:
+        return int(getattr(host, "markup_revision", 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _dual_cursor_fact(host):
+    reader = getattr(host, "capture_cursor_facts", None)
+    if not callable(reader):
+        return (False, None)
+    try:
+        dual, geometry = reader()
+    except (RuntimeError, TypeError, ValueError):
+        return (False, None)
+    if not dual:
+        return (False, None)
+    return (True, geometry)
 def _channel_pair(key):
     if key is None:
         return None
@@ -382,6 +490,12 @@ class UltraViewCaptureCoordinator(QObject):
         self._result_generation: dict[tuple, int] = {}
         self._runtime = PresentationRuntimeLedger()
         self._presentation_revision: dict[UltraViewRef, int] = {}
+        # Session-only fact snapshots. Compared, never persisted, never
+        # mixed into presentation_digest.
+        self._presentation_fingerprints: dict[UltraViewRef, tuple] = {}
+        self._manual_zoom_by_host: dict[int, bool] = {}
+        self._dual_cursor_text_by_host: dict[int, str] = {}
+        self._deferred_preview_refs: set[UltraViewRef] = set()
         self._resolution_stale_notified: set[UltraViewRef] = set()
         # A target canvas can be correct while a local page handoff is still
         # presenting its previous frame.  Keep UltraView's expensive export
@@ -451,6 +565,10 @@ class UltraViewCaptureCoordinator(QObject):
         self._digest_retries.clear()
         self._runtime.clear()
         self._presentation_revision.clear()
+        self._presentation_fingerprints.clear()
+        self._manual_zoom_by_host.clear()
+        self._dual_cursor_text_by_host.clear()
+        self._deferred_preview_refs.clear()
         self._resolution_stale_notified.clear()
 
     def shutdown_capture(self) -> None:
@@ -485,6 +603,11 @@ class UltraViewCaptureCoordinator(QObject):
         self._ensure_stability_hooks(canvas)
         self._ensure_axis_edit_hook()
         self._watch_canvas_destroyed(canvas)
+        # A restore emits range signals while the canvas is still bound to
+        # the outgoing ref. Commit the incoming ref from the settled widget
+        # instead of treating that transient signal as a fact change.
+        if not self._signal_is_cross_view_restore(ref, canvas, canvas):
+            self._commit_presentation_fingerprint(ref, canvas)
 
     def bound_ref_for(self, canvas) -> UltraViewRef | None:
         if canvas is None:
@@ -551,6 +674,10 @@ class UltraViewCaptureCoordinator(QObject):
             and not self._needs_focus_recapture(ref)
             and not self._needs_resolution_recapture(ref)
         ):
+            self._deferred_preview_refs.discard(ref)
+            return
+        if self._defer_hidden_automatic_preview(reason):
+            self._deferred_preview_refs.add(ref)
             return
         key = (ref, digest)
         self._drop_queued_for_ref(ref, keep=key)
@@ -833,6 +960,8 @@ class UltraViewCaptureCoordinator(QObject):
                 )
         self._store.set_residency_requests(requests)
         self._recapture_resolution_stale_refs()
+        if self._sheet_visible():
+            self.consume_deferred_previews()
 
     def _active_card_visible(self, ref: UltraViewRef) -> bool:
         page = self.page()
@@ -1108,6 +1237,7 @@ class UltraViewCaptureCoordinator(QObject):
         """Publish optional shared preview pixels before the project JSON commit."""
         if self._inactive():
             return []
+        self._publish_deferred_previews_for_save()
         saved = save_preview_sidecar(
             project_path, workspace_to_payload(self._workspace), self._store
         )
@@ -1136,8 +1266,13 @@ class UltraViewCaptureCoordinator(QObject):
             return
         if section == "time":
             self._capture_visible_time_refs("leaving-source-for-ultraview")
-            return
-        self.request_visible_section_capture(section, "leaving-source-for-ultraview")
+        else:
+            self.request_visible_section_capture(
+                section, "leaving-source-for-ultraview"
+            )
+        # open_ultraview presents the sheet after this returns. The 0 ms
+        # shot is that show, not a readiness delay.
+        self._schedule_deferred_preview_consume()
 
     def _capture_visible_time_refs(self, reason: str) -> None:
         window = self._window
@@ -1205,6 +1340,174 @@ class UltraViewCaptureCoordinator(QObject):
         resolved = self._analysis_state(self._window, ref.section, ref.view_id)
         return resolved is not None
 
+    def _defer_hidden_automatic_preview(self, reason: str) -> bool:
+        if self._sheet_visible():
+            return False
+        return str(reason) in _AUTOMATIC_SWITCH_PREVIEW_REASONS
+
+    def _schedule_deferred_preview_consume(self) -> None:
+        if self._inactive() or not self._deferred_preview_refs:
+            return
+        if self._sheet_visible():
+            self.consume_deferred_previews()
+            return
+        QTimer.singleShot(0, self.consume_deferred_previews)
+
+    def consume_deferred_previews(self) -> None:
+        """Fill deferred previews once UltraView can show them.
+
+        Visible thumbnails are scheduled first, through the existing per-ref
+        idle timer. Refs whose canvas is not currently bound stay deferred
+        until a later show or a project save that can still see that canvas.
+        """
+        if not _alive(self) or self._inactive() or not self._deferred_preview_refs:
+            return
+        if not self._sheet_visible():
+            return
+        for ref in self._deferred_recapture_order():
+            if ref not in self._deferred_preview_refs:
+                continue
+            widget = self._bound_widget_for(ref)
+            if widget is None:
+                continue
+            self.schedule_idle_capture(ref, widget)
+
+    def _deferred_recapture_order(self) -> list[UltraViewRef]:
+        board = active_board(self._workspace)
+        placed = [item.ref for item in (getattr(board, "free_grid", None) or ())]
+        if not placed:
+            placed = list(placed_ref_set(board))
+        page = self.page()
+        card_for = getattr(page, "card_widget", None) if page is not None else None
+        scroll_getter = getattr(page, "board_scroll_area", None) if page is not None else None
+        scroll = scroll_getter() if callable(scroll_getter) else None
+        visible = []
+        hidden = []
+        for index, ref in enumerate(placed):
+            if ref not in self._deferred_preview_refs:
+                continue
+            rank = self._thumbnail_rank(card_for, scroll, ref, index)
+            if rank[0] == 0:
+                visible.append(rank)
+            else:
+                hidden.append(rank)
+        visible.sort()
+        hidden.sort()
+        ordered = [item[-1] for item in visible]
+        ordered.extend(item[-1] for item in hidden)
+        rest = [ref for ref in self._deferred_preview_refs if ref not in ordered]
+        return ordered + rest
+
+    def _thumbnail_rank(self, card_for, scroll, ref, index):
+        if not callable(card_for) or scroll is None:
+            return (1, index, 0, ref)
+        try:
+            card = card_for(ref.section, ref.view_id)
+            if card is None:
+                return (1, index, 0, ref)
+            rect = card.rect()
+            origin = card.mapTo(scroll.viewport(), rect.topLeft())
+            center = card.mapTo(scroll.viewport(), rect.center())
+            on_screen = bool(scroll.viewport().rect().contains(center))
+            return (
+                0 if on_screen else 1,
+                int(origin.y()),
+                int(origin.x()),
+                ref,
+            )
+        except (RuntimeError, TypeError, AttributeError):
+            return (1, index, 0, ref)
+
+    def _publish_deferred_previews_for_save(self) -> None:
+        """Grab deferred refs whose canvas is still on screen before save."""
+        for ref in list(self._deferred_preview_refs):
+            widget = self._bound_widget_for(ref)
+            if widget is None or not _alive(widget):
+                continue
+            try:
+                visible = bool(widget.isVisible())
+            except RuntimeError:
+                continue
+            if not visible:
+                continue
+            if self._try_publish_now(ref, widget, "project-save"):
+                self._deferred_preview_refs.discard(ref)
+                continue
+            digest = self.current_digest_for(ref)
+            if digest is not None and self._has_current_preview(ref, digest):
+                self._deferred_preview_refs.discard(ref)
+
+    def _signal_is_cross_view_restore(self, ref, sender, widget) -> bool:
+        """True when this signal belongs to a view restore, not the bound ref.
+
+        Time restores set ``_applying_view`` for the whole projection, and
+        the canvas is still bound to the outgoing View while that runs.
+        Analysis restores keep the same page widget but the active View has
+        already changed. Split time panes are not the active View and must
+        still record their own zoom.
+        """
+        if ref is None:
+            return False
+        if ref.section == "time":
+            window = self._window
+            return bool(window is not None and getattr(window, "_applying_view", False))
+        active = self._active_ref(ref.section)
+        if active is None or active == ref:
+            return False
+        visible = self._visible_widget_for(ref.section)
+        if visible is None:
+            return False
+        if sender is visible or widget is visible:
+            return True
+        try:
+            return self._widget_has_overlay_host(visible, sender) or (
+                self._widget_has_overlay_host(visible, widget)
+            )
+        except (RuntimeError, TypeError):
+            return False
+
+    def _note_presentation_signal_args(self, sender, args) -> None:
+        if sender is None or len(args) != 1:
+            return
+        payload = args[0]
+        ident = id(sender)
+        if isinstance(payload, bool):
+            self._manual_zoom_by_host[ident] = bool(payload)
+            return
+        if isinstance(payload, str):
+            self._dual_cursor_text_by_host[ident] = payload
+
+    def _presentation_fingerprint(self, widget) -> tuple:
+        hosts = list(_iter_overlay_hosts(widget))
+        if not hosts:
+            hosts = [widget]
+        rows = []
+        for host in hosts:
+            ident = id(host)
+            rows.append(
+                (
+                    _visible_range_fact(host),
+                    _markup_fact(host),
+                    _dual_cursor_fact(host),
+                    self._dual_cursor_text_by_host.get(ident),
+                    self._manual_zoom_by_host.get(ident),
+                )
+            )
+        return tuple(rows)
+
+    def _commit_presentation_fingerprint(self, ref, widget) -> bool:
+        """Record ``widget``'s facts. Return True only when they changed."""
+        try:
+            current = self._presentation_fingerprint(widget)
+        except RuntimeError:
+            return False
+        previous = self._presentation_fingerprints.get(ref)
+        self._presentation_fingerprints[ref] = current
+        if previous is None or previous == current:
+            return False
+        self.bump_presentation_revision(ref)
+        return True
+
     def presentation_revision_for(self, ref: UltraViewRef) -> int:
         return int(self._presentation_revision.get(ref, 0) or 0)
 
@@ -1232,6 +1535,8 @@ class UltraViewCaptureCoordinator(QObject):
             if payload and payload[0] == ref:
                 self._unstable.pop(ident, None)
         self.bump_presentation_revision(ref)
+        self._presentation_fingerprints.pop(ref, None)
+        self._deferred_preview_refs.discard(ref)
         if _alive(self._store):
             self._store.drop(ref)
 
@@ -1648,6 +1953,8 @@ class UltraViewCaptureCoordinator(QObject):
         if published:
             self._digest_retries.pop(ref, None)
             self._runtime.commit(ref, self._facts_from_widget(widget))
+            self._presentation_fingerprints[ref] = self._presentation_fingerprint(widget)
+            self._deferred_preview_refs.discard(ref)
             self._refresh_resolution_state(ref)
             self._push_preview(ref)
         return published
@@ -1724,7 +2031,10 @@ class UltraViewCaptureCoordinator(QObject):
                         # copy/export retains the default cancellation
                         # behavior in ChartStack.
                         pixmap = grab_pres(
-                            widget, scale=scale, cancel_page_transition=False,
+                            widget,
+                            scale=scale,
+                            cancel_page_transition=False,
+                            auto_preview=True,
                         )
                     except TypeError:
                         # Compatibility seam for an older/mocked ChartStack
@@ -1826,6 +2136,8 @@ class UltraViewCaptureCoordinator(QObject):
         self._clear_page_transition_waits(widget_id=ident)
         self._bindings.pop(ident, None)
         self._unstable.pop(ident, None)
+        self._manual_zoom_by_host.pop(ident, None)
+        self._dual_cursor_text_by_host.pop(ident, None)
         for key in [key for key in self._axis_edit_waits if key[1] == ident]:
             self._axis_edit_waits.pop(key, None)
         self._hooked_ids.discard(ident)
@@ -2167,19 +2479,27 @@ class UltraViewCaptureCoordinator(QObject):
             self._idle_timer.start()
 
     def _on_idle_presentation_signal(self, *_args) -> None:
-        """Bump the session presentation revision even when the Board is hidden.
+        """Bump revision only when a pixel-affecting fact actually changed.
 
-        Idle recapture itself stays gated on sheet visibility so a hidden
-        UltraView does not grab.  The revision still advances so the next
-        temporary-inspect open can see that zoom/cursor/markup changed.
+        Idle recapture itself stays gated on sheet visibility. A hidden
+        Board does not grab. The fingerprint is session-only and is not
+        part of ``presentation_digest``.
         """
         if self._inactive():
             return
-        ref, widget = self._binding_for_idle_sender(self.sender())
-        if ref is None:
+        sender = self.sender()
+        ref, widget = self._binding_for_idle_sender(sender)
+        if ref is None or widget is None:
             return
-        self.bump_presentation_revision(ref)
+        if self._signal_is_cross_view_restore(ref, sender, widget):
+            return
+        self._note_presentation_signal_args(sender, _args)
+        if not self._commit_presentation_fingerprint(ref, widget):
+            return
         if not self._sheet_visible():
+            # The fact changed, but nobody is looking at the Board. Opening
+            # UltraView or saving the project consumes this set.
+            self._deferred_preview_refs.add(ref)
             return
         self.schedule_idle_capture(ref, widget)
 

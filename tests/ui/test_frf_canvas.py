@@ -862,25 +862,34 @@ def test_presentation_paint_ack_is_cancelled_by_visibility_or_geometry_change(
         assert canvas._presentation_paint_ack_token() is None
 
 
+def _unstable_paint_ack_key(original, change, step):
+    """A geometry key that never repeats, so a bounded rearm cannot settle."""
+    if change == "geometry":
+        return (original[0] + step, *original[1:])
+    changed_dpr = (original[4][0] + float(step), *original[4][1:])
+    return (*original[:4], changed_dpr, *original[5:])
+
+
 @pytest.mark.parametrize("change", ("geometry", "dpr"))
 def test_presentation_paint_ack_rejects_geometry_or_dpr_change_before_paint(
     qtbot, monkeypatch, change,
 ):
+    """One settled change is re-armed. Geometry that keeps moving is cancelled."""
     canvas = _shown_frf_canvas(qtbot)
     original = canvas._presentation_paint_ack_geometry_key()
     assert original is not None
-    if change == "geometry":
-        changed = (original[0] + 1, *original[1:])
-    else:
-        changed_dpr = (original[4][0] + 1.0, *original[4][1:])
-        changed = (*original[:4], changed_dpr, *original[5:])
-    keys = iter((original, changed))
-    monkeypatch.setattr(
-        canvas, "_presentation_paint_ack_geometry_key", lambda: next(keys, changed),
-    )
+    step = {"n": 0}
+
+    def key():
+        step["n"] += 1
+        return _unstable_paint_ack_key(original, change, step["n"])
+
+    monkeypatch.setattr(canvas, "_presentation_paint_ack_geometry_key", key)
 
     with qtbot.assertNotEmitted(canvas.presentation_paint_acknowledged, wait=50):
-        canvas.request_presentation_paint_ack(change)
+        assert canvas.request_presentation_paint_ack(change) is True
+        for _ in range(canvas._PAINT_ACK_MAX_REARMS + 1):
+            assert canvas._presentation_paint_ack_token() is None
     assert canvas._presentation_paint_ack_request_id is None
 
 

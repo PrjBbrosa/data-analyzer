@@ -1,4 +1,5 @@
 """Application entry point."""
+import gc
 import importlib
 import logging
 import os
@@ -354,6 +355,9 @@ def main():
     window.show()
     if startup_timing_enabled():
         _arm_startup_observation(app, window)
+    # D-I: startup survivors are long-lived. Freeze them once, after the
+    # window exists, so later section switches do not pay a gen-2 pause.
+    gc.freeze()
     sys.exit(app.exec_())
 
 

@@ -12002,7 +12002,9 @@ class TestPresentationPaintAcknowledgement:
         monkeypatch.setattr(canvas._glw, "devicePixelRatioF", lambda: 2.0)
         canvas._presentation_paint_acked(stale_token)
         self._drain_events()
-        assert acknowledged == []
+        # A single DPR change is re-snapshotted. The paint that matches the
+        # new geometry acknowledges; only geometry that keeps moving cancels.
+        assert acknowledged == ["dpr"]
 
     def test_clear_emits_presentation_content_invalidated(self, qapp):
         canvas = self._settled_canvas(qapp)

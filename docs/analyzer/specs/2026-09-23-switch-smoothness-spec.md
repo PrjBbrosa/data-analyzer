@@ -1,6 +1,7 @@
 # Section / View 切换平顺性（switch smoothness）设计
 
-> 状态：**设计稿，未实施。** 实施计划见
+> 状态：**D-A、D-C、D-D、D-E、D-F（F1/F2）、D-G、D-I 已在源码落地。D-B 与 D-F 的 F3 未做**
+> （D-B 要等 Windows 真机标定）。实施计划见
 > `docs/analyzer/plans/2026-09-23-switch-smoothness-plan.md`。问题与全部数字出自
 > `docs/analyzer/reviews/2026-09-23-windows-switch-smoothness-analysis.md`（下称“报告”），
 > 可用 `scripts/probe_switch_smoothness.py`（`--scenario view|section`）复跑。

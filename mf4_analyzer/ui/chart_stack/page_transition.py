@@ -7,12 +7,14 @@ renders data, restores axes, submits compute, or persists state.
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 from PyQt5.QtCore import QEvent, QObject, QPoint, QRect, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QPainter, QPixmap
 from PyQt5.QtWidgets import QApplication, QWidget
 
+from ...diagnostics import throttled
 from ...ui_kit.motion import (
     MotionPolicy,
     POLICY_OFF,
@@ -26,6 +28,8 @@ from ...ui_kit.motion import (
 # Production user-navigation admission. Split, programmatic restore, and
 # uncomputed cache-miss targets stay on the direct-terminal path.
 PAGE_TRANSITION_ENABLED_SECTIONS = ("time", "fft", "fft_time", "frf", "order")
+
+_LOG = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -583,6 +587,16 @@ class PageTransitionController(QObject):
         token = self._target_ack_watchdog_token
         self._target_ack_watchdog_token = None
         if token is not None and token == self._target_token and not self.is_active():
+            throttled(
+                _LOG,
+                "page-transition:target-paint-timeout",
+                logging.WARNING,
+                "page transition target paint ack timed out "
+                "(target-paint-timeout): section=%s view=%s request_generation=%s",
+                getattr(token, "section", None),
+                getattr(token, "view_id", None),
+                getattr(token, "request_generation", None),
+            )
             self.cancel("target-paint-timeout")
 
     def _cancel_if_host_rect_changed(self) -> None:

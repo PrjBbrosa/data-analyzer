@@ -135,11 +135,19 @@ class ChartStack(QWidget):
         self._page_transition_ready_slots = []
         self._page_transition_content_slots = []
         self._page_transition_awaiting_pin_commit = False
+        self._discrete_quality_hold_token = None
+        self._discrete_quality_hold_canvases = ()
         self._page_transition.transition_finished.connect(
             self._clear_page_transition_ready_fence,
         )
+        self._page_transition.transition_finished.connect(
+            self._release_discrete_quality_hold,
+        )
         self._page_transition.transition_cancelled.connect(
             self._clear_page_transition_ready_fence,
+        )
+        self._page_transition.transition_cancelled.connect(
+            self._release_discrete_quality_hold,
         )
         self._page_transition.transition_cancelled.connect(
             self._abandon_pin_restore_after_transition_cancel,
@@ -1560,7 +1568,57 @@ class ChartStack(QWidget):
             overlay_rect=overlay_rect,
         )
         self._page_transition_target = token
+        if token is not None:
+            self._hold_discrete_quality(token, target_section)
         return token
+
+    def _transition_target_canvases(self, section: str):
+        """Canvases whose discrete AA settle must wait out this handoff."""
+        section = str(section)
+        if section == "time":
+            return (self.canvas_time,)
+        page = {
+            "fft": self.page_fft,
+            "fft_time": self.page_fft_time,
+            "frf": self.page_frf,
+            "order": self.page_order,
+        }.get(section)
+        if page is None:
+            return ()
+        canvases = []
+        try:
+            count = int(page.pane_count())
+        except (RuntimeError, TypeError, ValueError):
+            return ()
+        for index in range(count):
+            canvas = page.pane_canvas(index)
+            if canvas is not None:
+                canvases.append(canvas)
+        return tuple(canvases)
+
+    def _hold_discrete_quality(self, token, section: str) -> None:
+        """Stop a discrete AA upgrade until this transition finishes or cancels."""
+        self._release_discrete_quality_hold()
+        canvases = self._transition_target_canvases(section)
+        self._discrete_quality_hold_token = token
+        self._discrete_quality_hold_canvases = canvases
+        for canvas in canvases:
+            hold = getattr(canvas, "hold_discrete_quality", None)
+            if callable(hold):
+                hold(token)
+
+    def _release_discrete_quality_hold(self, *_args) -> None:
+        """Arm at most one deferred discrete settle on the held canvases."""
+        token = self._discrete_quality_hold_token
+        canvases = self._discrete_quality_hold_canvases
+        self._discrete_quality_hold_token = None
+        self._discrete_quality_hold_canvases = ()
+        if token is None:
+            return
+        for canvas in canvases:
+            release = getattr(canvas, "release_discrete_quality", None)
+            if callable(release):
+                release(token)
 
     def page_transition_plot_surface(self) -> QWidget:
         """Visible plot surface of the current page, excluding View-tab chrome."""
@@ -2059,6 +2117,7 @@ class ChartStack(QWidget):
 
     def grab_presentation_pixmap(
         self, target, *, scale=1.0, cancel_page_transition=True,
+        auto_preview=False,
     ):
         """Grab canvas pixels plus overlapping live/pinned cursor chrome.
 
@@ -2066,7 +2125,24 @@ class ChartStack(QWidget):
         Does not touch the clipboard. Time-domain split copy still uses
         ``_combined_split_pixmap`` and does not go through this helper.
         Multi-pane analysis pages keep ``grab_combined_pixmap``.
+
+        ``auto_preview=True`` keeps the on-screen curve antialiasing.
+        Explicit copy/export leaves it false and still forces AA.
         """
+        if not auto_preview:
+            return self._grab_presentation_pixmap(
+                target, scale=scale, cancel_page_transition=cancel_page_transition,
+            )
+        from ..pg_canvas.renderer import auto_preview_grab_scope
+
+        with auto_preview_grab_scope():
+            return self._grab_presentation_pixmap(
+                target, scale=scale, cancel_page_transition=cancel_page_transition,
+            )
+
+    def _grab_presentation_pixmap(
+        self, target, *, scale=1.0, cancel_page_transition=True,
+    ):
         # An explicit copy/export must consume the real settled page, not a
         # transient presentation blend.  UltraView's automatic coordinator is
         # different: it grabs the already-bound canvas (never the overlay),

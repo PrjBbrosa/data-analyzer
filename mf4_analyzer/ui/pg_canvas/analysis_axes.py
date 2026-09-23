@@ -156,12 +156,114 @@ _TARGET_BOTTOM_TICK_MIN_GAP_PX = 10.0
 _TARGET_BOTTOM_TICK_MIN_NARROW_GAP_PX = 0.0
 _TARGET_BOTTOM_TICK_EDGE_PAD_PX = 2.0
 _TARGET_BOTTOM_TICK_MIN_COUNT = 3
+# Per-axis memo. Not a process-global map: the axis owns it and drops it on
+# destruction. Display names are never part of the key.
+_BOTTOM_TICK_FIT_MEMO_ATTR = "_analysis_bottom_tick_fit_memo"
+_BOTTOM_TICK_FONT_PROBE = "0123456789.-+e"
+
+
+def _label_px_width(metrics, text: str) -> float:
+    try:
+        return float(metrics.horizontalAdvance(text))
+    except AttributeError:  # pragma: no cover - older Qt fallback
+        return float(metrics.width(text))
+
+
+def _bottom_tick_device_pixel_ratio(axis, owner) -> float:
+    """DPR of the owning paint device. Missing or unusable values stay at 1."""
+    for source in (owner, axis):
+        if source is None:
+            continue
+        reader = getattr(source, "devicePixelRatioF", None)
+        if not callable(reader):
+            continue
+        try:
+            value = float(reader())
+        except (TypeError, ValueError, RuntimeError):
+            continue
+        if math.isfinite(value) and value > 0.0:
+            return value
+    return 1.0
+
+
+def _bottom_tick_font_key(font, metrics):
+    """Measurements the fitter actually uses, so a metric change invalidates."""
+    return (
+        str(font.family()),
+        float(font.pointSizeF()),
+        int(font.pixelSize()),
+        int(font.weight()),
+        int(font.style()),
+        int(font.stretch()),
+        bool(font.bold()),
+        bool(font.italic()),
+        int(metrics.ascent()),
+        int(metrics.descent()),
+        int(metrics.height()),
+        int(metrics.averageCharWidth()),
+        _label_px_width(metrics, "0"),
+        _label_px_width(metrics, _BOTTOM_TICK_FONT_PROBE),
+    )
+
+
+def _bottom_tick_formatter_identity(axis):
+    formatter = getattr(axis, "tickStrings", None)
+    return getattr(formatter, "__func__", formatter)
+
+
+def _bottom_tick_fit_key(axis, owner, lo, hi, width, target, font, metrics):
+    """Exact inputs of one fit. Same floats compare equal; no range tolerance.
+
+    ``scale`` and ``logMode`` travel with the formatter: they change the
+    strings ``tickStrings`` emits without replacing the callable.
+    """
+    try:
+        scale = float(getattr(axis, "scale", 1.0))
+    except (TypeError, ValueError):
+        scale = getattr(axis, "scale", 1.0)
+    return (
+        float(lo),
+        float(hi),
+        float(width),
+        _bottom_tick_device_pixel_ratio(axis, owner),
+        int(target),
+        True,  # visible; the hidden path returns before this key is built
+        _bottom_tick_font_key(font, metrics),
+        _bottom_tick_formatter_identity(axis),
+        bool(getattr(axis, "logMode", False)),
+        scale,
+    )
+
+
+def _remember_bottom_ticks(axis, key, applied: bool, ticks) -> None:
+    frozen = None
+    if applied and ticks is not None:
+        frozen = tuple((float(value), str(text)) for value, text in ticks)
+    setattr(axis, _BOTTOM_TICK_FIT_MEMO_ATTR, (key, bool(applied), frozen))
+
+
+def _reuse_remembered_bottom_ticks(axis, memo) -> bool:
+    _key, applied, frozen = memo
+    if not applied or not frozen:
+        return False
+    try:
+        axis.setStyle(maxTickLevel=0)
+        axis.setTicks([list(frozen), []])
+    except Exception:
+        return False
+    return True
 
 
 def _apply_target_bottom_ticks(
     axis, view_box, target_count: int, owner: QWidget | None = None
 ) -> bool:
-    """Pin bottom-axis ticks to a readable target count when geometry exists."""
+    """Pin bottom-axis ticks to a readable target count when geometry exists.
+
+    Repeated calls with the same X range, axis width, DPR, target count,
+    visibility, font metrics and formatter reuse the ticks stored on
+    ``axis``. A hidden owner still returns False so the caller can fall
+    back to adaptive density instead of pinning explicit ticks.
+    """
     try:
         if owner is not None and not owner.isVisible():
             return False
@@ -181,7 +283,15 @@ def _apply_target_bottom_ticks(
     if not np.isfinite(raw_step) or raw_step <= 0:
         return False
 
-    metrics = QFontMetrics(_pg_chart_font(CHART_FONT_PT))
+    font = _pg_chart_font(CHART_FONT_PT)
+    metrics = QFontMetrics(font)
+    key = _bottom_tick_fit_key(
+        axis, owner, lo, hi, width, target, font, metrics,
+    )
+    memo = getattr(axis, _BOTTOM_TICK_FIT_MEMO_ATTR, None)
+    if isinstance(memo, tuple) and len(memo) == 3 and memo[0] == key:
+        return _reuse_remembered_bottom_ticks(axis, memo)
+
     extreme_narrow = width < target * 8.0
     min_gap = (
         _TARGET_BOTTOM_TICK_MIN_NARROW_GAP_PX
@@ -216,6 +326,12 @@ def _apply_target_bottom_ticks(
                 guard += 1
             if len(values) < _TARGET_BOTTOM_TICK_MIN_COUNT:
                 continue
+            # Value count times the minimum gap exceeds the axis, so the
+            # fit below rejects this candidate. Skip tickStrings. Do not
+            # thin it. extreme_narrow keeps min_gap at 0 and is excluded,
+            # so its thinning path is unchanged.
+            if not extreme_narrow and len(values) * min_gap > width:
+                continue
             try:
                 labels = axis.tickStrings(
                     values,
@@ -231,10 +347,7 @@ def _apply_target_bottom_ticks(
             for tick_value, label in zip(values, labels):
                 x_pos = (float(tick_value) - lo) / (hi - lo) * width
                 text = str(label)
-                try:
-                    text_width = float(metrics.horizontalAdvance(text))
-                except AttributeError:  # pragma: no cover - older Qt fallback
-                    text_width = float(metrics.width(text))
+                text_width = _label_px_width(metrics, text)
                 left = x_pos - text_width / 2.0
                 right = x_pos + text_width / 2.0
                 if left < edge_pad:
@@ -267,13 +380,15 @@ def _apply_target_bottom_ticks(
             ))
 
     if not candidates:
+        _remember_bottom_ticks(axis, key, False, None)
         return False
     _distance, _neg_count, _nice_distance, ticks = min(candidates)
     try:
         axis.setStyle(maxTickLevel=0)
-        axis.setTicks([ticks, []])
+        axis.setTicks([list(ticks), []])
     except Exception:
         return False
+    _remember_bottom_ticks(axis, key, True, ticks)
     return True
 
 

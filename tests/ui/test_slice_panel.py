@@ -291,15 +291,34 @@ def test_programmatic_marker_moves_do_not_re_enter_the_drag_handler(sliced):
     assert sliced._slice_x_idx == 4
 
 
-def test_marker_drag_drops_antialiasing_then_schedules_its_return(sliced):
-    sliced.select_time_index(1)
-    xc, _yc = sliced._slice_coords()
+def test_marker_drag_drops_antialiasing_then_schedules_its_return(sliced, qapp):
+    """A real marker drag still uses the 150 ms idle timer. Seed arms the
+    0 ms discrete settle; that has to run before the drag, and a later
+    programmatic reslice must not look like one."""
+    # The fixture yields with the 0 ms timer already armed, and pytest may
+    # deliver that timer before this body runs. Re-seed here so the
+    # rebuild-return state is observed inside the test.
+    sliced._seed_slice()
+    assert sliced._slice_aa_on is False
+    assert sliced._slice._slice_discrete_aa_timer.isActive()
+    assert sliced._slice._slice_discrete_aa_timer.interval() == 0
+    assert sliced._slice_aa_idle_timer.interval() == 150
+    assert sliced._slice_aa_idle_timer.isActive() is False
+
+    qapp.processEvents()
     assert sliced._slice_aa_on is True
 
+    sliced.select_time_index(1)
+    assert sliced._slice_aa_on is True
+    assert sliced._slice_aa_idle_timer.isActive() is False
+
+    xc, _yc = sliced._slice_coords()
     sliced._slice_marker.setValue(float(xc[4]))
 
     assert sliced._slice_aa_on is False
     assert sliced._slice_aa_idle_timer.isActive()
+    assert sliced._slice_aa_idle_timer.interval() == 150
+    assert sliced._slice._slice_discrete_aa_timer.isActive() is False
 
 
 # --- readout ----------------------------------------------------------------

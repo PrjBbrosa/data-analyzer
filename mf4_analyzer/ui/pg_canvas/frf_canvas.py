@@ -276,6 +276,8 @@ class PgFrfCanvas(QWidget):
         self._discrete_aa_timer.setSingleShot(True)
         self._discrete_aa_timer.setInterval(0)
         self._discrete_aa_timer.timeout.connect(self._enable_idle_quality)
+        self._discrete_quality_hold = None
+        self._discrete_quality_deferred = False
         self.destroyed.connect(self._stop_aa_timers)
         self.destroyed.connect(self._on_presentation_paint_destroyed)
         # Hysteresis state for the two AA legs (ink + drawn points). Both are
@@ -654,6 +656,33 @@ class PgFrfCanvas(QWidget):
         self._aa_block_reason = None
         self._stop_aa_timers()
         timer = self._aa_timer_alive(getattr(self, "_discrete_aa_timer", None))
+        if timer is None:
+            self._discrete_quality_deferred = False
+        elif self._discrete_quality_hold is not None:
+            self._discrete_quality_deferred = True
+        else:
+            self._discrete_quality_deferred = False
+            timer.start()
+        self._emit_quality_status()
+
+    def hold_discrete_quality(self, token) -> None:
+        """Defer the discrete AA upgrade while a page transition holds ``token``."""
+        self._discrete_quality_hold = token
+        timer = self._aa_timer_alive(getattr(self, "_discrete_aa_timer", None))
+        if timer is not None and timer.isActive():
+            timer.stop()
+            self._discrete_quality_deferred = True
+
+    def release_discrete_quality(self, token) -> None:
+        """Arm one deferred discrete settle after the matching transition."""
+        if self._discrete_quality_hold != token:
+            return
+        self._discrete_quality_hold = None
+        deferred = self._discrete_quality_deferred
+        self._discrete_quality_deferred = False
+        if not deferred:
+            return
+        timer = self._aa_timer_alive(getattr(self, "_discrete_aa_timer", None))
         if timer is not None:
             timer.start()
         self._emit_quality_status()
@@ -661,6 +690,7 @@ class PgFrfCanvas(QWidget):
     def disable_interactive_quality(self) -> None:
         """Use AA-off curves while an FRF pan or zoom is in progress."""
         timers_were_active = self._aa_timers_active()
+        self._discrete_quality_deferred = False
         self._stop_aa_timers()
         self._close_aa_backstop_session()
         if not self._aa_on:
@@ -786,12 +816,113 @@ class PgFrfCanvas(QWidget):
     # Magnitude / phase / coherence share ``_glw``; the ready set is this host.
     # ------------------------------------------------------------------
 
+    # Same structural cap as the line canvas. Not shared: this request
+    # still resets plot-host alignment and flushes autorange first, and the
+    # geometry key's plots are magnitude, phase, coherence.
+    _PAINT_ACK_MAX_REARMS = 2
+
     def _cancel_presentation_paint_ack(self) -> None:
         """Invalidate a pending presentation-paint acknowledgement."""
         self._presentation_paint_ack_generation += 1
         self._presentation_paint_ack_pending = False
         self._presentation_paint_ack_request_id = None
         self._presentation_paint_ack_geometry = None
+        self._presentation_paint_ack_rearms = 0
+        self._presentation_paint_ack_rearm_warned = False
+
+    def _prepare_presentation_paint_ack_scene(self) -> None:
+        """Settle delayed ViewBox autorange before the geometry snapshot.
+
+        Called after ``reset_alignment`` and ``updateAutoRange``. Paint
+        still runs ``prepareForPaint`` later; doing it here makes the
+        snapshot match that paint. RuntimeError means the view is already
+        going away, and the geometry key then fails the request closed.
+        """
+        try:
+            self._glw.scene().prepareForPaint()
+        except (AttributeError, RuntimeError):
+            return
+
+    def _presentation_paint_ack_geometry_delta(self, previous, current) -> str:
+        """Name which snapshot component moved. Plots are magnitude, phase, coherence."""
+        if not isinstance(previous, tuple) or not isinstance(current, tuple):
+            return f"geometry {previous!r} -> {current!r}"
+        parts = []
+        for index, name in (
+            (0, "host-width"),
+            (1, "host-height"),
+            (2, "viewport-width"),
+            (3, "viewport-height"),
+            (4, "dpr"),
+        ):
+            if index >= len(previous) or index >= len(current):
+                parts.append(f"{name} missing")
+                continue
+            if previous[index] != current[index]:
+                parts.append(f"{name} {previous[index]!r} -> {current[index]!r}")
+        prev_plots = previous[5] if len(previous) > 5 else ()
+        curr_plots = current[5] if len(current) > 5 else ()
+        names = ("magnitude", "phase", "coherence")
+        for index in range(max(len(prev_plots), len(curr_plots))):
+            label = names[index] if index < len(names) else f"plot-{index}"
+            if index >= len(prev_plots) or index >= len(curr_plots):
+                parts.append(f"{label} plot membership changed")
+                continue
+            prev_item = prev_plots[index]
+            curr_item = curr_plots[index]
+            if prev_item == curr_item:
+                continue
+            if prev_item[0] != curr_item[0]:
+                parts.append(
+                    f"{label} sceneRect {prev_item[0]!r} -> {curr_item[0]!r}"
+                )
+            prev_range = (prev_item[1], prev_item[2])
+            curr_range = (curr_item[1], curr_item[2])
+            if prev_range != curr_range:
+                parts.append(
+                    f"{label} viewRange x {prev_item[1]!r} -> {curr_item[1]!r}, "
+                    f"y {prev_item[2]!r} -> {curr_item[2]!r}"
+                )
+        return "; ".join(parts) if parts else f"geometry {previous!r} -> {current!r}"
+
+    def _warn_presentation_paint_ack_geometry(self, previous, current) -> None:
+        """Log one geometry-give-up warning for this request."""
+        if getattr(self, "_presentation_paint_ack_rearm_warned", False):
+            return
+        self._presentation_paint_ack_rearm_warned = True
+        import logging
+
+        from mf4_analyzer.diagnostics import throttled
+
+        throttled(
+            logger,
+            "presentation-paint-ack-geometry",
+            logging.WARNING,
+            "presentation paint ack cancelled after %s rearms; geometry changed: %s",
+            self._PAINT_ACK_MAX_REARMS,
+            self._presentation_paint_ack_geometry_delta(previous, current),
+        )
+
+    def _rearm_presentation_paint_ack(self, previous, current) -> None:
+        """Snapshot ``current`` and schedule one more paint, or cancel."""
+        if (
+            not self._presentation_paint_ack_pending
+            or not self._presentation_paint_ack_visible()
+            or current is None
+        ):
+            self._cancel_presentation_paint_ack()
+            return
+        rearms = int(getattr(self, "_presentation_paint_ack_rearms", 0))
+        if rearms >= self._PAINT_ACK_MAX_REARMS:
+            self._warn_presentation_paint_ack_geometry(previous, current)
+            self._cancel_presentation_paint_ack()
+            return
+        self._presentation_paint_ack_rearms = rearms + 1
+        self._presentation_paint_ack_geometry = current
+        try:
+            self._glw.viewport().update()
+        except RuntimeError:
+            self._cancel_presentation_paint_ack()
 
     def _note_presentation_content_invalidated(self) -> None:
         """Tell a covering page transition that this chart is no longer B.
@@ -870,6 +1001,9 @@ class PgFrfCanvas(QWidget):
                 pass
         if not self._presentation_paint_ack_visible():
             return False
+        # Alignment and updateAutoRange above are FRF-specific. prepareForPaint
+        # still has to run before the snapshot; line canvas has neither step.
+        self._prepare_presentation_paint_ack_scene()
         geometry = self._presentation_paint_ack_geometry_key()
         if geometry is None:
             return False
@@ -892,7 +1026,9 @@ class PgFrfCanvas(QWidget):
             return None
         geometry = self._presentation_paint_ack_geometry_key()
         if geometry != self._presentation_paint_ack_geometry:
-            self._cancel_presentation_paint_ack()
+            self._rearm_presentation_paint_ack(
+                self._presentation_paint_ack_geometry, geometry,
+            )
             return None
         return (
             self._presentation_paint_ack_generation,
@@ -908,11 +1044,18 @@ class PgFrfCanvas(QWidget):
         if (
             generation != self._presentation_paint_ack_generation
             or not self._presentation_paint_ack_visible()
-            or geometry != self._presentation_paint_ack_geometry_key()
-            or geometry != self._presentation_paint_ack_geometry
         ):
             self._cancel_presentation_paint_ack()
             return
+        current = self._presentation_paint_ack_geometry_key()
+        if (
+            geometry != current
+            or geometry != self._presentation_paint_ack_geometry
+        ):
+            self._rearm_presentation_paint_ack(geometry, current)
+            return
+        self._presentation_paint_ack_rearms = 0
+        self._presentation_paint_ack_rearm_warned = False
         self._presentation_paint_ack_pending = False
         self._presentation_paint_ack_request_id = None
         self._presentation_paint_ack_geometry = None

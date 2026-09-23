@@ -24,10 +24,16 @@ fix can also be undone immediately because programmatic
 `sigPositionChanged` and can masquerade as a user drag.
 
 Rule: Apply slice AA to both the `PlotDataItem.opts` and the rendered child
-`PlotCurveItem.opts`, then drop AA only for real interactive movement and
-restore it from an idle timer. Guard programmatic marker updates so fresh
-slice renders stay AA-on.
+`PlotCurveItem.opts`. A rebuild returns with AA off and an independent 0 ms
+discrete timer armed; after that timer a cheap slice (ink inside the borrowed
+spectrum band, not blacklisted) is AA-on again. Drop AA only for real
+interactive movement, and restore it from the 150 ms `_slice_aa_idle_timer`
+(`interval()` stays 150; never `start(0)` on that timer). Guard programmatic
+`InfiniteLine.setValue` inside `_apply_slice` with `_slice_marker_updating`
+so it cannot cancel the discrete settle or leave a resting cheap slice AA-off.
 
-Verification: Cover fresh AA-on, manual range/marker drag AA-off, Ctrl/Shift
-wheel AA-off, and idle restoration in `tests/ui/test_pg_heatmap_canvas.py`;
-run the heatmap canvas suite plus `git diff --check`.
+Verification: Cover rebuild AA-off with the discrete timer armed, cheap
+settle AA-on, high-ink refusal, backstop blacklist, manual range/marker drag
+AA-off, Ctrl/Shift wheel AA-off, and idle restoration in
+`tests/ui/test_pg_heatmap_canvas.py`; run the heatmap canvas suite plus
+`git diff --check`.

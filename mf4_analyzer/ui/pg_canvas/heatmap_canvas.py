@@ -399,7 +399,9 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         self._copy_image_handler = None
         self._bottom_tick_target = None
         self._bottom_tick_density = None
-        self._slice_aa_on = True
+        # Slice AA starts off. A rebuild arms the strip's 0 ms discrete timer;
+        # this 150 ms timer is only the interaction quiet window.
+        self._slice_aa_on = False
         self._slice_aa_idle_timer = QTimer(self)
         self._slice_aa_idle_timer.setSingleShot(True)
         self._slice_aa_idle_timer.setInterval(150)
@@ -660,12 +662,119 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
     # waiter.
     # ------------------------------------------------------------------
 
+    # Same structural cap as the line canvas. Not shared: this request
+    # still aligns an expanded slice and flushes autorange first, and the
+    # geometry key appends a colorbar after the map/slice plots.
+    _PAINT_ACK_MAX_REARMS = 2
+
     def _cancel_presentation_paint_ack(self) -> None:
         """Invalidate a pending presentation-paint acknowledgement."""
         self._presentation_paint_ack_generation += 1
         self._presentation_paint_ack_pending = False
         self._presentation_paint_ack_request_id = None
         self._presentation_paint_ack_geometry = None
+        self._presentation_paint_ack_rearms = 0
+        self._presentation_paint_ack_rearm_warned = False
+
+    def _prepare_presentation_paint_ack_scene(self) -> None:
+        """Settle delayed ViewBox autorange before the geometry snapshot.
+
+        Slice alignment and ``updateAutoRange`` stay in the request. This
+        only runs ``prepareForPaint`` so the snapshot matches the following
+        paint. RuntimeError during teardown fails the request closed.
+        """
+        try:
+            self._glw.scene().prepareForPaint()
+        except (AttributeError, RuntimeError):
+            return
+
+    def _presentation_paint_ack_geometry_delta(self, previous, current) -> str:
+        """Name which snapshot component moved. Plots are map, then slice.
+
+        Index 6 is the colorbar key, which the line/FRF snapshots do not have.
+        """
+        if not isinstance(previous, tuple) or not isinstance(current, tuple):
+            return f"geometry {previous!r} -> {current!r}"
+        parts = []
+        for index, name in (
+            (0, "host-width"),
+            (1, "host-height"),
+            (2, "viewport-width"),
+            (3, "viewport-height"),
+            (4, "dpr"),
+        ):
+            if index >= len(previous) or index >= len(current):
+                parts.append(f"{name} missing")
+                continue
+            if previous[index] != current[index]:
+                parts.append(f"{name} {previous[index]!r} -> {current[index]!r}")
+        prev_plots = previous[5] if len(previous) > 5 else ()
+        curr_plots = current[5] if len(current) > 5 else ()
+        names = ("map", "slice")
+        for index in range(max(len(prev_plots), len(curr_plots))):
+            label = names[index] if index < len(names) else f"plot-{index}"
+            if index >= len(prev_plots) or index >= len(curr_plots):
+                parts.append(f"{label} plot membership changed")
+                continue
+            prev_item = prev_plots[index]
+            curr_item = curr_plots[index]
+            if prev_item == curr_item:
+                continue
+            if prev_item[0] != curr_item[0]:
+                parts.append(
+                    f"{label} sceneRect {prev_item[0]!r} -> {curr_item[0]!r}"
+                )
+            prev_range = (prev_item[1], prev_item[2])
+            curr_range = (curr_item[1], curr_item[2])
+            if prev_range != curr_range:
+                parts.append(
+                    f"{label} viewRange x {prev_item[1]!r} -> {curr_item[1]!r}, "
+                    f"y {prev_item[2]!r} -> {curr_item[2]!r}"
+                )
+        prev_cbar = previous[6] if len(previous) > 6 else None
+        curr_cbar = current[6] if len(current) > 6 else None
+        if prev_cbar != curr_cbar:
+            parts.append(f"colorbar {prev_cbar!r} -> {curr_cbar!r}")
+        return "; ".join(parts) if parts else f"geometry {previous!r} -> {current!r}"
+
+    def _warn_presentation_paint_ack_geometry(self, previous, current) -> None:
+        """Log one geometry-give-up warning for this request."""
+        if getattr(self, "_presentation_paint_ack_rearm_warned", False):
+            return
+        self._presentation_paint_ack_rearm_warned = True
+        import logging
+
+        from mf4_analyzer.diagnostics import throttled
+
+        throttled(
+            logger,
+            "presentation-paint-ack-geometry",
+            logging.WARNING,
+            "presentation paint ack cancelled after %s rearms; geometry changed: %s",
+            self._PAINT_ACK_MAX_REARMS,
+            self._presentation_paint_ack_geometry_delta(previous, current),
+        )
+
+    def _rearm_presentation_paint_ack(self, previous, current) -> None:
+        """Snapshot ``current`` and schedule one more paint, or cancel."""
+        if (
+            not self._presentation_paint_ack_pending
+            or not self._presentation_paint_ack_visible()
+            or current is None
+        ):
+            self._cancel_presentation_paint_ack()
+            return
+        rearms = int(getattr(self, "_presentation_paint_ack_rearms", 0))
+        if rearms >= self._PAINT_ACK_MAX_REARMS:
+            self._warn_presentation_paint_ack_geometry(previous, current)
+            self._cancel_presentation_paint_ack()
+            return
+        self._presentation_paint_ack_rearms = rearms + 1
+        self._presentation_paint_ack_geometry = current
+        try:
+            self._glw.viewport().update()
+        except RuntimeError:
+            self._cancel_presentation_paint_ack()
 
     def _note_presentation_content_invalidated(self) -> None:
         """Tell a covering page transition that this chart is no longer B.
@@ -785,6 +894,9 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
                 pass
         if not self._presentation_paint_ack_visible():
             return False
+        # Slice alignment and updateAutoRange above are heatmap-specific.
+        # prepareForPaint still runs before the snapshot.
+        self._prepare_presentation_paint_ack_scene()
         geometry = self._presentation_paint_ack_geometry_key()
         if geometry is None:
             return False
@@ -807,7 +919,9 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             return None
         geometry = self._presentation_paint_ack_geometry_key()
         if geometry != self._presentation_paint_ack_geometry:
-            self._cancel_presentation_paint_ack()
+            self._rearm_presentation_paint_ack(
+                self._presentation_paint_ack_geometry, geometry,
+            )
             return None
         return (
             self._presentation_paint_ack_generation,
@@ -823,11 +937,18 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         if (
             generation != self._presentation_paint_ack_generation
             or not self._presentation_paint_ack_visible()
-            or geometry != self._presentation_paint_ack_geometry_key()
-            or geometry != self._presentation_paint_ack_geometry
         ):
             self._cancel_presentation_paint_ack()
             return
+        current = self._presentation_paint_ack_geometry_key()
+        if (
+            geometry != current
+            or geometry != self._presentation_paint_ack_geometry
+        ):
+            self._rearm_presentation_paint_ack(geometry, current)
+            return
+        self._presentation_paint_ack_rearms = 0
+        self._presentation_paint_ack_rearm_warned = False
         self._presentation_paint_ack_pending = False
         self._presentation_paint_ack_request_id = None
         self._presentation_paint_ack_geometry = None
@@ -856,35 +977,26 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
 
     def disable_interactive_quality(self) -> None:
         """Drop slice-curve AA while the user is actively moving the view."""
-        try:
-            self._slice_aa_idle_timer.stop()
-        except Exception:
-            pass
-        if self._slice_curve is None or not self._slice_aa_on:
-            return
-        self._slice_aa_on = False
-        self._apply_slice_curve_aa_state()
+        return self._slice.disable_interactive_quality()
 
     def schedule_idle_quality(self) -> None:
         """Restore slice-curve AA after the interaction has settled."""
-        if self._slice_curve is None:
-            return
-        try:
-            self._slice_aa_idle_timer.start()
-        except Exception:
-            pass
+        return self._slice.schedule_idle_quality()
 
     def try_enable_idle_quality(self) -> None:
-        if self._slice_curve is None or self._slice_aa_on:
-            return
-        try:
-            if QApplication.mouseButtons() != Qt.NoButton:
-                self._slice_aa_idle_timer.start()
-                return
-        except Exception:
-            pass
-        self._slice_aa_on = True
-        self._apply_slice_curve_aa_state()
+        return self._slice.try_enable_idle_quality()
+
+    def hold_discrete_quality(self, token) -> None:
+        """Defer the slice curve's discrete AA upgrade for ``token``."""
+        self._slice.hold_discrete_quality(token)
+
+    def release_discrete_quality(self, token) -> None:
+        """Settle one deferred slice AA upgrade for ``token``."""
+        self._slice.release_discrete_quality(token)
+
+    def _note_aa_frame(self, frame_ms) -> None:
+        """Paint-timer hook. Slice AA frames are the heatmap's only AA session."""
+        self._slice._note_slice_aa_frame(frame_ms)
 
     def _on_interactive_range_changed(self, *_args) -> None:
         self.disable_interactive_quality()
@@ -1270,6 +1382,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         self._z_unit_suffix = None
         self._x_coords = None
         self._y_coords = None
+        self._slice.release_slice_quality_state()
         if self._slice_curve is not None:
             self._slice_curve.clear()
             _hide_plot_title(self._slice_plot)

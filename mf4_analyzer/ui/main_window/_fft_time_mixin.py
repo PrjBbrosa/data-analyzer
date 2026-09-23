@@ -1,5 +1,7 @@
 """FFTTimeMixin: FFT-vs-Time (spectrogram) compute, cache, dispatch, render."""
 
+from dataclasses import replace
+
 import numpy as np
 
 from ... import db_reference
@@ -16,6 +18,13 @@ from ...signal.spectrogram import spectrogram_facts_from_result
 from ..pg_canvas.heatmap_canvas import DEFAULT_HEATMAP_CMAP
 from ..compute_feedback import ComputeOutcome
 from ._sentinel import _INSPECTOR_TIME_RANGE
+from ._state_holders import (
+    FftTimeHeatmapRenderInputs,
+    canvas_previous_db_reference,
+    composite_source_id,
+    heatmap_slice_snapshot,
+    widget_raster_metrics,
+)
 from .fft_time_coordinator import make_fft_time_analysis_key
 from .ultraview_coordinator import notify_ultraview_plot
 
@@ -653,75 +662,160 @@ class FFTTimeMixin:
             return self._resolve_db_reference_for_source('fft_time', source)
         return db_reference.degraded_numeric_resolution(p)
 
-    def _render_fft_time_on(self, canvas, result, p, source=None):
-        """Multi-pane variant: render ``result`` on an arbitrary FFT-vs-Time
-        heatmap canvas with display options from ``p``. ``source`` is the
-        ``(fid, ch)`` this specific pane/result came from -- required for a
-        per-pane-accurate dB-reference resolution (spec §15 C2)."""
-        if bool(p.get('freq_auto', p.get('y_auto', True))):
-            freq_range = None  # The canvas adapts to actual result bins; keep auto intent.
+    @staticmethod
+    def _fft_time_result_extents(result):
+        """Coverage/time and frequency extents, or ``None`` when absent.
+
+        ``plot_result`` recomputes the image rectangle itself. These copies
+        exist so a later entry can see that the result's display geometry
+        changed. A bare ``object()`` test double has neither axis.
+        """
+        time_extent = None
+        frequency_extent = None
+        times = getattr(result, "times", None)
+        frequencies = getattr(result, "frequencies", None)
+        if times is not None:
+            try:
+                arr = np.asarray(times, dtype=float)
+                finite = arr[np.isfinite(arr)] if getattr(arr, "ndim", 0) == 1 else arr[:0]
+                if finite.size:
+                    from ..pg_canvas.heatmap_canvas import time_axis_display_extent
+                    extent = time_axis_display_extent(
+                        arr,
+                        params=getattr(result, "params", None),
+                        metadata=getattr(result, "metadata", None),
+                        fallback=(float(finite[0]), float(finite[-1])),
+                    )
+                    time_extent = (float(extent[0]), float(extent[1]))
+            except (AttributeError, TypeError, ValueError, IndexError):
+                time_extent = None
+        if frequencies is not None:
+            try:
+                freq = np.asarray(frequencies, dtype=float)
+                finite = (
+                    freq[np.isfinite(freq)] if getattr(freq, "ndim", 0) == 1 else freq[:0]
+                )
+                if finite.size:
+                    frequency_extent = (float(finite.min()), float(finite.max()))
+            except (AttributeError, TypeError, ValueError, IndexError):
+                frequency_extent = None
+        return time_extent, frequency_extent
+
+    def _current_fft_time_heatmap_inputs(self, canvas, result, p, source):
+        """Snapshot the display inputs the next FFT-vs-Time paint or retain check reads."""
+        resolution = self._fft_time_label_resolution(source, p)
+        inputs = self._fft_time_render_inputs(
+            canvas, result, p, source, resolution,
+        )
+        return replace(inputs, db_value=float(resolution.value))
+
+    def _fft_time_render_inputs(self, canvas, result, p, source, resolution):
+        """Build the frozen display snapshot. Paint reads this object only."""
+        if bool(p.get("freq_auto", p.get("y_auto", True))):
+            freq_range = None
         else:
             freq_range = self._normalize_freq_range(p)
-        # Wave 5: legacy ``dynamic: str`` is gone; we forward the explicit
-        # z_auto / z_floor / z_ceiling triplet that FFTTimeContextual now
-        # emits, plus y_auto / y_min / y_max for the manual Y override
-        # (precedes freq_range on the canvas). amplitude_mode is already
-        # the canvas's lowercase token ('amplitude_db' / 'amplitude') in
-        # FFTTimeContextual.get_params, so no translation needed.
-        z_auto = bool(p.get('z_auto', False))
+        result_params = getattr(result, "params", None)
+        weighting = str(
+            getattr(result_params, "weighting", None) or p.get("weighting", "None")
+        )
+        slice_dir, slice_x, slice_y = heatmap_slice_snapshot(canvas)
+        x_origin, x_lim, y_origin, y_lim = self._heatmap_viewport_snapshot(
+            "fft_time", canvas,
+        )
+        width, height, dpr = widget_raster_metrics(canvas)
+        tick_x, tick_y = self._heatmap_tick_counts()
+        time_extent, frequency_extent = self._fft_time_result_extents(result)
+        return FftTimeHeatmapRenderInputs(
+            amplitude_mode=p["amplitude_mode"],
+            weighting=weighting,
+            db_reference_mode=str(p.get("db_reference_mode", "") or ""),
+            db_value=float(resolution.value),
+            db_unit=str(resolution.unit or ""),
+            db_quantity=str(resolution.quantity or ""),
+            db_source=str(resolution.source or ""),
+            db_warning=str(resolution.warning or ""),
+            z_auto=bool(p.get("z_auto", False)),
+            z_floor=float(p.get("z_floor", -80.0)),
+            z_ceiling=float(p.get("z_ceiling", 0.0)),
+            x_auto=bool(p.get("x_auto", True)),
+            x_min=float(p.get("x_min", 0.0)),
+            x_max=float(p.get("x_max", 0.0)),
+            y_auto=bool(p.get("freq_auto", p.get("y_auto", True))),
+            y_min=float(p.get("y_min", 0.0)),
+            y_max=float(p.get("y_max", 0.0)),
+            freq_range=freq_range,
+            cmap=str(getattr(canvas, "_cmap_name", DEFAULT_HEATMAP_CMAP)),
+            interp="bilinear",
+            tick_x=tick_x,
+            tick_y=tick_y,
+            source_id=composite_source_id(source),
+            x_origin=x_origin,
+            y_origin=y_origin,
+            x_lim=x_lim,
+            y_lim=y_lim,
+            slice_dir=slice_dir,
+            slice_x=slice_x,
+            slice_y=slice_y,
+            seed_slice=getattr(canvas, "_slice_curve", None) is not None,
+            canvas_width=width,
+            canvas_height=height,
+            canvas_dpr=dpr,
+            previous_db_reference=canvas_previous_db_reference(canvas),
+            time_extent=time_extent,
+            frequency_extent=frequency_extent,
+            channel_name=str(getattr(result, "channel_name", "") or ""),
+            channel_unit=str(getattr(result, "unit", "") or ""),
+        )
+
+    def _paint_fft_time_heatmap(self, canvas, result, inputs):
+        """Draw ``inputs`` onto ``canvas``. Display knobs are not re-read from ``p``."""
+        resolution = db_reference.DbReferenceResolution(
+            value=float(inputs.db_value),
+            unit=inputs.db_unit,
+            quantity=inputs.db_quantity,
+            source=inputs.db_source,
+            warning=inputs.db_warning,
+        )
+        output_scale = "db" if inputs.amplitude_mode == "amplitude_db" else "linear"
+        amplitude_label = db_reference.format_amplitude_label(
+            resolution, weighting=inputs.weighting, output_scale=output_scale,
+        )
+        z_unit_suffix = (
+            db_reference.format_reference_note(
+                resolution, weighting=inputs.weighting,
+            )
+            if output_scale == "db" else None
+        )
         setter = getattr(canvas, "set_overlay_source", None)
         if callable(setter):
-            setter(source)
-        amp_mode = p['amplitude_mode']
-        # weighting: prefer the COMPUTED result's own SpectrogramParams (the
-        # authoritative value actually used to build this matrix) over the
-        # current inspector combo, which may have drifted since compute.
-        result_params = getattr(result, 'params', None)
-        weighting = str(getattr(result_params, 'weighting', None)
-                        or p.get('weighting', 'None'))
-        output_scale = 'db' if amp_mode == 'amplitude_db' else 'linear'
-        resolution = self._fft_time_label_resolution(source, p)
-        amplitude_label = db_reference.format_amplitude_label(
-            resolution, weighting=weighting, output_scale=output_scale)
-        # Reference-aware readout/remark suffix (spec §15 C2): only in dB
-        # mode -- Linear has no reference concept, so leave it None and let
-        # the canvas fall back to the channel unit (historical behaviour).
-        z_unit_suffix = (
-            db_reference.format_reference_note(resolution, weighting=weighting)
-            if output_scale == 'db' else None
-        )
+            setter(inputs.source_id)
+        if inputs.amplitude_mode == "amplitude_db":
+            delta_fn = getattr(canvas, "reference_delta_since_last_render", None)
+            if callable(delta_fn) and hasattr(canvas, "_last_db_reference"):
+                canvas._last_db_reference = inputs.previous_db_reference
         canvas.plot_result(
             result,
-            amplitude_mode=amp_mode,
-            cmap=getattr(canvas, '_cmap_name', DEFAULT_HEATMAP_CMAP),
-            z_auto=z_auto,
-            z_floor=float(p.get('z_floor', -80.0)),
-            z_ceiling=float(p.get('z_ceiling', 0.0)),
-            freq_range=freq_range,
-            interp='bilinear',
-            x_auto=bool(p.get('x_auto', True)),
-            x_min=float(p.get('x_min', 0.0)),
-            x_max=float(p.get('x_max', 0.0)),
-            y_auto=bool(p.get('freq_auto', p.get('y_auto', True))),
-            y_min=float(p.get('y_min', 0.0)),
-            y_max=float(p.get('y_max', 0.0)),
-            # db_reference is display-only: source it from the resolved
-            # reference at RENDER time so changing it re-renders from cache
-            # without a recompute (it is absent from SpectrogramParams + the
-            # cache key). resolve_db_reference always returns a validated,
-            # positive value -- no separate max(..., 1e-12) coercion needed.
-            db_reference=resolution.value,
+            amplitude_mode=inputs.amplitude_mode,
+            cmap=inputs.cmap,
+            z_auto=inputs.z_auto,
+            z_floor=float(inputs.z_floor),
+            z_ceiling=float(inputs.z_ceiling),
+            freq_range=inputs.freq_range,
+            interp=inputs.interp,
+            x_auto=inputs.x_auto,
+            x_min=float(inputs.x_min),
+            x_max=float(inputs.x_max),
+            y_auto=inputs.y_auto,
+            y_min=float(inputs.y_min),
+            y_max=float(inputs.y_max),
+            db_reference=inputs.db_value,
             amplitude_label=amplitude_label,
             colorbar_label=amplitude_label,
             z_unit_suffix=z_unit_suffix,
         )
-        # Write the auto-computed absolute levels back into the inspector
-        # spins (blockSignals so we don't trigger a recompute).  This makes
-        # the current display window the single source of truth: when the
-        # user later un-ticks "自动", the spins already hold the exact same
-        # values that are on screen, so switching auto→manual is jump-free.
-        if z_auto and amp_mode == 'amplitude_db':
-            auto_lvls = getattr(canvas, '_last_auto_levels', None)
+        if inputs.z_auto and inputs.amplitude_mode == "amplitude_db":
+            auto_lvls = getattr(canvas, "_last_auto_levels", None)
             if auto_lvls is not None:
                 ctx = self.inspector.fft_time_ctx
                 for spin, val in (
@@ -731,13 +825,8 @@ class FFTTimeMixin:
                     spin.blockSignals(True)
                     spin.setValue(val)
                     spin.blockSignals(False)
-        elif not z_auto and amp_mode == 'amplitude_db':
-            # Spec §8.3.1: the reference changed since this canvas's last
-            # render and a MANUAL window was in effect -- plot_result already
-            # shifted vmin/vmax by the matching delta; persist the shifted
-            # numbers into the spins so they don't silently drift back to
-            # the pre-shift values on the next unrelated re-render.
-            shifted = getattr(canvas, '_last_manual_levels_shifted', None)
+        elif (not inputs.z_auto) and inputs.amplitude_mode == "amplitude_db":
+            shifted = getattr(canvas, "_last_manual_levels_shifted", None)
             if shifted is not None:
                 ctx = self.inspector.fft_time_ctx
                 for spin, val in (
@@ -747,10 +836,26 @@ class FFTTimeMixin:
                     spin.blockSignals(True)
                     spin.setValue(val)
                     spin.blockSignals(False)
-        xt, yt = self.inspector.top.tick_density()
-        canvas.set_tick_density(xt, yt)
+        canvas.set_tick_density(inputs.tick_x, inputs.tick_y)
+
+    def _render_fft_time_on(self, canvas, result, p, source=None):
+        """Multi-pane variant: render ``result`` on an arbitrary FFT-vs-Time
+        heatmap canvas with display options from ``p``. ``source`` is the
+        ``(fid, ch)`` this specific pane/result came from -- required for a
+        per-pane-accurate dB-reference resolution (spec §15 C2)."""
+        resolution = self._fft_time_label_resolution(source, p)
+        inputs = replace(
+            self._fft_time_render_inputs(canvas, result, p, source, resolution),
+            db_value=float(resolution.value),
+        )
+        self._paint_fft_time_heatmap(canvas, result, inputs)
         notify_ultraview_plot(self, "fft_time", "fft-time-plot")
         self._restore_analysis_canvas_viewport("fft_time", canvas)
+        # After the viewport restore, so the signature records the pane
+        # limits the next entry will read.
+        commit = getattr(self, "_commit_heatmap_reveal", None)
+        if callable(commit):
+            commit("fft_time", canvas, inputs, result)
 
     # ---- FFT vs Time coordinator events --------------------------------
     def _on_fft_time_render_requested(self, ctx, result, cache_hit):

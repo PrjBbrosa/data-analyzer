@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 import sys
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 import numpy as np
 from PyQt5.QtCore import Qt
@@ -45,6 +47,23 @@ _log = logging.getLogger("mf4_analyzer.ui.pg_canvases")
 # ---------------------------------------------------------------------------
 _HIDPI_COPY_SCALE = 2.0
 _HIDPI_MAX_WIDTH = 2560
+
+# UltraView automatic previews grab through Canvas.grab_pixmap, which does
+# not take an AA policy argument. ChartStack sets this for that call only.
+# Explicit copy/export leaves it unset and still forces AA when affordable.
+_AUTO_PREVIEW_GRAB: ContextVar[bool] = ContextVar(
+    "mf4_ultraview_auto_preview_grab", default=False
+)
+
+
+@contextmanager
+def auto_preview_grab_scope():
+    """Grab with the curves' current antialiasing instead of forcing it."""
+    token = _AUTO_PREVIEW_GRAB.set(True)
+    try:
+        yield
+    finally:
+        _AUTO_PREVIEW_GRAB.reset(token)
 
 
 # ---------------------------------------------------------------------------
@@ -875,13 +894,18 @@ class Renderer(_CanvasBackref):
             pass
         return pix
 
-    def grab_pixmap(self, scale: float = 1.0) -> QPixmap:
+    def grab_pixmap(self, scale: float = 1.0, *, auto_preview: bool = False) -> QPixmap:
         """Return a ``QPixmap`` snapshot of the canvas.
 
         ``scale`` (spec §E) renders the scene at a HIGHER resolution for
         crisp, DPI-independent copy/save output. The effective factor is
         capped by ``_capped_hidpi_scale`` (floor 1×, width ceiling
         ``_HIDPI_MAX_WIDTH``) so export stays fast.
+
+        ``auto_preview=True`` (also implied by :func:`auto_preview_grab_scope`)
+        keeps each curve's current antialiasing. Explicit copy, export, and
+        save-image keep the default and still force AA when it is affordable.
+        The grabbed widget is unchanged: the outer canvas, then ``_glw``.
 
         Order of attempts:
         1. ``QWidget.grab()`` on the outer widget (covers GraphicsLayoutWidget
@@ -919,8 +943,10 @@ class Renderer(_CanvasBackref):
             return None
 
         # Few-channel exports keep the crisp forced-AA path. Dense exports
-        # are what-you-see-is-what-you-get and avoid re-enabling AA.
-        if affordable:
+        # and UltraView automatic previews are what-you-see-is-what-you-get
+        # and do not re-enable AA.
+        screen_aa = bool(auto_preview) or bool(_AUTO_PREVIEW_GRAB.get())
+        if affordable and not screen_aa:
             with self._quality._curves_antialiased():
                 pix = _grab_first_good()
         else:

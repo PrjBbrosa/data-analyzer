@@ -2447,9 +2447,24 @@ class TimeDomainCanvasPG(QWidget):
             self._interaction_generation
         )
 
+    def hold_discrete_quality(self, token) -> None:
+        """Defer the discrete AA upgrade for a page transition token."""
+        self._quality.hold_discrete_quality(token)
+
+    def release_discrete_quality(self, token) -> None:
+        """Settle one deferred discrete AA upgrade for ``token``."""
+        self._quality.release_discrete_quality(token)
+
     # ------------------------------------------------------------------
     # Natural-paint acknowledgement for local chart transitions.
     # ------------------------------------------------------------------
+
+    # Structural cap. This canvas does not share the analysis-canvas helper:
+    # the ack token is one tuple (request, epoch, restore generation,
+    # interaction generation, geometry), and the geometry key is viewport
+    # size, DPR, and axes — no host size and no colorbar. ``_glw`` is the
+    # GraphicsLayoutWidget, so the scene call is still ``_glw.scene()``.
+    _PAINT_ACK_MAX_REARMS = 2
 
     def _invalidate_presentation_paint_ack(self) -> None:
         """Drop an unpainted presentation request without emitting anything."""
@@ -2459,6 +2474,110 @@ class TimeDomainCanvasPG(QWidget):
             return
         self._presentation_paint_ack_epoch += 1
         self._presentation_paint_ack_request = None
+        self._presentation_paint_ack_rearms = 0
+        self._presentation_paint_ack_rearm_warned = False
+
+    def _prepare_presentation_paint_ack_scene(self) -> None:
+        """Settle delayed ViewBox autorange before the geometry snapshot.
+
+        ``_glw.scene()`` is the pyqtgraph scene on this GraphicsLayoutWidget.
+        RuntimeError during teardown fails the request closed via the
+        geometry key.
+        """
+        try:
+            self._glw.scene().prepareForPaint()
+        except (AttributeError, RuntimeError):
+            return
+
+    def _presentation_paint_ack_geometry_delta(self, previous, current) -> str:
+        """Name which snapshot component moved.
+
+        Key layout differs from the analysis canvases: index 0/1 are the
+        viewport size, index 2 is DPR, index 3 is the axis tuple. There is
+        no host-size prefix.
+        """
+        if not isinstance(previous, tuple) or not isinstance(current, tuple):
+            return f"geometry {previous!r} -> {current!r}"
+        parts = []
+        for index, name in (
+            (0, "viewport-width"),
+            (1, "viewport-height"),
+            (2, "dpr"),
+        ):
+            if index >= len(previous) or index >= len(current):
+                parts.append(f"{name} missing")
+                continue
+            if previous[index] != current[index]:
+                parts.append(f"{name} {previous[index]!r} -> {current[index]!r}")
+        prev_axes = previous[3] if len(previous) > 3 else ()
+        curr_axes = current[3] if len(current) > 3 else ()
+        for index in range(max(len(prev_axes), len(curr_axes))):
+            label = f"axis-{index}"
+            if index >= len(prev_axes) or index >= len(curr_axes):
+                parts.append(f"{label} plot membership changed")
+                continue
+            prev_item = prev_axes[index]
+            curr_item = curr_axes[index]
+            if prev_item == curr_item:
+                continue
+            if prev_item[0] != curr_item[0]:
+                parts.append(
+                    f"{label} sceneRect {prev_item[0]!r} -> {curr_item[0]!r}"
+                )
+            prev_range = (prev_item[1], prev_item[2])
+            curr_range = (curr_item[1], curr_item[2])
+            if prev_range != curr_range:
+                parts.append(
+                    f"{label} viewRange x {prev_item[1]!r} -> {curr_item[1]!r}, "
+                    f"y {prev_item[2]!r} -> {curr_item[2]!r}"
+                )
+        return "; ".join(parts) if parts else f"geometry {previous!r} -> {current!r}"
+
+    def _warn_presentation_paint_ack_geometry(self, previous, current) -> None:
+        """Log one geometry-give-up warning for this request."""
+        if getattr(self, "_presentation_paint_ack_rearm_warned", False):
+            return
+        self._presentation_paint_ack_rearm_warned = True
+        throttled(
+            _LOG,
+            "presentation-paint-ack-geometry",
+            logging.WARNING,
+            "presentation paint ack cancelled after %s rearms; geometry changed: %s",
+            self._PAINT_ACK_MAX_REARMS,
+            self._presentation_paint_ack_geometry_delta(previous, current),
+        )
+
+    def _rearm_presentation_paint_ack(self, token, current) -> None:
+        """Replace the tuple's geometry without bumping the epoch.
+
+        A changed epoch, restore generation, or interaction generation is a
+        real invalidation and does not rearm. Analysis canvases instead keep
+        a pending flag and a separate generation counter.
+        """
+        if (
+            token is None
+            or token is not self._presentation_paint_ack_request
+            or current is None
+            or not self._presentation_paint_ack_visible()
+            or token[1] != self._presentation_paint_ack_epoch
+            or token[2] != self._presentation_restore_generation
+            or token[3] != self._interaction_generation
+        ):
+            self._invalidate_presentation_paint_ack()
+            return
+        rearms = int(getattr(self, "_presentation_paint_ack_rearms", 0))
+        if rearms >= self._PAINT_ACK_MAX_REARMS:
+            self._warn_presentation_paint_ack_geometry(token[4], current)
+            self._invalidate_presentation_paint_ack()
+            return
+        self._presentation_paint_ack_rearms = rearms + 1
+        self._presentation_paint_ack_request = (
+            token[0], token[1], token[2], token[3], current,
+        )
+        try:
+            self._glw.viewport().update()
+        except RuntimeError:
+            self._invalidate_presentation_paint_ack()
 
     def _note_presentation_content_invalidated(self) -> None:
         """Tell a covering page transition that this chart is no longer B.
@@ -2541,6 +2660,7 @@ class TimeDomainCanvasPG(QWidget):
             or not self._presentation_paint_ack_visible()
         ):
             return False
+        self._prepare_presentation_paint_ack_scene()
         geometry = self._presentation_paint_ack_geometry_key()
         if geometry is None:
             return False
@@ -2569,9 +2689,12 @@ class TimeDomainCanvasPG(QWidget):
             or token[2] != self._presentation_restore_generation
             or token[3] != self._interaction_generation
             or not self._presentation_paint_ack_visible()
-            or token[4] != self._presentation_paint_ack_geometry_key()
         ):
             self._invalidate_presentation_paint_ack()
+            return None
+        geometry = self._presentation_paint_ack_geometry_key()
+        if token[4] != geometry:
+            self._rearm_presentation_paint_ack(token, geometry)
             return None
         return token
 
@@ -2584,13 +2707,18 @@ class TimeDomainCanvasPG(QWidget):
             or token[2] != self._presentation_restore_generation
             or token[3] != self._interaction_generation
             or not self._presentation_paint_ack_visible()
-            or token[4] != self._presentation_paint_ack_geometry_key()
         ):
             self._invalidate_presentation_paint_ack()
+            return
+        geometry = self._presentation_paint_ack_geometry_key()
+        if token[4] != geometry:
+            self._rearm_presentation_paint_ack(token, geometry)
             return
         request_id = token[0]
         # Clear before emitting so a synchronous consumer cannot replay this
         # acknowledgement, and may safely arm a later request of its own.
+        self._presentation_paint_ack_rearms = 0
+        self._presentation_paint_ack_rearm_warned = False
         self._presentation_paint_ack_request = None
         self.presentation_paint_acknowledged.emit(request_id)
 

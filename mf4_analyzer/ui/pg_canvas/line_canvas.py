@@ -558,6 +558,8 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         self._discrete_aa_timer.setSingleShot(True)
         self._discrete_aa_timer.setInterval(0)
         self._discrete_aa_timer.timeout.connect(self._enable_idle_quality)
+        self._discrete_quality_hold = None
+        self._discrete_quality_deferred = False
         # Measured backstop (spec §3.3/§3.4). Everything above is a
         # PREDICTION; this is the layer that measures what the frame actually
         # cost, so a prediction that was wrong costs at most ONE bad frame per
@@ -950,12 +952,121 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         self._stop_aa_idle_timer()
         self._stop_discrete_aa_timer()
 
+    # Structural cap on layout-settling rounds, not a timed calibration.
+    # Kept on this canvas: ack state is pending/request-id/generation, and
+    # the geometry key is host size, viewport size, DPR, then the amplitude
+    # and time-preview plots. FRF pre-aligns three plots, heatmap appends a
+    # colorbar, and the time-domain canvas stores one epoch tuple.
+    _PAINT_ACK_MAX_REARMS = 2
+
     def _cancel_presentation_paint_ack(self) -> None:
         """Invalidate a pending presentation-paint acknowledgement."""
         self._presentation_paint_ack_generation += 1
         self._presentation_paint_ack_pending = False
         self._presentation_paint_ack_request_id = None
         self._presentation_paint_ack_geometry = None
+        self._presentation_paint_ack_rearms = 0
+        self._presentation_paint_ack_rearm_warned = False
+
+    def _prepare_presentation_paint_ack_scene(self) -> None:
+        """Settle delayed ViewBox autorange before the geometry snapshot.
+
+        The viewport paint calls ``prepareForPaint`` only after the ack
+        token is sampled, so a freshly added curve would change viewRange
+        during that paint and void the handshake. A deleted GraphicsView
+        during teardown raises RuntimeError; the request then fails closed
+        on the geometry key.
+        """
+        try:
+            self._glw.scene().prepareForPaint()
+        except (AttributeError, RuntimeError):
+            return
+
+    def _presentation_paint_ack_geometry_delta(self, previous, current) -> str:
+        """Name which snapshot component moved. Plots are amplitude, then time."""
+        if not isinstance(previous, tuple) or not isinstance(current, tuple):
+            return f"geometry {previous!r} -> {current!r}"
+        parts = []
+        for index, name in (
+            (0, "host-width"),
+            (1, "host-height"),
+            (2, "viewport-width"),
+            (3, "viewport-height"),
+            (4, "dpr"),
+        ):
+            if index >= len(previous) or index >= len(current):
+                parts.append(f"{name} missing")
+                continue
+            if previous[index] != current[index]:
+                parts.append(f"{name} {previous[index]!r} -> {current[index]!r}")
+        prev_plots = previous[5] if len(previous) > 5 else ()
+        curr_plots = current[5] if len(current) > 5 else ()
+        names = ("amp", "time")
+        for index in range(max(len(prev_plots), len(curr_plots))):
+            label = names[index] if index < len(names) else f"plot-{index}"
+            if index >= len(prev_plots) or index >= len(curr_plots):
+                parts.append(f"{label} plot membership changed")
+                continue
+            prev_item = prev_plots[index]
+            curr_item = curr_plots[index]
+            if prev_item == curr_item:
+                continue
+            if prev_item[0] != curr_item[0]:
+                parts.append(
+                    f"{label} sceneRect {prev_item[0]!r} -> {curr_item[0]!r}"
+                )
+            prev_range = (prev_item[1], prev_item[2])
+            curr_range = (curr_item[1], curr_item[2])
+            if prev_range != curr_range:
+                parts.append(
+                    f"{label} viewRange x {prev_item[1]!r} -> {curr_item[1]!r}, "
+                    f"y {prev_item[2]!r} -> {curr_item[2]!r}"
+                )
+        return "; ".join(parts) if parts else f"geometry {previous!r} -> {current!r}"
+
+    def _warn_presentation_paint_ack_geometry(self, previous, current) -> None:
+        """Log one geometry-give-up warning for this request."""
+        if getattr(self, "_presentation_paint_ack_rearm_warned", False):
+            return
+        self._presentation_paint_ack_rearm_warned = True
+        import logging
+
+        from mf4_analyzer.diagnostics import throttled
+
+        throttled(
+            logger,
+            "presentation-paint-ack-geometry",
+            logging.WARNING,
+            "presentation paint ack cancelled after %s rearms; geometry changed: %s",
+            self._PAINT_ACK_MAX_REARMS,
+            self._presentation_paint_ack_geometry_delta(previous, current),
+        )
+
+    def _rearm_presentation_paint_ack(self, previous, current) -> None:
+        """Snapshot ``current`` and schedule one more paint, or cancel.
+
+        Visibility loss and a changed generation take the cancel path.
+        Generation stays put across a rearm; ``_cancel_presentation_paint_ack``
+        is what bumps it.
+        """
+        if (
+            not self._presentation_paint_ack_pending
+            or not self._presentation_paint_ack_visible()
+            or current is None
+        ):
+            self._cancel_presentation_paint_ack()
+            return
+        rearms = int(getattr(self, "_presentation_paint_ack_rearms", 0))
+        if rearms >= self._PAINT_ACK_MAX_REARMS:
+            self._warn_presentation_paint_ack_geometry(previous, current)
+            self._cancel_presentation_paint_ack()
+            return
+        self._presentation_paint_ack_rearms = rearms + 1
+        self._presentation_paint_ack_geometry = current
+        try:
+            self._glw.viewport().update()
+        except RuntimeError:
+            self._cancel_presentation_paint_ack()
 
     def _note_presentation_content_invalidated(self) -> None:
         """Tell a covering page transition that this chart is no longer B.
@@ -1021,6 +1132,9 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         self._cancel_presentation_paint_ack()
         if not self._presentation_paint_ack_visible():
             return False
+        # Line canvas does not pre-align. Settle autorange here so the
+        # snapshot matches the paint that follows.
+        self._prepare_presentation_paint_ack_scene()
         geometry = self._presentation_paint_ack_geometry_key()
         if geometry is None:
             return False
@@ -1043,7 +1157,9 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             return None
         geometry = self._presentation_paint_ack_geometry_key()
         if geometry != self._presentation_paint_ack_geometry:
-            self._cancel_presentation_paint_ack()
+            self._rearm_presentation_paint_ack(
+                self._presentation_paint_ack_geometry, geometry,
+            )
             return None
         return (
             self._presentation_paint_ack_generation,
@@ -1059,11 +1175,18 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         if (
             generation != self._presentation_paint_ack_generation
             or not self._presentation_paint_ack_visible()
-            or geometry != self._presentation_paint_ack_geometry_key()
-            or geometry != self._presentation_paint_ack_geometry
         ):
             self._cancel_presentation_paint_ack()
             return
+        current = self._presentation_paint_ack_geometry_key()
+        if (
+            geometry != current
+            or geometry != self._presentation_paint_ack_geometry
+        ):
+            self._rearm_presentation_paint_ack(geometry, current)
+            return
+        self._presentation_paint_ack_rearms = 0
+        self._presentation_paint_ack_rearm_warned = False
         self._presentation_paint_ack_pending = False
         self._presentation_paint_ack_request_id = None
         self._presentation_paint_ack_geometry = None
@@ -1125,8 +1248,35 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         self._aa_on = False
         timer = self._timer_alive(self._discrete_aa_timer)
         if timer is None:
+            self._discrete_quality_deferred = False
             return
+        if self._discrete_quality_hold is not None:
+            timer.stop()
+            self._discrete_quality_deferred = True
+            return
+        self._discrete_quality_deferred = False
         timer.start()
+
+    def hold_discrete_quality(self, token) -> None:
+        """Defer the discrete AA upgrade while a page transition holds ``token``."""
+        self._discrete_quality_hold = token
+        timer = self._timer_alive(self._discrete_aa_timer)
+        if timer is not None and timer.isActive():
+            timer.stop()
+            self._discrete_quality_deferred = True
+
+    def release_discrete_quality(self, token) -> None:
+        """Arm one deferred discrete settle after the matching transition."""
+        if self._discrete_quality_hold != token:
+            return
+        self._discrete_quality_hold = None
+        deferred = self._discrete_quality_deferred
+        self._discrete_quality_deferred = False
+        if not deferred:
+            return
+        timer = self._timer_alive(self._discrete_aa_timer)
+        if timer is not None:
+            timer.start()
 
     def disable_interactive_quality(self):
         """Drop curve AA for the interactive (pan/zoom) path and cancel any
@@ -1136,6 +1286,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         # to red, so that transition has to be emitted even on the hot path
         # below where AA was already off and nothing else changes.
         settle_was_pending = self._aa_settle_pending()
+        self._discrete_quality_deferred = False
         self._stop_aa_idle_timer()
         self._stop_discrete_aa_timer()
         if self._aa_backstop_armed:

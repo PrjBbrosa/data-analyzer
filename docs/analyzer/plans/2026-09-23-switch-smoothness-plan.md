@@ -1,7 +1,7 @@
 # Section / View 切换平顺性优化计划
 
 - 日期：2026-09-23。
-- 状态：**计划稿，未实施。** 本文授权范围是计划本身；产品实现按接受后的计划另行执行。
+- 状态：**源码实施已到 Task 1–6 与 Task 8，以及 Task 4（D-A）。Task 0 的 Windows 基线、Task 5 的 F3、Task 7 的真机标定未做。** 本机 offscreen 聚焦测试已过；Windows 前台、frozen exe、Cocoa 仍是 UNVERIFIED。Task 7 不改现有 ink / 兜底常量，也不引入 `_DISCRETE_AA_FRAME_BUDGET_MS`（决策门没有 Windows 读数）。
 - 编写基线：`ef63e1e6`，`app_meta.py` 版本 `v8.3.2`。执行前重新记录 HEAD 与相关文件指纹；源码变化后，报告里的数字只能作为参考，不能当作基线。
 - 设计：`docs/analyzer/specs/2026-09-23-switch-smoothness-spec.md`（下称 spec，设计项编号 D-A…D-I）。
 - 问题与数字：`docs/analyzer/reviews/2026-09-23-windows-switch-smoothness-analysis.md`（下称报告）。

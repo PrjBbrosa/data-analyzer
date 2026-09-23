@@ -1,6 +1,8 @@
 """Presentation-only contracts for chart page-transition composition."""
 from __future__ import annotations
 
+import logging
+
 from PyQt5.QtCore import QEvent, QPoint, QPointF, QRect, Qt
 from PyQt5.QtGui import QColor, QPainter, QPixmap, QWheelEvent
 from PyQt5.QtTest import QTest
@@ -388,4 +390,34 @@ def test_missing_natural_ack_times_out_without_starting_a_fade(qtbot):
     assert controller.watch_target_ack(target)
     qtbot.waitUntil(lambda: controller.image_bytes() == 0, timeout=1000)
     assert cancelled == ["target-paint-timeout"]
+    assert not controller.is_active()
+
+
+def test_target_paint_timeout_warns_with_section_and_view_before_cancel(qtbot, caplog):
+    """The 1000 ms watchdog stays; expiry logs Section/View identity, then cancels."""
+    controller = _controller(qtbot)
+    assert controller._target_ack_watchdog.interval() == 1000
+    target = _token("fft-view")
+    logged_before_cancel = []
+
+    def _on_cancel(reason):
+        logged_before_cancel.append((reason, [record.getMessage() for record in caplog.records]))
+
+    controller.transition_cancelled.connect(_on_cancel)
+    assert controller.begin_departure(_token("time-view"), _frame("#204080"))
+    assert controller.arm_target(target)
+    controller._target_ack_watchdog.setInterval(20)
+    with caplog.at_level(
+        logging.WARNING, logger="mf4_analyzer.ui.chart_stack.page_transition",
+    ):
+        assert controller.watch_target_ack(target)
+        qtbot.waitUntil(lambda: bool(logged_before_cancel), timeout=1000)
+
+    assert logged_before_cancel
+    reason, messages_at_cancel = logged_before_cancel[0]
+    assert reason == "target-paint-timeout"
+    assert len(messages_at_cancel) == 1
+    message = messages_at_cancel[0]
+    assert "section=time" in message
+    assert "view=fft-view" in message
     assert not controller.is_active()

@@ -3027,3 +3027,310 @@ def test_fft_time_chart_options_updates_frequency_alias_policy(two_file_win, qtb
     assert state.params['freq_auto'] is True
     assert state.panes[0].viewport_origin['y'] == 'auto'
     assert canvas.capture_xy_viewport()[1][1] > 60.
+
+
+def _perturb_heatmap_field(value):
+    """One value that cannot compare equal to ``value``."""
+    if isinstance(value, bool):
+        return not value
+    if isinstance(value, int):
+        return value + 1
+    if isinstance(value, float):
+        return value + 1.0
+    if isinstance(value, str):
+        return value + "·"
+    if isinstance(value, tuple):
+        if value and all(isinstance(item, float) for item in value):
+            return (value[0] + 1.0,) + tuple(value[1:])
+        return value + ("changed",)
+    if value is None:
+        return ("changed",)
+    raise AssertionError(type(value))
+
+
+class _HoldingHeatmap:
+    def has_result(self):
+        return True
+
+
+def _assert_each_heatmap_field_forces_redraw(inputs, section):
+    """Every display field is part of the signature and blocks a retained reveal."""
+    from dataclasses import fields, replace
+
+    from mf4_analyzer.ui.main_window._state_holders import heatmap_render_signature
+
+    identity = (1, 100)
+    baseline = heatmap_render_signature(inputs, identity)
+    canvas = _HoldingHeatmap()
+    from mf4_analyzer.ui.main_window._state_holders import HeatmapRevealBook
+
+    book = HeatmapRevealBook()
+    assert book.signature_for(section, canvas) is None
+    book.remember(section, canvas, baseline)
+    canvas._tracelab_heatmap_picture = (section, identity)
+    assert book.keeps(section, canvas, baseline, identity)
+    assert heatmap_render_signature(inputs, (2, 100)) != baseline
+    assert heatmap_render_signature(inputs, (1, 101)) != baseline
+    assert not book.keeps(section, canvas, baseline, (2, 100))
+    for field in fields(inputs):
+        mutated = replace(
+            inputs, **{field.name: _perturb_heatmap_field(getattr(inputs, field.name))},
+        )
+        mutated_sig = heatmap_render_signature(mutated, identity)
+        assert mutated_sig != baseline, field.name
+        assert not book.keeps(section, canvas, mutated_sig, identity), field.name
+
+
+def test_order_heatmap_render_inputs_each_field_changes_signature():
+    from mf4_analyzer.ui.main_window._state_holders import OrderHeatmapRenderInputs
+
+    inputs = OrderHeatmapRenderInputs(
+        signal_title="扭矩",
+        order_resolution_text="0.1",
+        amplitude_mode="amplitude_db",
+        weighting="None",
+        db_reference_mode="manual",
+        db_value=3.5,
+        db_unit="Nm",
+        db_quantity="torque",
+        db_source="manual",
+        db_warning="",
+        z_auto=False,
+        z_floor=-50.0,
+        z_ceiling=-10.0,
+        x_auto=True,
+        x_min=0.0,
+        x_max=1.0,
+        y_auto=False,
+        y_min=0.0,
+        y_max=4.0,
+        cmap="gnuplot2",
+        interp="bilinear",
+        tick_x=8,
+        tick_y=6,
+        source_id=("fid", "torque"),
+        x_origin="auto",
+        y_origin="user",
+        x_lim=(0.1, 0.9),
+        y_lim=(1.0, 3.0),
+        slice_dir="y",
+        slice_x=0.2,
+        slice_y=1.5,
+        seed_slice=True,
+        canvas_width=640,
+        canvas_height=480,
+        canvas_dpr=2.0,
+        previous_db_reference=3.5,
+        x_extent=(0.0, 1.0),
+        y_extent=(0.0, 8.0),
+    )
+    _assert_each_heatmap_field_forces_redraw(inputs, "order")
+
+
+def test_fft_time_heatmap_render_inputs_each_field_changes_signature():
+    from mf4_analyzer.ui.main_window._state_holders import FftTimeHeatmapRenderInputs
+
+    inputs = FftTimeHeatmapRenderInputs(
+        amplitude_mode="amplitude_db",
+        weighting="A",
+        db_reference_mode="manual",
+        db_value=3.5,
+        db_unit="rpm",
+        db_quantity="rotational speed",
+        db_source="manual",
+        db_warning="",
+        z_auto=False,
+        z_floor=-80.0,
+        z_ceiling=0.0,
+        x_auto=True,
+        x_min=0.0,
+        x_max=1.0,
+        y_auto=True,
+        y_min=0.0,
+        y_max=200.0,
+        freq_range=(10.0, 80.0),
+        cmap="gnuplot2",
+        interp="bilinear",
+        tick_x=8,
+        tick_y=6,
+        source_id=("fid", "speed"),
+        x_origin="auto",
+        y_origin="auto",
+        x_lim=None,
+        y_lim=None,
+        slice_dir="x",
+        slice_x=0.25,
+        slice_y=40.0,
+        seed_slice=True,
+        canvas_width=800,
+        canvas_height=600,
+        canvas_dpr=1.0,
+        previous_db_reference=3.5,
+        time_extent=(0.0, 0.5),
+        frequency_extent=(0.0, 200.0),
+        channel_name="speed",
+        channel_unit="rpm",
+    )
+    _assert_each_heatmap_field_forces_redraw(inputs, "fft_time")
+
+
+def _heatmap_plot_name(section):
+    return "plot_or_update_heatmap" if section == "order" else "plot_result"
+
+
+def _install_heatmap_plot_spy(canvas, section):
+    name = _heatmap_plot_name(section)
+    real = getattr(canvas, name)
+    calls = []
+
+    def wrapped(*args, **kwargs):
+        calls.append(1)
+        return real(*args, **kwargs)
+
+    setattr(canvas, name, wrapped)
+    return calls
+
+
+def _seed_heatmap_cache(win, section):
+    from mf4_analyzer.signal.order_cot import COTParams, COTResult
+    from mf4_analyzer.signal.spectrogram import SpectrogramParams, SpectrogramResult
+
+    fid = next(iter(win.files))
+    mgr = win.analysis_managers[section]
+    state = mgr.get(mgr.active)
+    pane = state.panes[0]
+    if section == "order":
+        ctx = win.inspector.order_ctx
+        ctx.apply_params({
+            "amplitude_mode": "Amplitude dB",
+            "z_auto": False,
+            "db_reference_mode": "manual",
+            "db_reference": 3.5,
+            "z_floor": -50.0,
+            "z_ceiling": -10.0,
+        })
+        pane.sources = [(fid, "torque")]
+        pane.rpm_source = (fid, "speed")
+        times = np.linspace(0.0, 0.5, 8)
+        orders = np.linspace(0.0, 10.0, 16)
+        amplitude = np.full((8, 16), 0.15, dtype=float)
+        amplitude[3, 5] = 1.2
+        result = COTResult(
+            times=times,
+            orders=orders,
+            amplitude=amplitude,
+            params=COTParams(fs=1000.0, nfft=256, order_res=0.05),
+            metadata={"frames": 8, "coverage_start": 0.0, "coverage_end": 0.5},
+        )
+        key = win._analysis_cache_key(
+            "order", fid, "torque", rpm_source=pane.rpm_source, pane_idx=0,
+        )
+    else:
+        ctx = win.inspector.fft_time_ctx
+        ctx.apply_params({
+            "amplitude_mode": "amplitude_db",
+            "z_auto": False,
+            "db_reference_mode": "manual",
+            "db_reference": 3.5,
+            "z_floor": -80.0,
+            "z_ceiling": 0.0,
+            "freq_auto": True,
+        })
+        pane.sources = [(fid, "speed")]
+        pane.rpm_source = None
+        freqs = np.linspace(0.0, 200.0, 16)
+        times = np.linspace(0.0, 0.5, 8)
+        amp = np.full((16, 8), 0.2, dtype=np.float32)
+        amp[4, 3] = 1.5
+        result = SpectrogramResult(
+            times=times,
+            frequencies=freqs,
+            amplitude=amp,
+            params=SpectrogramParams(fs=1000.0, nfft=32),
+            channel_name="speed",
+            unit="rpm",
+            metadata={"frames": 8},
+        )
+        key = win._analysis_cache_key("fft_time", fid, "speed", pane_idx=0)
+    state.params.update(ctx.current_params())
+    win.analysis_caches[section].put(key, result)
+    return state, result, key
+
+
+@pytest.mark.parametrize("section", ["order", "fft_time"])
+def test_unchanged_heatmap_section_entry_does_not_redraw(two_file_win, section):
+    """Same result and display inputs keep the picture; facts and the handshake still run."""
+    win = two_file_win
+    win.toolbar._set_mode(section)
+    _seed_active_analysis_attachments(win)
+    state, result, key = _seed_heatmap_cache(win, section)
+    canvas = win._analysis_page(section).pane_canvas(0)
+    plots = _install_heatmap_plot_spy(canvas, section)
+    facts = []
+    ready = []
+    candidates = []
+    real_facts = win._sync_section_effective_facts
+    real_ready = win._request_analysis_page_transition_ready
+    real_candidates = win._refresh_analysis_candidates
+
+    def wrapped_facts(*args, **kwargs):
+        facts.append(args[0] if args else section)
+        return real_facts(*args, **kwargs)
+
+    def wrapped_ready(*args, **kwargs):
+        ready.append(1)
+        return real_ready(*args, **kwargs)
+
+    def wrapped_candidates(*args, **kwargs):
+        candidates.append(args[0] if args else section)
+        return real_candidates(*args, **kwargs)
+
+    win._sync_section_effective_facts = wrapped_facts
+    win._request_analysis_page_transition_ready = wrapped_ready
+    win._refresh_analysis_candidates = wrapped_candidates
+
+    win._on_analysis_view_switched(section, win.analysis_managers[section].active)
+    assert len(plots) == 1
+    assert canvas.has_result()
+    assert facts == [section]
+    assert ready == [1]
+    assert section in candidates
+
+    plots.clear()
+    facts.clear()
+    ready.clear()
+    candidates.clear()
+    win._on_analysis_view_switched(section, win.analysis_managers[section].active)
+    assert plots == []
+    assert canvas.has_result()
+    assert facts == [section]
+    assert ready == [1]
+    assert section in candidates
+
+    canvas._cmap_name = "plasma"
+    win._on_analysis_view_switched(section, win.analysis_managers[section].active)
+    assert len(plots) == 1
+
+    win._clear_analysis_canvas(canvas)
+    win._on_analysis_view_switched(section, win.analysis_managers[section].active)
+    assert len(plots) == 2
+
+    win._store_analysis_result(section, state.view_id, 0, key, result)
+    win._on_analysis_view_switched(section, win.analysis_managers[section].active)
+    assert len(plots) == 3
+
+
+def test_order_z_auto_section_entry_still_redraws_heatmap(two_file_win):
+    """Auto colour levels rewrite the spins, so the next entry paints again."""
+    win = two_file_win
+    win.toolbar._set_mode("order")
+    _seed_active_analysis_attachments(win)
+    state, _result, _key = _seed_heatmap_cache(win, "order")
+    win.inspector.order_ctx.apply_params({"z_auto": True})
+    state.params.update(win.inspector.order_ctx.current_params())
+    canvas = win._analysis_page("order").pane_canvas(0)
+    plots = _install_heatmap_plot_spy(canvas, "order")
+    active = win.analysis_managers["order"].active
+    win._on_analysis_view_switched("order", active)
+    win._on_analysis_view_switched("order", active)
+    assert len(plots) == 2

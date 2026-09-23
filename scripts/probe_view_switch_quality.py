@@ -1340,8 +1340,8 @@ def _calib_report_fits(title, fits, band, diagnostics=()):
     print(flush=True)
 
 
-def _calib_open(canvas_cls, app, *, width=1400, height=900):
-    canvas = canvas_cls()
+def _calib_open(canvas_cls, app, *, width=1400, height=900, ctor_kwargs=None):
+    canvas = canvas_cls(**(ctor_kwargs or {}))
     canvas.resize(width, height)
     canvas.show(); canvas.raise_(); canvas.activateWindow()
     exposed = _wait_window_exposed(app, canvas)
@@ -1730,6 +1730,110 @@ def _calib_frf(app):
             "clean_family_note": clean_note, "band": band}
 
 
+def _calib_slice(app):
+    """Slice-row ink sweep. Does not write product thresholds.
+
+    The shipped gate borrows ``_SPECTRUM_INK_AA_ON/OFF`` until this probe
+    has been run on Cocoa and Windows and spec §5 is updated. The fit is
+    reported so that calibration can replace the borrow; it is not applied.
+    """
+    import numpy as np
+
+    from mf4_analyzer.render_profile import envelope_ink_dev_px
+    from mf4_analyzer.ui.pg_canvas.heatmap_canvas import PgHeatmapCanvas
+
+    canvas, viewport, exposed = _calib_open(
+        PgHeatmapCanvas, app, ctor_kwargs={"with_slice": True})
+    dpr = float(canvas._glw.devicePixelRatioF())
+    print(f"== 组 4 热力图切片行：方波/单周期正弦，只改垂直墨迹 "
+          f"(dpr={dpr}) ==", flush=True)
+    print("   产品准入带仍借用谱行 _SPECTRUM_INK_AA_ON/OFF，"
+          "本探针只出推荐值，不改常量（spec 2026-09-23 §5 待标定）",
+          flush=True)
+
+    def make_pass(n_points, square):
+        column = np.arange(n_points, dtype=float)
+        if square:
+            samples = np.where(column % 2.0 == 0.0, 0.0, 1.0)
+        else:
+            samples = 0.5 + 0.5 * np.sin(2.0 * np.pi * column / n_points)
+        matrix = np.tile(samples.reshape(-1, 1), (1, 4))
+
+        def run():
+            canvas.plot_or_update_heatmap(
+                matrix=matrix,
+                x_extent=(0.0, 3.0),
+                y_extent=(0.0, 1.0),
+                x_label="Time (s)",
+                y_label="Frequency (Hz)",
+                amplitude_mode="amplitude",
+                z_auto=True,
+            )
+            canvas._seed_slice()
+            app.processEvents()
+            _settle(app, 80)
+            # Stop the product settle so the forced AA/non-AA pair below is
+            # not overwritten by the 0 ms discrete timer or the backstop.
+            canvas.disable_interactive_quality()
+            y_span, row_h = _calib_row_geometry(canvas._slice_plot.vb, app)
+            _x, y_data = canvas._slice_curve.getData()
+            ink = envelope_ink_dev_px(
+                y_data, y_span=y_span, row_height_px=row_h, dpr=dpr)
+            pts = int(len(y_data))
+
+            def _force(on):
+                canvas._set_curve_aa(canvas._slice_curve, on)
+                app.processEvents()
+
+            _force(True)
+            aa_ms, aa_miss = _calib_frames(canvas, viewport)
+            _force(False)
+            off_ms, off_miss = _calib_frames(canvas, viewport)
+            return {
+                "ink": float(ink),
+                "aa_frame_ms": aa_ms,
+                "off_frame_ms": off_ms,
+                "drawn_points": pts,
+                "y_span": float(y_span),
+                "row_height_px": float(row_h),
+                "suspect": bool(aa_miss or off_miss),
+            }
+        return run
+
+    cases = []
+    for n_points in (512, 2048, 8192, 20000):
+        cases.append(_calib_case(
+            f"方波 n={n_points}", make_pass(n_points, True),
+            shape="square", n_points=n_points))
+    cases.append(_calib_case(
+        "单周期正弦 n=8192", make_pass(8192, False),
+        shape="sine", n_points=8192))
+
+    canvas.close()
+    app.processEvents()
+    fits = [
+        _calib_fit(cases, "全部点"),
+        _calib_fit(cases, f"≤{_CALIB_NEAR_TARGET_MS:.0f}ms 近目标段",
+                   max_ms=_CALIB_NEAR_TARGET_MS),
+    ]
+    diagnostics = [_calib_fit(cases, "仅方波",
+                              where=lambda c: c.get("shape") == "square")]
+    band = _calib_band(fits)
+    _calib_report_fits("组 4 热力图切片行", fits, band, diagnostics)
+    if band:
+        print("   上表是测量推荐，不是已生效阈值。切片继续借用谱行 "
+              "95k/145k，直到 spec §5 回写。", flush=True)
+    return {
+        "exposed": exposed,
+        "dpr": dpr,
+        "borrowed_band": "spectrum _SPECTRUM_INK_AA_ON/OFF",
+        "cases": cases,
+        "fits": [f for f in fits if f],
+        "diagnostic_fits": [f for f in diagnostics if f],
+        "band": band,
+    }
+
+
 def cmd_analysis_calibrate(_args):
     import platform
 
@@ -1742,12 +1846,20 @@ def cmd_analysis_calibrate(_args):
     spectrum = _calib_spectrum(app)
     preview = _calib_preview(app)
     frf = _calib_frf(app)
+    slice_row = _calib_slice(app)
 
     recommended = {
         "spectrum_row": spectrum["band"],
         "time_preview_row": {"band": preview["band"],
                              "verdict": preview.get("verdict")},
         "frf_rows": frf["band"],
+        # Measured recommendation only. The product still borrows the
+        # spectrum band until spec §5 is updated from a real-machine run.
+        "slice_row": {
+            "band": slice_row["band"],
+            "borrowed_from": slice_row["borrowed_band"],
+            "applied": False,
+        },
         "target_ms": _CALIB_TARGET_MS,
         "on_over_off_ratio": _CALIB_ON_RATIO,
     }
@@ -1768,6 +1880,11 @@ def cmd_analysis_calibrate(_args):
     if frf["band"]:
         print(f"  FRF 三行 ink 带 = {frf['band']['on']/1000:.0f}k / "
               f"{frf['band']['off']/1000:.0f}k", flush=True)
+    slice_band = (slice_row.get("band") or {})
+    if slice_band:
+        print(f"  切片行推荐（未写回产品，仍借用谱行）= "
+              f"{slice_band['on']/1000:.0f}k / "
+              f"{slice_band['off']/1000:.0f}k", flush=True)
 
     return {
         "command": "analysis-calibrate",
@@ -1776,6 +1893,7 @@ def cmd_analysis_calibrate(_args):
         "spectrum": spectrum,
         "time_preview": preview,
         "frf": frf,
+        "slice_row": slice_row,
         "recommended": recommended,
     }
 
@@ -1991,13 +2109,15 @@ def _arguments():
         "analysis-calibrate",
         help="Calibration sweep for the analysis-canvas ink bands (spec Sec 5 "
              "rows: spectrum row _SPECTRUM_INK_AA_ON/OFF, FRF three-row band, "
-             "time-preview band). Three groups -- spectrum row (3 curves, "
+             "time-preview band, heatmap slice row). Spectrum row (3 curves, "
              "peak/floor swept), time-preview row (2/3/4 envelopes x default "
              "vs filled Y), FRF (1k/2k/4k bins x clean/noisy-phase/noisy-"
-             "coherence) -- each configuration measured over >=2 passes with "
-             "AA forced on and off, reduced to a least-squares ink->ms line, "
-             "and turned into OFF = ink at 250 ms (_BACKSTOP_STEADY_AA_MS), "
-             "ON = OFF * 2/3. Real machine only.",
+             "coherence), and the heatmap slice (square vs one-cycle sine). "
+             "Each configuration is measured over >=2 passes with AA forced "
+             "on and off, reduced to a least-squares ink->ms line, and turned "
+             "into OFF = ink at 250 ms (_BACKSTOP_STEADY_AA_MS), ON = OFF * "
+             "2/3. The slice row is reported only: the product still borrows "
+             "the spectrum band until spec Sec 5 is updated. Real machine only.",
     )
     p.add_argument("--json-out", type=Path)
 

@@ -1,5 +1,7 @@
 """OrderMixin: COT Order analysis worker dispatch and render methods."""
 
+from dataclasses import replace
+
 import numpy as np
 
 from PyQt5.QtWidgets import QMessageBox
@@ -19,6 +21,13 @@ from ..pg_canvas.heatmap_canvas import DEFAULT_HEATMAP_CMAP, DEFAULT_HEATMAP_INT
 from ...qt_analysis_shared import amplitude_mode_is_db
 from ..compute_feedback import ComputeOutcome
 from ._sentinel import _INSPECTOR_TIME_RANGE
+from ._state_holders import (
+    OrderHeatmapRenderInputs,
+    canvas_previous_db_reference,
+    composite_source_id,
+    heatmap_slice_snapshot,
+    widget_raster_metrics,
+)
 from .ultraview_coordinator import notify_ultraview_plot
 
 
@@ -629,139 +638,177 @@ class OrderMixin:
             return self._resolve_db_reference_for_source('order', source)
         return db_reference.degraded_numeric_resolution(order_params)
 
-    def _render_order_on(self, canvas, result, source=None):
-        """Multi-pane variant: draw an Order COT ``result`` on an arbitrary
-        order heatmap canvas using the current OrderContextual display knobs.
-        Pure canvas draw — no preset/status side-effects (those stay in
-        ``_render_order_time``). ``source`` is the ``(fid, ch)`` this
-        specific pane/result came from -- required for a per-pane-accurate
-        dB-reference resolution (spec §15 C3)."""
+    def _current_order_heatmap_inputs(self, canvas, result, source):
+        """Snapshot the display inputs the next Order paint or retain check reads."""
+        ctx = self.inspector.order_ctx
+        order_params = ctx.current_params() if hasattr(ctx, "current_params") else {}
+        resolution = self._order_label_resolution(source, order_params)
+        inputs = self._order_render_inputs(
+            canvas, result, source, order_params, resolution,
+        )
+        return replace(inputs, db_value=float(resolution.value))
+
+    def _order_render_inputs(self, canvas, result, source, order_params, resolution):
+        """Build the frozen display snapshot. Paint reads this object only."""
         from ..pg_canvas.heatmap_canvas import time_axis_display_extent
 
-        title = (
-            f"时间-阶次谱 - {self.inspector.order_ctx.combo_sig.currentText()} "
-            f"(分辨率:{result.params.order_res})"
+        result_params = getattr(result, "params", None)
+        weighting = str(
+            getattr(result_params, "weighting", None)
+            or order_params.get("weighting", "None")
         )
-        ctx = self.inspector.order_ctx
-        order_params = ctx.current_params() if hasattr(ctx, 'current_params') else {}
-        amp_mode_token = (
-            'amplitude_db'
+        amplitude_mode = (
+            "amplitude_db"
             if amplitude_mode_is_db(
-                order_params.get('amplitude_mode', 'Amplitude dB')
+                order_params.get("amplitude_mode", "Amplitude dB")
             )
-            else 'amplitude'
+            else "amplitude"
         )
-        # weighting: prefer the COMPUTED result's own COTParams (the
-        # authoritative value actually used to build this matrix) over the
-        # current inspector combo, which may have drifted since compute.
-        result_params = getattr(result, 'params', None)
-        weighting = str(getattr(result_params, 'weighting', None)
-                        or order_params.get('weighting', 'None'))
-        output_scale = 'db' if amp_mode_token == 'amplitude_db' else 'linear'
-        resolution = self._order_label_resolution(source, order_params)
+        x_extent = time_axis_display_extent(
+            result.times,
+            params=result_params,
+            metadata=getattr(result, "metadata", None),
+            fallback=(float(result.times[0]), float(result.times[-1])),
+        )
+        slice_dir, slice_x, slice_y = heatmap_slice_snapshot(canvas)
+        x_origin, x_lim, y_origin, y_lim = self._heatmap_viewport_snapshot(
+            "order", canvas,
+        )
+        width, height, dpr = widget_raster_metrics(canvas)
+        tick_x, tick_y = self._heatmap_tick_counts()
+        return OrderHeatmapRenderInputs(
+            signal_title=str(self.inspector.order_ctx.combo_sig.currentText()),
+            order_resolution_text=f"{result.params.order_res}",
+            amplitude_mode=amplitude_mode,
+            weighting=weighting,
+            db_reference_mode=str(order_params.get("db_reference_mode", "") or ""),
+            db_value=float(resolution.value),
+            db_unit=str(resolution.unit or ""),
+            db_quantity=str(resolution.quantity or ""),
+            db_source=str(resolution.source or ""),
+            db_warning=str(resolution.warning or ""),
+            z_auto=bool(order_params.get("z_auto", False)),
+            z_floor=float(order_params.get("z_floor", -30.0)),
+            z_ceiling=float(order_params.get("z_ceiling", 0.0)),
+            x_auto=bool(order_params.get("x_auto", True)),
+            x_min=float(order_params.get("x_min", 0.0)),
+            x_max=float(order_params.get("x_max", 0.0)),
+            y_auto=bool(order_params.get("y_auto", True)),
+            y_min=float(order_params.get("y_min", 0.0)),
+            y_max=float(order_params.get("y_max", 0.0)),
+            cmap=str(getattr(canvas, "_cmap_name", DEFAULT_HEATMAP_CMAP)),
+            interp=str(DEFAULT_HEATMAP_INTERP),
+            tick_x=tick_x,
+            tick_y=tick_y,
+            source_id=composite_source_id(source),
+            x_origin=x_origin,
+            y_origin=y_origin,
+            x_lim=x_lim,
+            y_lim=y_lim,
+            slice_dir=slice_dir,
+            slice_x=slice_x,
+            slice_y=slice_y,
+            seed_slice=getattr(canvas, "_slice_curve", None) is not None,
+            canvas_width=width,
+            canvas_height=height,
+            canvas_dpr=dpr,
+            previous_db_reference=canvas_previous_db_reference(canvas),
+            x_extent=(float(x_extent[0]), float(x_extent[1])),
+            y_extent=(float(result.orders[0]), float(result.orders[-1])),
+        )
+
+    def _paint_order_heatmap(self, canvas, result, inputs):
+        """Draw ``inputs`` onto ``canvas``. Display knobs are not re-read here."""
+        resolution = db_reference.DbReferenceResolution(
+            value=float(inputs.db_value),
+            unit=inputs.db_unit,
+            quantity=inputs.db_quantity,
+            source=inputs.db_source,
+            warning=inputs.db_warning,
+        )
+        output_scale = "db" if inputs.amplitude_mode == "amplitude_db" else "linear"
         amplitude_label = db_reference.format_amplitude_label(
-            resolution, weighting=weighting, output_scale=output_scale)
-        # Reference-aware readout/remark suffix (spec §15 C3): only in dB
-        # mode -- Linear has no reference concept, so leave it None and let
-        # the canvas fall back to the channel unit (historical behaviour).
-        z_unit_suffix = (
-            db_reference.format_reference_note(resolution, weighting=weighting)
-            if output_scale == 'db' else None
+            resolution, weighting=inputs.weighting, output_scale=output_scale,
         )
-
-        # Pre-convert dB outside the canvas so the canvas does not re-normalise
-        # to its own peak (which would make the colorbar unpredictable and break
-        # z_floor/z_ceiling color mapping). In Linear mode pass the raw matrix.
-        matrix = result.amplitude.T
-        plot_amp_mode = amp_mode_token
-        cbar_label = amplitude_label
-        # Spec §8.3.1: diff THIS render's reference against the last one
-        # THIS canvas actually used, so a manual window can be shifted by
-        # the same delta as the (unclipped) matrix -- getattr-guarded so a
-        # bare test double canvas without the method keeps the pre-Task-7
-        # behaviour (no shift, no crash).
+        z_unit_suffix = (
+            db_reference.format_reference_note(
+                resolution, weighting=inputs.weighting,
+            )
+            if output_scale == "db" else None
+        )
+        raw = result.amplitude.T
+        matrix = raw
+        plot_amp_mode = inputs.amplitude_mode
+        # Spec §8.3.1: diff THIS render's reference against the snapshot in
+        # ``inputs``, so a manual window tracks the unclipped matrix. A test
+        # double without the method keeps the historical no-shift behaviour.
         reference_delta = None
-        if amp_mode_token == 'amplitude_db':
-            db_ref = resolution.value
-            matrix = SpectrogramAnalyzer.amplitude_to_db(matrix, reference=db_ref)
-            plot_amp_mode = 'amplitude'
-            delta_fn = getattr(canvas, 'reference_delta_since_last_render', None)
+        if inputs.amplitude_mode == "amplitude_db":
+            matrix = SpectrogramAnalyzer.amplitude_to_db(
+                matrix, reference=inputs.db_value,
+            )
+            plot_amp_mode = "amplitude"
+            delta_fn = getattr(canvas, "reference_delta_since_last_render", None)
             if callable(delta_fn):
-                reference_delta = delta_fn(db_ref)
-
-        z_auto = bool(order_params.get('z_auto', False))
-        z_floor = float(order_params.get('z_floor', -30.0))
-        z_ceiling = float(order_params.get('z_ceiling', 0.0))
-
-        # dB auto levels come from the same ``_auto_db_window`` as
-        # plot_result: floor is the robust percentile minus the fixed span,
-        # ceiling is that percentile plus a few dB of headroom capped at the
-        # finite max. Pass them as explicit vmin/vmax so the canvas does not
-        # fall back to the full data range (which may span 80+ dB of noise
-        # floor). Order's auto→manual transition stays jump-free with
-        # FFT-vs-Time, and a lone transient still cannot lift the floor.
+                if hasattr(canvas, "_last_db_reference"):
+                    canvas._last_db_reference = inputs.previous_db_reference
+                reference_delta = delta_fn(inputs.db_value)
+        z_floor = float(inputs.z_floor)
+        z_ceiling = float(inputs.z_ceiling)
         vmin_override = None
         vmax_override = None
         shifted_manual_levels = None
-        if amp_mode_token == 'amplitude_db':
-            if z_auto:
+        if inputs.amplitude_mode == "amplitude_db":
+            if inputs.z_auto:
                 from ..pg_canvas.heatmap_canvas import _auto_db_window
                 window = _auto_db_window(matrix)
                 if window is not None:
                     vmin_override, vmax_override = window
             elif reference_delta is not None:
-                # An already-tuned MANUAL window must track the SAME shift
-                # as the (unclipped) matrix above, else the map goes
-                # black/blank when the effective reference changes.
                 z_floor += reference_delta
                 z_ceiling += reference_delta
                 shifted_manual_levels = (z_floor, z_ceiling)
-
-        # Pin the amplitude mode so the slice's amplitude-axis label reads
-        # 'Amplitude (dB)' vs 'Amplitude' correctly (Order renders through
-        # plot_or_update_heatmap, which does not set it like plot_result does).
-        canvas._amplitude_mode = amp_mode_token
+        if inputs.amplitude_mode == "amplitude_db":
+            amplitude_valid_mask = np.isfinite(raw) & (raw > 0)
+        else:
+            amplitude_valid_mask = np.isfinite(raw)
+        canvas._amplitude_mode = inputs.amplitude_mode
         setter = getattr(canvas, "set_overlay_source", None)
         if callable(setter):
-            setter(source)
+            setter(inputs.source_id)
         canvas.plot_or_update_heatmap(
             matrix=matrix,
-            amplitude_valid_mask=(np.isfinite(result.amplitude.T) & (result.amplitude.T > 0)
-                                  if amp_mode_token == 'amplitude_db'
-                                  else np.isfinite(result.amplitude.T)),
-            x_extent=time_axis_display_extent(
-                result.times,
-                params=getattr(result, 'params', None),
-                metadata=getattr(result, 'metadata', None),
-                fallback=(float(result.times[0]), float(result.times[-1])),
+            amplitude_valid_mask=amplitude_valid_mask,
+            x_extent=inputs.x_extent,
+            y_extent=inputs.y_extent,
+            x_label="Time (s)",
+            y_label="Order",
+            title=(
+                f"时间-阶次谱 - {inputs.signal_title} "
+                f"(分辨率:{inputs.order_resolution_text})"
             ),
-            y_extent=(float(result.orders[0]), float(result.orders[-1])),
-            x_label='Time (s)',
-            y_label='Order',
-            title=title,
-            cmap=getattr(canvas, '_cmap_name', DEFAULT_HEATMAP_CMAP),
-            interp=DEFAULT_HEATMAP_INTERP,
-            cbar_label=cbar_label,
+            cmap=inputs.cmap,
+            interp=inputs.interp,
+            cbar_label=amplitude_label,
             amplitude_mode=plot_amp_mode,
             amplitude_label=amplitude_label,
             z_unit_suffix=z_unit_suffix,
-            z_auto=z_auto,
+            z_auto=inputs.z_auto,
             z_floor=z_floor,
             z_ceiling=z_ceiling,
             vmin=vmin_override,
             vmax=vmax_override,
-            x_auto=bool(order_params.get('x_auto', True)),
-            x_min=float(order_params.get('x_min', 0.0)),
-            x_max=float(order_params.get('x_max', 0.0)),
-            y_auto=bool(order_params.get('y_auto', True)),
-            y_min=float(order_params.get('y_min', 0.0)),
-            y_max=float(order_params.get('y_max', 0.0)),
-            x_coords=result.times, y_coords=result.orders,
+            x_auto=inputs.x_auto,
+            x_min=float(inputs.x_min),
+            x_max=float(inputs.x_max),
+            y_auto=inputs.y_auto,
+            y_min=float(inputs.y_min),
+            y_max=float(inputs.y_max),
+            x_coords=result.times,
+            y_coords=result.orders,
         )
-        # Write the auto-computed absolute levels back into the inspector
-        # spins (blockSignals) so that auto→manual is jump-free for Order
-        # as well (parity with FFT-vs-Time).
-        if z_auto and amp_mode_token == 'amplitude_db' and vmin_override is not None:
+        ctx = self.inspector.order_ctx
+        if inputs.z_auto and inputs.amplitude_mode == "amplitude_db" and vmin_override is not None:
             for spin, val in (
                 (ctx.spin_z_floor, vmin_override),
                 (ctx.spin_z_ceiling, vmax_override),
@@ -770,9 +817,6 @@ class OrderMixin:
                 spin.setValue(val)
                 spin.blockSignals(False)
         elif shifted_manual_levels is not None:
-            # Spec §8.3.1: persist the shifted manual window so it doesn't
-            # silently drift back to the pre-shift numbers on the next
-            # unrelated re-render.
             for spin, val in (
                 (ctx.spin_z_floor, shifted_manual_levels[0]),
                 (ctx.spin_z_ceiling, shifted_manual_levels[1]),
@@ -780,14 +824,34 @@ class OrderMixin:
                 spin.blockSignals(True)
                 spin.setValue(val)
                 spin.blockSignals(False)
-        # Seed the order slice (default 按阶次 / Y is most useful, but keep the
-        # current direction if the user already switched it).
-        if getattr(canvas, '_slice_curve', None) is not None:
+        if inputs.seed_slice:
             canvas._seed_slice()
-        xt, yt = self.inspector.top.tick_density()
-        canvas.set_tick_density(xt, yt)
+        canvas.set_tick_density(inputs.tick_x, inputs.tick_y)
+
+    def _render_order_on(self, canvas, result, source=None):
+        """Multi-pane variant: draw an Order COT ``result`` on an arbitrary
+        order heatmap canvas using the current OrderContextual display knobs.
+        Pure canvas draw — no preset/status side-effects (those stay in
+        ``_render_order_time``). ``source`` is the ``(fid, ch)`` this
+        specific pane/result came from -- required for a per-pane-accurate
+        dB-reference resolution (spec §15 C3)."""
+        ctx = self.inspector.order_ctx
+        order_params = ctx.current_params() if hasattr(ctx, "current_params") else {}
+        resolution = self._order_label_resolution(source, order_params)
+        inputs = replace(
+            self._order_render_inputs(
+                canvas, result, source, order_params, resolution,
+            ),
+            db_value=float(resolution.value),
+        )
+        self._paint_order_heatmap(canvas, result, inputs)
         notify_ultraview_plot(self, "order", "order-plot")
         self._restore_analysis_canvas_viewport("order", canvas)
+        # After the viewport restore, so the signature records the pane
+        # limits the next entry will read.
+        commit = getattr(self, "_commit_heatmap_reveal", None)
+        if callable(commit):
+            commit("order", canvas, inputs, result)
         page = self._analysis_page("order")
         focused = (
             page.peek_pane_canvas(page.focused_index())

@@ -26,11 +26,15 @@ reach this module via ``analysis_axes``.
 """
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 import pyqtgraph as pg
-from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtWidgets import QHBoxLayout, QPushButton, QWidget
+from PyQt5 import sip
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal
+from PyQt5.QtWidgets import QApplication, QHBoxLayout, QPushButton, QWidget
 
+from mf4_analyzer.render_profile import envelope_ink_dev_px
 from mf4_analyzer.signal.display_ranges import line_amplitude_limits, visible_line_values
 
 from mf4_analyzer.ui._axis_handle import (
@@ -41,6 +45,17 @@ from mf4_analyzer.ui.pg_canvas._backref import _CanvasBackref
 from mf4_analyzer.ui.pg_canvas.analysis_axes import (
     _hide_plot_title,
 )
+from mf4_analyzer.ui.pg_canvas.quality import (
+    _BACKSTOP_BLACKLIST_MAX,
+    _BACKSTOP_EPOCH_PROPERTY,
+    _BACKSTOP_FIRST_AA_MS,
+    _BACKSTOP_STEADY_AA_MS,
+    _BACKSTOP_STEADY_EMA_ALPHA,
+)
+from mf4_analyzer.ui.pg_canvas.quality_backstop import AaFrameLatch
+
+
+logger = logging.getLogger(__name__)
 
 
 class _SliceDirToggle(QWidget):
@@ -103,7 +118,88 @@ class _SliceStrip(_CanvasBackref):
     what they were on ``PgHeatmapCanvas``: ``self._matrix_disp``,
     ``self._time_index_for(...)``, ``self.slice_picked`` and the rest still
     resolve to the canvas.
+
+    Slice AA settlement state (discrete timer, latch, ink cache, pending
+    flag) is owned here. ``_slice_aa_on`` and ``_slice_aa_idle_timer`` stay
+    on the canvas: tests and the 150 ms interaction path already read them
+    there. ``_aa_backstop_armed`` also stays on the canvas because the
+    resident paint timer reads that bare attribute on every frame.
     """
+
+    # New settlement state must be listed here. An undeclared ``self.X =``
+    # becomes write-through and fails test_pg_canvas_backref_invariants.
+    _owned_names = frozenset({
+        "_slice_aa_block_reason",
+        "_slice_aa_latch",
+        "_slice_backstop_timer",
+        "_slice_discrete_aa_timer",
+        "_slice_discrete_quality_deferred",
+        "_slice_discrete_quality_hold",
+        "_slice_discrete_settle_pending",
+        "_slice_ink_allowed",
+        "_slice_ink_dev_px",
+        "_slice_ink_seeded",
+    })
+
+    def __init__(self, canvas):
+        super().__init__(canvas)
+        # Separate from the 150 ms idle timer. QTimer.start(int) permanently
+        # rewrites interval, so a 0 ms settle must not reuse that timer.
+        self._slice_discrete_aa_timer = QTimer(canvas)
+        self._slice_discrete_aa_timer.setSingleShot(True)
+        self._slice_discrete_aa_timer.setInterval(0)
+        self._slice_discrete_quality_hold = None
+        self._slice_discrete_quality_deferred = False
+        self._slice_discrete_aa_timer.timeout.connect(
+            self.try_enable_idle_quality)
+        self._slice_backstop_timer = QTimer(canvas)
+        self._slice_backstop_timer.setSingleShot(True)
+        self._slice_backstop_timer.setInterval(0)
+        self._slice_backstop_timer.timeout.connect(
+            self._on_slice_backstop_timeout)
+        self._slice_aa_latch = self._new_slice_aa_latch()
+        self._slice_ink_allowed = False
+        self._slice_ink_seeded = False
+        self._slice_ink_dev_px = None
+        self._slice_discrete_settle_pending = False
+        self._slice_aa_block_reason = None
+        canvas.destroyed.connect(self._on_slice_canvas_destroyed)
+
+    def _new_slice_aa_latch(self) -> AaFrameLatch:
+        # Ceilings are borrowed, not a slice calibration. Spec 2026-09-23 §5:
+        # 借用 ``_BACKSTOP_FIRST_AA_MS`` / ``_BACKSTOP_STEADY_AA_MS``，待标定.
+        return AaFrameLatch(
+            _BACKSTOP_FIRST_AA_MS,
+            _BACKSTOP_STEADY_AA_MS,
+            _BACKSTOP_STEADY_EMA_ALPHA,
+            _BACKSTOP_BLACKLIST_MAX,
+        )
+
+    def _slice_canvas_alive(self) -> bool:
+        try:
+            return not sip.isdeleted(self._c)
+        except RuntimeError:
+            return False
+
+    def _slice_timer_alive(self, timer):
+        """Return ``timer`` when it and the canvas still exist in C++."""
+        if timer is None or not self._slice_canvas_alive():
+            return None
+        try:
+            if sip.isdeleted(timer):
+                return None
+        except RuntimeError:
+            return None
+        return timer
+
+    def _stop_slice_timer(self, timer) -> None:
+        alive = self._slice_timer_alive(timer)
+        if alive is None:
+            return
+        try:
+            alive.stop()
+        except RuntimeError:
+            return
 
     def _apply_slice_curve_aa_state(self) -> None:
         if self._slice_curve is None:
@@ -111,16 +207,386 @@ class _SliceStrip(_CanvasBackref):
         self._set_curve_aa(self._slice_curve, self._slice_aa_on)
         try:
             self._glw.update()
-        except Exception:
-            pass
+        except RuntimeError:
+            return
 
     def _reset_slice_quality_for_rebuild(self) -> None:
-        try:
-            self._slice_aa_idle_timer.stop()
-        except Exception:
-            pass
-        self._slice_aa_on = True
+        """Drop slice AA for a heatmap rebuild and arm the discrete settle.
+
+        The call itself must not paint an AA frame. The 0 ms timer decides
+        on the next event-loop turn, after ``_seed_slice`` has installed the
+        new samples. Interaction keeps using ``_slice_aa_idle_timer``.
+        """
+        self._stop_slice_timer(self._slice_aa_idle_timer)
+        self._close_slice_backstop_session()
+        self._slice_ink_seeded = False
+        self._slice_ink_allowed = False
+        self._slice_ink_dev_px = None
+        self._slice_aa_block_reason = None
+        self._slice_aa_on = False
+        if self._slice_curve is None:
+            self._slice_discrete_settle_pending = False
+            self._stop_slice_timer(self._slice_discrete_aa_timer)
+            return
         self._apply_slice_curve_aa_state()
+        self._arm_slice_discrete_aa()
+
+    def _arm_slice_discrete_aa(self) -> None:
+        """Arm one 0 ms settle against the samples now on the slice curve."""
+        self._stop_slice_timer(self._slice_aa_idle_timer)
+        self._close_slice_backstop_session()
+        self._slice_ink_seeded = False
+        self._slice_ink_allowed = False
+        self._slice_ink_dev_px = None
+        self._slice_aa_block_reason = None
+        self._slice_aa_on = False
+        if self._slice_curve is None:
+            self._slice_discrete_settle_pending = False
+            self._stop_slice_timer(self._slice_discrete_aa_timer)
+            return
+        self._apply_slice_curve_aa_state()
+        timer = self._slice_timer_alive(self._slice_discrete_aa_timer)
+        if timer is None:
+            self._slice_discrete_settle_pending = False
+            self._slice_discrete_quality_deferred = False
+            return
+        self._slice_discrete_settle_pending = True
+        if self._slice_discrete_quality_hold is not None:
+            self._stop_slice_timer(timer)
+            self._slice_discrete_quality_deferred = True
+            return
+        self._slice_discrete_quality_deferred = False
+        timer.start()
+
+    def hold_discrete_quality(self, token) -> None:
+        """Defer the slice's 0 ms AA settle for a page-transition token."""
+        self._slice_discrete_quality_hold = token
+        timer = self._slice_timer_alive(self._slice_discrete_aa_timer)
+        if timer is not None and timer.isActive():
+            self._stop_slice_timer(timer)
+            self._slice_discrete_quality_deferred = True
+
+    def release_discrete_quality(self, token) -> None:
+        """Arm one deferred slice settle after the matching transition."""
+        if self._slice_discrete_quality_hold != token:
+            return
+        self._slice_discrete_quality_hold = None
+        deferred = self._slice_discrete_quality_deferred
+        self._slice_discrete_quality_deferred = False
+        if not deferred or self._slice_curve is None:
+            self._slice_discrete_settle_pending = False
+            return
+        timer = self._slice_timer_alive(self._slice_discrete_aa_timer)
+        if timer is None:
+            self._slice_discrete_settle_pending = False
+            return
+        self._slice_discrete_settle_pending = True
+        timer.start()
+
+    def release_slice_quality_state(self) -> None:
+        """Drop latch, pending settle, and timers. Used by canvas clear."""
+        self._stop_slice_timer(self._slice_aa_idle_timer)
+        self._stop_slice_timer(self._slice_discrete_aa_timer)
+        self._stop_slice_timer(self._slice_backstop_timer)
+        self._slice_discrete_settle_pending = False
+        self._slice_discrete_quality_deferred = False
+        self._close_slice_backstop_session()
+        self._slice_aa_latch = self._new_slice_aa_latch()
+        self._slice_ink_seeded = False
+        self._slice_ink_allowed = False
+        self._slice_ink_dev_px = None
+        self._slice_aa_block_reason = None
+        self._slice_aa_on = False
+        if self._slice_curve is not None:
+            self._apply_slice_curve_aa_state()
+
+    def _on_slice_canvas_destroyed(self, *_args) -> None:
+        """Stop settle timers and forget measured sessions with the canvas."""
+        self._slice_discrete_settle_pending = False
+        self._stop_slice_timer(self._slice_discrete_aa_timer)
+        self._stop_slice_timer(self._slice_backstop_timer)
+        self._slice_aa_latch.close()
+        self._slice_aa_latch.blacklist.clear()
+        self._slice_aa_latch.memo.clear()
+        if not self._slice_canvas_alive():
+            return
+        self._c._aa_backstop_armed = False
+
+    def disable_interactive_quality(self) -> None:
+        """Drop slice-curve AA while the user is actively moving the view."""
+        self._stop_slice_timer(self._slice_aa_idle_timer)
+        self._stop_slice_timer(self._slice_discrete_aa_timer)
+        self._slice_discrete_settle_pending = False
+        self._slice_discrete_quality_deferred = False
+        self._close_slice_backstop_session()
+        if self._slice_curve is None or not self._slice_aa_on:
+            return
+        self._slice_aa_on = False
+        self._apply_slice_curve_aa_state()
+
+    def schedule_idle_quality(self) -> None:
+        """Restore slice-curve AA after the 150 ms interaction quiet window."""
+        if self._slice_curve is None:
+            return
+        timer = self._slice_timer_alive(self._slice_aa_idle_timer)
+        if timer is None:
+            return
+        # No argument: start(int) would permanently replace the 150 ms interval.
+        timer.start()
+
+    def try_enable_idle_quality(self) -> None:
+        """Shared gate for the 0 ms discrete settle and the 150 ms idle timer."""
+        if not self._slice_canvas_alive():
+            return
+        if self._slice_curve is None or self._slice_aa_on:
+            self._stop_slice_timer(self._slice_discrete_aa_timer)
+            self._stop_slice_timer(self._slice_aa_idle_timer)
+            self._slice_discrete_settle_pending = False
+            return
+        try:
+            buttons_down = QApplication.mouseButtons() != Qt.NoButton
+        except RuntimeError:
+            logger.warning(
+                "slice idle-quality mouse query failed", exc_info=True)
+            buttons_down = False
+        if buttons_down:
+            self._stop_slice_timer(self._slice_discrete_aa_timer)
+            self._slice_discrete_settle_pending = False
+            self.schedule_idle_quality()
+            return
+        self._stop_slice_timer(self._slice_discrete_aa_timer)
+        self._stop_slice_timer(self._slice_aa_idle_timer)
+        self._slice_discrete_settle_pending = False
+        signature = self._slice_view_signature()
+        if self._slice_aa_latch.blocked(signature):
+            self._slice_aa_block_reason = "aa-backstop"
+            return
+        if not self._slice_ink_allowed_now():
+            return
+        self._slice_aa_block_reason = None
+        self._slice_aa_on = True
+        # Arm before the update. _apply_slice_curve_aa_state repaints, and a
+        # synchronous paint has to land inside this session or the backstop
+        # never sees the frame it just paid for.
+        if signature is not None:
+            self._open_slice_backstop_session(signature)
+        self._apply_slice_curve_aa_state()
+
+    def _borrowed_spectrum_ink_band(self):
+        """Spectrum-row admission band, borrowed until the slice is calibrated.
+
+        Spec 2026-09-23 §5: 借用 ``_SPECTRUM_INK_AA_ON/OFF``，待标定.
+        The numbers stay on the spectrum row; this is a reference.
+        """
+        from mf4_analyzer.ui.pg_canvas.line_canvas import (
+            _SPECTRUM_INK_AA_OFF,
+            _SPECTRUM_INK_AA_ON,
+        )
+        return _SPECTRUM_INK_AA_ON, _SPECTRUM_INK_AA_OFF
+
+    def _measure_slice_ink(self):
+        """Device-pixel ink of the slice curve, or ``None`` when unknown.
+
+        Unknown is not zero: a missing row height must not read as a free
+        curve and turn AA on.
+        """
+        curve = self._slice_curve
+        plot = self._slice_plot
+        if curve is None or plot is None:
+            return None
+        try:
+            _x_data, y_data = curve.getData()
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            return None
+        if y_data is None:
+            return None
+        try:
+            view_box = plot.vb
+            view_box.updateAutoRange()
+            y_range = view_box.viewRange()[1]
+            y_span = abs(float(y_range[1]) - float(y_range[0]))
+            row_height_px = float(view_box.sceneBoundingRect().height())
+            dpr = float(self._glw.devicePixelRatioF())
+        except (AttributeError, IndexError, RuntimeError, TypeError,
+                ValueError):
+            return None
+        if not np.isfinite(row_height_px) or row_height_px <= 0.0:
+            return None
+        if not np.isfinite(dpr) or dpr <= 0.0:
+            return None
+        return envelope_ink_dev_px(
+            y_data, y_span=y_span, row_height_px=row_height_px, dpr=dpr)
+
+    def _slice_ink_allowed_now(self) -> bool:
+        """Hysteresis ink leg. Band borrowed from the spectrum row."""
+        total = self._measure_slice_ink()
+        if total is None:
+            self._slice_aa_block_reason = "unknown-ink"
+            return False
+        self._slice_ink_dev_px = float(total)
+        on_ink, off_ink = self._borrowed_spectrum_ink_band()
+        if not self._slice_ink_seeded:
+            self._slice_ink_allowed = total <= off_ink
+            self._slice_ink_seeded = True
+        elif total <= on_ink:
+            self._slice_ink_allowed = True
+        elif total > off_ink:
+            self._slice_ink_allowed = False
+        if not self._slice_ink_allowed:
+            self._slice_aa_block_reason = "high-ink"
+            return False
+        return True
+
+    def _slice_view_signature(self):
+        """Identity of this slice's AA cost, or ``None`` when geometry is unknown."""
+        plot = self._slice_plot
+        curve = self._slice_curve
+        if plot is None or curve is None:
+            return None
+        try:
+            from mf4_analyzer.ui.pg_canvas.renderer import _quantize_y_span_key
+
+            view_box = plot.vb
+            y_range = view_box.viewRange()[1]
+            y_span = abs(float(y_range[1]) - float(y_range[0]))
+            rect = view_box.sceneBoundingRect()
+            _x_data, y_data = curve.getData()
+            n_points = 0 if y_data is None else int(len(y_data))
+            return (
+                "slice",
+                str(self._slice_dir),
+                int(self._slice_x_idx),
+                int(self._slice_y_idx),
+                n_points,
+                _quantize_y_span_key(y_span),
+                int(rect.height()),
+                int(rect.width()),
+            )
+        except (AttributeError, IndexError, RuntimeError, TypeError,
+                ValueError):
+            return None
+
+    def _open_slice_backstop_session(self, signature) -> None:
+        self._slice_aa_latch.open(signature)
+        self._c._aa_backstop_armed = True
+
+    def _close_slice_backstop_session(self) -> None:
+        armed = bool(self._c._aa_backstop_armed)
+        session_open = bool(self._slice_aa_latch.session_open)
+        if not armed and not session_open:
+            return
+        self._c._aa_backstop_armed = False
+        self._slice_aa_latch.close()
+
+    def _note_slice_aa_frame(self, frame_ms) -> None:
+        """Feed one measured AA frame. Called from the canvas paint timer."""
+        if not self._slice_canvas_alive() or not self._c._aa_backstop_armed:
+            return
+        trip = self._slice_aa_latch.note_frame(frame_ms)
+        if trip is not None:
+            self._trip_slice_backstop(trip[0], trip[1])
+
+    def _trip_slice_backstop(self, reason, measured_ms) -> None:
+        """Disarm now; drop AA on the next turn so paint is not mutated."""
+        self._c._aa_backstop_armed = False
+        self._slice_aa_latch.reason = (str(reason), float(measured_ms))
+        timer = self._slice_timer_alive(self._slice_backstop_timer)
+        if timer is None:
+            logger.warning(
+                "slice AA backstop tripped (%s, %.1f ms) but its timer is "
+                "gone; antialiasing stays on for this session",
+                reason, float(measured_ms),
+            )
+            return
+        try:
+            timer.setProperty(
+                _BACKSTOP_EPOCH_PROPERTY, int(self._slice_aa_latch.epoch))
+            timer.start()
+        except RuntimeError:
+            logger.warning(
+                "slice AA backstop trip could not be queued", exc_info=True)
+
+    def _on_slice_backstop_timeout(self) -> None:
+        """Drop AA only for the epoch that measured the unaffordable frame."""
+        timer = self._slice_timer_alive(self._slice_backstop_timer)
+        if timer is None:
+            return
+        try:
+            epoch = int(timer.property(_BACKSTOP_EPOCH_PROPERTY))
+        except (RuntimeError, TypeError, ValueError):
+            return
+        if epoch != int(self._slice_aa_latch.epoch):
+            return
+        self._slice_aa_block_reason = "aa-backstop"
+        self.disable_interactive_quality()
+
+    def _slice_settle_pending(self) -> bool:
+        if self._slice_discrete_settle_pending:
+            return True
+        for timer in (
+            self._slice_discrete_aa_timer,
+            self._slice_aa_idle_timer,
+        ):
+            alive = self._slice_timer_alive(timer)
+            if alive is None:
+                continue
+            try:
+                if alive.isActive():
+                    return True
+            except RuntimeError:
+                continue
+        return False
+
+    def slice_quality_status(self) -> dict:
+        """Observable slice AA state, same vocabulary as the chart quality dot.
+
+        ``preview`` / ``red`` with ``block_reason`` is the existing "受限"
+        indication: ink over the borrowed band, or a measured frame that
+        tripped the backstop. A refusal is never a silent AA-off.
+        """
+        curve = self._slice_curve
+        if curve is None:
+            return {
+                "state": "idle",
+                "tooltip": "无切片曲线",
+                "block_reason": "no-curve",
+            }
+        try:
+            actual_on = bool(curve.opts.get("antialias", False))
+        except (AttributeError, RuntimeError, TypeError):
+            actual_on = False
+        if self._slice_aa_on and actual_on:
+            return {"state": "green", "tooltip": "精细显示"}
+        if self._slice_settle_pending():
+            return {"state": "yellow", "tooltip": "正在细化：等待空闲刷新"}
+        reason = self._slice_aa_block_reason
+        if reason == "aa-backstop" or (
+            self._slice_aa_latch.blacklist
+            and self._slice_aa_latch.blocked(self._slice_view_signature())
+        ):
+            return {
+                "state": "red",
+                "block_reason": "aa-backstop",
+                "tooltip": "绘制异常：实测帧超时",
+            }
+        if reason == "high-ink" or (
+            self._slice_ink_seeded and not self._slice_ink_allowed
+        ):
+            return {
+                "state": "preview",
+                "block_reason": "high-ink",
+                "tooltip": (
+                    "流畅预览：切片曲线填满绘图区，绘制量超预算"
+                    "（已按墨迹预算关闭抗锯齿）"
+                ),
+            }
+        if reason == "unknown-ink":
+            return {
+                "state": "red",
+                "block_reason": "unknown-ink",
+                "tooltip": "绘制异常：绘制量无法测量",
+            }
+        return {"state": "red", "tooltip": "绘制异常：抗锯齿未激活"}
 
     def _slice_coords(self):
         """Return (x_coords, y_coords) for the displayed matrix, falling back
@@ -162,6 +628,10 @@ class _SliceStrip(_CanvasBackref):
         else:
             self._slice_y_idx = nrows // 2
         self._apply_slice()
+        # Re-arm after the samples are on the curve. plot_or_update_heatmap
+        # arms once before this seed; a processEvents in between would
+        # otherwise settle the previous (or empty) curve.
+        self._arm_slice_discrete_aa()
 
     def set_slice_direction(self, direction: str) -> None:
         """Switch the slice between 'x' (fix time → amp vs Y) and 'y' (fix
@@ -351,6 +821,9 @@ class _SliceStrip(_CanvasBackref):
         """Marker drag → snap to the nearest index along the active axis and
         re-slice live."""
         if self._slice_marker_updating:
+            # Programmatic InfiniteLine.setValue inside _apply_slice emits
+            # sigPositionChanged. Treating that as a drag stops the discrete
+            # 0 ms settle and leaves a cheap slice AA-off at rest.
             return
         if self._matrix_disp is None or self._slice_curve is None:
             return

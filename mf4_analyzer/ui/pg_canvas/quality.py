@@ -274,6 +274,8 @@ class QualityManager(_CanvasBackref):
         "ink_seeded",
         "last_emitted_status",
         "timer",
+        "_discrete_quality_hold",
+        "_discrete_quality_deferred",
         # Injectable defensive provider for the idle-quality mouse-buttons
         # probe (P1-6). Owned by the manager, never write-through: local
         # canvas interaction state (_interaction_depth / _overlay_axes.
@@ -314,6 +316,11 @@ class QualityManager(_CanvasBackref):
         self.discrete_timer.setSingleShot(True)
         self.discrete_timer.setInterval(0)
         self.discrete_timer.timeout.connect(self.try_enable_idle_quality)
+        # Page-transition hold. ChartStack sets the token; this manager never
+        # imports chart_stack. While held, a discrete settle is recorded and
+        # the 0 ms timer waits until release.
+        self._discrete_quality_hold = None
+        self._discrete_quality_deferred = False
         self.density_allowed = False
         self.density_seeded = False
         # Ink-sum hysteresis state (spec §4.2), mirrors density_allowed /
@@ -897,6 +904,14 @@ class QualityManager(_CanvasBackref):
             self.discrete_timer.stop()
             self._emit_quality_status_changed()
             return
+        if self._discrete_quality_hold is not None:
+            # A page fade is in flight. Record the settle and upgrade once,
+            # on the turn after the transition finishes or cancels.
+            self.timer.stop()
+            self.discrete_timer.stop()
+            self._discrete_quality_deferred = True
+            self._emit_quality_status_changed()
+            return
         memo_ms = self.latch.memo_lookup(self._aa_memo_key())
         if memo_ms is not None and memo_ms <= _SYNC_AA_MAX_MS:
             # MEASURED cheap here before: enable AA now so the first frame
@@ -913,6 +928,26 @@ class QualityManager(_CanvasBackref):
         # beats the first paint is not guaranteed and does not need to be —
         # losing the race is today's behaviour, only sooner (spec §7).
         self.timer.stop()
+        self.discrete_timer.start()
+        self._emit_quality_status_changed()
+
+    def hold_discrete_quality(self, token) -> None:
+        """Defer the 0 ms discrete AA upgrade until ``release`` of this token."""
+        self._discrete_quality_hold = token
+        if self.discrete_timer.isActive():
+            self.discrete_timer.stop()
+            self._discrete_quality_deferred = True
+            self._emit_quality_status_changed()
+
+    def release_discrete_quality(self, token) -> None:
+        """Run one deferred discrete settle after the matching transition."""
+        if self._discrete_quality_hold != token:
+            return
+        self._discrete_quality_hold = None
+        deferred = self._discrete_quality_deferred
+        self._discrete_quality_deferred = False
+        if not deferred:
+            return
         self.discrete_timer.start()
         self._emit_quality_status_changed()
 
