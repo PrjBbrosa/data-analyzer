@@ -13,6 +13,7 @@ from PyQt5.QtGui import QColor, QFont, QImage
 from PyQt5.QtWidgets import QWidget
 
 from mf4_analyzer.app_meta import APP_CREDIT, APP_NAME, APP_VERSION
+from mf4_analyzer.ui import startup_splash as splash_module
 from mf4_analyzer.ui.startup_splash import (
     CARD_HEIGHT,
     CARD_WIDTH,
@@ -337,6 +338,46 @@ def test_no_self_painted_outer_shadow(splash_host):
     below = image.pixelColor(int(card.center().x()), below_y)
     if below_y > int(card.bottom()):
         assert below.alpha() < 40
+
+
+def test_windows_splash_keeps_the_rounded_shell_without_dwm_backdrop(
+    splash_host, monkeypatch, qtbot
+):
+    splash, _host = splash_host
+    monkeypatch.setattr(splash_module.platform, "system", lambda: "Windows")
+
+    def unexpected_backdrop(*_args, **_kwargs):
+        pytest.fail("Windows DWM backdrop would fill the rectangular shell corners")
+
+    monkeypatch.setattr(splash_module, "apply_native_panel_surface", unexpected_backdrop)
+    splash.hide()
+    splash.show()
+    qtbot.waitExposed(splash)
+    splash._apply_panel_surface(force=True)
+
+
+def test_card_has_an_inner_highlight_and_lighter_lower_left(splash_host):
+    from PyQt5.QtGui import QPainter
+
+    splash, _host = splash_host
+    image = QImage(splash.size(), QImage.Format_ARGB32_Premultiplied)
+    image.fill(Qt.transparent)
+    painter = QPainter(image)
+    painter.setRenderHint(QPainter.Antialiasing, True)
+    splash._paint_card(painter, splash.card_rect_logical())
+    painter.end()
+
+    x = image.width() // 2
+    top_rim = image.pixelColor(x, 1)
+    top_inner = image.pixelColor(x, 16)
+    assert top_rim.red() >= top_inner.red() + 3
+
+    bottom_rim = image.pixelColor(x, image.height() - 2)
+    bottom_inner = image.pixelColor(x, image.height() - 16)
+    assert bottom_rim.red() <= bottom_inner.red() - 3
+
+    lower_left = image.pixelColor(int(image.width() * .13), int(image.height() * .75))
+    assert lower_left.red() >= 240
 
 
 def test_invalid_stage_rejected(splash_host):

@@ -279,6 +279,7 @@ lesson by default.
 | [Set Ordinary Qt Tooltip Wake Delay Through The Application Style](qt-tooltip-wake-delay-is-style-controlled.md) | Changing the latency of ordinary QWidget tooltips in an app that | See lesson |
 | [Splash Thread Dispatch Needs A Real GUI Receiver](splash-thread-dispatch-needs-real-gui-receiver.md) | Dispatching splash IPC state from a Python reader thread into Qt GUI callbacks, or changing splash-to-main-window handover. | See lesson |
 | [Native glass needs a real backdrop and an opaque fallback](native-glass-needs-backdrop-and-opaque-fallback.md) | Translating an HTML glass prototype to Qt translucent panels. | See lesson |
+| [Windows DWM Backdrop Can Fill Rounded Splash Corners](windows-dwm-backdrop-can-fill-rounded-splash-corners.md) | Adding a Windows system backdrop to a translucent, frameless Qt panel whose visible card is painted with rounded corners. | See lesson |
 
 ## Selection Rules
 

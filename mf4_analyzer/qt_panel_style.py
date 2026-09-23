@@ -96,8 +96,14 @@ def glass_fill_css(*, fallback: bool = False) -> str:
     )
 
 
-def paint_panel_fill(painter, rect, radius: float, *, fallback: bool):
-    """HTML's white-to-ice surface and two elliptical, localized color washes."""
+def paint_panel_fill(
+    painter, rect, radius: float, *, fallback: bool, bl_glow_scale: float = 1.0
+):
+    """HTML's white-to-ice surface and two elliptical, localized color washes.
+
+    ``bl_glow_scale`` lets the splash soften its lower-left wash without
+    changing the QuickRef surface that shares this helper.
+    """
     from PyQt5.QtCore import QRectF
     from PyQt5.QtGui import QColor, QLinearGradient, QPainterPath, QRadialGradient
 
@@ -115,6 +121,8 @@ def paint_panel_fill(painter, rect, radius: float, *, fallback: bool):
     # Normalized coordinates keep these elliptical instead of wide blue disks.
     for which, x, y, extent in (("tr", 1., 0., .68), ("bl", .02, .8, .57)):
         color = glow_color(which)
+        if which == "bl":
+            color.setAlpha(int(round(color.alpha() * bl_glow_scale)))
         wash = QRadialGradient(x, y, extent)
         wash.setColorAt(0, color)
         clear = QColor(color)

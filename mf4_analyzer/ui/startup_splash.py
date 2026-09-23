@@ -83,7 +83,7 @@ TIPS: Tuple[Tuple[str, str], ...] = (
 _INK = panel_color("ink")
 _SECONDARY = panel_color("secondary")
 _ACCENT = panel_color("accent")
-_TIP_BG = QColor(24, 193, 229, 28)  # light cyan wash
+_TIP_BG = QColor(24, 193, 229, 18)  # light cyan wash
 _TIP_BORDER = QColor(255, 255, 255, 184)
 _TIP_TITLE = panel_color("tip_title")
 _TIP_BODY = panel_color("tip_body")
@@ -92,7 +92,6 @@ _CREDIT_FG = QColor("#617e98")
 _RAIL_TRACK = QColor(73, 142, 252, 38)
 _CAPTION_FG = panel_color("secondary")
 _CAPTION_DOT = QColor("#17b6df")
-_BORDER = panel_color("border")
 _SPECTRUM_STOPS = tuple(
     (stop, color)
     for stop, color in zip((0.0, 0.4, 0.67, 1.0), spectrum_stop_colors())
@@ -333,10 +332,10 @@ class StartupSplash(QWidget):
         # Readable on first show — no fade-in wait.
         self._apply_preferred_size()
         self._center_on_screen()
-        # Native glass when capable; otherwise paint an opaque fallback.
-        # Success here is not visual acceptance of frosted glass.
+        # Use native glass where its window bounds match our rounded surface.
+        # Windows uses the opaque, self-painted path for clean corners.
         self.setProperty("panelCornerRadius", self._s(CORNER_RADIUS))
-        apply_native_panel_surface(self)
+        self._apply_panel_surface()
         if not self._timer.isActive() and not self._reduced_motion:
             self._last_tick_ms = float(self._clock.elapsed())
             self._timer.start()
@@ -416,7 +415,7 @@ class StartupSplash(QWidget):
         screen = self._target_screen()
         if screen is not None:
             avail = screen.availableGeometry()
-            # Leave a little breathing room so shadow corners stay on-screen.
+            # Leave a little breathing room around the panel on-screen.
             max_w = max(160, avail.width() - 24)
             max_h = max(160, avail.height() - 24)
             natural_w = (CARD_WIDTH + 2 * SHADOW_PAD) * DISPLAY_SCALE
@@ -499,7 +498,14 @@ class StartupSplash(QWidget):
             self._ensure_brand_pixmap(force=True)
             self._rebuild_paths_if_needed(force=True)
             if self.isVisible() and not self._closed:
-                apply_native_panel_surface(self, force=True)
+                self._apply_panel_surface(force=True)
+
+    def _apply_panel_surface(self, *, force: bool = False) -> None:
+        # Windows DWM draws Acrylic behind the entire rectangular HWND. The
+        # card's antialiased transparent corners expose that rectangular layer.
+        # Keep the Windows splash opaque inside its own rounded painted path.
+        if platform.system() != "Windows":
+            apply_native_panel_surface(self, force=force)
 
     # --- Animation tick -----------------------------------------------------
 
@@ -585,11 +591,45 @@ class StartupSplash(QWidget):
 
     def _paint_card(self, painter: QPainter, card: QRectF) -> None:
         path = paint_panel_fill(
-            painter, card, self._s(CORNER_RADIUS), fallback=uses_opaque_fallback(self)
+            painter,
+            card,
+            self._s(CORNER_RADIUS),
+            fallback=uses_opaque_fallback(self),
+            bl_glow_scale=0.40,
         )
-        pen = QPen(_BORDER)
+        edge = QLinearGradient(card.left(), card.top(), card.left(), card.bottom())
+        edge.setColorAt(0.0, QColor(83, 132, 187, 58))
+        edge.setColorAt(1.0, QColor(63, 108, 164, 86))
+        pen = QPen()
+        pen.setBrush(edge)
         pen.setWidthF(max(1.0, self._s(1.0)))
         painter.strokePath(path, pen)
+        painter.save()
+        painter.setClipPath(path)
+        # Depth lives inside the rounded surface; it cannot leave a square
+        # shadow in the transparent window corners.
+        depth = QLinearGradient(card.left(), card.top(), card.left(), card.bottom())
+        depth.setColorAt(0.0, QColor(255, 255, 255, 50))
+        depth.setColorAt(0.55, QColor(255, 255, 255, 0))
+        depth.setColorAt(1.0, QColor(53, 101, 159, 9))
+        painter.fillPath(path, depth)
+
+        inset = self._s(1.0)
+        rim = QPainterPath()
+        rim.addRoundedRect(
+            card.adjusted(inset, inset, -inset, -inset),
+            self._s(CORNER_RADIUS - 1.0),
+            self._s(CORNER_RADIUS - 1.0),
+        )
+        rim_color = QLinearGradient(card.left(), card.top(), card.left(), card.bottom())
+        rim_color.setColorAt(0.0, QColor(255, 255, 255, 230))
+        rim_color.setColorAt(0.6, QColor(255, 255, 255, 45))
+        rim_color.setColorAt(1.0, QColor(63, 108, 164, 75))
+        rim_pen = QPen()
+        rim_pen.setBrush(rim_color)
+        rim_pen.setWidthF(max(1.0, self._s(1.2)))
+        painter.strokePath(rim, rim_pen)
+        painter.restore()
         # Clip subsequent chrome to the rounded card.
         painter.setClipPath(path)
 
