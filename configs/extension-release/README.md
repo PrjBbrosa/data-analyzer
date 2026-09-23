@@ -4,7 +4,7 @@
 
 ## 一键打包
 
-在 Windows 上直接双击 `tools/build_windows_folder_lite_modular.bat`。它会先构建、自检 `installer.exe`，再打包 Modular 并把 installer 放进成品目录；结束后窗口保留成功或失败信息。默认成品为 `dist\TraceLabAnalyzer8.3.2-modular\`。
+在 Windows 上直接双击 `tools/build_windows_folder_lite_modular.bat`。它会先构建、自检 `installer.exe`，再打包 Modular 并把 installer 放进成品目录；结束后窗口保留成功或失败信息。默认成品为 `dist\TraceLabAnalyzer8.4-modular\`。
 
 无需每次填写参数。未指定仓库配置时，installer 使用本目录下的 `local/repository.json`；目前它仍是上述占位配置，打包成功不代表在线扩展源可用。正式发布应通过 `-RepositoryConfig` 指定真实配置。脚本不生成信任根或私钥。
 

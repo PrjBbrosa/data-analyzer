@@ -29,7 +29,7 @@ def test_windows_folder_build_script_uses_onedir_pyinstaller_contract():
         "--hidden-import",
         "qtawesome",
         "MF4 Data Analyzer V1.py",
-        "TraceLab8.3.2",
+        "TraceLab8.4",
     ):
         assert token in text
 
@@ -153,7 +153,7 @@ def test_vector_runbook_uses_default_build_name_and_separate_evidence_files():
         ROOT / "docs/analyzer/acquisition/runbooks/stage-8-pr4-bench.md"
     ).read_text(encoding="utf-8")
 
-    assert r".\dist\TraceLab8.3.2\TraceLab8.3.2.exe" in runbook
+    assert r".\dist\TraceLab8.4\TraceLab8.4.exe" in runbook
     assert "build-api-contract.json" in runbook
     assert "packaged-runtime-smoke.json" in runbook
     assert "MF4DataAnalyzer" not in runbook
@@ -283,10 +283,10 @@ def test_windows_build_scripts_default_to_current_release():
         script = ROOT / "tools" / filename
         text = script.read_text(encoding="utf-8")
 
-        assert '[string]$Version = "8.3.2"' in text
+        assert '[string]$Version = "8.4"' in text
 
     lite_script = ROOT / "tools" / "build_windows_folder_lite.ps1"
-    assert "TraceLabAnalyzer8.3.2" in lite_script.read_text(encoding="utf-8")
+    assert "TraceLabAnalyzer8.4" in lite_script.read_text(encoding="utf-8")
 
 
 def test_lite_build_script_omits_acquisition_and_native_deps():

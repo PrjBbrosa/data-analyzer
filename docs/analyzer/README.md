@@ -24,7 +24,7 @@ Published guide entry points:
 
 ## Current Product Baseline
 
-The current baseline is TraceLab 8.3.2. It retains the 7.6 ASCII (`.asc`),
+The current baseline is TraceLab 8.4. It retains the 7.6 ASCII (`.asc`),
 NI TDMS (`.tdms`), and the original 12-View expansion (time-domain is now 24
 Views; the four analysis sections stay at 12), as well as the native WinWert
 (`.wwt`), ZFGE2/TestRunPRO (`.zfd`), and MATLAB (`.mat`) imports introduced
@@ -140,6 +140,9 @@ keep the last sample, a backward step skips that channel, and range loss,
 resampling, and endpoint hold are reported. A channel with no overlap is not
 imported as a constant. Single-sample channels merge only when their timestamps
 match exactly. A real signal named `t` or `time` stays if it is not a time master.
+8.4 adds a DPI-aware startup panel that closes before the main window appears,
+refines the sky-blue glass panels with a native Cocoa backdrop and an opaque
+fallback, and improves repeat chart transitions and tooltip responsiveness.
 Update the published guides when these behaviours change; preserve each loader's
 timing and unit boundaries instead of describing inferred metadata as measured
 truth.
