@@ -24,6 +24,7 @@ HIDDEN_MODES = (
     "--importer-runtime-smoke",
     "--batch-render-runtime-smoke",
     "--frozen-batch-acceptance",
+    "--startup-splash-child",
 )
 
 

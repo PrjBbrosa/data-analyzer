@@ -37,6 +37,14 @@ STAGE_FIRST_FRAME = "first_frame"
 STAGE_INTERACTIVE_PROBE_HANDLED = "interactive_probe_handled"
 STAGE_PRELOAD_COMPLETE = "preload_complete"
 STAGE_PAGE_READY = "page_ready"
+# Parent-side splash diagnostics (marks.jsonl). Never written by the splash child.
+STAGE_SPLASH_PAINTED = "splash_painted"
+STAGE_SPLASH_CLOSED = "splash_closed"
+
+# Probe message roles: feedback is a parent push; interactive is tool→app request.
+PROBE_ROLE_FEEDBACK = "feedback"
+PROBE_ROLE_FEEDBACK_ACK = "feedback_ack"
+PROBE_CMD_INTERACTIVE = "interactive_probe"
 
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 
@@ -188,6 +196,95 @@ def mark_preload_complete(**detail: Any) -> None:
     """Task 3 hook: record idle preload finished. Never means 'app available'."""
 
     mark(STAGE_PRELOAD_COMPLETE, **detail)
+
+
+def record_splash_event(
+    event: str,
+    *,
+    session: str | None = None,
+    detail: Any = None,
+) -> None:
+    """Parent I/O-thread splash diagnostic: marks.jsonl + optional probe push.
+
+    Uses this process's mono clock for marks only. Child mono timestamps in
+    *detail* are recorded as opaque payload and must never be subtracted from
+    parent or tool clocks. When timing is disabled this is a full no-op.
+    """
+
+    if not _enabled:
+        return
+    stage_name = str(event)
+    extra: dict[str, Any] = {}
+    if session is not None:
+        extra["session"] = str(session)
+    if detail is not None:
+        # Opaque child diagnostics (e.g. frame stats); not a parent clock.
+        extra["child_detail"] = detail
+    mark(stage_name, **extra)
+    forward_feedback_event(stage_name, session=session)
+
+
+def forward_feedback_event(
+    event: str,
+    *,
+    session: str | None = None,
+    timeout_s: float = 0.5,
+) -> dict[str, Any] | None:
+    """One-shot TCP push of a feedback event to the measurement tool.
+
+    Safe to call from the splash controller I/O thread. Does not wait for the
+    main-window interactive probe path. Returns the tool ack payload when
+    present; returns None when timing/probe is disabled or the push fails.
+    """
+
+    if not _enabled:
+        return None
+    endpoint = probe_endpoint()
+    if endpoint is None:
+        return None
+    host, port = endpoint
+    parent_mono_ns: int | None = None
+    if _origin_mono_ns is not None:
+        parent_mono_ns = int(time.perf_counter_ns() - _origin_mono_ns)
+    payload = {
+        "role": PROBE_ROLE_FEEDBACK,
+        "event": str(event),
+        "run_id": _run_id,
+        "session": session,
+        # Informational only — the tool must stamp receipt on its own clock.
+        "parent_mono_ns": parent_mono_ns,
+    }
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(timeout_s)
+    try:
+        sock.connect((host, port))
+        raw = (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
+        sock.sendall(raw)
+        try:
+            reply = sock.recv(4096)
+        except OSError:
+            return None
+        if not reply:
+            return None
+        text = reply.decode("utf-8", errors="replace").strip()
+        if not text:
+            return None
+        try:
+            body = json.loads(text.splitlines()[0])
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(body, dict):
+            return None
+        if body.get("role") != PROBE_ROLE_FEEDBACK_ACK:
+            return None
+        return body
+    except OSError:
+        return None
+    finally:
+        try:
+            sock.close()
+        except OSError:
+            pass
 
 
 def exit_after_probe() -> bool:

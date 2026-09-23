@@ -164,6 +164,12 @@ _SHORTCUTS = {
 
 _HINTS = (
     Hint(
+        id="startup.splash_panel",
+        text="启动面板表示启动中，就绪后自动关",
+        surface="discovery",
+        priority=21,
+    ),
+    Hint(
         id="preset.keep_manual_axes",
         text="切换预设可保留手动坐标范围",
         surface="discovery",

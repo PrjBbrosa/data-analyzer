@@ -303,6 +303,21 @@ def test_modular_packager_is_a_separate_lite_copy():
     )
 
 
+def test_modular_packager_keeps_startup_splash_modules():
+    """Modular base drops media/MAT but must still analyse splash imports."""
+
+    text = MODULAR.read_text(encoding="utf-8")
+    assert "MF4 Data Analyzer V1.py" in text
+    for module_name in (
+        "mf4_analyzer.startup_feedback",
+        "mf4_analyzer.startup_splash_child",
+        "mf4_analyzer.ui.startup_splash",
+    ):
+        assert f'"--exclude-module", "{module_name}"' not in text
+    # Optional importers stay excluded; splash is unrelated to those trees.
+    assert '"--exclude-module", "matplotlib"' in text
+
+
 def test_modular_packager_emits_manifests_zips_audit_and_manager_copy():
     text = MODULAR.read_text(encoding="utf-8")
     assert "build_windows_extensions.py" in text

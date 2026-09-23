@@ -387,6 +387,28 @@ def test_lite_build_keeps_qtnetwork_conservatively():
     assert "PyQt5.QtNetwork" not in text
 
 
+def test_windows_builders_do_not_exclude_startup_splash_modules():
+    """Splash is statically imported from the shared launcher; do not exclude it."""
+
+    splash_modules = (
+        "mf4_analyzer.startup_feedback",
+        "mf4_analyzer.startup_splash_child",
+        "mf4_analyzer.ui.startup_splash",
+    )
+    for filename in (
+        "build_windows_folder.ps1",
+        "build_windows_folder_lite.ps1",
+        "build_windows_folder_lite_modular.ps1",
+    ):
+        text = (ROOT / "tools" / filename).read_text(encoding="utf-8")
+        assert "MF4 Data Analyzer V1.py" in text
+        for module_name in splash_modules:
+            assert f'"--exclude-module", "{module_name}"' not in text
+        # No mechanical hidden-import required when the launcher import is static.
+        # Presence would be redundant but must not be the only closure path.
+        assert '"--exclude-module", "matplotlib"' in text
+
+
 def test_lite_build_records_each_attempt_and_checks_environment_exit_codes():
     text = (ROOT / "tools/build_windows_folder_lite.ps1").read_text(encoding="utf-8")
     # Logging must start before validation/install; a failed attempt is evidence too.

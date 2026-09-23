@@ -41,6 +41,8 @@ def test_launcher_marks_python_entry_before_importing_app(monkeypatch):
     assert calls[0] == "mark:python_entry"
     assert "gui" in calls
     assert calls.index("mark:python_entry") < calls.index("gui")
+    # Ordinary GUI no longer bootstraps in the launcher; app.main owns that.
+    assert "boot" not in calls
 
 
 def test_launcher_child_modes_exit_before_mainwindow(monkeypatch):
@@ -126,6 +128,7 @@ def test_app_module_main_marks_python_entry_when_launched_directly(monkeypatch):
     import mf4_analyzer.app as app_mod
 
     calls: list[str] = []
+    monkeypatch.setenv("TRACELAB_STARTUP_SPLASH", "0")
     monkeypatch.setattr(
         app_mod,
         "bootstrap_extension_runtime",
@@ -150,12 +153,37 @@ def test_app_module_main_marks_python_entry_when_launched_directly(monkeypatch):
     fake_timing.StartupTimingError = RuntimeError
     monkeypatch.setitem(sys.modules, "mf4_analyzer.startup_timing", fake_timing)
 
-    armed: list[str] = []
+    feedback_calls: list[str] = []
+
+    class _FakeFeedback:
+        def start(self, **kwargs):
+            feedback_calls.append(("start", dict(kwargs)))
+            calls.append("feedback:start")
+
+        def publish(self, stage):
+            feedback_calls.append(("publish", stage))
+            calls.append(f"feedback:publish:{stage}")
+
+        def finish(self):
+            feedback_calls.append(("finish", None))
+            calls.append("feedback:finish")
+
+        def close(self):
+            feedback_calls.append(("close", None))
+            calls.append("feedback:close")
+
     monkeypatch.setattr(
-        app_mod,
-        "_arm_startup_observation",
-        lambda _app, _window: armed.append("arm"),
+        "mf4_analyzer.startup_feedback.StartupFeedback",
+        _FakeFeedback,
     )
+
+    armed: list[tuple] = []
+
+    def _capture_arm(_app, _window, feedback=None):
+        calls.append("arm")
+        armed.append(("arm", feedback))
+
+    monkeypatch.setattr(app_mod, "_arm_startup_observation", _capture_arm)
 
     class _FakeApp:
         def __init__(self, _argv):
@@ -212,18 +240,31 @@ def test_app_module_main_marks_python_entry_when_launched_directly(monkeypatch):
     app_mod.main()
 
     assert calls[0] == "mark:python_entry"
+    assert "feedback:start" in calls
+    assert "feedback:publish:loading_components" in calls
+    assert "boot" in calls
+    assert calls.index("feedback:start") < calls.index(
+        "feedback:publish:loading_components"
+    )
+    assert calls.index("feedback:publish:loading_components") < calls.index("boot")
+    assert "feedback:publish:preparing_workspace" in calls
+    assert calls.index("feedback:publish:preparing_workspace") < calls.index(
+        "MainWindow"
+    )
     assert "mark:gui_modules_imported" in calls
     assert "mark:qapplication_ready" in calls
     assert "mark:mainwindow_constructed" in calls
     assert "MainWindow" in calls
     assert calls.index("mark:python_entry") < calls.index("MainWindow")
     assert calls.index("mark:mainwindow_constructed") < calls.index("show")
-    assert armed == ["arm"]
+    assert calls.index("arm") < calls.index("show")
+    assert len(armed) == 1
+    assert armed[0][0] == "arm"
+    assert armed[0][1] is not None
+    assert "feedback:close" in calls
     # Task 0 must not pretend preload/pages are done on the startup path.
     assert "mark:preload_complete" not in calls
     assert not any(item.startswith("mark:page_ready") for item in calls)
-
-
 def test_launcher_text_keeps_hidden_children_before_app_import():
     text = LAUNCHER.read_text(encoding="utf-8")
     gui_import = "from mf4_analyzer.app import main"
@@ -232,6 +273,231 @@ def test_launcher_text_keeps_hidden_children_before_app_import():
     assert text.index("if args.pyxcp_import_probe_child") < text.index(gui_import)
     assert text.index("if args.a2l_probe_child") < text.index(gui_import)
     assert text.index("startup_timing") < text.index(gui_import)
-    # No new required CLI flag that would join the exclusive hidden group.
+    # Splash child must return before timing marks and the GUI import.
+    assert "startup_splash_child" in text
+    assert text.index("startup_splash_child") < text.index("startup_timing")
+    assert text.index("startup_splash_child") < text.index(gui_import)
+    # No timing CLI; splash uses an exact hidden child flag instead.
     assert "--startup-timing" not in text
-    assert "add_argument(\"--startup" not in text
+    assert 'add_argument("--startup-timing"' not in text
+    assert 'add_argument("--startup-splash-child"' in text
+
+
+def test_launcher_routes_startup_splash_child_before_timing(monkeypatch):
+    calls: list[str] = []
+
+    fake_timing = ModuleType("mf4_analyzer.startup_timing")
+    fake_timing.mark = lambda *_a, **_k: calls.append("mark")
+    fake_timing.enabled = lambda: False
+    fake_timing.STAGE_PYTHON_ENTRY = "python_entry"
+
+    fake_app = ModuleType("mf4_analyzer.app")
+    fake_app.main = lambda: calls.append("gui")
+    fake_app.bootstrap_extension_runtime = lambda **_k: calls.append("boot")
+
+    splash = ModuleType("mf4_analyzer.startup_splash_child")
+
+    def child_main(argv=None):
+        calls.append("splash:" + " ".join(argv or []))
+        return 0
+
+    splash.child_main = child_main
+
+    monkeypatch.setitem(sys.modules, "mf4_analyzer.startup_timing", fake_timing)
+    monkeypatch.setitem(sys.modules, "mf4_analyzer.app", fake_app)
+    monkeypatch.setitem(sys.modules, "mf4_analyzer.startup_splash_child", splash)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "TraceLab.exe",
+            "--startup-splash-child",
+            "--startup-splash-session",
+            "sess-1",
+            "--startup-splash-endpoint",
+            "127.0.0.1:54321",
+            "--startup-splash-token",
+            "tok-1",
+        ],
+    )
+    with pytest.raises(SystemExit) as stopped:
+        runpy.run_path(str(LAUNCHER), run_name="__main__")
+    assert stopped.value.code == 0
+    assert calls == [
+        "splash:--startup-splash-child --startup-splash-session sess-1 "
+        "--startup-splash-endpoint 127.0.0.1:54321 --startup-splash-token tok-1"
+    ]
+    assert "mark" not in calls
+    assert "gui" not in calls
+    assert "boot" not in calls
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        [
+            "TraceLab.exe",
+            "--startup-splash-child",
+            "--startup-splash-session",
+            "sess",
+            "--startup-splash-endpoint",
+            "127.0.0.1:9",
+            "--startup-splash-token",
+            "tok",
+            "--pyxcp-import-probe-child",
+        ],
+        [
+            "TraceLab.exe",
+            "--importer-runtime-smoke",
+            "--startup-splash-child",
+            "--json",
+            "out.json",
+            "--import-path",
+            "a.mat",
+        ],
+    ],
+)
+def test_launcher_rejects_splash_child_with_other_hidden_modes(
+    argv, monkeypatch
+):
+    calls: list[str] = []
+    splash = ModuleType("mf4_analyzer.startup_splash_child")
+    splash.child_main = lambda *_a, **_k: calls.append("splash") or 0
+    fake_app = ModuleType("mf4_analyzer.app")
+    fake_app.main = lambda: calls.append("gui")
+    monkeypatch.setitem(sys.modules, "mf4_analyzer.startup_splash_child", splash)
+    monkeypatch.setitem(sys.modules, "mf4_analyzer.app", fake_app)
+    monkeypatch.setattr(sys, "argv", argv)
+    with pytest.raises(SystemExit) as stopped:
+        runpy.run_path(str(LAUNCHER), run_name="__main__")
+    assert stopped.value.code == 2
+    assert calls == []
+
+
+def test_launcher_rejects_abbreviated_splash_child_flag(monkeypatch):
+    calls: list[str] = []
+    splash = ModuleType("mf4_analyzer.startup_splash_child")
+    splash.child_main = lambda *_a, **_k: calls.append("splash") or 0
+    fake_app = ModuleType("mf4_analyzer.app")
+    fake_app.main = lambda: calls.append("gui")
+    fake_app.bootstrap_extension_runtime = lambda **_k: None
+    fake_timing = ModuleType("mf4_analyzer.startup_timing")
+    fake_timing.mark = lambda *_a, **_k: None
+    fake_timing.STAGE_PYTHON_ENTRY = "python_entry"
+    monkeypatch.setitem(sys.modules, "mf4_analyzer.startup_splash_child", splash)
+    monkeypatch.setitem(sys.modules, "mf4_analyzer.app", fake_app)
+    monkeypatch.setitem(sys.modules, "mf4_analyzer.startup_timing", fake_timing)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "TraceLab.exe",
+            "--startup-splash-ch",
+            "--startup-splash-session",
+            "sess",
+            "--startup-splash-endpoint",
+            "127.0.0.1:9",
+            "--startup-splash-token",
+            "tok",
+        ],
+    )
+    with pytest.raises(SystemExit) as stopped:
+        runpy.run_path(str(LAUNCHER), run_name="__main__")
+    assert stopped.value.code == 2
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        # Mode without payload
+        ["TraceLab.exe", "--startup-splash-child"],
+        # Payload without mode
+        [
+            "TraceLab.exe",
+            "--startup-splash-session",
+            "sess",
+            "--startup-splash-endpoint",
+            "127.0.0.1:9",
+            "--startup-splash-token",
+            "tok",
+        ],
+        # Illegal endpoint host
+        [
+            "TraceLab.exe",
+            "--startup-splash-child",
+            "--startup-splash-session",
+            "sess",
+            "--startup-splash-endpoint",
+            "0.0.0.0:9",
+            "--startup-splash-token",
+            "tok",
+        ],
+        # Illegal endpoint shape
+        [
+            "TraceLab.exe",
+            "--startup-splash-child",
+            "--startup-splash-session",
+            "sess",
+            "--startup-splash-endpoint",
+            "127.0.0.1",
+            "--startup-splash-token",
+            "tok",
+        ],
+        # Missing token
+        [
+            "TraceLab.exe",
+            "--startup-splash-child",
+            "--startup-splash-session",
+            "sess",
+            "--startup-splash-endpoint",
+            "127.0.0.1:9",
+        ],
+    ],
+)
+def test_launcher_rejects_missing_or_illegal_splash_payload(argv, monkeypatch):
+    calls: list[str] = []
+    splash = ModuleType("mf4_analyzer.startup_splash_child")
+    splash.child_main = lambda *_a, **_k: calls.append("splash") or 0
+    fake_app = ModuleType("mf4_analyzer.app")
+    fake_app.main = lambda: calls.append("gui")
+    fake_app.bootstrap_extension_runtime = lambda **_k: None
+    fake_timing = ModuleType("mf4_analyzer.startup_timing")
+    fake_timing.mark = lambda *_a, **_k: None
+    fake_timing.STAGE_PYTHON_ENTRY = "python_entry"
+    monkeypatch.setitem(sys.modules, "mf4_analyzer.startup_splash_child", splash)
+    monkeypatch.setitem(sys.modules, "mf4_analyzer.app", fake_app)
+    monkeypatch.setitem(sys.modules, "mf4_analyzer.startup_timing", fake_timing)
+    monkeypatch.setattr(sys, "argv", argv)
+    with pytest.raises(SystemExit) as stopped:
+        runpy.run_path(str(LAUNCHER), run_name="__main__")
+    assert stopped.value.code == 2
+    assert "splash" not in calls
+    assert "gui" not in calls
+
+
+def test_launcher_splash_child_dispatch_without_console_streams(monkeypatch):
+    calls: list[str] = []
+    splash = ModuleType("mf4_analyzer.startup_splash_child")
+    splash.child_main = lambda argv=None: calls.append("splash") or 0
+    monkeypatch.setitem(sys.modules, "mf4_analyzer.startup_splash_child", splash)
+    monkeypatch.setattr(sys, "stdout", None)
+    monkeypatch.setattr(sys, "stderr", None)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "TraceLab.exe",
+            "--startup-splash-child",
+            "--startup-splash-session",
+            "sess",
+            "--startup-splash-endpoint",
+            "127.0.0.1:4242",
+            "--startup-splash-token",
+            "tok",
+        ],
+    )
+    with pytest.raises(SystemExit) as stopped:
+        runpy.run_path(str(LAUNCHER), run_name="__main__")
+    assert stopped.value.code == 0
+    assert calls == ["splash"]

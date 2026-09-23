@@ -116,6 +116,16 @@ def test_modular_profile_excludes_optional_importers_from_analysis():
     assert excluded == MODULAR_EXCLUDED_MODULES
     assert "av" in excluded
     assert "hdf5storage" in excluded
+    # Splash modules are base GUI feedback, not optional importer trees.
+    for splash in (
+        "mf4_analyzer.startup_feedback",
+        "mf4_analyzer.startup_splash_child",
+        "mf4_analyzer.ui.startup_splash",
+        "startup_feedback",
+        "startup_splash_child",
+        "startup_splash",
+    ):
+        assert splash not in excluded
 
 
 def _pairs(args: tuple[str, ...]) -> set[tuple[str, str]]:

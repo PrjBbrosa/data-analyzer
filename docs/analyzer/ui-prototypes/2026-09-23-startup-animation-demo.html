@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TraceLab · 启动体验设计</title>
+<!-- Self-contained visual prototype. Version snapshot: app_meta.py, 2026-09-23.
+     Tip content: ui/quickref.py. All timings and stage changes are simulated.
+     Design: cloud #f8fbfd, ink #243343, blue #1769e0, teal #087e96,
+     mist #edf5fa, spectrum blue #397cad. Segoe UI/PingFang for UI, Trebuchet for wordmark.
+     A: left-aligned brand / waveform / status / tip. B: brand / spectral landscape / tip.
+     C: compact brand and activity. D: satin silver phase portrait. E: celadon woven signal.
+     No real telemetry or loading percentage. Spectrum fits a 15 px top inset. -->
+<style>
+:root{font-family:"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;color:#243343;background:#edf0f4;font-synthesis:none;--blue:#1769e0;--muted:#637487}
+*{box-sizing:border-box}body{margin:0}button,select{font:inherit}button{cursor:pointer}button:focus-visible,select:focus-visible,a:focus-visible{outline:3px solid #4387d9;outline-offset:4px}button:disabled{opacity:.45;cursor:default}button,select{-webkit-tap-highlight-color:transparent}button{color:inherit}header{height:83px;padding:0 40px;display:flex;align-items:center;justify-content:space-between;background:#fcfdff;border-bottom:1px solid #dce2e9}.identity{display:flex;align-items:center;gap:12px}.app-icon{width:38px;height:38px}.identity strong{font-size:18px;letter-spacing:-.5px}.identity span{font-size:12px;color:var(--muted);border-left:1px solid #d7dee6;padding-left:15px;margin-left:4px}.prototype{font-size:12px;color:#667487;border:1px solid #d7dee6;padding:6px 10px;border-radius:5px}
+main{max-width:1400px;margin:auto;padding:36px 40px 24px}.intro{display:flex;align-items:end;justify-content:space-between;margin-bottom:27px}.intro h1{font-size:28px;letter-spacing:-.9px;margin:0 0 9px;font-weight:650}.intro p{margin:0;color:var(--muted);font-size:14px}.quiet-button{background:#fff;border:1px solid #d4dce5;border-radius:7px;padding:10px 15px;white-space:nowrap}.workspace{display:grid;grid-template-columns:236px minmax(0,1fr);gap:22px}.choices{display:flex;flex-direction:column;gap:12px}.choice{text-align:left;background:transparent;border:1px solid #d2dae4;border-radius:10px;padding:18px;position:relative;transition:border-color .2s,background .2s}.choice[aria-pressed=true]{background:#fff;border-color:#3376c8;box-shadow:0 3px 12px #24496e08}.choice[aria-pressed=true]::after{content:"";position:absolute;right:16px;top:20px;width:7px;height:7px;background:#1769e0;border-radius:50%}.choice b{display:block;font-size:15px;margin:10px 0 7px}.choice p{font-size:12px;line-height:1.7;color:#637487;margin:0}.swatches{display:flex;gap:4px;height:10px}.swatches i{width:24px;border-radius:2px}.choice small{display:block;color:#69798b;font-size:11px;margin-top:12px}.design-note{padding:8px 4px;font-size:12px;line-height:1.9;color:#647487}.design-note b{font-weight:600;color:#344a60;display:block;margin-bottom:6px}.preview{border:1px solid #d3dce6;border-radius:12px;overflow:hidden;background:#e2e8ef}.preview-top{height:45px;display:flex;align-items:center;justify-content:space-between;padding:0 19px;color:#607184;font-size:11px;border-bottom:1px solid #d2dbe6;background:#f6f8fa}.preview-top span:last-child{font-variant-numeric:tabular-nums}.stage{position:relative;min-height:493px;display:flex;justify-content:center;align-items:center;padding:32px 22px;background:radial-gradient(ellipse at 45% 25%,#f3f6fa 0%,#e5ebf2 60%,#dbe3ed 100%)}.splash{--accent:#1769e0;--ink:#243343;--secondary:#5e7185;color:var(--ink);background:#fcfdff;width:600px;max-width:100%;border-radius:13px;box-shadow:0 25px 60px #1d38532a,0 2px 7px #233a4d12;overflow:hidden;position:relative;border:1px solid #fff;animation:appear .36s ease both}.splash[hidden]{display:none}.splash-head{padding:29px 32px 0;display:flex;justify-content:space-between;align-items:start}.brand{display:flex;align-items:center;gap:12px}.brand .app-icon{width:44px;height:44px}.wordmark{font-family:"Trebuchet MS","Segoe UI",sans-serif;font-size:30px;font-weight:700;line-height:1.1;letter-spacing:-1.2px}.subtitle{font-size:11px;color:var(--secondary);margin-top:6px;letter-spacing:.6px}.version{font-size:11px;color:var(--secondary);padding-top:4px}.wave-visual{height:143px;margin:14px 0 0;position:relative;overflow:hidden}.wave-visual svg{width:100%;height:100%;display:block}.trace-base{stroke:#cbdbe9;stroke-width:1;fill:none}.trace-active{fill:none;stroke:#2177b9;stroke-width:2.2;stroke-linecap:round;stroke-dasharray:230 620;animation:trace 4.6s linear infinite}.trace-second{fill:none;stroke:#91b9ce;stroke-width:1.2;opacity:.8}.scan-line{animation:scan 4.6s linear infinite;transform-origin:center}.loading{padding:0 32px 22px}.status-row{display:flex;align-items:center;gap:9px;font-size:12px;font-weight:600;min-height:22px}.status-row .stage-label{margin-left:auto;font-size:10px;font-weight:400;color:var(--secondary)}.spinner{width:13px;height:13px;border:1.5px solid #cad8e8;border-top-color:var(--accent);border-radius:50%;animation:spin 1s linear infinite;flex-shrink:0}.rail{height:3px;background:#e4ebf2;overflow:hidden;margin-top:13px;border-radius:3px}.rail::after{content:"";display:block;height:100%;width:32%;border-radius:3px;background:var(--accent);animation:indeterminate 2.3s ease-in-out infinite}.tip-box{border-top:1px solid #e6edf3;background:#f3f7fb;padding:17px 32px 18px;min-height:92px}.tip-heading{display:flex;align-items:center;justify-content:space-between;color:#4d6780;font-size:10px;margin-bottom:8px}.tip-heading strong{font-weight:600;display:flex;align-items:center;gap:7px}.tip-heading svg{width:12px;height:12px;stroke:currentColor;fill:none;stroke-width:1.4}.dots{display:flex;gap:4px}.dots i{width:4px;height:4px;background:#c4ced8;border-radius:50%}.dots i.on{background:var(--accent);width:12px;border-radius:3px}.tip-copy{font-size:12px;line-height:1.65;margin:0;color:#425b73;max-width:65ch}.credit{display:flex;justify-content:space-between;padding:11px 32px;font-size:9px;color:#778797;background:#fcfdff}.ready .spinner{border:0;border-radius:0;animation:none;width:13px;height:13px}.ready .spinner::after{content:"✓";color:var(--accent);font-size:16px;line-height:12px}.ready .rail::after{animation:none;width:100%}.ready .trace-active,.ready .scan-line,.ready .spectral-lines{animation-play-state:paused}.ready .spectrum-glow{opacity:0}
+/* B: one sculptural spectrum is the focal point; all other chrome stays quiet. */
+.cinematic{--accent:#426f94;--ink:#273d50;--secondary:#576e82;width:640px;background:linear-gradient(135deg,#e8edf1 0%,#dce5ec 58%,#d2dfe8 100%);border-color:#f6f9fbc9;border-radius:13px}.cinematic .splash-head{padding-top:30px;align-items:center;position:relative;z-index:2}.cinematic .wordmark{font-size:31px}.cinematic .brand .app-icon{width:40px;height:40px}.cinematic .subtitle{font-size:10px}.spectrum{height:198px;margin-top:15px;position:relative;overflow:hidden;background:radial-gradient(ellipse at 50% 72%,#b8cedd55,transparent 70%)}.spectrum svg{display:block;width:100%;height:100%}.spectrum-caption{position:absolute;bottom:12px;left:32px;display:flex;gap:16px;font-size:9px;color:#5d758b}.spectrum-caption span::before{content:"";width:4px;height:4px;background:#398baf;display:inline-block;margin-right:6px;vertical-align:2px;border-radius:50%}.spectral-lines{animation:breathe 5s ease-in-out infinite;transform-origin:center}.spectrum-glow{animation:scan 6s linear infinite;opacity:.5}.cinematic .loading{padding-bottom:21px}.cinematic .rail{background:#bdcddb;height:2px}.cinematic .spinner{border-color:#b9cad7;border-top-color:var(--accent)}.cinematic .tip-box{background:#ccdce88c;border-color:#b4c6d680;min-height:92px}.cinematic .tip-heading{color:#3a627e}.cinematic .tip-copy{color:#425b73}.cinematic .dots i{background:#acbfce}.cinematic .dots i.on{background:#426f94}.cinematic .credit{background:#d6e1e980;color:#5e7386}
+/* C: a small desktop utility surface, with no large illustration. */
+.compact{width:460px;border-radius:11px;border-color:#dbe4ed}.compact .splash-head{padding:28px 27px 22px;align-items:center}.compact .brand{gap:13px}.compact .brand .app-icon{width:50px;height:50px}.compact .wordmark{font-size:29px}.compact .subtitle{letter-spacing:0}.mini-signal{display:flex;align-items:center;gap:4px;height:40px;padding-left:10px}.mini-signal i{width:3px;height:28px;background:#5894c4;border-radius:2px;animation:equalize 1.3s ease-in-out infinite alternate;animation-delay:calc(var(--i)*-.17s)}.compact .loading{padding:0 27px 20px}.compact .tip-box{padding:15px 27px;min-height:91px}.compact .credit{padding:10px 27px}.ready .mini-signal i{animation-play-state:paused}.compact .status-row .stage-label{font-size:10px}.compact.ready .stage-label{visibility:hidden}.controls{display:flex;flex-wrap:wrap;align-items:center;gap:9px;padding:15px 18px;background:#f9fbfd;border-top:1px solid #d3dce6}.controls button,.controls select{border:1px solid #d1dbe5;background:white;border-radius:6px;padding:8px 11px;font-size:12px;height:34px}.controls button.primary{background:#253f59;color:#fff;border-color:#253f59}.controls label{font-size:11px;color:#64788c;margin-left:auto}.controls select{max-width:160px;color:#3f556d}.caption{display:flex;justify-content:space-between;gap:20px;font-size:12px;line-height:1.7;color:#647487;margin:17px 0 0}.caption p{margin:0}.caption b{color:#3b5269;font-weight:600}.footer{margin-top:24px;font-size:11px;color:#738092;display:flex;justify-content:space-between;gap:15px}.is-paused .animated,.is-paused .animated::after,.is-paused .mini-signal i{animation-play-state:paused!important}.reduced .animated,.reduced .animated::after,.reduced .mini-signal i{animation:none!important}.reduced .trace-active{stroke-dasharray:none}.motion-control{display:flex;align-items:center;gap:6px;white-space:nowrap}.motion-control input{accent-color:#1769e0}.solo header,.solo .intro,.solo .choices,.solo .preview-top,.solo .caption,.solo .footer{display:none}.solo main{padding:0;max-width:none}.solo .workspace{display:block}.solo .preview{border:0;border-radius:0}.solo .stage{min-height:calc(100vh - 68px)}.solo .controls{justify-content:center}.solo .controls label{margin-left:8px}#exitSolo{display:none}.solo #exitSolo{display:block}.solo .splash{animation:none}
+
+/* D: satin silver with a contained phase portrait. E: celadon with a woven signal field. */
+.earlier{font-size:12px;color:#647487}.earlier summary{cursor:pointer;padding:9px 3px}.earlier .choice{width:100%;margin:6px 0}.earlier summary:focus-visible{outline:3px solid #4387d9;outline-offset:2px}
+.titanium{--accent:#5b758d;--ink:#303f4e;--secondary:#617282;width:620px;border-color:#f4f6f8bd;background:linear-gradient(125deg,#ecedef,#dce1e5 60%,#d0d8de);border-radius:13px}
+.phase-hero{display:grid;grid-template-columns:1fr 1.12fr;align-items:center;min-height:235px;padding:24px 27px 10px 32px}.phase-identity{align-self:stretch;display:flex;flex-direction:column;align-items:flex-start;padding-top:8px}.phase-identity .app-icon{width:38px;height:38px;margin-bottom:14px}.phase-identity .wordmark{font-size:32px}.phase-identity .version{font-size:11px;margin-top:6px}.phase-modes{font-size:10px;line-height:1.9;color:#687c8d;margin-top:20px}.phase-art{width:100%;max-width:260px;justify-self:end}.phase-art svg{display:block;width:100%}.phase-lines{transform-origin:130px 110px;animation:phase-drift 8s ease-in-out infinite alternate}.titanium .rail{background:#bcc9d3;height:2px}.titanium .spinner{border-color:#bac8d3;border-top-color:var(--accent)}.titanium .tip-box{background:#cbd5de70;border-color:#bac7d080}.titanium .tip-heading{color:#546c80}.titanium .tip-copy{color:#445b6c}.titanium .credit{background:#d6dde380;color:#637787}.titanium .dots i{background:#b2c0cc}.titanium .dots i.on{background:var(--accent)}
+.celadon{--accent:#527e73;--ink:#2f4745;--secondary:#58756f;width:620px;border-color:#f0f6f1b3;background:linear-gradient(125deg,#e8ece5,#dbe6df 58%,#cfdfd8);border-radius:13px}.celadon .splash-head{align-items:center;padding-top:29px}.celadon .brand .app-icon{width:39px;height:39px}.celadon .wordmark{font-size:31px}.weave-body{display:grid;grid-template-columns:70px 1fr;align-items:center;height:200px;margin:6px 27px 8px 32px}.weave-modes{display:flex;flex-direction:column;gap:12px;border-right:1px solid #aec5bc8c;color:#5a766d;font-size:10px;padding:8px 0}.weave-modes span::before{content:"";display:inline-block;width:3px;height:3px;border-radius:50%;background:#6e9488;margin-right:8px;vertical-align:2px}.weave-art svg{width:100%;height:auto;display:block}.weave-lines{animation:weave-drift 6s ease-in-out infinite alternate;transform-origin:center}.celadon .rail{background:#b6cbc1;height:2px}.celadon .spinner{border-color:#b6cabe;border-top-color:var(--accent)}.celadon .tip-box{background:#c6d9cf80;border-color:#adc6ba80}.celadon .tip-heading{color:#456f61}.celadon .tip-copy{color:#3f6055}.celadon .credit{background:#d4e1d880;color:#5b756a}.celadon .dots i{background:#a9c2b4}.celadon .dots i.on{background:var(--accent)}
+.ready .phase-lines,.ready .weave-lines{animation-play-state:paused}.splash[hidden]{display:none!important}
+@keyframes phase-drift{from{transform:rotate(-5deg)}to{transform:rotate(5deg)}}
+@keyframes weave-drift{from{opacity:.65;transform:translateY(-2px)}to{opacity:1;transform:translateY(2px)}}
+@keyframes appear{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}@keyframes spin{to{transform:rotate(360deg)}}@keyframes trace{to{stroke-dashoffset:-850}}@keyframes scan{from{transform:translateX(-500px)}to{transform:translateX(630px)}}@keyframes indeterminate{0%{transform:translateX(-105%)}100%{transform:translateX(415%)}}@keyframes breathe{0%,100%{opacity:.7}50%{opacity:1}}@keyframes equalize{from{transform:scaleY(.3)}to{transform:scaleY(1)}}
+@media(prefers-reduced-motion:reduce){.animated,.animated::after,.mini-signal i,.splash{animation:none!important}.trace-active{stroke-dasharray:none}}
+@media(min-width:1450px){main{padding-top:47px}.stage{min-height:550px}}
+@media(max-width:980px){header{padding:0 24px}main{padding:25px 24px}.workspace{grid-template-columns:190px minmax(0,1fr);gap:15px}.choice{padding:14px}.stage{padding:28px 15px}.controls label{margin-left:0}.splash-head{padding:25px 24px 0}.loading{padding-left:24px;padding-right:24px}.tip-box{padding-left:24px;padding-right:24px}.status-row .stage-label{display:none}.caption{display:block}.caption p+p{margin-top:6px}}
+@media(max-width:740px){header{height:65px;padding:0 17px}.identity span{display:none}.prototype{font-size:10px}main{padding:24px 14px}.intro{align-items:start;gap:14px}.intro h1{font-size:24px}.intro p{font-size:12px;line-height:1.7}.intro .quiet-button{font-size:11px;padding:8px}.workspace{display:flex;flex-direction:column}.choices{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}.choice{padding:11px 9px}.choice b{font-size:12px;margin-bottom:0}.choice p,.choice small,.design-note{display:none}.choice[aria-pressed=true]::after{right:9px;top:13px;width:5px;height:5px}.swatches i{width:15px}.stage{min-height:465px;padding:22px 12px}.splash-head,.cinematic .splash-head{padding:23px 20px 0}.brand{gap:9px}.wordmark,.cinematic .wordmark{font-size:27px}.brand .app-icon{width:36px;height:36px}.version{font-size:10px}.loading{padding-left:20px;padding-right:20px}.tip-box,.cinematic .tip-box{padding-left:20px;padding-right:20px;min-height:109px}.credit{padding-left:20px;padding-right:20px}.compact .splash-head{padding:24px 20px}.compact .loading,.compact .tip-box{padding-left:20px;padding-right:20px}.compact .brand .app-icon{width:42px;height:42px}.mini-signal{gap:3px}.mini-signal i{width:2px}.controls{padding:12px;gap:7px}.controls button,.controls select{font-size:11px;padding:7px 9px}.controls label{margin-left:0}.footer{display:block}.footer>span{display:block;margin-bottom:12px}.spectrum{height:176px}.tip-copy{font-size:11px}}
+@media(max-width:740px){.earlier,.design-note{grid-column:1/-1}.earlier .choice{width:calc(50% - 5px);margin-right:5px;vertical-align:top}.phase-hero{padding:20px 18px 15px;grid-template-columns:1fr 1fr;min-height:225px}.phase-identity .wordmark{font-size:26px}.phase-identity .app-icon{width:34px;height:34px}.phase-modes{font-size:9px;margin-top:18px}.weave-body{grid-template-columns:48px 1fr;margin:5px 16px 8px 20px;height:182px}.weave-modes{font-size:9px}.celadon .splash-head{padding:24px 20px 0}.celadon .wordmark{font-size:27px}.celadon .brand .app-icon{width:35px;height:35px}}
+</style>
+</head>
+<body>
+<header><div class="identity"><img class="app-icon" data-logo alt="TraceLab"><strong>TraceLab</strong><span>启动体验设计</span></div><span class="prototype">浅色迭代 · 3 款对比</span></header>
+<main>
+<div class="intro"><div><h1>TraceLab 启动面板</h1><p>本轮对比：雾蓝频谱、银钛相位环、青瓷信号织面。</p></div><button class="quiet-button" id="solo">只看启动面板</button></div>
+<div class="workspace">
+<aside class="choices" aria-label="选择启动设计">
+<button class="choice" data-design="cinematic" aria-pressed="false"><span class="swatches"><i style="background:#dce5ec"></i><i style="background:#a5bdcd"></i><i style="background:#47718f"></i></span><b>B　雾蓝频谱</b><p>蓝灰底色承接层叠频谱，明暗有层次，线条保留呼吸感。</p><small>640 px · 原方案精修</small></button>
+<button class="choice" data-design="titanium" aria-pressed="false"><span class="swatches"><i style="background:#e2e5e7"></i><i style="background:#afb9c2"></i><i style="background:#536b7f"></i></span><b>D　银钛相位环</b><p>横向分区与细线相位环。中性银灰，像一台精密仪器的开机界面。</p><small>620 px · 新构图 / 银灰</small></button>
+<button class="choice" data-design="celadon" aria-pressed="false"><span class="swatches"><i style="background:#e0e8e2"></i><i style="background:#afc5bd"></i><i style="background:#49796f"></i></span><b>E　青瓷信号织面</b><p>低饱和青灰底，信号像细丝交织。柔和、有温度，但仍然清晰。</p><small>620 px · 新构图 / 青灰</small></button>
+<details class="earlier"><summary>早期方案 A / C</summary><button class="choice" data-design="wave" aria-pressed="false"><span class="swatches"><i style="background:#fff"></i><i style="background:#b9d3e8"></i><i style="background:#2177b9"></i></span><b>A　波形签名</b><p>清透、安静。波形轻轻划过，像一台正在苏醒的测量仪器。</p><small>600 px · 浅色经典款</small></button><button class="choice" data-design="compact" aria-pressed="false"><span class="swatches"><i style="background:#fff"></i><i style="background:#dfe8f1"></i><i style="background:#5894c4"></i></span><b>C　桌面轻启动</b><p>小一点，再轻一点。软件标识、启动状态和一句 tip，刚刚好。</p><small>460 px · 紧凑工具款</small></button></details>
+<div class="design-note"><b>本轮共同调整</b>去掉 slogan，保留名称与版本。<br>底色增加灰度，降低纯白面积。<br>保留启动反馈与轮换 tips。</div>
+</aside>
+<section aria-label="启动效果预览">
+<div class="preview">
+<div class="preview-top"><span id="previewName">A / 波形签名</span><span id="elapsed">模拟启动 · 0.0 s</span></div>
+<div class="stage">
+<article class="splash wave" id="wave" aria-label="波形签名启动面板">
+<div class="splash-head"><div class="brand"><img data-logo class="app-icon" alt=""><div><div class="wordmark">TraceLab</div><div class="subtitle">工程数据分析工作台</div></div></div><span class="version">v8.3.2</span></div>
+<div class="wave-visual" aria-hidden="true"><svg viewBox="0 0 600 143" preserveAspectRatio="none"><defs><pattern id="grid" width="30" height="24" patternUnits="userSpaceOnUse"><path d="M30 0H0V24" fill="none" stroke="#eaf0f5" stroke-width=".7"/></pattern><linearGradient id="waveFade"><stop stop-color="#fcfdff"/><stop offset=".15" stop-color="#fcfdff" stop-opacity="0"/><stop offset=".85" stop-color="#fcfdff" stop-opacity="0"/><stop offset="1" stop-color="#fcfdff"/></linearGradient></defs><rect x="0" y="10" width="600" height="119" fill="url(#grid)"/><path class="trace-second" d="M0 74 C35 73 45 92 70 90 S112 31 138 45 S170 115 198 99 S235 26 264 53 S308 116 333 79 S369 34 398 64 S431 102 457 74 S500 48 525 69 S560 92 600 74"/><path class="trace-base" id="wavePath" d="M0 74 C45 74 53 68 72 74 S104 91 125 69 S150 26 168 52 S192 139 214 89 S240 4 262 50 S288 140 310 84 S337 23 360 63 S390 103 412 73 S443 47 466 66 S500 81 520 75 S560 74 600 74"/><use href="#wavePath" class="trace-active animated"/><line class="scan-line animated" x1="200" x2="200" y1="20" y2="120" stroke="#8bbbdc" opacity=".4"/><rect width="600" height="143" fill="url(#waveFade)"/></svg></div>
+<div class="loading"><div class="status-row"><span class="spinner animated" aria-hidden="true"></span><span class="status" role="status">正在启动 TraceLab…</span></div><div class="rail animated" aria-hidden="true"></div></div>
+<div class="tip-box"></div><div class="credit"><span>时域 / 频谱 / 时频 / 阶次 / 频响</span><span>GC02689</span></div>
+</article>
+<article class="splash cinematic" id="cinematic" aria-label="频谱舞台启动面板" hidden>
+<div class="splash-head"><div class="brand"><img data-logo class="app-icon" alt=""><div><div class="wordmark">TraceLab</div></div></div><span class="version">v8.3.2</span></div>
+<div class="spectrum" aria-hidden="true"><svg viewBox="0 0 640 184"><defs><linearGradient id="spectrumInk"><stop stop-color="#6996b8"/><stop offset=".4" stop-color="#237f9b"/><stop offset=".67" stop-color="#397cad"/><stop offset="1" stop-color="#83a6c0"/></linearGradient></defs><g id="spectralPaths" class="spectral-lines animated"></g></svg><div class="spectrum-caption"><span>时域</span><span>频谱</span><span>时频</span><span>阶次</span><span>频响</span></div></div>
+<div class="loading"><div class="status-row"><span class="spinner animated" aria-hidden="true"></span><span class="status" role="status">正在启动 TraceLab…</span><span class="stage-label">工程数据分析工作台</span></div><div class="rail animated" aria-hidden="true"></div></div>
+<div class="tip-box"></div><div class="credit"><span>TraceLab · 工程信号与数据分析</span><span>GC02689</span></div>
+</article>
+<article class="splash compact" id="compact" aria-label="桌面轻启动面板" hidden>
+<div class="splash-head"><div class="brand"><img data-logo class="app-icon" alt=""><div><div class="wordmark">TraceLab</div><div class="subtitle">工程数据分析工作台 · v8.3.2</div></div></div><div class="mini-signal" aria-hidden="true"><i style="--i:0"></i><i style="--i:1"></i><i style="--i:2"></i><i style="--i:3"></i><i style="--i:4"></i></div></div>
+<div class="loading"><div class="status-row"><span class="spinner animated" aria-hidden="true"></span><span class="status" role="status">正在启动 TraceLab…</span><span class="stage-label">请稍候</span></div><div class="rail animated" aria-hidden="true"></div></div>
+<div class="tip-box"></div><div class="credit"><span>TraceLab</span><span>GC02689</span></div>
+</article>
+<article class="splash titanium" id="titanium" aria-label="银钛相位环启动面板" hidden>
+<div class="phase-hero">
+<div class="phase-identity"><img data-logo class="app-icon" alt=""><div class="wordmark">TraceLab</div><div class="version">v8.3.2</div><div class="phase-modes">时域 / 频谱 / 时频<br>阶次 / 频响</div></div>
+<div class="phase-art" aria-hidden="true"><svg viewBox="0 0 260 220"><defs><linearGradient id="phaseInk" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#a3b3c0"/><stop offset=".5" stop-color="#4d6b84"/><stop offset="1" stop-color="#99abb8"/></linearGradient></defs><ellipse cx="130" cy="110" rx="108" ry="90" fill="none" stroke="#9aaebb" stroke-opacity=".22" stroke-dasharray="2 5"/><g id="phasePaths" class="phase-lines animated"></g><circle cx="130" cy="110" r="3" fill="#657f93"/><path d="M124 110h12M130 104v12" stroke="#657f93" stroke-width=".7"/></svg></div>
+</div>
+<div class="loading"><div class="status-row"><span class="spinner animated" aria-hidden="true"></span><span class="status" role="status">正在启动 TraceLab…</span><span class="stage-label">工程数据分析工作台</span></div><div class="rail animated" aria-hidden="true"></div></div>
+<div class="tip-box"></div><div class="credit"><span>TraceLab</span><span>GC02689</span></div>
+</article>
+<article class="splash celadon" id="celadon" aria-label="青瓷信号织面启动面板" hidden>
+<div class="splash-head"><div class="brand"><img data-logo class="app-icon" alt=""><div class="wordmark">TraceLab</div></div><span class="version">v8.3.2</span></div>
+<div class="weave-body"><div class="weave-modes"><span>时域</span><span>频谱</span><span>时频</span><span>阶次</span><span>频响</span></div><div class="weave-art" aria-hidden="true"><svg viewBox="0 0 440 190"><defs><linearGradient id="weaveInk"><stop stop-color="#8caeaa"/><stop offset=".4" stop-color="#466f6b"/><stop offset=".7" stop-color="#658e7c"/><stop offset="1" stop-color="#91aea6"/></linearGradient></defs><g id="weavePaths" class="weave-lines animated"></g></svg></div></div>
+<div class="loading"><div class="status-row"><span class="spinner animated" aria-hidden="true"></span><span class="status" role="status">正在启动 TraceLab…</span><span class="stage-label">工程数据分析工作台</span></div><div class="rail animated" aria-hidden="true"></div></div>
+<div class="tip-box"></div><div class="credit"><span>TraceLab</span><span>GC02689</span></div>
+</article>
+</div>
+<div class="controls"><button class="primary" id="replay">↻ 重播启动</button><button id="pause" aria-pressed="false">暂停</button><button id="nextTip">下一条 tip</button><label for="scenario">模拟场景</label><select id="scenario"><option value="normal">正常启动 · 8 秒</option><option value="slow">较慢启动 · 20 秒</option><option value="waiting">持续等待</option></select><button id="finish">模拟就绪</button><button id="exitSolo">返回对比</button></div>
+</div>
+<div class="caption"><p id="designCaption"><b>推荐起点：A 波形签名。</b> 与工程软件的日常气质最贴近，轻动画不会抢走信息。</p><p id="resultNote" role="status">8 秒为演示时长，不代表实际启动速度。</p></div>
+</section>
+</div>
+<div class="footer"><span>HTML 视觉 demo · 动画为示意，不代表真实数据；启动阶段为模拟状态。</span><label class="motion-control"><input type="checkbox" id="reduceMotion">减少动态效果</label></div>
+</main>
+<script>
+'use strict';
+const logo = 'data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNTYgMjU2IiB3aWR0aD0iMjU2IiBoZWlnaHQ9IjI1NiI+CiAgPGRlZnM+CiAgICA8bGluZWFyR3JhZGllbnQgaWQ9ImJnIiB4MT0iMCIgeTE9IjAiIHgyPSIwIiB5Mj0iMSI+CiAgICAgIDxzdG9wIG9mZnNldD0iMCIgc3RvcC1jb2xvcj0iI2ZmZmZmZiIvPgogICAgICA8c3RvcCBvZmZzZXQ9IjEiIHN0b3AtY29sb3I9IiNkMWQ1ZGIiLz4KICAgIDwvbGluZWFyR3JhZGllbnQ+CiAgICA8bGluZWFyR3JhZGllbnQgaWQ9ImhsIiB4MT0iMCIgeTE9IjAiIHgyPSIwIiB5Mj0iMSI+CiAgICAgIDxzdG9wIG9mZnNldD0iMCIgc3RvcC1jb2xvcj0iI2ZmZmZmZiIgc3RvcC1vcGFjaXR5PSIwLjkiLz4KICAgICAgPHN0b3Agb2Zmc2V0PSIwLjYiIHN0b3AtY29sb3I9IiNmZmZmZmYiIHN0b3Atb3BhY2l0eT0iMCIvPgogICAgPC9saW5lYXJHcmFkaWVudD4KICAgIDxsaW5lYXJHcmFkaWVudCBpZD0id2F2ZSIgeDE9IjAiIHkxPSIwIiB4Mj0iMSIgeTI9IjAiPgogICAgICA8c3RvcCBvZmZzZXQ9IjAiIHN0b3AtY29sb3I9IiMwZTc0OTAiLz4KICAgICAgPHN0b3Agb2Zmc2V0PSIwLjUiIHN0b3AtY29sb3I9IiMwNmI2ZDQiLz4KICAgICAgPHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjMGU3NDkwIi8+CiAgICA8L2xpbmVhckdyYWRpZW50PgogIDwvZGVmcz4KCiAgPHJlY3QgeD0iMCIgeT0iMCIgd2lkdGg9IjI1NiIgaGVpZ2h0PSIyNTYiIHJ4PSI1NyIgZmlsbD0idXJsKCNiZykiLz4KICA8cmVjdCB4PSIwIiB5PSIwIiB3aWR0aD0iMjU2IiBoZWlnaHQ9IjEzMCIgcng9IjU3IiBmaWxsPSJ1cmwoI2hsKSIvPgoKICA8cGF0aCBkPSJNIDQ0IDEyOCBDIDYwIDEyOCwgNzIgNzYsIDk2IDc2IEMgMTE4IDc2LCAxMjQgMTU2LCAxNDQgMTU2IEMgMTY4IDE1NiwgMTc4IDkyLCAxOTYgOTIgQyAyMDggOTIsIDIxMiAxMjgsIDIxMiAxMjgiCiAgICAgICAgc3Ryb2tlPSJ1cmwoI3dhdmUpIgogICAgICAgIHN0cm9rZS13aWR0aD0iMjIiCiAgICAgICAgZmlsbD0ibm9uZSIKICAgICAgICBzdHJva2UtbGluZWNhcD0icm91bmQiCiAgICAgICAgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPgoKICA8Y2lyY2xlIGN4PSIxNDQiIGN5PSIxNTYiIHI9IjE2IiBmaWxsPSIjMGU3NDkwIi8+CiAgPGNpcmNsZSBjeD0iMTM5IiBjeT0iMTUxIiByPSI1IiBmaWxsPSIjZmZmZmZmIiBmaWxsLW9wYWNpdHk9IjAuODUiLz4KPC9zdmc+Cg==';
+document.querySelectorAll('[data-logo]').forEach(img => img.src=logo);
+const tips = [
+ ['找回全局视野','点击图表的 Home，可查看全部已绘通道范围。'],
+ ['把读数留在图上','单游标下按 P 固定读数，再点图底 Pn 展开面板。'],
+ ['保存你的分析现场','保存为 .tlproj 项目，下次继续当前分析。'],
+ ['忘记操作了？','点击底栏「?」，可查看和搜索操作速查。'],
+ ['让频率变化可见','用「时频」查看频率成分随时间的变化。']
+];
+const bulb='<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 11c0-2-2-2.2-2-5a4.5 4.5 0 0 1 9 0c0 2.8-2 3-2 5ZM6 13h4M6.5 15h3"/></svg>';
+const panels=[...document.querySelectorAll('.splash')];
+const choices=[...document.querySelectorAll('.choice')];
+const descriptions={titanium:['D / 银钛相位环','<b>D / 银钛相位环。</b> 标识与图形左右分区，中性银灰更接近精密仪器。'],celadon:['E / 青瓷信号织面','<b>E / 青瓷信号织面。</b> 低饱和青灰与细线织面，温和而不失工程感。'],wave:['A / 波形签名','<b>推荐起点：A 波形签名。</b> 与工程软件的日常气质最贴近，轻动画不会抢走信息。'],cinematic:['B / 雾蓝频谱','<b>B / 雾蓝频谱。</b> 更沉静的蓝灰底色；完整、平滑的峰顶；不再显示 slogan。'],compact:['C / 桌面轻启动','<b>最轻巧的方向。</b> 小尺寸、信息集中，适合每天频繁打开的桌面工具。']};
+let selected='wave',tip=0,elapsed=0,lastTick=performance.now(),paused=false,finished=false,lastTipAt=0;
+const $=id=>document.getElementById(id);
+function renderTips(){document.querySelectorAll('.tip-box').forEach(box=>{box.innerHTML='<div class="tip-heading"><strong>'+bulb+tips[tip][0]+'</strong><span class="dots" aria-label="提示 '+(tip+1)+' / '+tips.length+'">'+tips.map((_,i)=>'<i class="'+(i===tip?'on':'')+'"></i>').join('')+'</span></div><p class="tip-copy">'+tips[tip][1]+'</p>';});}
+function nextTip(){tip=(tip+1)%tips.length;lastTipAt=elapsed;renderTips();}
+function currentStatus(){if(finished)return '已就绪，正在打开主窗口';if(elapsed>=12000)return '启动比平时久一些，请稍候…';if(elapsed>=4500)return '正在准备工作区…';if(elapsed>=1700)return '正在加载分析组件…';return '正在启动 TraceLab…';}
+function paint(){const status=currentStatus();panels.forEach(p=>{p.classList.toggle('ready',finished);const label=p.querySelector('.status');if(label.textContent!==status)label.textContent=status;});$('elapsed').textContent=(finished?'模拟就绪':'模拟启动')+' · '+(elapsed/1000).toFixed(1)+' s';}
+function complete(){finished=true;paused=false;document.body.classList.remove('is-paused');$('pause').textContent='暂停';$('pause').setAttribute('aria-pressed','false');$('pause').disabled=true;$('finish').disabled=true;$('resultNote').textContent='演示已就绪，保留面板便于比较；实际接入后应立即交给主窗口。';paint();}
+function replay(){elapsed=0;lastTipAt=0;lastTick=performance.now();paused=false;finished=false;document.body.classList.remove('is-paused');$('pause').textContent='暂停';$('pause').setAttribute('aria-pressed','false');$('pause').disabled=false;$('finish').disabled=false;const mode=$('scenario').value;$('resultNote').textContent=mode==='waiting'?'保持等待，点击「模拟就绪」结束演示。':(mode==='slow'?'20':'8')+' 秒为演示时长，不代表实际启动速度。';paint();}
+choices.forEach(button=>button.addEventListener('click',()=>{selected=button.dataset.design;choices.forEach(c=>c.setAttribute('aria-pressed',String(c===button)));panels.forEach(p=>p.hidden=p.id!==selected);$('previewName').textContent=descriptions[selected][0];$('designCaption').innerHTML=descriptions[selected][1];history.replaceState(null,'','#'+selected);replay();}));
+$('replay').addEventListener('click',replay);$('nextTip').addEventListener('click',nextTip);$('finish').addEventListener('click',complete);$('scenario').addEventListener('change',replay);
+$('pause').addEventListener('click',()=>{paused=!paused;lastTick=performance.now();document.body.classList.toggle('is-paused',paused);$('pause').textContent=paused?'继续':'暂停';$('pause').setAttribute('aria-pressed',String(paused));});
+function setSolo(value){document.body.classList.toggle('solo',value);(value?$('exitSolo'):$('solo')).focus();}
+$('solo').addEventListener('click',()=>setSolo(true));$('exitSolo').addEventListener('click',()=>setSolo(false));document.addEventListener('keydown',event=>{if(event.key==='Escape'&&document.body.classList.contains('solo'))setSolo(false);});
+$('reduceMotion').checked=matchMedia('(prefers-reduced-motion: reduce)').matches;
+$('reduceMotion').addEventListener('change',()=>document.body.classList.toggle('reduced',$('reduceMotion').checked));
+document.body.classList.toggle('reduced',$('reduceMotion').checked);
+// Decorative spectrum only: deliberately no numerical axes or fabricated measurement labels.
+function addArtPath(target, d, ink, width, opacity){
+ const path=document.createElementNS('http://www.w3.org/2000/svg','path');
+ for(const [name,value] of Object.entries({d,fill:'none',stroke:ink,'stroke-width':width,opacity,'stroke-linecap':'round','stroke-linejoin':'round'}))path.setAttribute(name,String(value));
+ $(target).appendChild(path);
+}
+const spectrumRows=[];
+for(let row=0;row<16;row++){
+ const points=[];
+ for(let sample=0;sample<=460;sample++){
+  const i=sample/4,x=40+i*4.3+row*5.7;
+  const peaks=56*Math.exp(-(((i-34-row*.4)/7)**2))+90*Math.exp(-(((i-67+row*.55)/8)**2))+23*Math.exp(-(((i-91)/6)**2));
+  points.push([x,150-row*4-peaks*(.50+row*.035)+Math.sin(i*.35+row*.6)*2]);
+ }
+ spectrumRows.push(points);
+}
+const spectrumY=spectrumRows.flatMap(points=>points.map(p=>p[1]));
+const spectrumMin=Math.min(...spectrumY),spectrumMax=Math.max(...spectrumY);
+spectrumRows.forEach((points,row)=>{
+ const d=points.map(([x,y],i)=>(i?'L':'M')+x.toFixed(2)+' '+(15+(y-spectrumMin)/(spectrumMax-spectrumMin)*132).toFixed(2)).join(' ');
+ addArtPath('spectralPaths',d,'url(#spectrumInk)',row===15?1.65:1.05,.29+row*.044);
+});
+for(let row=0;row<15;row++){
+ const angle=-.68+row*.084,rx=90,ry=25+row*2.2;
+ let d='';
+ for(let n=0;n<=240;n++){
+  const t=n/240*Math.PI*2;
+  const x=rx*Math.cos(t),y=ry*Math.sin(t)+5*Math.sin(t*3+row*.14);
+  d+=(n?'L':'M')+(130+x*Math.cos(angle)-y*Math.sin(angle)).toFixed(2)+' '+(110+x*Math.sin(angle)+y*Math.cos(angle)).toFixed(2)+' ';
+ }
+ addArtPath('phasePaths',d+'Z','url(#phaseInk)',row===7?1.35:.9,.38+row*.025);
+}
+for(let row=0;row<22;row++){
+ let d='';
+ for(let n=0;n<=320;n++){
+  const x=12+n*1.3,u=n/320;
+  const envelope=Math.sin(u*Math.PI);
+  const y=95+(row-10.5)*3.3+Math.sin(u*Math.PI*2.5+row*.20)*41*envelope;
+  d+=(n?'L':'M')+x.toFixed(2)+' '+y.toFixed(2)+' ';
+ }
+ addArtPath('weavePaths',d,'url(#weaveInk)',row%7===0?1.35:.85,.35+row*.018);
+}
+renderTips();
+const initial=location.hash.slice(1);choices.find(c=>c.dataset.design===(descriptions[initial]?initial:'cinematic')).click();
+setInterval(()=>{const now=performance.now(),delta=now-lastTick;lastTick=now;if(paused||finished||document.hidden)return;elapsed+=delta;const limit=$('scenario').value==='normal'?8000:$('scenario').value==='slow'?20000:Infinity;if(elapsed>=limit){elapsed=limit;complete();return;}if(elapsed-lastTipAt>=5000)nextTip();paint();},100);
+document.addEventListener('visibilitychange',()=>{lastTick=performance.now();});
+</script>
+</body>
+</html>

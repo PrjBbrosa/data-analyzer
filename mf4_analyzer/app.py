@@ -230,20 +230,49 @@ def bootstrap_extension_runtime(
     return snapshot
 
 
-def _arm_startup_observation(app, window) -> None:
-    """Watch first paint and answer the measurement tool's queued probe.
+def _report_startup_failure(exc: BaseException, *, qapp_ready: bool) -> None:
+    """Surface a one-shot startup failure without restarting the app."""
 
-    ``show()`` returning and a lone 0 ms timer are never treated as interactive.
-    Interactive readiness is recorded only after the tool's probe is handled on
-    the Qt event loop; the tool stamps receipt on its own monotonic clock.
+    message = f"TraceLab 启动失败：{exc}"
+    if qapp_ready:
+        try:
+            from PyQt5.QtWidgets import QMessageBox
+
+            QMessageBox.critical(None, "TraceLab", message)
+            return
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "startup failure dialog could not be shown"
+            )
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            ctypes.windll.user32.MessageBoxW(  # type: ignore[attr-defined]
+                0, message, "TraceLab", 0x10
+            )
+            return
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "startup failure MessageBoxW could not be shown"
+            )
+    logging.getLogger(__name__).error("%s", message)
+
+
+def _arm_startup_observation(app, window, feedback=None) -> None:
+    """Watch first paint for splash handover and optional timing probes.
+
+    ``show()`` returning and a lone 0 ms timer are never treated as ready.
+    Splash ``finish`` is queued after the first Paint returns, then re-checks
+    that the main window is still visible. Interactive probe wiring stays
+    gated on the timing switch; splash handover does not.
     """
 
     from PyQt5.QtCore import QEvent, QObject, QSocketNotifier, QTimer
 
     from mf4_analyzer import startup_timing as st
 
-    if not st.enabled():
-        return
+    timing_on = st.enabled()
 
     class _StartupObserver(QObject):
         def __init__(self):
@@ -252,6 +281,7 @@ def _arm_startup_observation(app, window) -> None:
             self._sock = None
             self._notifier = None
             self._responded = False
+            self._splash_finished = False
 
         def eventFilter(self, obj, event):  # noqa: N802 - Qt API
             if self._framed or obj is not window:
@@ -259,15 +289,44 @@ def _arm_startup_observation(app, window) -> None:
             if event.type() != QEvent.Paint:
                 return False
             self._framed = True
-            try:
-                st.mark(st.STAGE_FIRST_FRAME)
-            except st.StartupTimingError as exc:
-                print(f"startup timing: {exc}", file=sys.stderr)
-            # Queued connect only arms the probe channel; it is not interactive.
-            QTimer.singleShot(0, self._connect_probe)
+            if timing_on:
+                try:
+                    st.mark(st.STAGE_FIRST_FRAME)
+                except st.StartupTimingError as exc:
+                    print(f"startup timing: {exc}", file=sys.stderr)
+                # Queued connect only arms the probe channel; it is not interactive.
+                QTimer.singleShot(0, self._connect_probe)
+            # Paint filters run before the paint; finish after it returns.
+            QTimer.singleShot(0, self._finish_splash_after_paint)
             return False
 
+        def _finish_splash_after_paint(self) -> None:
+            if self._splash_finished:
+                return
+            self._splash_finished = True
+            if feedback is None:
+                return
+            try:
+                from PyQt5 import sip
+            except ImportError:
+                sip = None
+            if sip is not None:
+                try:
+                    deleted = sip.isdeleted(window)
+                except RuntimeError:
+                    return
+                if deleted:
+                    return
+            try:
+                if not window.isVisible():
+                    return
+            except RuntimeError:
+                return
+            feedback.finish()
+
         def _connect_probe(self) -> None:
+            if not timing_on:
+                return
             sock = st.connect_probe_socket(timeout_s=5.0)
             if sock is None:
                 return
@@ -311,50 +370,84 @@ def _arm_startup_observation(app, window) -> None:
 
 
 def main():
+    from mf4_analyzer.startup_feedback import (
+        STAGE_LOADING_COMPONENTS,
+        STAGE_PREPARING_WORKSPACE,
+        StartupFeedback,
+    )
     from mf4_analyzer.startup_timing import (
         STAGE_GUI_MODULES_IMPORTED,
         STAGE_MAINWINDOW_CONSTRUCTED,
         STAGE_PYTHON_ENTRY,
         STAGE_QAPPLICATION_READY,
-        enabled as startup_timing_enabled,
         mark as startup_mark,
     )
 
     startup_mark(STAGE_PYTHON_ENTRY)
     setup_logging()
-    bootstrap_extension_runtime()
-    _configure_high_dpi()
 
-    from PyQt5.QtWidgets import QApplication
+    feedback = StartupFeedback()
+    qapp_ready = False
+    try:
+        # QT_QPA_PLATFORM is consulted inside splash_enabled via environ;
+        # do not pass allow_offscreen on the production path.
+        feedback.start(
+            layout_probe=(os.environ.get("TRACELAB_LAYOUT_PROBE") == "1"),
+        )
+        feedback.publish(STAGE_LOADING_COMPONENTS)
+        bootstrap_extension_runtime()
+        _configure_high_dpi()
 
-    MainWindow = _import_symbol("ui", "MainWindow")
-    setup_chinese_font = _import_symbol("ui_kit", "setup_chinese_font")
-    load_stylesheet = _import_symbol("ui_kit", "load_stylesheet")
-    install_glass_tooltips = _import_symbol("ui_kit", "install_glass_tooltips")
-    startup_mark(STAGE_GUI_MODULES_IMPORTED)
+        from PyQt5.QtWidgets import QApplication
 
-    setup_chinese_font()
-    app = QApplication(sys.argv)
-    install_qt_message_handler()
-    from mf4_analyzer.ui.pg_canvas.fonts import apply_global_chart_font
-    apply_global_chart_font(app)
-    app.setStyle('Fusion')
-    icon = _load_app_icon()
-    if icon is not None:
-        app.setWindowIcon(icon)
-    load_stylesheet(app)
-    install_glass_tooltips(app)
-    startup_mark(STAGE_QAPPLICATION_READY)
-    if os.environ.get("TRACELAB_LAYOUT_PROBE") == "1":
-        from mf4_analyzer.ui.layout_probe import run_layout_probe
-        sys.exit(run_layout_probe(app))
-    window = MainWindow()
-    startup_mark(STAGE_MAINWINDOW_CONSTRUCTED)
-    install_excepthooks(on_error=lambda text: window.toast(text, "error"))
-    window.show()
-    if startup_timing_enabled():
-        _arm_startup_observation(app, window)
-    sys.exit(app.exec_())
+        MainWindow = _import_symbol("ui", "MainWindow")
+        setup_chinese_font = _import_symbol("ui_kit", "setup_chinese_font")
+        load_stylesheet = _import_symbol("ui_kit", "load_stylesheet")
+        install_glass_tooltips = _import_symbol("ui_kit", "install_glass_tooltips")
+        startup_mark(STAGE_GUI_MODULES_IMPORTED)
+
+        setup_chinese_font()
+        app = QApplication(sys.argv)
+        qapp_ready = True
+        # Keep the controller reachable for the QApplication lifetime.
+        app._tracelab_startup_feedback = feedback
+        install_qt_message_handler()
+        from mf4_analyzer.ui.pg_canvas.fonts import apply_global_chart_font
+        apply_global_chart_font(app)
+        app.setStyle('Fusion')
+        icon = _load_app_icon()
+        if icon is not None:
+            app.setWindowIcon(icon)
+        load_stylesheet(app)
+        install_glass_tooltips(app)
+        startup_mark(STAGE_QAPPLICATION_READY)
+        if os.environ.get("TRACELAB_LAYOUT_PROBE") == "1":
+            from mf4_analyzer.ui.layout_probe import run_layout_probe
+            code = run_layout_probe(app)
+            feedback.close()
+            sys.exit(code)
+        feedback.publish(STAGE_PREPARING_WORKSPACE)
+        window = MainWindow()
+        startup_mark(STAGE_MAINWINDOW_CONSTRUCTED)
+        install_excepthooks(on_error=lambda text: window.toast(text, "error"))
+        # Arm before show so the first real Paint is observed.
+        _arm_startup_observation(app, window, feedback)
+        window.show()
+        code = app.exec_()
+        feedback.close()
+        sys.exit(code)
+    except SystemExit:
+        raise
+    except BaseException as exc:
+        try:
+            feedback.close()
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "startup feedback close failed during error handling"
+            )
+        logging.getLogger(__name__).exception("TraceLab startup failed")
+        _report_startup_failure(exc, qapp_ready=qapp_ready)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

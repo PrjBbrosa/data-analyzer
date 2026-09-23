@@ -35,6 +35,53 @@ def _reject_abbreviated_probe_flags(argv) -> None:
             raise SystemExit(2)
 
 
+_SPLASH_ARGV_FLAGS = frozenset(
+    {
+        "--startup-splash-child",
+        "--startup-splash-session",
+        "--startup-splash-endpoint",
+        "--startup-splash-token",
+    }
+)
+
+
+def _reject_abbreviated_splash_flags(argv) -> None:
+    """Exact ``--startup-splash-*`` flags only.  Abbreviations must not route."""
+
+    for token in argv:
+        if not token.startswith("--"):
+            continue
+        name = token.split("=", 1)[0]
+        if name.startswith("--startup-splash") and name not in _SPLASH_ARGV_FLAGS:
+            raise SystemExit(2)
+
+
+def _valid_splash_endpoint(endpoint: str) -> bool:
+    text = str(endpoint).strip()
+    if text.count(":") != 1:
+        return False
+    host, _, port_text = text.partition(":")
+    if host != "127.0.0.1":
+        return False
+    try:
+        port = int(port_text)
+    except ValueError:
+        return False
+    return 1 <= port <= 65535
+
+
+def _splash_child_argv(args) -> list[str]:
+    return [
+        "--startup-splash-child",
+        "--startup-splash-session",
+        str(args.startup_splash_session),
+        "--startup-splash-endpoint",
+        str(args.startup_splash_endpoint),
+        "--startup-splash-token",
+        str(args.startup_splash_token),
+    ]
+
+
 def _probe_child_argv(args) -> list[str]:
     argv = [
         "--extension-probe-request",
@@ -70,6 +117,7 @@ def _probe_app_root(staging: Path | None) -> Path | None:
 
 if __name__ == "__main__":
     _reject_abbreviated_probe_flags(sys.argv[1:])
+    _reject_abbreviated_splash_flags(sys.argv[1:])
     parser = _WindowedArgumentParser(add_help=False, allow_abbrev=False)
     hidden_mode = parser.add_mutually_exclusive_group()
     hidden_mode.add_argument("--acquisition-runtime-smoke", action="store_true")
@@ -94,6 +142,12 @@ if __name__ == "__main__":
     parser.add_argument("--extension-probe-staging", type=Path)
     parser.add_argument("--extension-probe-staging-nonce")
     parser.add_argument("--extension-probe-staging-handle", type=int)
+    # Splash child mode joins the exclusive group; session/endpoint/token are
+    # sibling payload flags (same pattern as extension-probe).
+    hidden_mode.add_argument("--startup-splash-child", action="store_true")
+    parser.add_argument("--startup-splash-session")
+    parser.add_argument("--startup-splash-endpoint")
+    parser.add_argument("--startup-splash-token")
     args, _unknown = parser.parse_known_args()
     probe_payload_present = any(
         (
@@ -105,6 +159,26 @@ if __name__ == "__main__":
     )
     if probe_payload_present and args.extension_probe_request is None:
         raise SystemExit(2)
+    splash_payload_present = any(
+        (
+            args.startup_splash_session is not None,
+            args.startup_splash_endpoint is not None,
+            args.startup_splash_token is not None,
+        )
+    )
+    if splash_payload_present and not args.startup_splash_child:
+        raise SystemExit(2)
+    if args.startup_splash_child:
+        if (
+            args.startup_splash_session is None
+            or args.startup_splash_endpoint is None
+            or args.startup_splash_token is None
+            or not _valid_splash_endpoint(args.startup_splash_endpoint)
+        ):
+            raise SystemExit(2)
+        from mf4_analyzer.startup_splash_child import child_main as splash_child_main
+
+        raise SystemExit(splash_child_main(_splash_child_argv(args)))
     if args.extension_probe_request is not None:
         from mf4_analyzer.extensions.probe import (
             ProbeError,
@@ -157,11 +231,19 @@ if __name__ == "__main__":
     _startup_mark(STAGE_PYTHON_ENTRY)
     from mf4_analyzer.app import main
 
-    bootstrap = getattr(
-        sys.modules["mf4_analyzer.app"], "bootstrap_extension_runtime", None
+    # Hidden smoke/acceptance still bootstrap here; ordinary GUI lets app.main()
+    # own bootstrap so StartupFeedback can start first.
+    needs_early_bootstrap = (
+        args.importer_runtime_smoke
+        or args.batch_render_runtime_smoke
+        or args.frozen_batch_acceptance
     )
-    if callable(bootstrap):
-        bootstrap()
+    if needs_early_bootstrap:
+        bootstrap = getattr(
+            sys.modules["mf4_analyzer.app"], "bootstrap_extension_runtime", None
+        )
+        if callable(bootstrap):
+            bootstrap()
     if args.importer_runtime_smoke:
         if args.json is None or not args.import_path:
             raise SystemExit(

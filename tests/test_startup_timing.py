@@ -228,3 +228,168 @@ def test_wait_for_input_idle_is_auxiliary_and_absent_on_macos():
         assert "windows" in info.get("reason", "").lower() or "unavailable" in info.get(
             "reason", ""
         ).lower()
+
+
+def test_splash_events_write_parent_marks_when_enabled(tmp_path, monkeypatch):
+    run_id = "run-splash-marks"
+    perf_dir = tmp_path / "startup-perf"
+    st = _reload_timing(
+        monkeypatch,
+        TRACELAB_STARTUP_TIMING="1",
+        TRACELAB_STARTUP_RUN_ID=run_id,
+        TRACELAB_STARTUP_PERF_DIR=str(perf_dir),
+    )
+    st.record_splash_event(
+        st.STAGE_SPLASH_PAINTED,
+        session="sess-1",
+        detail={"child_mono_ns": 10**15, "frames": 3},
+    )
+    st.record_splash_event(st.STAGE_SPLASH_CLOSED, session="sess-1")
+    marks_path = perf_dir / run_id / "marks.jsonl"
+    rows = [
+        json.loads(line)
+        for line in marks_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert [row["stage"] for row in rows] == ["splash_painted", "splash_closed"]
+    assert rows[0]["detail"]["session"] == "sess-1"
+    assert rows[0]["detail"]["child_detail"]["child_mono_ns"] == 10**15
+    # Parent mono is process-local and must not equal the absurd child value.
+    assert rows[0]["mono_ns"] != 10**15
+    assert rows[0]["mono_ns"] <= rows[1]["mono_ns"]
+
+
+def test_splash_events_are_noop_when_timing_disabled(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    st = _reload_timing(monkeypatch)
+    st.record_splash_event(st.STAGE_SPLASH_PAINTED, session="s")
+    st.forward_feedback_event(st.STAGE_SPLASH_CLOSED, session="s")
+    assert list(tmp_path.iterdir()) == []
+    assert st.recorded_stages() == ()
+
+
+def test_feedback_forward_uses_tool_clock_not_cross_process_mono(
+    tmp_path, monkeypatch
+):
+    from tools import measure_windows_startup as measure
+
+    run_id = "run-feedback-fwd"
+    st = _reload_timing(
+        monkeypatch,
+        TRACELAB_STARTUP_TIMING="1",
+        TRACELAB_STARTUP_RUN_ID=run_id,
+        TRACELAB_STARTUP_PERF_DIR=str(tmp_path / "perf"),
+    )
+    server = measure._ProbeServer(expected_run_id=run_id)
+    monkeypatch.setenv("TRACELAB_STARTUP_PROBE_HOST", server.host)
+    monkeypatch.setenv("TRACELAB_STARTUP_PROBE_PORT", str(server.port))
+
+    absurd_child_mono = 99 * 10**15
+
+    def _push():
+        # Simulate controller I/O thread: mark + push with opaque child detail.
+        st.record_splash_event(
+            st.STAGE_SPLASH_PAINTED,
+            session="sess-fwd",
+            detail={"child_mono_ns": absurd_child_mono},
+        )
+
+    thread = threading.Thread(target=_push, daemon=True)
+    t0 = time.perf_counter_ns()
+    thread.start()
+    deadline = time.perf_counter() + 2.0
+    event = None
+    while time.perf_counter() < deadline:
+        server.poll()
+        drained = server.drain_feedback()
+        if drained:
+            event = drained[0]
+            break
+        time.sleep(0.01)
+    thread.join(timeout=2.0)
+    server.close()
+    t1 = time.perf_counter_ns()
+
+    assert event is not None
+    assert event["ok"] is True
+    assert event["role"] == "feedback"
+    assert event["event"] == "splash_painted"
+    assert event["feedback_clock"] == "tool"
+    assert t0 <= event["tool_mono_ns_accepted"] <= event["tool_mono_ns_received"] <= t1
+    assert event["transport_overhead_ns"] >= 0
+    # Must not claim splash timing from parent−child mono arithmetic.
+    assert event["tool_mono_ns_received"] != absurd_child_mono
+    assert "splash_from_child_mono" not in event
+
+
+def test_feedback_and_interactive_roles_are_validated_separately():
+    from tools import measure_windows_startup as measure
+
+    painted = measure.stamp_feedback_message(
+        {
+            "role": "feedback",
+            "event": "splash_painted",
+            "run_id": "r-ok",
+            "session": "s1",
+            "parent_mono_ns": 123,
+        },
+        expected_run_id="r-ok",
+        accepted_ns=1000,
+        received_ns=1500,
+    )
+    assert painted["ok"] is True
+    assert painted["transport_overhead_ns"] == 500
+    assert painted["role"] == "feedback"
+
+    bad_run = measure.stamp_feedback_message(
+        {
+            "role": "feedback",
+            "event": "splash_painted",
+            "run_id": "other",
+            "session": "s1",
+        },
+        expected_run_id="r-ok",
+        accepted_ns=1,
+        received_ns=2,
+    )
+    assert bad_run["ok"] is False
+
+    # Interactive-shaped payload must not pass the feedback validator.
+    interactive_shaped = measure.stamp_feedback_message(
+        {"ok": True, "token": "tok", "cmd": "interactive_probe", "run_id": "r-ok"},
+        expected_run_id="r-ok",
+        accepted_ns=1,
+        received_ns=2,
+    )
+    assert interactive_shaped["ok"] is False
+
+    required = measure.evaluate_run_outcome(
+        exit_code=0,
+        timed_out=False,
+        marks=[
+            {"stage": name, "run_id": "r-ok"}
+            for name in measure.REQUIRED_APP_STAGES
+        ],
+        interactive_received=True,
+        run_id="r-ok",
+        marks_run_id="r-ok",
+        splash_required=True,
+        splash_events=[painted],
+    )
+    assert required["ok"] is True
+
+    missing_splash = measure.evaluate_run_outcome(
+        exit_code=0,
+        timed_out=False,
+        marks=[
+            {"stage": name, "run_id": "r-ok"}
+            for name in measure.REQUIRED_APP_STAGES
+        ],
+        interactive_received=True,
+        run_id="r-ok",
+        marks_run_id="r-ok",
+        splash_required=True,
+        splash_events=[],
+    )
+    assert missing_splash["ok"] is False
+    assert "splash_painted" in missing_splash["error"]

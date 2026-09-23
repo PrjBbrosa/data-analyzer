@@ -42,8 +42,13 @@ RELATED_PATHS = (
     "MF4 Data Analyzer V1.py",
     "mf4_analyzer/app.py",
     "mf4_analyzer/startup_timing.py",
+    "mf4_analyzer/startup_feedback.py",
     "tools/measure_windows_startup.py",
 )
+
+FEEDBACK_ROLE = "feedback"
+FEEDBACK_ACK_ROLE = "feedback_ack"
+INTERACTIVE_CMD = "interactive_probe"
 
 
 def _truthy(value: str | None) -> bool:
@@ -60,6 +65,8 @@ def evaluate_run_outcome(
     interactive_received: bool,
     run_id: str,
     marks_run_id: str | None,
+    splash_required: bool = False,
+    splash_events: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     if timed_out:
         return {"ok": False, "error": "startup measurement timed out"}
@@ -91,6 +98,18 @@ def evaluate_run_outcome(
             "ok": False,
             "error": "interactive probe response was not received",
         }
+    if splash_required:
+        events = list(splash_events or [])
+        feedback_names = {
+            str(row.get("event"))
+            for row in events
+            if row.get("ok") and row.get("role") == FEEDBACK_ROLE
+        }
+        if "splash_painted" not in feedback_names:
+            return {
+                "ok": False,
+                "error": "splash_painted feedback was not received",
+            }
     return {"ok": True, "error": None}
 
 
@@ -118,7 +137,7 @@ def send_interactive_probe(
                 sock.close()
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 sock.settimeout(min(2.0, max(0.05, deadline - time.perf_counter())))
-        payload = json.dumps({"cmd": "interactive_probe", "token": token}) + "\n"
+        payload = json.dumps({"cmd": INTERACTIVE_CMD, "token": token}) + "\n"
         sent_ns = time.perf_counter_ns()
         sock.sendall(payload.encode("utf-8"))
         sock.settimeout(max(0.05, deadline - time.perf_counter()))
@@ -134,8 +153,12 @@ def send_interactive_probe(
         raw = b"".join(chunks).decode("utf-8", errors="replace").strip()
         body = json.loads(raw.splitlines()[0]) if raw else {}
         ok = bool(body.get("ok")) and body.get("token") == token
+        # Interactive responses must not be mistaken for feedback pushes.
+        if body.get("role") == FEEDBACK_ROLE:
+            ok = False
         return {
             "ok": ok,
+            "role": "interactive",
             "token": token,
             "tool_mono_ns_sent": sent_ns,
             "tool_mono_ns_received": received_ns,
@@ -289,28 +312,126 @@ def _marks_run_id(marks: list[dict[str, Any]]) -> str | None:
 
 
 class _ProbeServer:
-    """Accept one app connection; hold it until the tool sends the probe."""
+    """Accept feedback pushes and one interactive app connection.
 
-    def __init__(self) -> None:
+    Feedback clients push a JSON line with ``role=feedback`` immediately.
+    The main-window interactive client connects and waits for the tool to send
+    ``interactive_probe``. The two roles are never mixed on one socket.
+    """
+
+    def __init__(self, *, expected_run_id: str) -> None:
         self._server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._server.bind(("127.0.0.1", 0))
-        self._server.listen(1)
-        self._server.settimeout(0.2)
+        self._server.listen(8)
+        self._server.settimeout(0.05)
         self.host, self.port = self._server.getsockname()
+        self.expected_run_id = str(expected_run_id)
         self.conn: socket.socket | None = None
+        self.feedback_events: list[dict[str, Any]] = []
+
+    def poll(self) -> None:
+        """Accept pending connections; classify feedback vs interactive."""
+
+        while True:
+            try:
+                conn, _addr = self._server.accept()
+            except socket.timeout:
+                return
+            except OSError:
+                return
+            accepted_ns = time.perf_counter_ns()
+            conn.settimeout(0.15)
+            try:
+                # Feedback peers send first; interactive peers stay silent.
+                data = conn.recv(4096)
+            except socket.timeout:
+                data = b""
+            except OSError:
+                try:
+                    conn.close()
+                except OSError:
+                    pass
+                continue
+            if data:
+                self._ingest_feedback_push(conn, data, accepted_ns=accepted_ns)
+                continue
+            if self.conn is None:
+                try:
+                    conn.settimeout(None)
+                except OSError:
+                    pass
+                self.conn = conn
+            else:
+                try:
+                    conn.close()
+                except OSError:
+                    pass
 
     def accept_ready(self) -> bool:
-        if self.conn is not None:
-            return True
+        """Compatibility shim: poll once; True when interactive conn is held."""
+
+        self.poll()
+        return self.conn is not None
+
+    def _ingest_feedback_push(
+        self,
+        conn: socket.socket,
+        data: bytes,
+        *,
+        accepted_ns: int,
+    ) -> None:
+        received_ns = time.perf_counter_ns()
+        transport_overhead_ns = max(0, received_ns - accepted_ns)
+        raw = data.decode("utf-8", errors="replace").strip()
+        body: dict[str, Any] = {}
         try:
-            conn, _addr = self._server.accept()
-        except socket.timeout:
-            return False
+            body = json.loads(raw.splitlines()[0]) if raw else {}
+        except json.JSONDecodeError:
+            body = {}
+        ok = (
+            isinstance(body, dict)
+            and body.get("role") == FEEDBACK_ROLE
+            and str(body.get("run_id") or "") == self.expected_run_id
+            and str(body.get("event") or "")
+            in {"splash_painted", "splash_closed"}
+        )
+        # Never derive launch-to-splash from parent_mono_ns vs tool clocks.
+        parent_mono = body.get("parent_mono_ns") if isinstance(body, dict) else None
+        event_row = {
+            "ok": ok,
+            "role": FEEDBACK_ROLE,
+            "event": body.get("event") if isinstance(body, dict) else None,
+            "run_id": body.get("run_id") if isinstance(body, dict) else None,
+            "session": body.get("session") if isinstance(body, dict) else None,
+            "tool_mono_ns_accepted": accepted_ns,
+            "tool_mono_ns_received": received_ns,
+            "transport_overhead_ns": transport_overhead_ns,
+            "feedback_clock": "tool",
+            "parent_mono_ns_reported": parent_mono,
+            "payload": body if isinstance(body, dict) else {"raw": raw},
+        }
+        self.feedback_events.append(event_row)
+        try:
+            ack = {
+                "role": FEEDBACK_ACK_ROLE,
+                "ok": ok,
+                "event": event_row["event"],
+                "run_id": self.expected_run_id,
+            }
+            conn.sendall(
+                (json.dumps(ack, ensure_ascii=False) + "\n").encode("utf-8")
+            )
         except OSError:
-            return False
-        self.conn = conn
-        return True
+            pass
+        try:
+            conn.close()
+        except OSError:
+            pass
+
+    def drain_feedback(self) -> list[dict[str, Any]]:
+        events, self.feedback_events = self.feedback_events, []
+        return events
 
     def send_probe(self, token: str, timeout_s: float) -> dict[str, Any]:
         deadline = time.perf_counter() + timeout_s
@@ -318,13 +439,14 @@ class _ProbeServer:
             if time.perf_counter() >= deadline:
                 return {
                     "ok": False,
+                    "role": "interactive",
                     "error": "timed out waiting for app probe connection",
                     "interactive_clock": "tool",
                 }
-            self.accept_ready()
+            self.poll()
             time.sleep(0.01)
         assert self.conn is not None
-        payload = json.dumps({"cmd": "interactive_probe", "token": token}) + "\n"
+        payload = json.dumps({"cmd": INTERACTIVE_CMD, "token": token}) + "\n"
         sent_ns = time.perf_counter_ns()
         self.conn.settimeout(max(0.05, deadline - time.perf_counter()))
         self.conn.sendall(payload.encode("utf-8"))
@@ -340,8 +462,11 @@ class _ProbeServer:
         raw = b"".join(chunks).decode("utf-8", errors="replace").strip()
         body = json.loads(raw.splitlines()[0]) if raw else {}
         ok = bool(body.get("ok")) and body.get("token") == token
+        if body.get("role") == FEEDBACK_ROLE:
+            ok = False
         return {
             "ok": ok,
+            "role": "interactive",
             "token": token,
             "tool_mono_ns_sent": sent_ns,
             "tool_mono_ns_received": received_ns,
@@ -356,6 +481,38 @@ class _ProbeServer:
                 self.conn.close()
         finally:
             self._server.close()
+
+
+def stamp_feedback_message(
+    body: dict[str, Any],
+    *,
+    expected_run_id: str,
+    accepted_ns: int | None = None,
+    received_ns: int | None = None,
+) -> dict[str, Any]:
+    """Pure helper for unit tests: validate feedback and stamp tool clocks."""
+
+    accepted = int(accepted_ns if accepted_ns is not None else time.perf_counter_ns())
+    received = int(received_ns if received_ns is not None else time.perf_counter_ns())
+    ok = (
+        isinstance(body, dict)
+        and body.get("role") == FEEDBACK_ROLE
+        and str(body.get("run_id") or "") == str(expected_run_id)
+        and str(body.get("event") or "") in {"splash_painted", "splash_closed"}
+    )
+    return {
+        "ok": ok,
+        "role": FEEDBACK_ROLE,
+        "event": body.get("event"),
+        "run_id": body.get("run_id"),
+        "session": body.get("session"),
+        "tool_mono_ns_accepted": accepted,
+        "tool_mono_ns_received": received,
+        "transport_overhead_ns": max(0, received - accepted),
+        "feedback_clock": "tool",
+        "parent_mono_ns_reported": body.get("parent_mono_ns"),
+        "payload": body,
+    }
 
 
 def build_command(
@@ -381,6 +538,7 @@ def run_once(
     python_exe: Path,
     timeout_s: float,
     qt_platform: str | None,
+    splash_mode: str = "auto",
 ) -> dict[str, Any]:
     run_dir = perf_root / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -389,9 +547,10 @@ def run_once(
     summary_path = run_dir / "summary.json"
     meta_path = run_dir / "meta.json"
 
-    probe_server = _ProbeServer()
+    probe_server = _ProbeServer(expected_run_id=run_id)
     token = uuid.uuid4().hex
     timeline: list[dict[str, Any]] = []
+    splash_events: list[dict[str, Any]] = []
 
     def note(event: str, **extra: Any) -> None:
         row = {"event": event, "tool_mono_ns": time.perf_counter_ns(), **extra}
@@ -414,12 +573,16 @@ def run_once(
             "python_exe": str(python_exe),
             "probe_host": probe_server.host,
             "probe_port": probe_server.port,
+            "splash_mode": splash_mode,
         },
         "notes": (
-            "macOS source/offscreen runs are not a Windows EXE baseline."
+            "macOS source/offscreen runs are not a Windows EXE baseline. "
+            "Splash first-visible times require tool-clock receipt of feedback "
+            "events (or screen capture); never parent_mono_ns − child_mono_ns."
             if package_type == "source"
             else "Windows EXE measurement."
         ),
+        "windows_frozen_status": "UNKNOWN",
     }
     meta_path.write_text(json.dumps(meta, indent=2, ensure_ascii=False) + "\n")
 
@@ -430,6 +593,7 @@ def run_once(
     env["TRACELAB_STARTUP_PROBE_HOST"] = probe_server.host
     env["TRACELAB_STARTUP_PROBE_PORT"] = str(probe_server.port)
     env["TRACELAB_STARTUP_EXIT_AFTER_PROBE"] = "1"
+    env["TRACELAB_STARTUP_SPLASH"] = str(splash_mode)
     env.setdefault("PYTHONPATH", str(ROOT))
     if qt_platform:
         env["QT_QPA_PLATFORM"] = qt_platform
@@ -464,7 +628,11 @@ def run_once(
         deadline = time.perf_counter() + timeout_s
         saw_first_frame = False
         while time.perf_counter() < deadline:
-            probe_server.accept_ready()
+            # Poll feedback pushes early — do not wait for first_frame.
+            probe_server.poll()
+            for feedback in probe_server.drain_feedback():
+                splash_events.append(feedback)
+                note("splash_feedback_received", **feedback)
             marks = _read_marks(marks_path)
             stages = {str(row.get("stage")) for row in marks}
             if "first_frame" in stages and not saw_first_frame:
@@ -497,11 +665,16 @@ def run_once(
             if exit_code is None:
                 exit_code = -1
     finally:
+        probe_server.poll()
+        for feedback in probe_server.drain_feedback():
+            splash_events.append(feedback)
+            note("splash_feedback_received", **feedback)
         probe_server.close()
 
     marks = _read_marks(marks_path)
     marks_id = _marks_run_id(marks)
     interactive_ok = bool(interactive and interactive.get("ok"))
+    splash_required = str(splash_mode).strip() in {"1", "true", "yes", "on"}
     outcome = evaluate_run_outcome(
         exit_code=exit_code if exit_code is not None else -1,
         timed_out=timed_out,
@@ -509,6 +682,31 @@ def run_once(
         interactive_received=interactive_ok,
         run_id=run_id,
         marks_run_id=marks_id,
+        splash_required=splash_required,
+        splash_events=splash_events,
+    )
+
+    def _delta_from_spawn(tool_ns: Any) -> int | None:
+        try:
+            return max(0, int(tool_ns) - int(spawn_ns))
+        except (TypeError, ValueError):
+            return None
+
+    painted = next(
+        (
+            row
+            for row in splash_events
+            if row.get("ok") and row.get("event") == "splash_painted"
+        ),
+        None,
+    )
+    closed = next(
+        (
+            row
+            for row in splash_events
+            if row.get("ok") and row.get("event") == "splash_closed"
+        ),
+        None,
     )
 
     summary = {
@@ -519,11 +717,29 @@ def run_once(
         "timed_out": timed_out,
         "marks": marks,
         "interactive": interactive,
+        "splash_mode": splash_mode,
+        "splash_events": splash_events,
+        "splash_painted_ns_from_spawn": (
+            _delta_from_spawn(painted.get("tool_mono_ns_received"))
+            if painted
+            else None
+        ),
+        "splash_closed_ns_from_spawn": (
+            _delta_from_spawn(closed.get("tool_mono_ns_received"))
+            if closed
+            else None
+        ),
+        "interactive_ns_from_spawn": (
+            _delta_from_spawn(interactive.get("tool_mono_ns_received"))
+            if interactive
+            else None
+        ),
         "wait_for_input_idle": wait_idle,
         "stdout_tail": (stdout or "")[-4000:],
         "stderr_tail": (stderr or "")[-4000:],
         "package_type": package_type,
         "platform": platform.system(),
+        "windows_frozen_status": "UNKNOWN",
     }
     try:
         summary_path.write_text(
@@ -538,7 +754,6 @@ def run_once(
         }
     summary["run_dir"] = str(run_dir)
     return summary
-
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
@@ -577,6 +792,15 @@ def main(argv: list[str] | None = None) -> int:
         default=os.environ.get("QT_QPA_PLATFORM") or "offscreen",
         help="Qt platform plugin for source runs (default: offscreen)",
     )
+    parser.add_argument(
+        "--splash",
+        choices=("auto", "0", "1"),
+        default="auto",
+        help=(
+            "TRACELAB_STARTUP_SPLASH for the measured process. "
+            "Use 0/1 for matched splash-disabled/enabled comparisons."
+        ),
+    )
     args = parser.parse_args(argv)
 
     if args.package_type == "exe" and args.exe is None:
@@ -597,10 +821,10 @@ def main(argv: list[str] | None = None) -> int:
         python_exe=args.python,
         timeout_s=float(args.timeout),
         qt_platform=None if args.package_type == "exe" else args.qt_platform,
+        splash_mode=str(args.splash),
     )
-    print(json.dumps({"ok": summary.get("ok"), "run_dir": summary.get("run_dir"), "error": summary.get("error")}, ensure_ascii=False))
+    print(json.dumps({"ok": summary.get("ok"), "run_dir": summary.get("run_dir"), "error": summary.get("error"), "windows_frozen_status": summary.get("windows_frozen_status", "UNKNOWN")}, ensure_ascii=False))
     return 0 if summary.get("ok") else 1
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

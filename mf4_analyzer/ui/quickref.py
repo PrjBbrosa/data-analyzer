@@ -105,6 +105,10 @@ QUICKREF: Tuple[QuickGroup, ...] = (
                 gesture="工具栏「打开」",
             ),
             QuickRow(
+                "启动面板",
+                sub="启动时可能出现 TraceLab 启动面板，表示程序正在启动；主窗口就绪后自动关闭。它不是项目加载进度，也不是分析百分比。",
+            ),
+            QuickRow(
                 "支持格式",
                 sub="MF4 · MDF · BLF · ASCII · TDMS · WWT · ZFD · MAT · 表格 · HDF · 音视频",
             ),

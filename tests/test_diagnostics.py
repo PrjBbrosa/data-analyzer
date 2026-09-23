@@ -578,6 +578,12 @@ def test_app_main_wires_diagnostics_in_required_order(monkeypatch, tmp_path):
         def show(self):
             events.append("show")
 
+        def installEventFilter(self, _obj):
+            return None
+
+        def isVisible(self):
+            return True
+
     qtwidgets = ModuleType("PyQt5.QtWidgets")
     qtwidgets.QApplication = _FakeApplication
     fonts = ModuleType("mf4_analyzer.ui.pg_canvas.fonts")
@@ -619,6 +625,12 @@ def test_app_main_wires_diagnostics_in_required_order(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(app_module, "_load_app_icon", lambda: None)
     monkeypatch.setattr(app_module.sys, "exit", lambda code: events.append(("exit", code)))
+    # Keep splash controller inert so this order probe stays about diagnostics.
+    monkeypatch.setenv("TRACELAB_STARTUP_SPLASH", "0")
+    # FakeWindow is not a QObject; splash observation needs a real QWidget parent.
+    monkeypatch.setattr(
+        app_module, "_arm_startup_observation", lambda *_a, **_k: None
+    )
 
     app_module.main()
 

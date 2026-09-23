@@ -165,3 +165,47 @@ def test_packaging_hidden_import_modules_import_on_this_checkout():
             "pending Stage 2-4 Cockpit modules are named in packaging but "
             f"not present in this checkout yet: {pending}"
         )
+
+
+# Splash modules are reached by a static launcher import of
+# ``startup_splash_child`` (which imports ``startup_feedback`` and
+# ``ui.startup_splash``). Do not mechanically add them as hidden-imports.
+STARTUP_SPLASH_MODULES = (
+    "mf4_analyzer.startup_feedback",
+    "mf4_analyzer.startup_splash_child",
+    "mf4_analyzer.ui.startup_splash",
+)
+WINDOWS_BUILD_SCRIPTS = (
+    "build_windows_folder.ps1",
+    "build_windows_folder_lite.ps1",
+    "build_windows_folder_lite_modular.ps1",
+)
+
+
+def test_startup_splash_modules_import_without_optional_extensions():
+    """Modular packages omit media/MAT; splash must still import on this tree."""
+
+    for module_name in STARTUP_SPLASH_MODULES:
+        assert importlib.util.find_spec(module_name) is not None, module_name
+        importlib.import_module(module_name)
+
+
+def test_windows_builders_keep_startup_splash_in_analysis_closure():
+    launcher = (REPO_ROOT / "MF4 Data Analyzer V1.py").read_text(encoding="utf-8")
+    assert "startup_splash_child" in launcher
+    assert "child_main" in launcher
+    for script_name in WINDOWS_BUILD_SCRIPTS:
+        text = (REPO_ROOT / "tools" / script_name).read_text(encoding="utf-8")
+        assert "MF4 Data Analyzer V1.py" in text
+        for module_name in STARTUP_SPLASH_MODULES:
+            assert f'"--exclude-module", "{module_name}"' not in text, (
+                f"{script_name} must not exclude {module_name}"
+            )
+        # Splash is reached via static analysis of the launcher child import;
+        # builders must not exclude it and need not list mechanical hidden-imports.
+        assert '"--exclude-module", "mf4_analyzer.startup_feedback"' not in text
+        assert '"--exclude-module", "mf4_analyzer.startup_splash_child"' not in text
+        assert '"--exclude-module", "mf4_analyzer.ui.startup_splash"' not in text
+        # Keep the existing Qt/matplotlib exclusions; splash must not reintroduce them.
+        assert "PyQt5.QtWebEngine" in text or "QtWebEngine" in text
+        assert '"--exclude-module", "matplotlib"' in text
