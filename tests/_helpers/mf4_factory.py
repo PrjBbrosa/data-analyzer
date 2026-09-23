@@ -100,3 +100,34 @@ def write_conversion_unit_mf4(
     mdf.save(str(path), overwrite=True)
     mdf.close()
     return path
+
+
+def write_signal_groups_mf4(path: Path, groups: Sequence[Sequence]) -> Path:
+    """Write one asammdf channel group per inner sequence.
+
+    Each item is ``(name, samples, timestamps)`` or
+    ``(name, samples, timestamps, unit)``. Separate groups keep independent
+    clocks, which is how CANape stores rasters inside one MF4.
+    """
+    mdf = MDF(version="4.10")
+    for group in groups:
+        signals = []
+        for item in group:
+            name, samples, timestamps = item[:3]
+            unit = item[3] if len(item) > 3 else ""
+            samples = np.asarray(samples)
+            timestamps = np.asarray(timestamps, dtype=float)
+            encoding = "latin-1" if samples.dtype.kind in {"S", "V"} else None
+            signals.append(
+                Signal(
+                    samples=samples,
+                    timestamps=timestamps,
+                    name=name,
+                    unit=unit,
+                    encoding=encoding,
+                )
+            )
+        mdf.append(signals)
+    mdf.save(str(path), overwrite=True)
+    mdf.close()
+    return path

@@ -76,6 +76,82 @@ def _source_qualified_name_at(mdf, loc, base_name):
     return f"{source_path}.{base_name}" if source_path else ""
 
 
+def prepare_shared_time_series(timestamps, samples):
+    """Return a strictly increasing ``(time, values)`` pair for shared-axis import.
+
+    Non-finite timestamps are removed. A backward step is stable-sorted onto
+    the time axis. Exact duplicate timestamps keep the last sample so
+    ``np.interp`` can run. Returns ``None`` when no finite timestamp remains
+    or the two arrays differ in length — callers must not truncate with
+    ``min(len(t), len(y))``.
+    """
+    time_axis = np.asarray(timestamps, dtype=np.float64).reshape(-1)
+    values = np.asarray(samples, dtype=np.float64).reshape(-1)
+    if time_axis.size != values.size:
+        return None
+    finite_time = np.isfinite(time_axis)
+    time_axis = time_axis[finite_time]
+    values = values[finite_time]
+    if time_axis.size == 0:
+        return None
+    if time_axis.size > 1 and np.any(np.diff(time_axis) < 0):
+        order = np.argsort(time_axis, kind="stable")
+        time_axis = time_axis[order]
+        values = values[order]
+    if time_axis.size > 1:
+        last_at_time = np.empty(time_axis.size, dtype=bool)
+        last_at_time[-1] = True
+        last_at_time[:-1] = time_axis[:-1] != time_axis[1:]
+        time_axis = time_axis[last_at_time]
+        values = values[last_at_time]
+    return time_axis, values
+
+
+def _is_mdf_time_master(channel, version):
+    """True for the group's time master, which is the X axis rather than a signal.
+
+    MDF 2/3 masters are the time channel. MDF 4 time masters are
+    ``MASTER`` / ``VIRTUAL_MASTER`` with ``sync_type == TIME``. An angle or
+    distance master stays a signal.
+    """
+    if channel is None:
+        return False
+    kind = getattr(channel, "channel_type", None)
+    text = str(version or "")
+    if text.startswith("2") or text.startswith("3"):
+        return kind == 1
+    if kind not in (2, 3):
+        return False
+    return getattr(channel, "sync_type", None) == 1
+
+
+def _mdf_channel_block(mdf, group_idx, ch_idx):
+    try:
+        return mdf.groups[group_idx].channels[ch_idx]
+    except (AttributeError, IndexError, TypeError):
+        return None
+
+
+def _skip_mdf_channel(skipped, name, reason):
+    skipped.append({"name": str(name), "reason": reason})
+
+
+def _read_mdf_signal(mdf, ch_name, group_idx, ch_idx):
+    """Read one physical channel. A name-only retry covers older asammdf.
+
+    asammdf raises ``MdfException`` and occasionally ``RuntimeError`` for a
+    block it cannot decode. The caller records ``unreadable`` instead of
+    dropping the channel with no trace.
+    """
+    try:
+        return mdf.get(group=group_idx, index=ch_idx)
+    except Exception:
+        try:
+            return mdf.get(ch_name)
+        except Exception:
+            return None
+
+
 def unique_mdf_channel_locations(mdf):
     """Return display names mapped to unique MDF physical channel locations.
 
@@ -401,56 +477,92 @@ class DataLoader:
 
     @staticmethod
     def load_mf4(fp):
+        """Load numeric MF4/MDF channels onto one shared ``Time`` column.
+
+        The longest prepared numeric series is the reference axis. Other
+        series are copied only when their timestamps match that axis, and
+        otherwise linearly interpolated. Duplicate timestamps and backward
+        steps are repaired in :func:`prepare_shared_time_series` instead of
+        dropping the channel. Non-numeric, empty, and unreadable channels are
+        listed on ``DataFrame.attrs['source_metadata']['skipped_channels']``.
+        Time masters are the X axis and are not signal columns.
+        """
         mdf = ensure_mdf()(fp)
+        try:
+            channel_locations = unique_mdf_channel_locations(mdf)
+            if not channel_locations:
+                raise ValueError("No channels")
 
-        # 收集所有通道及其位置信息
-        channel_locations = unique_mdf_channel_locations(mdf)
+            version = getattr(mdf, "version", "")
+            skipped = []
+            series = {}
+            units = {}
+            for ch_name, (group_idx, ch_idx) in channel_locations.items():
+                block = _mdf_channel_block(mdf, group_idx, ch_idx)
+                if _is_mdf_time_master(block, version):
+                    continue
+                sig = _read_mdf_signal(mdf, ch_name, group_idx, ch_idx)
+                if sig is None:
+                    _skip_mdf_channel(skipped, ch_name, "unreadable")
+                    continue
+                samples = (
+                    np.asarray(sig.samples)
+                    if sig.samples is not None
+                    else np.asarray([])
+                )
+                if samples.size == 0:
+                    _skip_mdf_channel(skipped, ch_name, "empty")
+                    continue
+                if samples.ndim > 1:
+                    samples = np.squeeze(samples)
+                if getattr(samples.dtype, "names", None) or samples.ndim != 1:
+                    _skip_mdf_channel(skipped, ch_name, "non-1d")
+                    continue
+                if not np.issubdtype(samples.dtype, np.number):
+                    _skip_mdf_channel(skipped, ch_name, "non-numeric")
+                    continue
+                prepared = prepare_shared_time_series(sig.timestamps, samples)
+                if prepared is None:
+                    reason = (
+                        "length-mismatch"
+                        if np.asarray(sig.timestamps).reshape(-1).size != samples.size
+                        else "unusable-time"
+                    )
+                    _skip_mdf_channel(skipped, ch_name, reason)
+                    continue
+                series[ch_name] = prepared
+                units[ch_name] = _resolve_channel_unit(mdf, sig, group_idx, ch_idx)
 
-        if not channel_locations:
+            if not series:
+                raise ValueError("No valid numeric data")
+
+            ref_name = max(series, key=lambda name: series[name][0].size)
+            ref_t = series[ref_name][0]
+            data = {"Time": ref_t}
+            loaded_units = {}
+            for name, (channel_time, values) in series.items():
+                if values.size < 2 and ref_t.size != values.size:
+                    _skip_mdf_channel(skipped, name, "single-sample")
+                    continue
+                if (
+                    channel_time.shape == ref_t.shape
+                    and np.array_equal(channel_time, ref_t)
+                ):
+                    aligned = values
+                else:
+                    aligned = np.interp(ref_t, channel_time, values)
+                data[name] = aligned
+                loaded_units[name] = units.get(name, "")
+
+            pd = _pandas()
+            frame = pd.DataFrame(data)
+            frame.attrs["source_metadata"] = {
+                "source_kind": "mdf",
+                "skipped_channels": skipped,
+            }
+            return frame, list(data.keys()), loaded_units
+        finally:
             mdf.close()
-            raise ValueError("No channels")
-
-        max_len, ref_ts, sigs, units = 0, None, {}, {}
-
-        for ch_name, (group_idx, ch_idx) in channel_locations.items():
-            try:
-                sig = mdf.get(group=group_idx, index=ch_idx)
-                if sig.samples is not None and len(sig.samples) > 0 and np.issubdtype(sig.samples.dtype, np.number):
-                    s = sig.samples.flatten() if len(sig.samples.shape) > 1 else sig.samples
-                    sigs[ch_name] = {'s': np.asarray(s, dtype=np.float64), 't': np.asarray(sig.timestamps, dtype=np.float64)}
-                    units[ch_name] = _resolve_channel_unit(mdf, sig, group_idx, ch_idx)
-                    if len(sig.timestamps) > max_len:
-                        max_len = len(sig.timestamps)
-                        ref_ts = sigs[ch_name]['t']
-            except Exception as e:
-                # 如果带group/index失败，尝试不带参数（兼容旧版本）
-                try:
-                    sig = mdf.get(ch_name)
-                    if sig.samples is not None and len(sig.samples) > 0 and np.issubdtype(sig.samples.dtype, np.number):
-                        s = sig.samples.flatten() if len(sig.samples.shape) > 1 else sig.samples
-                        sigs[ch_name] = {'s': np.asarray(s, dtype=np.float64), 't': np.asarray(sig.timestamps, dtype=np.float64)}
-                        units[ch_name] = _resolve_channel_unit(mdf, sig, group_idx, ch_idx)
-                        if len(sig.timestamps) > max_len:
-                            max_len = len(sig.timestamps)
-                            ref_ts = sigs[ch_name]['t']
-                except:
-                    pass
-
-        mdf.close()
-        if ref_ts is None: raise ValueError("No valid numeric data")
-
-        data = {'Time': ref_ts}
-        for ch, d in sigs.items():
-            try:
-                if len(d['s']) == max_len:
-                    data[ch] = d['s']
-                elif len(d['t']) > 1 and np.all(np.diff(d['t']) > 0):
-                    data[ch] = np.interp(ref_ts, d['t'], d['s'])
-            except:
-                pass
-
-        pd = _pandas()
-        return pd.DataFrame(data), list(data.keys()), units
 
     @staticmethod
     def load_blf(fp, dbc_paths=None, progress_callback=None):

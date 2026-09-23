@@ -889,6 +889,7 @@ class ProjectIOMixin:
             report(0.0, "准备")
             report(0.05, "读取数据")
             is_canoe_asc = False
+            load_metadata = None
             if ext == ".asc":
                 from ...io.asc_can_format import sniff_canoe_asc
                 try:
@@ -901,6 +902,9 @@ class ProjectIOMixin:
                 if not HAS_ASAMMDF: QMessageBox.critical(self, "错误", "asammdf 未安装"); return
                 report(-1.0, "读取 MF4")
                 data, chs, units = DataLoader.load_mf4(fp)
+                load_metadata = dict(
+                    getattr(data, "attrs", {}).get("source_metadata") or {}
+                )
             elif ext in ('.xlsx', '.xls'):
                 report(-1.0, "读取 Excel")
                 data, chs, units = DataLoader.load_excel(fp)
@@ -1118,7 +1122,9 @@ class ProjectIOMixin:
             else:
                 report(-1.0, "读取表格")
                 data, chs, units = DataLoader.load_csv(fp)
-            fd = self._register_file_data(fp, data, chs, units)
+            fd = self._register_file_data(
+                fp, data, chs, units, source_metadata=load_metadata,
+            )
             # User-request 2026-05-20: do NOT auto-select channel[0] on file
             # load. The canvas opens empty; the user picks the channel(s)
             # they want explicitly. Any previously-checked channels on
@@ -1129,6 +1135,7 @@ class ProjectIOMixin:
                 f"✅ 已加载: {p.name} ({len(data)} 行) | 共 {len(self.files)} 文件",
                 f"已加载 {p.name} · {len(data)} 行",
             )
+            self._toast_io_load_diagnostics(load_metadata)
             report(1.0, "已加载")
         except ImportError as e:
             self._show_load_import_error(e)

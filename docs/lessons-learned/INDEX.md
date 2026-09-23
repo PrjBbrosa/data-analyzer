@@ -274,6 +274,7 @@ lesson by default.
 | [Native Probe PYD Identity Is Package Scoped](native-probe-pyd-identity-is-package-scoped.md) | Auditing loaded native modules against base and extension manifests. | See lesson |
 | [Native Probe Exit Can Leave Brief Windows File Contention](windows-native-probe-exit-file-contention.md) | Moving or deleting a verified native package immediately after a probe exits. | See lesson |
 | [Pin View Restore Publishes One Frame](pin-view-restore-publishes-one-frame.md) | Changing time-domain View restore, pinned-cursor projection, or the page-transition accept path. | See lesson |
+| [MF4 Shared Axis Repairs Non-Strict Time](mf4-shared-axis-repairs-non-strict-time.md) | Changing `DataLoader.load_mf4` or any shared-time alignment that | See lesson |
 
 ## Selection Rules
 

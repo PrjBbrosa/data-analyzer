@@ -422,6 +422,17 @@ def _mdf_channel_facts(mdf) -> tuple[tuple[str, ...], dict, dict]:
     return tuple(channels), units, channel_metadata
 
 
+def _frame_source_metadata(data) -> dict:
+    """Read loader diagnostics stashed on a 3-tuple DataFrame result."""
+    attrs = getattr(data, "attrs", None)
+    if not isinstance(attrs, Mapping):
+        return {}
+    extra = attrs.get("source_metadata")
+    if not isinstance(extra, Mapping):
+        return {}
+    return dict(extra)
+
+
 def _probe_mdf(path: str, adapter: "SourceAdapter") -> tuple[SourceDescriptor, ...]:
     MDF = getattr(_loader, "MDF", None)
     if MDF is None:
@@ -653,7 +664,10 @@ class SourceAdapter:
                 f"{self.loader_name} must return a ChannelFrame or pandas DataFrame"
             )
         fs = result[3] if len(result) == 5 else None
-        source_metadata = dict(result[4] or {}) if len(result) == 5 else {}
+        if len(result) == 5:
+            source_metadata = dict(result[4] or {})
+        else:
+            source_metadata = _frame_source_metadata(data)
         source_metadata.update({
             "adapter_key": self.key,
             "capability_notes": self.capability_notes,
