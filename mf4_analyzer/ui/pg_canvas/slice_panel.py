@@ -259,12 +259,12 @@ class _SliceStrip(_CanvasBackref):
         timer.start()
 
     def hold_discrete_quality(self, token) -> None:
-        """Defer the slice's 0 ms AA settle for a page-transition token."""
+        """Keep retained and rebuilt slices AA-off until the transition ends."""
         self._slice_discrete_quality_hold = token
-        timer = self._slice_timer_alive(self._slice_discrete_aa_timer)
-        if timer is not None and timer.isActive():
-            self._stop_slice_timer(timer)
-            self._slice_discrete_quality_deferred = True
+        # A retained picture skips the rebuild that normally drops AA. Its
+        # first natural paint and overlay exposes must still be cheap.
+        if self._slice_aa_on or self._slice_settle_pending():
+            self._arm_slice_discrete_aa()
 
     def release_discrete_quality(self, token) -> None:
         """Arm one deferred slice settle after the matching transition."""
@@ -290,6 +290,7 @@ class _SliceStrip(_CanvasBackref):
         self._stop_slice_timer(self._slice_backstop_timer)
         self._slice_discrete_settle_pending = False
         self._slice_discrete_quality_deferred = False
+        self._slice_discrete_quality_hold = None
         self._close_slice_backstop_session()
         self._slice_aa_latch = self._new_slice_aa_latch()
         self._slice_ink_seeded = False
@@ -303,6 +304,8 @@ class _SliceStrip(_CanvasBackref):
     def _on_slice_canvas_destroyed(self, *_args) -> None:
         """Stop settle timers and forget measured sessions with the canvas."""
         self._slice_discrete_settle_pending = False
+        self._slice_discrete_quality_hold = None
+        self._slice_discrete_quality_deferred = False
         self._stop_slice_timer(self._slice_discrete_aa_timer)
         self._stop_slice_timer(self._slice_backstop_timer)
         self._slice_aa_latch.close()
@@ -328,6 +331,9 @@ class _SliceStrip(_CanvasBackref):
         """Restore slice-curve AA after the 150 ms interaction quiet window."""
         if self._slice_curve is None:
             return
+        if self._slice_discrete_quality_hold is not None:
+            self._arm_slice_discrete_aa()
+            return
         timer = self._slice_timer_alive(self._slice_aa_idle_timer)
         if timer is None:
             return
@@ -337,6 +343,9 @@ class _SliceStrip(_CanvasBackref):
     def try_enable_idle_quality(self) -> None:
         """Shared gate for the 0 ms discrete settle and the 150 ms idle timer."""
         if not self._slice_canvas_alive():
+            return
+        if self._slice_discrete_quality_hold is not None:
+            self._arm_slice_discrete_aa()
             return
         if self._slice_curve is None or self._slice_aa_on:
             self._stop_slice_timer(self._slice_discrete_aa_timer)

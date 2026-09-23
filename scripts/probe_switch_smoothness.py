@@ -63,6 +63,8 @@ import pandas as pd
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 
+from scripts._switch_paint_metrics import canvas_aa_state, transition_paint_facts
+
 from PyQt5.QtCore import QCoreApplication, QSettings, QTimer  # noqa: E402
 
 QCoreApplication.setOrganizationName("TraceLabProbe")
@@ -229,17 +231,16 @@ _T_CLICK = [0.0]
 
 
 def _gv_paint(self, ev):
-    t0 = time.perf_counter()
-    r = _orig_gv_paint(self, ev)
     canvas = self.parent()
     while canvas is not None and not isinstance(canvas, _CANVAS_CLASSES):
         canvas = canvas.parent()
-    aa = None
+    aa = canvas_aa_state(canvas)
+    facts = transition_paint_facts(canvas)
     kind = type(canvas).__name__ if canvas is not None else None
-    if canvas is not None:
-        q = getattr(canvas, "_quality", None)
-        aa = getattr(q, "aa_on", None) if q is not None else getattr(canvas, "_aa_on", None)
-    PAINTS.append((round((t0 - _T_CLICK[0]) * 1000, 1), round((time.perf_counter() - t0) * 1000, 1), aa, bool(_IN_GRAB[0]), kind))
+    t0 = time.perf_counter()
+    r = _orig_gv_paint(self, ev)
+    # Preserve the first five tuple fields for existing result readers.
+    PAINTS.append((round((t0 - _T_CLICK[0]) * 1000, 1), round((time.perf_counter() - t0) * 1000, 1), aa, bool(_IN_GRAB[0]), kind, facts))
     return r
 
 
@@ -506,6 +507,10 @@ def run_section_scenario(win, fid, args, load_ms):
             "uv_grab_paint_ms": round(sum(p[1] for p in paints if p[3]), 1),
             "max_paint_ms": max((p[1] for p in paints), default=0.0),
             "paints": paints,
+            "target_fade_aa_paints": sum(
+                1 for p in paints if p[2] and p[5]["target"] and p[5]["phase"] == "fade"
+            ),
+            "unknown_aa_paints": sum(1 for p in paints if p[2] is None),
             "delta": list(DELTA),
             "overlay_frame_gaps_ms": [round((b - a) * 1000, 1) for a, b in zip(FRAMES, FRAMES[1:])],
             "gc_pauses_ms": [(g, round(ms, 2)) for g, ms in _GC["pauses"] if ms > 0.5],
@@ -641,6 +646,10 @@ def main():
             "cancelled": list(cancelled),
             "target": target,
             "paints": list(PAINTS),
+            "target_fade_aa_paints": sum(
+                1 for p in PAINTS if p[2] and p[5]["target"] and p[5]["phase"] == "fade"
+            ),
+            "unknown_aa_paints": sum(1 for p in PAINTS if p[2] is None),
             "ink_total": float(win.canvas_time._quality._frame_native_ink_total()),
             "aa_on_after": bool(win.canvas_time._quality.aa_on),
             "delta": list(DELTA),

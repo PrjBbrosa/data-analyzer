@@ -248,6 +248,9 @@ class UltraViewCoordinator(QObject):
     def capture_leaving_source(self, section: str) -> None:
         return self._capture.capture_leaving_source(section)
 
+    def capture_before_section_hidden(self, section: str) -> None:
+        return self._capture.capture_before_section_hidden(section)
+
     def open_unplaced_tray(self) -> None:
         """Open the active Board's unplaced tray and focus the first item."""
         page = self.page()

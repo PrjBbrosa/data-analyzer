@@ -275,6 +275,7 @@ lesson by default.
 | [Native Probe Exit Can Leave Brief Windows File Contention](windows-native-probe-exit-file-contention.md) | Moving or deleting a verified native package immediately after a probe exits. | See lesson |
 | [Pin View Restore Publishes One Frame](pin-view-restore-publishes-one-frame.md) | Changing time-domain View restore, pinned-cursor projection, or the page-transition accept path. | See lesson |
 | [MF4 Shared Axis Repairs Non-Strict Time](mf4-shared-axis-repairs-non-strict-time.md) | Changing `DataLoader.load_mf4` or any shared-time alignment that | See lesson |
+| [切换优化要验证复用和隐藏后的生命周期](switch-optimization-retained-hidden-lifecycle.md) | 修改页面保留揭示、AA 延后结算、隐藏预览或 GC 性能优化时。 | See lesson |
 
 ## Selection Rules
 

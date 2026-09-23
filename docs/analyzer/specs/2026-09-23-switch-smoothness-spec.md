@@ -1,6 +1,6 @@
 # Section / View 切换平顺性（switch smoothness）设计
 
-> 状态：**D-A、D-C、D-D、D-E、D-F（F1/F2）、D-G、D-I 已在源码落地。D-B 与 D-F 的 F3 未做**
+> 状态：**D-A、D-C、D-D、D-E、D-F（F1/F2）、D-G 已在源码落地。D-I 经复审撤回。D-B 与 D-F 的 F3 未做**
 > （D-B 要等 Windows 真机标定）。实施计划见
 > `docs/analyzer/plans/2026-09-23-switch-smoothness-plan.md`。问题与全部数字出自
 > `docs/analyzer/reviews/2026-09-23-windows-switch-smoothness-analysis.md`（下称“报告”），
@@ -114,6 +114,8 @@
 3. **自动预览不强制 AA（E3）。** 自动预览截图使用屏幕当前的曲线 AA 状态，不经 `_curves_antialiased()` 强制打开。显式复制、导出、保存图片保持现在的强制 AA。
 4. **保持：** UV-A18 离开页同步截图；digest/generation 校验；截图“不能永远 pending、不能抓半成品帧”（09-15 计划约束）。E2 的 stale 状态必须在 UltraView 显示或保存时被消费，不能无限期挂起。
 
+   **Section 生命周期补充：** 源 Section 隐藏后无法满足可见截图合同，因此切换前先同步补齐该 Section 已延后的预览；使用现有稳定性、绑定与 digest 校验，无变化时不重复 grab。显示和保存仍保留各自的可见源补截入口。
+
 ### 3.4 D-A · 离散 AA 结算感知页面过渡（解决 P-3，并约束 D-C）
 
 **Owner：** 过渡的持有方是 `ui/chart_stack/`（它知道目标页和画布）；结算的执行方是各画布的质量 owner（时域 `ui/pg_canvas/quality.py` 的 `QualityManager`，线图/FRF 的 `_arm_discrete_aa`，切片协作者）。画布不 import `chart_stack`。
@@ -126,6 +128,8 @@
 4. **解冻重绘不是 AA 帧。** 因为 AA 在保持期间没有打开，淡入结束解冻时的重绘是非 AA 帧；随后的一次升级是本次切换唯一的 AA 帧，并被现有 paint 计时兜底测量。
 5. **没有过渡时行为不变。** 动效关闭、过渡被判定不适用、或画布不在目标页时，离散结算与今天完全相同。
 6. **生命周期：** token 与过渡 generation 绑定；重定向（A→B→C）时旧 token 释放、新 token 持有，只有最终目标结算；画布销毁或 `clear()` 时清空保持状态。保持状态有唯一 owner，显式初始化，不依赖 `getattr(..., False)`。
+
+   **保留揭示补充：** hold 必须关闭已经开启的热力图切片 AA，并阻止 idle/direct 入口提前开启；只暂停尚未触发的 0 ms timer 无法覆盖复用画面。匹配 token 释放后再结算一次。
 
 **必须保住的合同：** `TestDiscreteSettle`（150 ms 定时器 `interval()` 不变、离散路径使用独立 0 ms 定时器）；`TestViewRestoreSettlement`（View 恢复结算恰好一次）；分析画布 `plot_spectra` / `set_result` 返回时曲线 AA 全关；paint 计时兜底仍安装在真画布上。
 
@@ -142,6 +146,8 @@
 3. **F3 首次显示对齐合并（在 F1、F2 之后按测量决定是否做）。** `showEvent` 中同步的 4 次 `_align_slice_to_main` 与 2 次 `reset_split_layout_alignment` 合并为一次最终几何上的对齐；保留一次 `_deferred_first_show_align`。合并必须发生在 D-D 的握手采样之前，保证淡入揭示的是对齐后的几何。
 
 **合同：** 刻度结果（位置、文字、精度）与改前逐位一致，由参数扫描测试冻结；`test_tick_label_precision.py` 与 `tests/ui_kit/test_ticks_math.py` 不变。
+
+参数扫描以 `ef63e1e6` 的未缓存算法作为独立参考，在同一运行时字体度量下比较 336 组输入与 4 种 DPR。不同系统替代字体的宽度不同，不能用单一 Linux 字体生成的刻度文本快照约束 macOS / Windows。
 
 ### 3.6 D-G · 热力图 Section 的保留揭示（解决 P-6）
 
@@ -177,11 +183,13 @@
 
 这些工作纳入本 spec 的统一验收矩阵（§6），方便在同一探针下看到叠加后的效果。
 
-### 3.9 D-I · 加载完成后冻结长寿对象（P-9）
+### 3.9 D-I · 全局 GC 冻结撤回（P-9 仍待解决）
 
 **Owner：** 文件加载完成点（`ui/main_window/` 的加载完成回调）与 `app.py` 启动完成点。
 
-**机制：** 启动完成和每次文件加载完成后调用一次 `gc.freeze()`，把当时存活的对象移出分代回收；不改 GC 阈值。关闭文件后调用 `gc.unfreeze()` 再 `gc.freeze()`，避免已关闭文件的对象被永久冻结。需要在长会话里观察内存（plan Task 9）。
+**复审决定：** 撤回启动、加载、关闭路径的全局 `gc.freeze()` / `gc.unfreeze()`。原方案冻结了动态业务对象和循环垃圾；不执行回收就 unfreeze 再 freeze，会将不可达循环重新放入永久代。它不能证明已关闭文件的内存能释放。保留 Python 默认 GC，不改阈值，不在切换路径强制 collect。
+
+**回归依据：** `tests/ui/test_gc_freeze_on_load.py` 用真实含自引用的对象覆盖反复加载、关闭单个源和关闭全部源，显式 GC 后弱引用必须释放。P-9 的停顿仍需单独设计与真机测量，不能再以 freeze 后 GC 计时接近零认定已解决。
 
 ### 3.10 改后的一次切换（预期形状）
 
@@ -251,7 +259,7 @@
 | D-C 借用的准入带不适合切片 | 切片该平滑时不平滑，或 AA 帧仍贵 | 标定前质量指示可观察；Cocoa 与 Windows 标定后回写 §5 |
 | D-F 记忆键漏项 | 刻度与范围不符 | 参数扫描逐位对比；键包含字体度量与 DPR；可单独 revert |
 | D-G 签名不完整 | 进入时看到旧画面 | 渲染只读输入对象；逐字段测试；签名失效点覆盖重算、清空、重开 |
-| D-I 冻结对象导致内存不回收 | 长会话内存上升 | 关闭文件时 unfreeze 再 freeze；长会话观察；可单独 revert |
+| D-I 全局冻结 | 不可达循环无法回收 | 已撤回；保留默认 GC，加载/关闭循环回收测试保护 |
 
 每个设计项独立提交、独立可回退；D-A 与 D-C 共享“质量保持”接口，D-C 的非保持部分（重建 AA 关、闸门、兜底）可先于 D-A 落地。
 

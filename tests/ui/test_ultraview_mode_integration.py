@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from PyQt5.QtGui import QColor, QImage
 from PyQt5.QtCore import QCoreApplication, Qt
 from PyQt5.QtTest import QTest
@@ -34,6 +36,53 @@ _CTX_PATH = (
     / "inspector_sections"
     / "contextual_ultraview.py"
 )
+
+
+@pytest.mark.parametrize("open_sheet", [False, True])
+def test_deferred_fft_preview_survives_section_hide(
+    qapp, qtbot, loaded_csv, tmp_path, open_sheet,
+):
+    from mf4_analyzer.ui_kit.motion import POLICY_OFF
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    win.resize(1280, 800)
+    win.show()
+    win.chart_stack.set_page_transition_motion_policy(POLICY_OFF)
+    win.load_file(loaded_csv)
+    fid = next(iter(win.files))
+    win.toolbar._set_mode("fft")
+    win._attach_files_to_active_context([fid])
+    win.navigator.set_checked_channels([(fid, "speed")])
+    win.do_fft()
+    coord = win._ultraview
+    state = win.analysis_managers["fft"].get(0)
+    ref = UltraViewRef("fft", state.view_id)
+    coord.add_from_source_tab("fft", state.view_id)
+
+    def current():
+        return coord._capture._has_current_preview(ref, coord.current_digest_for(ref))
+
+    qtbot.waitUntil(current, timeout=3000)
+    previous = coord.store.get(ref).image.cacheKey()
+    win.navigator.set_checked_channels([(fid, "torque")])
+    win.do_fft()
+    canvas = win.chart_stack.page_fft.pane_canvas(0)
+    qtbot.waitUntil(canvas.capture_quality_settled, timeout=3000)
+    assert ref in coord._capture._deferred_preview_refs
+    win.toolbar._set_mode("time")
+    assert not canvas.isVisible()
+    assert current(), "leaving a Section must preserve its deferred preview"
+    assert coord.store.get(ref).image.cacheKey() != previous
+    assert ref not in coord._capture._deferred_preview_refs
+    if open_sheet:
+        win.open_ultraview()
+        qtbot.addWidget(win._ultraview_sheet)
+        qapp.processEvents()
+        assert win.chart_stack.current_mode() == "time"
+        assert current()
+    assert coord.save_preview_sidecar(tmp_path / "preview.tlproj") == []
+    assert current()
 
 
 def test_ultraview_contextual_module_is_removed():

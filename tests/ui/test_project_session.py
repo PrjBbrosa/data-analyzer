@@ -1656,7 +1656,7 @@ def test_open_project_does_not_write_old_fft_pins_into_new_project(
     mw_old = MainWindow()
     mw_old._load_one(str(csv_old))
     old_fid = next(iter(mw_old.files))
-    page = mw_old.chart_stack.page_fft
+    page = mw_old.chart_stack.ensure_analysis_page_ready("fft")
     canvas = page.pane_canvas(0)
     collection = empty_collection()
     collection, _intent = next_record(collection, {
@@ -1709,7 +1709,7 @@ def test_open_project_restores_fft_pin_records_without_qt_loop_error(
     mw_old = MainWindow()
     mw_old._load_one(str(csv_old))
     old_fid = next(iter(mw_old.files))
-    page = mw_old.chart_stack.page_fft
+    page = mw_old.chart_stack.ensure_analysis_page_ready("fft")
     canvas = page.pane_canvas(0)
     collection = empty_collection()
     collection, intent = next_record(collection, {
@@ -1754,7 +1754,7 @@ def test_open_project_restores_fft_dual_pin_then_new_project_stays_empty(
     mw_old = MainWindow()
     mw_old._load_one(str(csv_old))
     old_fid = next(iter(mw_old.files))
-    page = mw_old.chart_stack.page_fft
+    page = mw_old.chart_stack.ensure_analysis_page_ready("fft")
     canvas = page.pane_canvas(0)
     collection = empty_collection()
     collection, intent = next_record(collection, {

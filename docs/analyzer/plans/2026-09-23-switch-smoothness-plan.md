@@ -1,7 +1,7 @@
 # Section / View 切换平顺性优化计划
 
 - 日期：2026-09-23。
-- 状态：**源码实施已到 Task 1–6 与 Task 8，以及 Task 4（D-A）。Task 0 的 Windows 基线、Task 5 的 F3、Task 7 的真机标定未做。** 本机 offscreen 聚焦测试已过；Windows 前台、frozen exe、Cocoa 仍是 UNVERIFIED。Task 7 不改现有 ink / 兜底常量，也不引入 `_DISCRETE_AA_FRAME_BUDGET_MS`（决策门没有 Windows 读数）。
+- 状态：**源码实施已到 Task 1–6，以及 Task 4（D-A）；Task 8 全局 GC 冻结经复审撤回。Task 0 的 Windows 基线、Task 5 的 F3、Task 7 的 Windows 真机标定未做。** 本次复审修正了热力图保留揭示期间的 AA hold、离开 Section 前的延后预览、探针 AA 口径与跨字体刻度回归。验证范围见 `docs/analyzer/verify/2026-09-23-switch-smoothness-followup.md`。Task 7 不改现有 ink / 兜底常量，也不引入 `_DISCRETE_AA_FRAME_BUDGET_MS`（决策门没有 Windows 读数）。
 - 编写基线：`ef63e1e6`，`app_meta.py` 版本 `v8.3.2`。执行前重新记录 HEAD 与相关文件指纹；源码变化后，报告里的数字只能作为参考，不能当作基线。
 - 设计：`docs/analyzer/specs/2026-09-23-switch-smoothness-spec.md`（下称 spec，设计项编号 D-A…D-I）。
 - 问题与数字：`docs/analyzer/reviews/2026-09-23-windows-switch-smoothness-analysis.md`（下称报告）。
@@ -49,7 +49,7 @@
 | 刻度重复计算（S4） | 每次进入 28–32 次，124–178 ms | Task 5 |
 | 每次进入完整重画（S7） | `_on_analysis_view_switched` 约 73–76 ms，其中重画约 52 ms | Task 6 |
 | 准入带未在 Windows 标定（W3） | 08-08 spec 状态行与 §7.4；README 发布门 | Task 7 |
-| GC 停顿（W7） | 第 2 代停顿 60–65 ms；`gc.freeze()` 后约 0 ms | Task 8 |
+| GC 停顿（W7） | 第 2 代停顿 60–65 ms；全局 freeze 方案有循环回收缺陷，已撤回 | Task 8；性能问题待后续设计 |
 
 ### 2.2 Task 0 必须补齐
 
@@ -260,23 +260,23 @@ Task 4 同时涉及 `chart_stack/stack.py`、`quality.py`、`line_canvas.py`、`
 
 **回退：** 常量改动与预算逻辑分开提交，各自可 revert。
 
-## 12. Task 8：加载完成后冻结长寿对象（D-I）
+## 12. Task 8：撤回全局冻结，恢复循环回收（D-I）
 
 **Owner：** 文件加载完成回调（`ui/main_window/`）与 `app.py` 启动完成点。
 
 **步骤：**
 
-- [ ] 启动完成与文件加载完成后调用一次 `gc.freeze()`；关闭文件后 `gc.unfreeze()` 再 `gc.freeze()`。
-- [ ] 用例：加载后 `gc.get_freeze_count()` > 0；关闭文件后被冻结对象数下降。
-- [ ] 长会话观察：反复加载、关闭同一文件 20 次，记录 RSS，不出现单调上升。
+- [x] 删除启动、加载和关闭路径的全局 freeze/unfreeze，保留默认 GC。
+- [x] 用真实循环对象与弱引用验证重复加载、关闭单个源、关闭全部源后的可回收性；不再使用 mock 调用次数作为内存安全证据。
+- [ ] 长会话 RSS 和第 2 代 GC 停顿仍需真机观察；不得将本次可回收性用例当作性能验收。
 
-**聚焦用例：** 加载与关闭的现有 owner 用例（Task 0 列出）、`tests/ui/test_startup_preload.py`。
+**聚焦用例：** `tests/ui/test_gc_freeze_on_load.py`；加载与关闭的现有 owner 用例（Task 0 列出）、`tests/ui/test_startup_preload.py`。
 
 **边界护栏：** `test_main_window_state_ownership.py`、`test_packaging_imports.py`。
 
-**测量验收：** Section 场景中不再出现 ≥ 30 ms 的第 2 代 GC 停顿。
+**验收边界：** 此次修正恢复对象回收；不承诺消除 ≥ 30 ms 的第 2 代 GC 停顿。未来 GC 优化须同时验证停顿和长会话内存。
 
-**回退：** 单独 revert。
+**回退：** 不恢复已知会保留循环垃圾的全局冻结方案。
 
 ## 13. Task 9：接续已有工作（D-H）
 

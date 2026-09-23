@@ -2068,6 +2068,8 @@ class MainWindow(
                 self._capture_focused_view()
             elif old_mode in self.analysis_managers:
                 self._capture_active_analysis_view(old_mode)
+            if uv is not None:
+                uv.capture_before_section_hidden(old_mode)
         self._begin_cross_section_page_transition(old_mode, mode)
         if uv is not None and mode in source_modes:
             uv.note_source_mode(mode)

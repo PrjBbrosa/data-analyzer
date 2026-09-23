@@ -1274,6 +1274,27 @@ class UltraViewCaptureCoordinator(QObject):
         # shot is that show, not a readiness delay.
         self._schedule_deferred_preview_consume()
 
+    def capture_before_section_hidden(self, section: str) -> None:
+        """Commit deferred pixels while their source is still visible.
+
+        A hidden Section cannot satisfy capture's visibility contract on a
+        later Board open/save. Like UV-A18's before-rebind offer, this is a
+        synchronous final opportunity; unchanged refs do not grab again.
+        Preserve the normal stability and digest checks.
+        """
+        if self._inactive():
+            return
+        for ref in tuple(self._deferred_preview_refs):
+            if ref.section != section:
+                continue
+            widget = self._bound_widget_for(ref)
+            if widget is None or not _alive(widget) or not widget.isVisible():
+                continue
+            if self._try_publish_now(ref, widget, "leaving-section"):
+                self._deferred_preview_refs.discard(ref)
+                self._drop_queued_for_ref(ref)
+                self._idle_pending.pop(ref, None)
+
     def _capture_visible_time_refs(self, reason: str) -> None:
         window = self._window
         stack = getattr(window, "chart_stack", None)

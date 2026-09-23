@@ -7,6 +7,48 @@ from mf4_analyzer.ui.pg_canvas.canvas import TimeDomainCanvasPG
 from mf4_analyzer.ui.pg_canvas.line_canvas import PgLineCanvas
 
 
+@pytest.mark.parametrize("redirect", [False, True])
+def test_retained_heatmap_hold_drops_existing_aa_and_settles_once(qapp, qtbot, redirect):
+    from mf4_analyzer.ui.pg_canvas.heatmap_canvas import PgHeatmapCanvas
+
+    canvas = PgHeatmapCanvas(with_slice=True)
+    qtbot.addWidget(canvas)
+    canvas.resize(800, 600)
+    canvas.show()
+    canvas.plot_or_update_heatmap(
+        matrix=np.tile(np.linspace(0.0, 1.0, 128)[:, None], (1, 8)),
+        x_extent=(0.0, 7.0), y_extent=(0.0, 127.0),
+        x_label="Time", y_label="Frequency", amplitude_mode="amplitude",
+    )
+    canvas._seed_slice()
+    qtbot.waitUntil(lambda: canvas._slice_aa_on)
+    first, second = object(), object()
+    canvas.hold_discrete_quality(first)
+    assert not canvas._slice_aa_on
+    assert not canvas._slice_curve.opts["antialias"]
+    assert not canvas._slice_curve.curve.opts["antialias"]
+    canvas.schedule_idle_quality()
+    canvas.try_enable_idle_quality()
+    qapp.processEvents()
+    assert not canvas._slice_aa_on
+    assert not canvas._slice_aa_idle_timer.isActive()
+    assert canvas._slice_aa_idle_timer.interval() == 150
+    token = first
+    if redirect:
+        canvas.hold_discrete_quality(second)
+        canvas.release_discrete_quality(first)
+        qapp.processEvents()
+        assert not canvas._slice_aa_on
+        token = second
+    timer = canvas._slice._slice_discrete_aa_timer
+    with qtbot.waitSignal(timer.timeout):
+        canvas.release_discrete_quality(token)
+    assert canvas._slice_aa_on
+    assert canvas._slice_curve.curve.opts["antialias"]
+    canvas.release_discrete_quality(token)
+    assert not timer.isActive()
+
+
 def _entry():
     freq = np.linspace(0, 500, 256)
     amp = np.exp(-((freq - 120) / 15.0) ** 2)

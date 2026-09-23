@@ -1,6 +1,5 @@
 """ProjectIOMixin: file load/close and .tlproj save/open for MainWindow."""
 
-import gc
 import inspect
 import json
 import logging
@@ -39,22 +38,6 @@ from ...ui_kit.message_box_buttons import fit_message_box_buttons_to_text
 
 
 logger = logging.getLogger(__name__)
-
-
-def _freeze_long_lived_objects():
-    """Move objects alive at a startup/load boundary out of generational GC."""
-    gc.freeze()
-
-
-def _refreeze_after_workspace_cleared():
-    """Let closed-file objects leave the permanent generation, then freeze survivors.
-
-    Only call this when the workspace no longer holds a loaded source.
-    ``gc.unfreeze`` followed by ``gc.freeze`` is the whole operation; a
-    failure must propagate.
-    """
-    gc.unfreeze()
-    gc.freeze()
 
 
 DATA_FILE_GLOB = DEFAULT_SOURCE_ADAPTER_REGISTRY.file_dialog_glob
@@ -471,7 +454,6 @@ class ProjectIOMixin:
         total_weight = max(1, sum(weights))
         fractions = [0.0] * len(data_files)
         last_paint_at = 0.0
-        before_ids = set(self.files)
         token = self._begin_compute_progress(
             f"加载文件 0/{len(data_files)}",
             total=1000,
@@ -594,12 +576,6 @@ class ProjectIOMixin:
         finally:
             self._wwt_import.end_open_batch()
             self._finish_compute_progress(token=token)
-            # One freeze for the whole batch, after the load transaction
-            # finishes. Channel registration and per-file attach stay inside
-            # the loop; a cancelled or empty batch adds no source and does
-            # not freeze.
-            if set(self.files) - before_ids:
-                _freeze_long_lived_objects()
 
     def save_project_via_dialog(self):
         """「保存」handler: overwrite the current .tlproj if one is open,
@@ -2450,11 +2426,6 @@ class ProjectIOMixin:
             self._invalidate_ultraview_previews_for_time_views(affected)
             self.statusBar.showMessage(f"已关闭 | 剩余 {len(self.files)} 文件")
             self.toast(f"已关闭 {name}", "info")
-        # Group close passes notify=False and presents once in the caller.
-        # Refreeze here, after this source is gone, only when it was the last
-        # one. A session that still has files keeps those objects frozen.
-        if not self.files:
-            _refreeze_after_workspace_cleared()
 
     def save_project(self, path):
         """Serialize the current session (open files + all Views) to a
@@ -2592,7 +2563,6 @@ class ProjectIOMixin:
         missing_paths = []
         missing_old_fids = []
         pending_by_path = {}
-        before_ids = set(self.files)
         for ref in doc.files:
             resolved = pio.resolve_file_path(ref, path)
             if resolved is None:
@@ -2653,10 +2623,6 @@ class ProjectIOMixin:
         refresh_chip = getattr(self, "_refresh_time_axis_provenance_chips", None)
         if callable(refresh_chip):
             refresh_chip()
-        # Project open loads through ``_load_one``, not ``_open_data_paths``.
-        # Freeze once after the whole file-ref batch, not per source.
-        if set(self.files) - before_ids:
-            _freeze_long_lived_objects()
         return ProjectFileRestoreResult(
             fid_map=fid_map,
             missing_paths=missing_paths,
@@ -3110,4 +3076,3 @@ class ProjectIOMixin:
         refresh_chip = getattr(self, "_refresh_time_axis_provenance_chips", None)
         if callable(refresh_chip):
             refresh_chip()
-        _refreeze_after_workspace_cleared()
