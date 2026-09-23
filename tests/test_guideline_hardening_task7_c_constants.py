@@ -74,12 +74,14 @@ def test_c3_builder_imports_auto_span_constants_from_shared():
     assert "_AUTO_SPAN_DB" not in assigned
     assert "_AUTO_CEILING_PERCENTILE" not in assigned
     assert "_AUTO_CEILING_PCT" not in assigned
+    assert "_AUTO_CEILING_HEADROOM_DB" not in assigned
     shared = SHARED.read_text(encoding="utf-8")
     assert "_AUTO_SPAN_DB: float = 30.0" in shared
     assert "_AUTO_CEILING_PCT: float = 99.0" in shared
+    assert "_AUTO_CEILING_HEADROOM_DB: float = 5.0" in shared
     assert "from mf4_analyzer.qt_analysis_shared import" in source
     assert "_AUTO_SPAN_DB" in source
-    assert "_AUTO_CEILING_PCT" in source or "_AUTO_CEILING_PERCENTILE" in source
+    assert "_auto_db_window" in source
 
 
 def test_c4_builder_uses_shared_slice_max_span_not_local_dead_span():

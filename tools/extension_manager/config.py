@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 
 from mf4_analyzer.extensions.contract import ExtensionError, ReasonCode
+from mf4_analyzer.extensions.locking import extensions_root
 
 
 def default_config_path() -> Path:
@@ -29,7 +30,7 @@ def create_repository(app_root, *, manager_version, cancel_event, config_path=No
         raise ExtensionError(ReasonCode.PROTOCOL_UNSUPPORTED, "unsupported repository configuration")
     from mf4_analyzer.extensions.state import resolve_inside
     bootstrap = resolve_inside(path.parent, payload["bootstrap_root"]).read_bytes()
-    cache = Path(app_root) / "extensions" / "cache"
+    cache = extensions_root(app_root) / "cache"
     common = dict(metadata_cache_dir=cache / ("tuf-offline" if offline_bundle else "tuf"),
                   bootstrap_root=bootstrap, manager_version=manager_version,
                   revocation_store=revocation_store_path(app_root))

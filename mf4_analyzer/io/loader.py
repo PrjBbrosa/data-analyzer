@@ -1,47 +1,54 @@
 """DataLoader: reads MF4 / Excel / CSV-like inputs."""
 from collections import defaultdict
 from collections.abc import Mapping
+import importlib.util
 from pathlib import Path
 
 import numpy as np
-import pandas as pd
 
-from .blf_format import (
-    # Re-exported so ``mf4_analyzer.io.loader.BlfDbcProbe`` keeps resolving for
-    # anyone who reached for the probe type through this module.
-    BlfDbcProbe,  # noqa: F401
-    _decode_blf_with_dbc,
-    _emit_progress,
-    _probe_blf_dbc_frames,
-    _raw_blf_channels,
-    _read_blf_frames,
-)
-from .head_hdf import full_channel_name as head_full_channel_name, parse_head_hdf
-from .wwt_format import load_wwt_groups
-from .wwt_document import load_wwt_document as _load_wwt_document
-from .zfd_format import load_zfd_groups
-from .mat_format import load_mat_groups
+# Discoverability only — find_spec does not prove a native library is usable.
+# Real format paths call ensure_* / import the engine and keep missing vs
+# broken vs data-error outcomes distinct.
+HAS_ASAMMDF = importlib.util.find_spec("asammdf") is not None
+HAS_OPENPYXL = importlib.util.find_spec("openpyxl") is not None
+HAS_XLRD = importlib.util.find_spec("xlrd") is not None
 
-try:
-    from asammdf import MDF
+# Populated by ensure_mdf(); tests may monkeypatch this attribute directly.
+MDF = None
 
-    HAS_ASAMMDF = True
-except ImportError:
-    HAS_ASAMMDF = False
 
-try:
-    import openpyxl
+def _pandas():
+    """Import pandas on first format path that needs a DataFrame."""
+    import pandas as pd
+    return pd
 
-    HAS_OPENPYXL = True
-except ImportError:
-    HAS_OPENPYXL = False
 
-try:
-    import xlrd
+def ensure_mdf():
+    """Load asammdf.MDF into this module, or raise a precise ImportError."""
+    global MDF
+    if MDF is not None:
+        return MDF
+    if importlib.util.find_spec("asammdf") is None:
+        raise ImportError("asammdf not installed")
+    try:
+        from asammdf import MDF as _MDF
+    except ImportError as exc:
+        raise ImportError("asammdf not installed") from exc
+    except Exception as exc:
+        raise ImportError(
+            f"asammdf is present but failed to import: {exc}"
+        ) from exc
+    MDF = _MDF
+    return MDF
 
-    HAS_XLRD = True
-except ImportError:
-    HAS_XLRD = False
+
+def __getattr__(name: str):
+    # Keep ``mf4_analyzer.io.loader.BlfDbcProbe`` resolvable without pulling
+    # blf_format (and its pandas import) into blank-startup import closure.
+    if name == "BlfDbcProbe":
+        from .blf_format import BlfDbcProbe
+        return BlfDbcProbe
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def _valid_mdf_channel_name(name):
@@ -226,6 +233,8 @@ class DataLoader:
         (P1-2). It is only ever invoked for the ``.asc`` path; raw BLF reads
         have no equivalent fallback concept.
         """
+        from .blf_format import _read_blf_frames
+
         if Path(fp).suffix.lower() == ".asc":
             from .asc_can_format import _read_asc_frames
             frames = _read_asc_frames(
@@ -242,6 +251,8 @@ class DataLoader:
     @staticmethod
     def probe_blf_dbc_frames(frames, dbc_paths, progress_callback=None, cancel_check=None):
         """Probe a DBC set against already-read CAN-log frames."""
+        from .blf_format import _probe_blf_dbc_frames
+
         if not frames:
             raise ValueError(NO_CAN_FRAMES_MESSAGE)
         return _probe_blf_dbc_frames(
@@ -259,6 +270,8 @@ class DataLoader:
         supplies its already-read frame list rather than reading the log again.
         Call :meth:`load_blf_dataframe` when a pandas ``DataFrame`` is required.
         """
+        from .blf_format import _decode_blf_with_dbc, _raw_blf_channels
+
         if not frames:
             raise ValueError(NO_CAN_FRAMES_MESSAGE)
         t0 = min(frame[0] for frame in frames)
@@ -383,12 +396,12 @@ class DataLoader:
             "skipped_channels": skipped,
             "renamed_channels": renamed,
         }
+        pd = _pandas()
         return pd.DataFrame(data), list(data.keys()), units, None, smeta
 
     @staticmethod
     def load_mf4(fp):
-        if not HAS_ASAMMDF: raise ImportError("asammdf not installed")
-        mdf = MDF(fp)
+        mdf = ensure_mdf()(fp)
 
         # 收集所有通道及其位置信息
         channel_locations = unique_mdf_channel_locations(mdf)
@@ -436,6 +449,7 @@ class DataLoader:
             except:
                 pass
 
+        pd = _pandas()
         return pd.DataFrame(data), list(data.keys()), units
 
     @staticmethod
@@ -455,6 +469,8 @@ class DataLoader:
         A2L is deliberately not involved: plain CAN signals decode from a DBC,
         which is a separate, lighter database than the XCP-measurement A2L.
         """
+        from .blf_format import _emit_progress
+
         def map_read(current, total):
             _emit_progress(
                 progress_callback,
@@ -489,6 +505,7 @@ class DataLoader:
             dbc_paths=dbc_paths,
             progress_callback=progress_callback,
         )
+        pd = _pandas()
         if hasattr(data, "to_pandas"):
             data = data.to_pandas()
         elif not isinstance(data, pd.DataFrame):
@@ -501,6 +518,8 @@ class DataLoader:
     @staticmethod
     def probe_blf_dbc(fp, dbc_paths, progress_callback=None, cancel_check=None):
         """Return a lightweight compatibility probe for a BLF and DBC path list."""
+        from .blf_format import _emit_progress
+
         def map_read(current, total):
             _emit_progress(
                 progress_callback,
@@ -628,6 +647,7 @@ class DataLoader:
         else:
             names = [f'ch{i}' for i in range(n_ch)]
 
+        pd = _pandas()
         data = pd.DataFrame({name: col for name, col in zip(names, cols)})
         units = {name: AUDIO_DEFAULT_UNIT for name in names}
         fs = float(fs or 0.0)
@@ -658,6 +678,7 @@ class DataLoader:
         if layout is not None and not layout.is_trivial:
             return DataLoader._load_csv_with_layout(fp, layout)
 
+        pd = _pandas()
         df = None
         for enc in ['utf-8', 'gbk', 'latin1']:
             for sep in [',', ';', '\t']:
@@ -713,6 +734,7 @@ class DataLoader:
                 unit = header_line[layout.units_row][a:b].strip()
                 if unit:
                     units[name] = unit
+        pd = _pandas()
         data = pd.read_fwf(fp, colspecs=list(layout.colspecs), skiprows=layout.data_row,
                            header=None, names=channels, encoding=layout.encoding)
         for channel in channels:
@@ -732,6 +754,7 @@ class DataLoader:
         import csv as _csv
         import io as _io
 
+        pd = _pandas()
         skiprows = list(range(layout.header_row))
         if layout.units_row is not None:
             skiprows.append(layout.units_row)
@@ -786,13 +809,30 @@ class DataLoader:
         if extension == '.xlsx':
             if not HAS_OPENPYXL:
                 raise ImportError("openpyxl is required to read .xlsx files")
+            try:
+                import openpyxl  # noqa: F401 - verify + freeze-scan declaration
+            except ImportError as exc:
+                raise ImportError("openpyxl is required to read .xlsx files") from exc
+            except Exception as exc:
+                raise ImportError(
+                    f"openpyxl is present but failed to import: {exc}"
+                ) from exc
             engine = 'openpyxl'
         elif extension == '.xls':
             if not HAS_XLRD:
                 raise ImportError("xlrd is required to read legacy .xls files")
+            try:
+                import xlrd  # noqa: F401 - verify + freeze-scan declaration
+            except ImportError as exc:
+                raise ImportError("xlrd is required to read legacy .xls files") from exc
+            except Exception as exc:
+                raise ImportError(
+                    f"xlrd is present but failed to import: {exc}"
+                ) from exc
             engine = 'xlrd'
         else:
             raise ValueError(f"unsupported Excel extension: {extension or '<none>'}")
+        pd = _pandas()
         df = pd.read_excel(fp, engine=engine)
         for col in df.columns: df[col] = pd.to_numeric(df[col], errors='coerce')
         df = df.dropna(how='all').interpolate().ffill().bfill().reset_index(drop=True)
@@ -801,25 +841,31 @@ class DataLoader:
     @staticmethod
     def load_wwt(fp):
         """WinWert .wwt：返回与 load_hdf 同形状的 groups 列表。"""
+        from .wwt_format import load_wwt_groups
         return load_wwt_groups(fp)
 
     @staticmethod
     def load_wwt_document(fp):
         """WinWert .wwt：正文分组 + 显示块/公式文档，只读一次文件。"""
+        from .wwt_document import load_wwt_document as _load_wwt_document
         return _load_wwt_document(fp)
 
     @staticmethod
     def load_zfd(fp):
         """ZFGE2 .zfd（ZwickRoell/TestRunPRO）：返回与 load_hdf 同形状的 groups。"""
+        from .zfd_format import load_zfd_groups
         return load_zfd_groups(fp)
 
     @staticmethod
     def load_mat(fp):
         """MATLAB .mat：返回与 load_hdf 同形状的 groups 列表。"""
+        from .mat_format import load_mat_groups
         return load_mat_groups(fp)
 
     @staticmethod
     def load_hdf(fp):
+        from .head_hdf import full_channel_name as head_full_channel_name, parse_head_hdf
+
         hf = parse_head_hdf(fp)
         max_factor = max((f for _, f in hf.ch_order), default=1)
         # 时间轴绝对尺度：delta 是「一个 scan 内交织浮点槽」的间隔，所以一个 scan
@@ -935,6 +981,7 @@ class DataLoader:
             }
             if hf.warnings:
                 smeta["warnings"] = list(hf.warnings)
+            pd = _pandas()
             groups.append({
                 "data": pd.DataFrame(data), "channels": list(data.keys()),
                 "units": units, "channel_metadata": cmeta,

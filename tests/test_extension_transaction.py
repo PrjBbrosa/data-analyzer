@@ -448,7 +448,70 @@ def test_reinstall_repairs_corrupted_existing_store(tmp_path):
     engine = _engine(root, backend)
     installed = engine.install([source])
     relative = installed.active['by_runtime'][RUNTIME_ID]['media']['package_relpath']
-    marker = root / 'extensions' / relative / 'site-packages' / 'av' / '__init__.py'
+    marker = store_root(root).parent / relative / 'site-packages' / 'av' / '__init__.py'
     marker.write_text('damaged')
     engine.install([source])
     assert marker.read_bytes() == _package_files('media')['site-packages/av/__init__.py']
+
+
+@pytest.mark.parametrize("winerror,failures,expected_calls", [(5, 2, 3), (32, 1, 2), (5, 100, 31), (2, 1, 1)])
+def test_store_publish_retries_only_bounded_windows_contention(tmp_path, monkeypatch, winerror, failures, expected_calls):
+    import os
+    import time
+
+    root = tmp_path / 'TraceLab'
+    _write_core(root)
+    source = _make_verified_zip(tmp_path, 'media')
+    engine = _engine(root, MemoryLockBackend())
+    original_replace = os.replace
+    calls = []
+    pauses = []
+    error = PermissionError('native cache holds the probed DLL')
+    error.winerror = winerror
+
+    def replace(src, dest):
+        if Path(src).name == 'media' and '.staging' in Path(src).parts:
+            calls.append((src, dest))
+            if len(calls) <= failures:
+                raise error
+        return original_replace(src, dest)
+
+    monkeypatch.setattr(os, 'replace', replace)
+    monkeypatch.setattr(time, 'sleep', pauses.append)
+    if winerror in (5, 32) and failures < 31:
+        assert engine.install([source]).outcome == 'installed'
+    else:
+        with pytest.raises(PermissionError) as caught:
+            engine.install([source])
+        assert caught.value is error
+        assert not active_path(root).exists()
+    assert len(calls) == expected_calls
+    assert len(pauses) == expected_calls - 1
+
+
+def test_cancel_during_store_contention_does_not_publish_active(tmp_path, monkeypatch):
+    import os
+    import time
+
+    root = tmp_path / 'TraceLab'
+    _write_core(root)
+    source = _make_verified_zip(tmp_path, 'media')
+    engine = _engine(root, MemoryLockBackend())
+    original_replace = os.replace
+    cancelled = []
+    attempts = []
+
+    def replace(src, dest):
+        if Path(src).name == 'media' and '.staging' in Path(src).parts:
+            attempts.append(src)
+            error = PermissionError('native file busy')
+            error.winerror = 32
+            raise error
+        return original_replace(src, dest)
+
+    monkeypatch.setattr(os, 'replace', replace)
+    monkeypatch.setattr(time, 'sleep', lambda delay: cancelled.append(True))
+    result = engine.install([source], hooks=TransactionHooks(cancel_requested=lambda: bool(cancelled)))
+    assert result.outcome == 'cancelled'
+    assert len(attempts) == 1
+    assert not active_path(root).exists()

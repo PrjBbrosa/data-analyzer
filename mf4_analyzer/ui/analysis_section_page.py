@@ -21,6 +21,7 @@ from PyQt5.QtCore import QEvent, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
     QHBoxLayout,
+    QLabel,
     QSplitter,
     QToolButton,
     QVBoxLayout,
@@ -40,6 +41,19 @@ from ..ui_kit.qt_lifecycle import as_weak_callable
 logger = logging.getLogger(__name__)
 
 _FOCUS_ACCENT = "#2d7ff9"
+
+
+class AnalysisPageReadiness:
+    """Page-owned chart resource lifecycle (Task 2 / plan §3.2).
+
+    Coordinators (Task 3) may read this; they must not own a second copy.
+    Never persisted to project / preset / QSettings.
+    """
+
+    UNINITIALIZED = "uninitialized"
+    PREPARING = "preparing"
+    READY = "ready"
+    FAILED = "failed"
 
 # Slim compare-toggle row chrome. Transparent container (lesson
 # no-gray-bg-embedded-widgets): an embedded custom QWidget hosting the
@@ -105,11 +119,22 @@ class AnalysisSectionPage(QWidget):
     pane_added = pyqtSignal(object)
     pane_removing = pyqtSignal(object)
 
-    def __init__(self, *, section: str, manager, card_factory, parent=None):
+    def __init__(
+        self,
+        *,
+        section: str,
+        manager,
+        card_factory,
+        parent=None,
+        defer_charts: bool = False,
+    ):
         super().__init__(parent)
         self.section = section
         self.manager = manager
         self._card_factory = card_factory
+        self._defer_charts = bool(defer_charts)
+        self._readiness = AnalysisPageReadiness.UNINITIALIZED
+        self._prepare_error = None
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -118,15 +143,36 @@ class AnalysisSectionPage(QWidget):
         self._split = QSplitter(Qt.Horizontal, self)
         self._split.setChildrenCollapsible(False)
         self._layout_sync_pending = False
-        self._cards = [self._make_card()]
-        self._split.addWidget(self._cards[0])
-        self._split.splitterMoved.connect(self._schedule_heatmap_layout_sync)
+        self._cards = []
         self._toolbar = None
-        detach_toolbar = getattr(self._cards[0], 'detach_toolbar', None)
-        if callable(detach_toolbar) and getattr(self._cards[0], 'toolbar', None) is not None:
-            lay.addWidget(detach_toolbar(self))
-            self._toolbar = self._cards[0].toolbar
-            self._configure_shared_toolbar()
+        self._split.splitterMoved.connect(self._schedule_heatmap_layout_sync)
+        # Lightweight prepare/fail chrome (Task 3). Not a permanent progress bar;
+        # cancellable by leaving the section. Never persisted.
+        self._prepare_banner = QLabel(self)
+        self._prepare_banner.setObjectName("analysisPrepareBanner")
+        self._prepare_banner.setAlignment(Qt.AlignCenter)
+        self._prepare_banner.setWordWrap(True)
+        self._prepare_banner.setStyleSheet(
+            "QLabel#analysisPrepareBanner {"
+            " background-color: rgba(251, 252, 255, 230);"
+            " color: #5b6471;"
+            " font-size: 13px;"
+            " padding: 16px;"
+            " border: none;"
+            "}"
+        )
+        self._prepare_banner.hide()
+        if not self._defer_charts:
+            self._cards = [self._make_card()]
+            self._split.addWidget(self._cards[0])
+            detach_toolbar = getattr(self._cards[0], 'detach_toolbar', None)
+            if (
+                callable(detach_toolbar)
+                and getattr(self._cards[0], 'toolbar', None) is not None
+            ):
+                lay.addWidget(detach_toolbar(self))
+                self._toolbar = self._cards[0].toolbar
+                self._configure_shared_toolbar()
         lay.addWidget(self._split, stretch=1)
 
         self._focused = 0
@@ -143,6 +189,8 @@ class AnalysisSectionPage(QWidget):
         # Bottom row: [ViewTabBar ........... 关闭对比窗格 | 联动缩放? | 锁定色阶? | UltraView].
         # Compare toggles stay on THIS page (not inside the shared ViewTabBar).
         # UltraView Dock is always the last clickable item of the host row.
+        # Manager + tabbar exist before charts so deferred pages keep View
+        # identity and early signal wiring (plan §3.3).
         self._compare_row = QWidget(self)
         self._compare_row.setObjectName("analysisCompareRow")
         self._compare_row.setAttribute(Qt.WA_StyledBackground, True)
@@ -205,6 +253,155 @@ class AnalysisSectionPage(QWidget):
         self._apply_focus_style()
         self._refresh_compare_buttons()
         self._sync_card_hint_bars()
+        if not self._defer_charts:
+            self._readiness = AnalysisPageReadiness.READY
+        self._sync_prepare_banner()
+
+    # -- deferred chart readiness (Task 2) -------------------------------
+    def readiness(self) -> str:
+        return self._readiness
+
+    def is_ready(self) -> bool:
+        return self._readiness == AnalysisPageReadiness.READY
+
+    def prepare_error(self):
+        """Last prepare failure, or None. Never persisted."""
+        return self._prepare_error
+
+    def peek_cards(self):
+        """Return existing cards without creating charts."""
+        return list(self._cards)
+
+    def peek_pane_canvas(self, idx: int):
+        """Non-creating canvas lookup; None when missing or out of range."""
+        if idx < 0 or idx >= len(self._cards):
+            return None
+        return getattr(self._cards[idx], "canvas", None)
+
+    def ensure_ready(self) -> None:
+        """Synchronously materialize the primary chart card if deferred.
+
+        Idempotent: preparing/ready pages do not build a second instance.
+        Does not change ChartStack mode, focus, dirty state, or camera.
+        Task 3 idle preload treats one page ensure as a single timer step.
+        """
+        if self._readiness in (
+            AnalysisPageReadiness.READY,
+            AnalysisPageReadiness.PREPARING,
+        ):
+            return
+        if not self._defer_charts and self._cards:
+            self._readiness = AnalysisPageReadiness.READY
+            self._sync_prepare_banner()
+            return
+        self._readiness = AnalysisPageReadiness.PREPARING
+        self._prepare_error = None
+        self._sync_prepare_banner()
+        try:
+            self._materialize_primary_card()
+            self._readiness = AnalysisPageReadiness.READY
+            self._sync_prepare_banner()
+        except Exception as exc:
+            self._prepare_error = exc
+            logger.exception(
+                "AnalysisSectionPage(%s) chart prepare failed", self.section,
+            )
+            self._cleanup_partial_primary_card()
+            self._readiness = AnalysisPageReadiness.FAILED
+            self._sync_prepare_banner()
+            raise
+
+    def show_preparing_status(self) -> None:
+        """Surface the lightweight preparing chrome without forcing ensure."""
+        if self._readiness == AnalysisPageReadiness.READY:
+            return
+        if self._readiness == AnalysisPageReadiness.UNINITIALIZED:
+            # Visible intent only; readiness owner stays uninitialized until ensure.
+            self._prepare_banner.setText("正在准备图表…\n可切换到其他分区取消等待")
+            self._prepare_banner.show()
+            self._prepare_banner.raise_()
+            self._layout_prepare_banner()
+            return
+        self._sync_prepare_banner()
+
+    def _sync_prepare_banner(self) -> None:
+        banner = getattr(self, "_prepare_banner", None)
+        if banner is None:
+            return
+        if self._readiness == AnalysisPageReadiness.READY:
+            banner.hide()
+            return
+        if self._readiness == AnalysisPageReadiness.PREPARING:
+            banner.setText("正在准备图表…\n可切换到其他分区取消等待")
+            banner.show()
+            banner.raise_()
+            self._layout_prepare_banner()
+            return
+        if self._readiness == AnalysisPageReadiness.FAILED:
+            detail = self._prepare_error
+            msg = str(detail).strip() if detail else "未知错误"
+            if len(msg) > 160:
+                msg = msg[:157] + "…"
+            banner.setText(f"图表准备失败：{msg}\n再次进入本分区可重试")
+            banner.show()
+            banner.raise_()
+            self._layout_prepare_banner()
+            return
+        banner.hide()
+
+    def _layout_prepare_banner(self) -> None:
+        banner = getattr(self, "_prepare_banner", None)
+        split = getattr(self, "_split", None)
+        if banner is None or split is None or not banner.isVisible():
+            return
+        banner.setGeometry(split.geometry())
+
+    def resizeEvent(self, event):  # noqa: N802 - Qt API
+        super().resizeEvent(event)
+        self._layout_prepare_banner()
+
+    def _materialize_primary_card(self) -> None:
+        if self._cards:
+            return
+        card = self._make_card()
+        self._cards = [card]
+        self._split.addWidget(card)
+        detach_toolbar = getattr(card, "detach_toolbar", None)
+        if callable(detach_toolbar) and getattr(card, "toolbar", None) is not None:
+            lay = self.layout()
+            toolbar = detach_toolbar(self)
+            # Splitter is index 0 while deferred (no toolbar yet).
+            lay.insertWidget(0, toolbar)
+            self._toolbar = card.toolbar
+            self._configure_shared_toolbar()
+        self._apply_focus_style()
+        self._refresh_compare_buttons()
+        self._sync_card_hint_bars()
+        self.tabbar.refresh_split_controls()
+
+    def _cleanup_partial_primary_card(self) -> None:
+        """Drop a half-built primary card after prepare failure."""
+        while self._cards:
+            card = self._cards.pop()
+            try:
+                card.removeEventFilter(self)
+            except Exception:
+                pass
+            canvas = getattr(card, "canvas", None)
+            if canvas is not None:
+                try:
+                    canvas.removeEventFilter(self)
+                except Exception:
+                    pass
+            try:
+                card.setParent(None)
+            except Exception:
+                pass
+            try:
+                card.deleteLater()
+            except Exception:
+                pass
+        self._toolbar = None
 
     # -- pane management -----------------------------------------------
     def _make_card(self):
@@ -248,6 +445,17 @@ class AnalysisSectionPage(QWidget):
         return len(self._cards)
 
     def pane_canvas(self, idx: int):
+        """Return canvas for pane ``idx``.
+
+        Requires charts to be ready (eager pages always are). Callers that
+        must not create should use :meth:`peek_pane_canvas`. ChartStack
+        compatibility aliases call :meth:`ensure_ready` first.
+        """
+        if not self._cards:
+            raise RuntimeError(
+                f"AnalysisSectionPage({self.section!r}) charts are not ready; "
+                "call ensure_ready() first"
+            )
         return self._cards[idx].canvas
 
     def grab_combined_pixmap(self, scale: float = 2.0):
@@ -315,6 +523,7 @@ class AnalysisSectionPage(QWidget):
         return out
 
     def enter_split(self) -> None:
+        self.ensure_ready()
         if len(self._cards) >= 2:
             return
         card = self._make_card()
@@ -386,6 +595,7 @@ class AnalysisSectionPage(QWidget):
         ]
 
     def focused_canvas(self):
+        self.ensure_ready()
         return self.pane_canvas(self.focused_index())
 
     def exit_split(self) -> None:
@@ -655,6 +865,9 @@ class AnalysisSectionPage(QWidget):
                 c.apply_frf_layout_alignment(left_axis_width=left_width)
 
     def _is_heatmap_section(self) -> bool:
+        if not self._cards:
+            # Deferred: section identity is enough; do not build a chart.
+            return self.section in {"fft_time", "order"}
         canvas = getattr(self._cards[0], 'canvas', None)
         return canvas is not None and hasattr(canvas, '_img')
 

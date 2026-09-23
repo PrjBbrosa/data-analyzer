@@ -101,7 +101,6 @@ def _loaded_extension_dlls(manifests, package_roots):
     """Observe this child's loaded modules; never open another process."""
     import ctypes
     from ctypes import wintypes
-    from .native_identity import sha256_file
 
     kernel = ctypes.WinDLL("kernel32", use_last_error=True)
     kernel.GetCurrentProcess.restype = wintypes.HANDLE
@@ -116,24 +115,62 @@ def _loaded_extension_dlls(manifests, package_roots):
         raise ctypes.WinError(ctypes.get_last_error())
     if needed.value > ctypes.sizeof(modules):
         raise RuntimeError("loaded module list exceeded probe capacity")
-    expected = {}
-    for component, manifest in manifests.items():
-        for entry in manifest.files:
-            if Path(entry.relpath).suffix.lower() in {".dll", ".pyd"}:
-                expected.setdefault(Path(entry.relpath).name.lower(), set()).add(entry.sha256)
-    origins = {}
-    allowed = [root.resolve() for root in package_roots.values()]
-    if getattr(sys, "frozen", False):
-        allowed.append(Path(sys.executable).resolve().parent)
+    paths = []
     for module in modules[:needed.value // ctypes.sizeof(wintypes.HMODULE)]:
         buffer = ctypes.create_unicode_buffer(32768)
         length = kernel.GetModuleFileNameW(module, buffer, len(buffer))
         if not length or length >= len(buffer):
             raise ctypes.WinError(ctypes.get_last_error())
-        path = Path(buffer.value).resolve()
-        digests = expected.get(path.name.lower())
-        if digests is not None:
-            if not any(path.is_relative_to(root) for root in allowed) or sha256_file(path) not in digests:
-                raise ExtensionError(ReasonCode.PROBE_FAILED, f"foreign loaded DLL: {path}")
-            origins[path.name] = str(path)
+        paths.append(Path(buffer.value))
+    core_root, core_files = None, ()
+    if getattr(sys, "frozen", False):
+        from .runtime import identify_core
+        core_root = Path(sys.executable).resolve().parent
+        core_files = identify_core(core_root).files.files
+    return _audit_loaded_native_paths(paths, manifests=manifests, package_roots=package_roots,
+                                      core_root=core_root, core_files=core_files)
+
+
+def _native_path_key(path):
+    # GetModuleFileNameW can return the ordinary spelling while the store uses
+    # extended paths. Resolve first, then compare the equivalent path spelling.
+    text = os.path.normcase(str(Path(path).resolve()))
+    if text.startswith("\\\\?\\"):
+        text = text[4:]
+        if text.lower().startswith("unc\\"):
+            text = "\\\\" + text[4:]
+    return text
+
+
+def _audit_loaded_native_paths(paths, *, manifests, package_roots, core_root=None, core_files=()):
+    from .native_identity import sha256_file
+
+    expected = {}
+    watched_names = set()
+    for component, manifest in manifests.items():
+        for entry in manifest.files:
+            relative = Path(entry.relpath)
+            if relative.suffix.lower() in {".dll", ".pyd"}:
+                path = package_roots[component] / relative
+                expected[_native_path_key(path)] = (path, entry.sha256)
+                watched_names.add(relative.name.lower())
+    # PYD names are package-scoped: pandas and scipy may both load their own
+    # _cyutility.pyd. Base copies must match the base manifest at that exact
+    # path, not the component's same-basename hash. Shared-DLL basename
+    # conflicts are still rejected by assert_native_combination before loading.
+    if core_root is not None:
+        for entry in core_files:
+            if Path(entry.relpath).name.lower() in watched_names:
+                path = core_root / entry.relpath
+                expected[_native_path_key(path)] = (path, entry.sha256)
+    origins = {}
+    for observed in paths:
+        path = Path(observed).resolve()
+        if path.name.lower() not in watched_names:
+            continue
+        entry = expected.get(_native_path_key(path))
+        if entry is None or sha256_file(entry[0]) != entry[1]:
+            raise ExtensionError(ReasonCode.PROBE_FAILED, f"foreign loaded DLL: {path}")
+        # Full-path keys retain both package-scoped modules in the evidence.
+        origins[str(path)] = str(path)
     return origins

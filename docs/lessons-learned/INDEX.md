@@ -263,11 +263,16 @@ lesson by default.
 | [Cursor Close Chrome Needs Sibling Polish](cursor-close-chrome-needs-sibling-polish.md) | Changing cursor title actions, their role transitions, or button styling. | See lesson |
 | [Build Logs Must Include Native And Frozen Child Diagnostics](codex-build-logs-retain-native-stderr.md) | Adding build transcripts or investigating a frozen Windows failure. | See lesson |
 | [Preserve JSON Argument Boundaries Across Typed PowerShell Helpers](codex-powershell-json-native-argv.md) | Passing JSON-generated command arguments through a PowerShell helper. | See lesson |
+| [Main Toolbar Chrome Belongs In The Mirrored Left Host](toolbar-mirrored-hosts-own-chrome.md) | Adding a label, chip, or other chrome to the main Analyzer toolbar, especially beside 打开 / 保存 / 批处理, or changing `_mode_zone_budget` / left-right mirroring. | See lesson |
 | [QImage.bits() Views Are Not Stable Pixel Data](qimage-bits-numpy-view-needs-owned-copy.md) | Turning a `QImage` into a NumPy array for ink, colormap, or layout checks. | See lesson |
 | [Batch Export Fonts Must Not Follow Screen DPI](batch-export-fonts-ignore-screen-dpi.md) | Changing Qt batch report titles, ticks, legends, stats cards, colorbars, or PNG export size. | See lesson |
-| [Main Toolbar Chrome Belongs In The Mirrored Left Host](toolbar-mirrored-hosts-own-chrome.md) | Adding a label, chip, or other chrome to the main Analyzer toolbar, especially beside 打开 / 保存 / 批处理, or changing `_mode_zone_budget` / left-right mirroring. | See lesson |
 | [Extension Production Boundaries Need Real Collaborators](extension-production-boundaries-need-real-collaborators.md) | Implementing or reviewing extension installation, native probes, and completion claims. | See lesson |
-
+| [Windows Builders Must Probe Python Build Architecture](windows-builders-probe-python-architecture.md) | Adding automatic Python selection or chaining Windows packaging scripts. | See lesson |
+| [Windows Build Validation Must Cover Every Delivery Profile](windows-build-validation-covers-every-profile.md) | Adding or changing a Windows build flavor, dependency profile, or parameterized build command. | See lesson |
+| [ctypes Structure Definitions Must Keep Class Identity](ctypes-structures-keep-class-identity.md) | A ctypes structure is shared between function argtypes and native call sites. | See lesson |
+| [Windows Extension Stores Need Long Path Handling](windows-extension-store-long-paths.md) | Installing or reading content-addressed extension packages on Windows. | See lesson |
+| [Native Probe PYD Identity Is Package Scoped](native-probe-pyd-identity-is-package-scoped.md) | Auditing loaded native modules against base and extension manifests. | See lesson |
+| [Native Probe Exit Can Leave Brief Windows File Contention](windows-native-probe-exit-file-contention.md) | Moving or deleting a verified native package immediately after a probe exits. | See lesson |
 | [Pin View Restore Publishes One Frame](pin-view-restore-publishes-one-frame.md) | Changing time-domain View restore, pinned-cursor projection, or the page-transition accept path. | See lesson |
 
 ## Selection Rules

@@ -2722,6 +2722,10 @@ class ProjectIOMixin:
                 AnalysisViewState,
                 analysis_view_has_sources,
             )
+            coord = getattr(self, "_startup_coordinator", None)
+            if coord is not None:
+                # Drop project-A ready closures; prepared charts may stay.
+                coord.invalidate_session()
             remapped = remap_analysis_view_fids(doc.analysis_views, fid_map)
             for sec, mgr in self.analysis_managers.items():
                 block = remapped.get(sec)
@@ -3011,6 +3015,9 @@ class ProjectIOMixin:
         ctrl = getattr(getattr(self, "_analysis_context", None), "time_range", None)
         if ctrl is not None:
             ctrl.clear_all()
+        coord = getattr(self, "_startup_coordinator", None)
+        if coord is not None:
+            coord.invalidate_session()
         if uv is not None and not getattr(uv, "is_shutdown", False):
             uv.reset_project_state()
         n = len(self.files)

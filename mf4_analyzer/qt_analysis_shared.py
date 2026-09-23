@@ -22,15 +22,13 @@ matrix (``tools/verify_batch_qt_render_parity.py``) is what proves it stays
 safe. The diff audit that cleared the switch is
 ``docs/analyzer/verify/batch-analysis-maths-dedup.md``.
 
-One family is deliberately still forked *at the function level*: the batch
-renderer keeps its own ``_auto_db_color_limits`` rather than using
-``_auto_db_window`` here. They agree on real data but not on empty/all-NaN
-input, where batch falls back to its ``_EMPTY_DB_LEVEL`` (-200 dB) baseline
-and this module returns ``None`` from ``_finite_data_bounds`` /
-``_auto_db_window`` so callers take an explicit no-data branch (B5).
-Unifying the two empty-state dialects is its own piece of work. The
-underlying span/percentile *constants* (``_AUTO_SPAN_DB`` /
-``_AUTO_CEILING_PCT``) are shared — only the empty-state function forks.
+Finite colour windows are ``_auto_db_window``, including the batch
+helper's real-data branch. Empty / all-non-finite input is still forked:
+batch falls back to its ``_EMPTY_DB_LEVEL`` (-200 dB) baseline, and this
+module returns ``None`` so interactive callers take an explicit no-data
+branch (B5). The span, percentile and ceiling-headroom constants
+(``_AUTO_SPAN_DB`` / ``_AUTO_CEILING_PCT`` /
+``_AUTO_CEILING_HEADROOM_DB``) live here.
 """
 from __future__ import annotations
 
@@ -163,31 +161,26 @@ def _finite_data_bounds(matrix):
     return lo, hi
 
 
-# Default dynamic range span used by the *absolute-dB* auto color window
-# (plot_result path, FFT-vs-Time and Order).  The canvas normalises to
-# [ceiling - _AUTO_SPAN_DB, ceiling] (ceiling = _robust_db_ceiling, below)
-# so the "auto" and "manual-after-write-back" windows are identical —
-# eliminating the 30+ dB jump that occurred when the old code treated
-# z_floor/z_ceiling as *peak offsets* while the manual path used them as
-# *absolute* dB values.
-#
-# Deliberately NOT read from the inspector's z_floor/z_ceiling: reading
-# from those fields would make the auto window depend on spin state and
-# re-introduce a feedback loop.  A fixed span is predictable and safe.
-# Default 30 dB — the window most noise analysis uses; high-dynamic-range data
-# may later auto-widen toward 40 dB (Phase A2 of the auto-color-span plan).
+# Floor offset of the absolute-dB auto colour window (FFT-vs-Time and Order,
+# interactive and batch). The floor is ``percentile - _AUTO_SPAN_DB``. It is
+# not read from the inspector spins: that would couple the auto window to
+# spin state and re-introduce the old auto/manual feedback loop.
+# 30 dB is the window most noise analysis uses.
 _AUTO_SPAN_DB: float = 30.0
 
-# Percentile used to anchor the *ceiling* of the absolute-dB auto window
-# (plot_result path, FFT-vs-Time and Order).  Real measurement spectra have
-# sharp transient peaks 30-40 dB above the informative bulk; anchoring the
-# auto ceiling at the literal data MAX (np.nanmax) put the whole field below
-# the floor → an all-dark image the user had to drag down ~38 dB to read.
-# Using a high percentile makes the ceiling track the top of the *bulk*
-# instead of a lone outlier, so "自动" lands where the user actually wants it.
-# For well-behaved data with no outliers, the 99th percentile ≈ max, so this
-# is a no-op there and only kicks in when there is a heavy upper tail.
+# Percentile that anchors the floor, and the reference for the ceiling
+# headroom. Real spectra have transient peaks 30-40 dB above the bulk;
+# anchoring the ceiling on the literal maximum buried that bulk below the
+# floor. The 99th percentile tracks the top of the bulk. It is not itself
+# the colour-scale maximum — see ``_AUTO_CEILING_HEADROOM_DB``.
 _AUTO_CEILING_PCT: float = 99.0
+
+# How far above the percentile the colour scale may extend, before it is
+# capped at the finite maximum. A bright ridge within this headroom stays
+# on the scale instead of pinning to the top colour. The floor does not
+# move with this offset. 5 dB is enough to show that near-percentile energy
+# has not run off the top, without giving a lone transient the scale.
+_AUTO_CEILING_HEADROOM_DB: float = 5.0
 
 
 def _robust_db_ceiling(matrix, pct=_AUTO_CEILING_PCT):
@@ -210,17 +203,25 @@ def _robust_db_ceiling(matrix, pct=_AUTO_CEILING_PCT):
 def _auto_db_window(matrix):
     """Single source for the absolute-dB auto colour window → ``(vmin, vmax)``.
 
-    ceiling = robust high-percentile (``_robust_db_ceiling``, anti-transient);
-    span = ``_AUTO_SPAN_DB`` below it. Both the heatmap ``z_auto`` path and the
-    Order render override resolve the window here, so the two can never drift
-    apart (the recurring compute-vs-display split). Display-only: callers clamp
-    COLOURS to this window, never the stored matrix. Returns ``None`` when
-    there is no finite data to window (B5).
+    Floor = robust percentile − ``_AUTO_SPAN_DB``. Ceiling = that percentile
+    + ``_AUTO_CEILING_HEADROOM_DB``, capped at the finite maximum so the
+    scale never extends past data that exists. A transient far above the
+    percentile still saturates; energy within the headroom does not pin to
+    the top colour, and the floor stays put. The heatmap ``z_auto`` path,
+    the Order render override and the batch renderer's finite-data branch
+    all resolve the window here. Display-only: callers clamp colours, never
+    the stored matrix. Returns ``None`` when nothing is finite (B5).
     """
-    ceiling = _robust_db_ceiling(matrix, _AUTO_CEILING_PCT)
-    if ceiling is None:
+    anchor = _robust_db_ceiling(matrix, _AUTO_CEILING_PCT)
+    if anchor is None:
         return None
-    return ceiling - _AUTO_SPAN_DB, ceiling
+    finite = np.asarray(matrix, dtype=float)
+    finite = finite[np.isfinite(finite)]
+    peak = float(np.max(finite))
+    return (
+        anchor - _AUTO_SPAN_DB,
+        min(peak, anchor + _AUTO_CEILING_HEADROOM_DB),
+    )
 
 
 # Retained for compatibility only; never used to identify invalid line values.

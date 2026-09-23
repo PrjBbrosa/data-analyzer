@@ -12,10 +12,11 @@ numpy implementation otherwise.
 Design constraints (from the design spec §3.5 / §4.3):
 
 - The C function ``cutils.positions`` is OPTIONAL — the wrapper must
-  probe it once at import time via ``getattr+callable`` and cache the
-  result in :data:`_HAS_POSITIONS_C`. Tests force the fallback by
-  monkey-patching this flag, not by mocking ``asammdf``. This honors
-  the codex-phantom-api-surface-guards lesson.
+  probe it once on first use via ``getattr+callable`` and cache the
+  result (exposed as :data:`_HAS_POSITIONS_C`). Importing this module
+  must not load asammdf. Tests force the fallback by monkey-patching
+  ``_HAS_POSITIONS_C``, not by mocking ``asammdf``. This honors the
+  codex-phantom-api-surface-guards lesson.
 - The wrapper must fall back to :func:`build_envelope` on every input
   shape that would cause a parity break or a copy-storm:
 
@@ -47,6 +48,7 @@ from __future__ import annotations
 
 import importlib.util
 import logging
+import sys
 from typing import Tuple
 
 import numpy as np
@@ -62,12 +64,17 @@ _log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# One-time probe of the optional C path.
+# One-time probe of the optional C path (deferred until first use).
 #
 # Per the codex-phantom-api-surface-guards lesson, this is NEVER a
 # MagicMock. We use importlib.util.find_spec + getattr+callable to
-# discover the real entry point without faking the surface.
+# discover the real entry point without faking the surface. The probe
+# must NOT run at module import: ``asammdf.blocks.cutils`` pulls the
+# full asammdf (and pandas) stack, which blank UI startup must avoid.
 # ---------------------------------------------------------------------------
+
+_HAS_POSITIONS_C_CACHE: bool | None = None
+
 
 def _probe_positions_c() -> bool:
     """Return True iff ``asammdf.blocks.cutils.positions`` is callable."""
@@ -80,7 +87,21 @@ def _probe_positions_c() -> bool:
     return callable(getattr(cutils, "positions", None))
 
 
-_HAS_POSITIONS_C: bool = _probe_positions_c()
+def _has_positions_c() -> bool:
+    """Resolve C-path availability; honor test monkeypatches of ``_HAS_POSITIONS_C``."""
+    mod = sys.modules[__name__]
+    if "_HAS_POSITIONS_C" in mod.__dict__:
+        return bool(mod.__dict__["_HAS_POSITIONS_C"])
+    global _HAS_POSITIONS_C_CACHE
+    if _HAS_POSITIONS_C_CACHE is None:
+        _HAS_POSITIONS_C_CACHE = _probe_positions_c()
+    return _HAS_POSITIONS_C_CACHE
+
+
+def __getattr__(name: str):
+    if name == "_HAS_POSITIONS_C":
+        return _has_positions_c()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 # One-shot fallback-reason log set; we want the *first* miss to be loud
 # (so engineers can see why the C path is dormant) but subsequent misses
@@ -181,7 +202,7 @@ def positions_envelope(
             is_monotonic=is_monotonic,
         )
 
-    if not _HAS_POSITIONS_C:
+    if not _has_positions_c():
         # System-level fallback: C extension absent on this install.
         # Logged once per process so engineers see the dormant C path.
         _log_fallback_once("c_unavailable")

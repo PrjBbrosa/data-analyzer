@@ -2,7 +2,8 @@
 import copy
 
 from PyQt5 import sip
-from PyQt5.QtCore import QCoreApplication, QEvent
+from PyQt5.QtCore import QCoreApplication, QEvent, QPoint, Qt
+from PyQt5.QtGui import QMouseEvent
 from PyQt5.QtWidgets import QApplication
 
 from mf4_analyzer.ui.inspector_sections import FFTContextual
@@ -40,9 +41,30 @@ def test_preset_load_button_preserves_hover_card_behavior(qtbot):
     QApplication.processEvents()
 
     button.enterEvent(QEvent(QEvent.Enter))
+    assert not bar._hover_card.isVisible()
+    assert bar._hover_timer.isActive()
+    assert bar._hover_timer.interval() == PresetBar._HOVER_SHOW_DELAY_MS
+
+    button.leaveEvent(QEvent(QEvent.Leave))
+    assert not bar._hover_timer.isActive()
+    assert not bar._hover_card.isVisible()
+
+    button.enterEvent(QEvent(QEvent.Enter))
+    with qtbot.waitSignal(bar._hover_timer.timeout, timeout=1000):
+        pass
     assert bar._hover_card.isVisible()
 
     button.leaveEvent(QEvent(QEvent.Leave))
+    assert not bar._hover_card.isVisible()
+    assert not bar._hover_timer.isActive()
+
+    button.enterEvent(QEvent(QEvent.Enter))
+    press = QMouseEvent(
+        QEvent.MouseButtonPress, QPoint(2, 2),
+        Qt.LeftButton, Qt.LeftButton, Qt.NoModifier,
+    )
+    button.mousePressEvent(press)
+    assert not bar._hover_timer.isActive()
     assert not bar._hover_card.isVisible()
     bar._delete(1)
 
@@ -51,14 +73,13 @@ def test_preset_bar_hide_ignores_a_destroyed_hover_card(qtbot):
     """Hiding the bar must not dereference a hover card Qt already deleted."""
     bar = PresetBar("test", lambda: {"nfft": "2048"}, lambda _params: None)
     qtbot.addWidget(bar)
-    button = bar._load_btns[1]
     bar._write(1, "预设", {"nfft": "2048"})
     bar._refresh_states()
     bar.resize(300, 32)
     bar.show()
     QApplication.processEvents()
 
-    button.enterEvent(QEvent(QEvent.Enter))
+    bar._show_hover(1)
     card = bar._hover_card
     assert card.isVisible()
 
@@ -69,6 +90,60 @@ def test_preset_bar_hide_ignores_a_destroyed_hover_card(qtbot):
     assert bar._hover_slot is None
     assert bar._hover_card is None
     bar._delete(1)
+
+
+def test_preset_hover_chip_row_stretch_is_not_a_white_bar(qapp, qtbot):
+    """The empty tail of a chip row must not paint the app stylesheet's white."""
+    from PyQt5.QtGui import QImage, QPainter
+    from PyQt5.QtWidgets import QLabel, QWidget
+
+    from mf4_analyzer.ui_kit import load_stylesheet
+
+    current = {"window": "hanning", "nfft": "auto", "overlap": 75}
+    bar = PresetBar("test_chip_row", lambda: current, lambda _params: None)
+    qtbot.addWidget(bar)
+    bar._write(1, "配置", current)
+    bar._refresh_states()
+    old = qapp.styleSheet()
+    try:
+        load_stylesheet(qapp)
+        bar._show_hover(1)
+        card = bar._hover_card
+        qapp.processEvents()
+        rows = card.findChildren(QWidget, "presetHoverChipRow")
+        assert rows
+        image = QImage(card.size(), QImage.Format_ARGB32_Premultiplied)
+        image.fill(Qt.transparent)
+        painter = QPainter(image)
+        card.render(painter)
+        painter.end()
+
+        sampled = 0
+        for row in rows:
+            chips = row.findChildren(QLabel, "presetChip")
+            if not chips:
+                continue
+            right = max(chip.geometry().right() for chip in chips)
+            x = right + 8
+            if x >= row.width() - 2:
+                continue
+            point = row.mapTo(card, QPoint(x, max(1, row.height() // 2)))
+            if not card.rect().contains(point):
+                continue
+            color = image.pixelColor(point)
+            sampled += 1
+            # Section fill is rgba(248, 251, 255, 232) over the white panel,
+            # so the empty stretch stays slightly blue. A styled QWidget row
+            # would be pure #ffffff.
+            assert color.alpha() > 200
+            assert color.red() <= 251
+            assert color.green() <= 253
+            assert color.blue() >= 250
+        assert sampled >= 1
+    finally:
+        qapp.setStyleSheet(old)
+        bar._hide_hover()
+        bar._delete(1)
 
 
 def test_contextual_segmented_choices_are_destroyed_with_their_owner(qapp):

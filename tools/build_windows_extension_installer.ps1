@@ -2,7 +2,7 @@ param(
     [string]$ManagerVersion = "1.0.0",
     [string]$AppName = "TraceLabExtensionManager",
     [string]$RepositoryConfig = "",
-    [string]$PythonExe = "python",
+    [string]$PythonExe = "",
     [switch]$Console,
     [switch]$SkipInstall
 )
@@ -14,14 +14,19 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 if ($env:OS -ne "Windows_NT") { throw "Build the manager on Windows x64." }
 if ($ManagerVersion -notmatch '^\d+\.\d+\.\d+([+-][0-9A-Za-z.-]+)?$') { throw "Invalid manager SemVer." }
-if (-not $RepositoryConfig) { throw "RepositoryConfig is required: supply the official repository.json and its trusted root; no production keys are generated." }
 if ($AppName -notmatch '^TraceLabExtensionManager[-a-zA-Z0-9_.]*$') { throw "Use a dedicated TraceLabExtensionManager output name." }
-$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).ProviderPath
+if (-not $RepositoryConfig) {
+    $RepositoryConfig = Join-Path $RepoRoot "configs\extension-release\local\repository.json"
+}
 $EntryScript = Join-Path $RepoRoot "tools\extension_installer.py"
 $Requirements = Join-Path $RepoRoot "tools\extension_manager\requirements.txt"
-$ConfigPath = (Resolve-Path -LiteralPath $RepositoryConfig).Path
+$ConfigPath = (Resolve-Path -LiteralPath $RepositoryConfig).ProviderPath
 $Config = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
 if ($Config.schema -ne 1) { throw "Unsupported repository configuration." }
+if ($Config.PSObject.Properties.Name -contains "distribution" -and $Config.distribution -eq "local-placeholder") {
+    Write-Warning "Using local placeholder repository configuration. This build cannot install online extensions until a real repository and trusted root are configured."
+}
 $BootstrapRoot = Join-Path (Split-Path $ConfigPath) $Config.bootstrap_root
 if (-not (Test-Path -LiteralPath $BootstrapRoot -PathType Leaf)) { throw "Trusted bootstrap root missing." }
 $OutputDir = Join-Path $RepoRoot "dist\$AppName"
@@ -32,17 +37,63 @@ $VenvDir = Join-Path $RepoRoot "build\.venv-extension-manager"
 $VenvPython = Join-Path $VenvDir "Scripts\python.exe"
 function Invoke-Checked {
     param([string]$Executable, [string[]]$Arguments)
-    & $Executable @Arguments
-    if ($LASTEXITCODE -ne 0) { throw "Command failed ($LASTEXITCODE): $Executable" }
+    # Windows PowerShell 5.1 wraps ordinary native stderr as error records.
+    $ErrorActionPreference = "Continue"
+    Write-Host "Command: $Executable $($Arguments | ConvertTo-Json -Compress)"
+    & $Executable @Arguments 2>&1 | ForEach-Object { Write-Host $_.ToString() }
+    $NativeExitCode = $LASTEXITCODE
+    Write-Host "Native exit code: $NativeExitCode"
+    if ($NativeExitCode -ne 0) { throw "Command failed ($NativeExitCode): $Executable" }
+}
+
+function Test-ManagerPython {
+    param([string]$Executable)
+    if (-not (Get-Command $Executable -ErrorAction SilentlyContinue)) { return $false }
+    $ErrorActionPreference = "Continue"
+    # platform.machine() reports ARM64 even for x64 Python under Windows emulation.
+    $Probe = "import sysconfig,tkinter; print(sysconfig.get_platform()); assert sysconfig.get_platform() == 'win-amd64', 'Windows x64 Python required'; tkinter.Tcl()"
+    Write-Host "Checking installer Python: $Executable"
+    & $Executable -c $Probe 2>&1 | ForEach-Object { Write-Host $_.ToString() }
+    return ($LASTEXITCODE -eq 0)
+}
+
+function Initialize-ManagerEnvironment {
+    if ((Test-Path -LiteralPath $VenvPython) -and (Test-ManagerPython $VenvPython)) {
+        return $false
+    }
+    # Select and validate before moving an existing environment. Keep manager
+    # dependencies isolated; a base interpreter is only used to create its venv.
+    $Candidates = if ($PythonExe) { @($PythonExe) } else {
+        @((Join-Path $RepoRoot ".build-tools\python312-x64\python.exe"),
+          (Join-Path $RepoRoot ".venv-build-win\Scripts\python.exe"), "python")
+    }
+    $BasePython = $null
+    foreach ($Candidate in $Candidates) {
+        if (Test-ManagerPython $Candidate) {
+            $BasePython = $Candidate
+            break
+        }
+    }
+    if (-not $BasePython) {
+        throw "No working Windows x64 Python with tkinter found. Supply -PythonExe with an x64 python.exe path; existing environments were preserved."
+    }
+    if (Test-Path -LiteralPath $VenvDir) {
+        $Backup = "$VenvDir.incompatible-$(Get-Date -Format 'yyyyMMdd-HHmmss')-$([guid]::NewGuid().ToString('N'))"
+        Move-Item -LiteralPath $VenvDir -Destination $Backup
+        Write-Host "Preserved incompatible installer environment: $Backup"
+    }
+    Invoke-Checked $BasePython @("-m", "venv", $VenvDir)
+    if (-not (Test-ManagerPython $VenvPython)) {
+        throw "Created installer environment failed the x64/tkinter check: $VenvPython"
+    }
+    return $true
 }
 Push-Location $RepoRoot
 try {
     New-Item -ItemType Directory -Force -Path $OutputDir, $WorkDir, $SpecDir, $EvidenceDir | Out-Null
-    if (-not (Test-Path $VenvPython)) {
-        Invoke-Checked $PythonExe @("-m", "venv", $VenvDir)
-    }
-    Invoke-Checked $VenvPython @("-c", "import platform,struct; assert struct.calcsize('P')==8 and platform.machine().lower() in ('amd64','x86_64'), 'Windows x64 Python required'; import tkinter")
-    if (-not $SkipInstall) {
+    $EnvironmentCreated = Initialize-ManagerEnvironment
+    if (-not $SkipInstall -or $EnvironmentCreated) {
+        if ($SkipInstall) { Write-Host "New installer environment requires dependency installation despite -SkipInstall." }
         Invoke-Checked $VenvPython @("-m", "pip", "install", "-r", $Requirements)
         Invoke-Checked $VenvPython @("-m", "pip", "install", "pyinstaller")
     }

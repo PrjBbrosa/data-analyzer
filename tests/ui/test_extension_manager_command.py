@@ -1,10 +1,12 @@
 """Command-registry wiring for「扩展管理…」. No Tk window."""
 from __future__ import annotations
 
-from PyQt5.QtWidgets import QAction, QMainWindow
+from PyQt5.QtCore import Qt
+from PyQt5.QtWidgets import QAction, QMainWindow, QStyleOptionToolButton
 
 from mf4_analyzer.ui.command_registry import CommandId, object_name_for
-from mf4_analyzer.ui.hints import all_hints, hint_display_width, HINT_MAX_WIDTH
+from mf4_analyzer.ui.hints import all_hints
+from mf4_analyzer.ui.main_window import MainWindow
 from mf4_analyzer.ui.main_window.command_coordinator import (
     CommandCoordinator,
     extension_import_offers_manager,
@@ -32,10 +34,32 @@ def test_manage_extensions_action_uses_bound_method(qapp):
     assert host.calls == ["open_extension_manager"]
 
 
-def test_extension_hint_fits_footer_budget():
-    hint = next(item for item in all_hints() if item.id == "file.extension_manager")
-    assert hint_display_width(hint.text) <= HINT_MAX_WIDTH
-    assert "扩展管理" in hint.text
+def test_extension_hint_is_hidden():
+    assert all(item.id != "file.extension_manager" for item in all_hints())
+
+
+def test_status_help_opens_manual_without_extension_dropdown(qapp, qtbot, monkeypatch):
+    from mf4_analyzer import help as help_module
+
+    opened = []
+
+    def open_guide(name):
+        opened.append(name)
+        return True
+
+    monkeypatch.setattr(help_module, "open_guide", open_guide)
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.show()
+    qapp.processEvents()
+    button = window._help_btn
+    assert button.menu() is None
+    option = QStyleOptionToolButton()
+    button.initStyleOption(option)
+    assert not option.features & QStyleOptionToolButton.MenuButtonPopup
+    assert button.toolTip() == "软件说明"
+    qtbot.mouseClick(button, Qt.LeftButton)
+    assert opened == ["manual"]
 
 
 def test_component_reason_offers_manager_from_availability():

@@ -553,6 +553,8 @@ class FFTMixin:
         mgr = self.analysis_managers["fft"]
         is_active = mgr.get(mgr.active) is state
         plot_live = is_active and self.chart_stack.current_mode() == "fft"
+        if plot_live:
+            self.chart_stack.ensure_analysis_page_ready("fft")
         page = self.chart_stack.page_fft
         for pane_idx, pane in enumerate(state.panes):
             sources = list(pane.sources)

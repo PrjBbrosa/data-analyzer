@@ -6,7 +6,7 @@ from functools import partial
 from html import escape
 
 from PyQt5 import sip
-from PyQt5.QtCore import QPoint, QRectF, QSettings, Qt, pyqtSignal
+from PyQt5.QtCore import QPoint, QRectF, QSettings, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QPainter
 from PyQt5.QtWidgets import (
     QApplication,
@@ -172,6 +172,9 @@ class _PresetHoverCard(QFrame):
                 font-weight: 800;
                 background: transparent;
             }
+            QWidget#presetHoverChipRow {
+                background-color: transparent;
+            }
             QLabel#presetChip {
                 padding: 3px 7px;
                 border: 1px solid #d5dfeb;
@@ -280,7 +283,12 @@ class _PresetHoverCard(QFrame):
         lbl.setObjectName("presetHoverSectionTitle")
         lay.addWidget(lbl)
         for row_specs in self._rows(chips):
+            # App QSS paints every QWidget white. The trailing stretch would
+            # otherwise read as a solid bar beside the chips.
             row_host = QWidget(frame)
+            row_host.setObjectName("presetHoverChipRow")
+            row_host.setAutoFillBackground(False)
+            row_host.setAttribute(Qt.WA_StyledBackground, True)
             row = QHBoxLayout(row_host)
             row.setContentsMargins(0, 0, 0, 0)
             row.setSpacing(5)
@@ -459,7 +467,7 @@ class _PresetLoadButton(QPushButton):
     def enterEvent(self, event):
         bar = self._preset_bar()
         if bar is not None and bar.isVisible():
-            bar._show_hover(self._slot)
+            bar._schedule_hover(self._slot)
         super().enterEvent(event)
 
     def leaveEvent(self, event):
@@ -530,6 +538,7 @@ class PresetBar(QWidget):
 
     SLOTS = (1, 2, 3)
     NAME_MAX_LEN = 12
+    _HOVER_SHOW_DELAY_MS = 300
     acknowledged = pyqtSignal(str, str)  # level, message
     preset_committed = pyqtSignal(object)  # successful baseline, or None
 
@@ -579,6 +588,10 @@ class PresetBar(QWidget):
         self._hover_card = _PresetHoverCard()
         self._hover_card.destroyed.connect(self._on_hover_card_destroyed)
         self._hover_slot = None
+        self._hover_pending_slot = None
+        self._hover_timer = QTimer(self)
+        self._hover_timer.setSingleShot(True)
+        self._hover_timer.timeout.connect(self._show_pending_hover)
         # Slot currently flagged as the unit-推荐 highlight (None => none).
         self._recommended_slot = None
         # Display-only unit cited on the recommended button tooltip.
@@ -1061,6 +1074,7 @@ class PresetBar(QWidget):
 
     def _on_hover_card_destroyed(self, _destroyed_card=None):
         """Drop the Python wrapper when Qt tears down the popup window."""
+        self._cancel_scheduled_hover()
         self._hover_card = None
         self._hover_slot = None
 
@@ -1074,7 +1088,25 @@ class PresetBar(QWidget):
             return None
         return card
 
+    def _schedule_hover(self, slot):
+        """Show the summary only after the pointer rests on the button."""
+        self._hover_pending_slot = slot
+        self._hover_timer.start(self._HOVER_SHOW_DELAY_MS)
+
+    def _show_pending_hover(self):
+        slot = self._hover_pending_slot
+        if slot is None:
+            return
+        self._show_hover(slot)
+
+    def _cancel_scheduled_hover(self):
+        self._hover_pending_slot = None
+        timer = getattr(self, "_hover_timer", None)
+        if timer is not None and not sip.isdeleted(timer):
+            timer.stop()
+
     def _show_hover(self, slot):
+        self._cancel_scheduled_hover()
         baseline = self._baseline if isinstance(self._baseline, dict) else None
         is_baseline = baseline is not None and baseline.get("slot") == slot
         status_note = self._baseline_source_note(slot) if is_baseline else ""
@@ -1191,6 +1223,7 @@ class PresetBar(QWidget):
         apply_plan(card, plan)
 
     def _hide_hover(self):
+        self._cancel_scheduled_hover()
         self._hover_slot = None
         card = self._live_hover_card()
         if card is not None:

@@ -149,6 +149,12 @@ if __name__ == "__main__":
         from mf4_analyzer.acquisition_capture.runtime_smoke import run
 
         raise SystemExit(run(args.json))
+    from mf4_analyzer.startup_timing import (  # noqa: E402 - after hidden children
+        STAGE_PYTHON_ENTRY,
+        mark as _startup_mark,
+    )
+
+    _startup_mark(STAGE_PYTHON_ENTRY)
     from mf4_analyzer.app import main
 
     bootstrap = getattr(

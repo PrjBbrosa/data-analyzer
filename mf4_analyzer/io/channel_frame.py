@@ -98,10 +98,11 @@ def is_channel_frame(obj: Any) -> bool:
 
 
 def is_pandas_dataframe(obj: Any) -> bool:
-    # pandas is already a top-level io import on loader paths. A nested
-    # ``import pandas`` here is scanned as a lazy frozen dependency and
-    # would force ``--collect-all pandas``. If pandas is not loaded, no
-    # DataFrame instance can exist in this process.
+    # Never ``import pandas`` here: the freeze-contract AST scan would treat it
+    # as a lazy dependency and force ``--collect-all pandas``. Read
+    # ``sys.modules`` instead — if pandas is not loaded, no DataFrame instance
+    # can exist in this process. Callers that materialize DataFrames must
+    # import pandas on their own format path (see ``loader._pandas``).
     pd = sys.modules.get("pandas")
     if pd is None:
         return False

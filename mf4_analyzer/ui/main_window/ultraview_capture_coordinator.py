@@ -1886,6 +1886,11 @@ class UltraViewCaptureCoordinator(QObject):
             if stack is not None and callable(getattr(stack, "focused_canvas", None)):
                 return stack.focused_canvas()
             return getattr(window, "canvas_time", None)
+        stack = getattr(window, "chart_stack", None)
+        if stack is not None and section in {"fft", "fft_time", "frf", "order"}:
+            ensure = getattr(stack, "ensure_analysis_page_ready", None)
+            if callable(ensure):
+                ensure(section)
         return self._analysis_page(window, section)
 
     def _toast(self, message: str, level: str) -> None:

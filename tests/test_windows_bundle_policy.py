@@ -74,6 +74,37 @@ def test_dry_run_does_not_modify_bundle(bundle):
     assert result["candidate_bytes"] == len(b"unused GL")
 
 
+@pytest.mark.parametrize("case", ["compatible", "older", "wrong_arch", "missing_export", "missing_canonical", "bundled"])
+def test_modular_crt_dedup_requires_compatible_canonical_before_any_deletion(bundle, monkeypatch, case):
+    exe, removable, report = bundle
+    internal = exe.parent / "_internal"
+    canonical = internal / "VCRUNTIME140.dll"
+    duplicate = internal / "PyQt5/Qt5/bin/VCRUNTIME140.dll"
+    duplicate.write_bytes(b"Qt older CRT")
+    if case != "missing_canonical":
+        canonical.write_bytes(b"Python newer CRT")
+    old = (0x8664, (14, 26, 0, 0), {(1, b"memcpy")})
+    current = (0x8664, (14, 42, 0, 0), {(1, b"memcpy"), (2, b"extra")})
+    if case == "older":
+        current = (current[0], (14, 20, 0, 0), current[2])
+    elif case == "wrong_arch":
+        current = (0xAA64, current[1], current[2])
+    elif case == "missing_export":
+        current = (current[0], current[1], {(2, b"extra")})
+    monkeypatch.setattr(policy, "read_pe_runtime_signature", lambda p: current if p == canonical else old)
+    monkeypatch.setattr(policy, "read_pe_imports", lambda _: {"VCRUNTIME140.dll"})
+    if case in {"compatible", "bundled"}:
+        result = policy.prune_bundle(exe, "lite", report, profile="bundled" if case == "bundled" else "modular")
+        assert duplicate.exists() == (case == "bundled")
+        assert canonical.read_bytes() == b"Python newer CRT"
+        assert result["status"] == "pruned"
+    else:
+        with pytest.raises(ValueError, match="MSVC runtime"):
+            policy.prune_bundle(exe, "lite", report, profile="modular")
+        assert duplicate.exists()
+        assert removable.exists()
+
+
 def test_native_dependency_blocks_entire_prune_before_any_deletion(bundle, monkeypatch):
     exe, removable, report = bundle
     monkeypatch.setattr(policy, "read_pe_imports", lambda _: {"OPENGL32SW.dll"})
@@ -111,7 +142,12 @@ def test_symlink_is_rejected_before_pruning(bundle, tmp_path):
     outside = tmp_path / "outside.dll"
     outside.write_bytes(b"keep")
     removable.unlink()
-    removable.symlink_to(outside)
+    try:
+        removable.symlink_to(outside)
+    except OSError as exc:
+        if getattr(exc, "winerror", None) == 1314:
+            pytest.skip("This Windows session lacks permission to create symlinks")
+        raise
     with pytest.raises(ValueError, match="link"):
         policy.prune_bundle(exe, "lite", report)
     assert outside.read_bytes() == b"keep"
@@ -121,7 +157,7 @@ def test_symlink_is_rejected_before_pruning(bundle, tmp_path):
     "build_windows_folder_lite.ps1", "build_windows_folder_lite_modular.ps1"])
 def test_all_builders_use_policy_and_prune_before_frozen_checks(script_name):
     root = Path(__file__).resolve().parents[1]
-    text = (root / "tools" / script_name).read_text()
+    text = (root / "tools" / script_name).read_text(encoding="utf-8")
     assert "windows_bundle_policy.py" in text
     assert "$PyInstallerArgs += $BundlePolicyArgs" in text
     assert '"--collect-submodules", "pyqtgraph"' not in text

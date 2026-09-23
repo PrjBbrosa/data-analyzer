@@ -230,7 +230,97 @@ def bootstrap_extension_runtime(
     return snapshot
 
 
+def _arm_startup_observation(app, window) -> None:
+    """Watch first paint and answer the measurement tool's queued probe.
+
+    ``show()`` returning and a lone 0 ms timer are never treated as interactive.
+    Interactive readiness is recorded only after the tool's probe is handled on
+    the Qt event loop; the tool stamps receipt on its own monotonic clock.
+    """
+
+    from PyQt5.QtCore import QEvent, QObject, QSocketNotifier, QTimer
+
+    from mf4_analyzer import startup_timing as st
+
+    if not st.enabled():
+        return
+
+    class _StartupObserver(QObject):
+        def __init__(self):
+            super().__init__(window)
+            self._framed = False
+            self._sock = None
+            self._notifier = None
+            self._responded = False
+
+        def eventFilter(self, obj, event):  # noqa: N802 - Qt API
+            if self._framed or obj is not window:
+                return False
+            if event.type() != QEvent.Paint:
+                return False
+            self._framed = True
+            try:
+                st.mark(st.STAGE_FIRST_FRAME)
+            except st.StartupTimingError as exc:
+                print(f"startup timing: {exc}", file=sys.stderr)
+            # Queued connect only arms the probe channel; it is not interactive.
+            QTimer.singleShot(0, self._connect_probe)
+            return False
+
+        def _connect_probe(self) -> None:
+            sock = st.connect_probe_socket(timeout_s=5.0)
+            if sock is None:
+                return
+            self._sock = sock
+            self._notifier = QSocketNotifier(
+                sock.fileno(), QSocketNotifier.Read, self
+            )
+            self._notifier.activated.connect(self._on_readable)
+
+        def _on_readable(self, *_args) -> None:
+            if self._sock is None or self._responded:
+                return
+            request = st.read_probe_request(self._sock)
+            if request is None:
+                return
+            if request.get("cmd") != "interactive_probe":
+                return
+            token = str(request.get("token") or "")
+            # Respond on a later event-loop turn (queued interaction).
+            QTimer.singleShot(0, lambda: self._respond(token))
+
+        def _respond(self, token: str) -> None:
+            if self._sock is None or self._responded:
+                return
+            self._responded = True
+            try:
+                st.write_probe_response(self._sock, token=token, ok=True)
+                st.mark(st.STAGE_INTERACTIVE_PROBE_HANDLED, token=token)
+            except Exception as exc:
+                print(f"startup timing probe response failed: {exc}", file=sys.stderr)
+            finally:
+                if self._notifier is not None:
+                    self._notifier.setEnabled(False)
+                if st.exit_after_probe():
+                    # Measurement runs only; never the default product path.
+                    QTimer.singleShot(0, app.quit)
+
+    observer = _StartupObserver()
+    window.installEventFilter(observer)
+    window._tracelab_startup_observer = observer  # prevent GC
+
+
 def main():
+    from mf4_analyzer.startup_timing import (
+        STAGE_GUI_MODULES_IMPORTED,
+        STAGE_MAINWINDOW_CONSTRUCTED,
+        STAGE_PYTHON_ENTRY,
+        STAGE_QAPPLICATION_READY,
+        enabled as startup_timing_enabled,
+        mark as startup_mark,
+    )
+
+    startup_mark(STAGE_PYTHON_ENTRY)
     setup_logging()
     bootstrap_extension_runtime()
     _configure_high_dpi()
@@ -241,6 +331,7 @@ def main():
     setup_chinese_font = _import_symbol("ui_kit", "setup_chinese_font")
     load_stylesheet = _import_symbol("ui_kit", "load_stylesheet")
     install_glass_tooltips = _import_symbol("ui_kit", "install_glass_tooltips")
+    startup_mark(STAGE_GUI_MODULES_IMPORTED)
 
     setup_chinese_font()
     app = QApplication(sys.argv)
@@ -253,12 +344,16 @@ def main():
         app.setWindowIcon(icon)
     load_stylesheet(app)
     install_glass_tooltips(app)
+    startup_mark(STAGE_QAPPLICATION_READY)
     if os.environ.get("TRACELAB_LAYOUT_PROBE") == "1":
         from mf4_analyzer.ui.layout_probe import run_layout_probe
         sys.exit(run_layout_probe(app))
     window = MainWindow()
+    startup_mark(STAGE_MAINWINDOW_CONSTRUCTED)
     install_excepthooks(on_error=lambda text: window.toast(text, "error"))
     window.show()
+    if startup_timing_enabled():
+        _arm_startup_observation(app, window)
     sys.exit(app.exec_())
 
 

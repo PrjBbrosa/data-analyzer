@@ -594,8 +594,10 @@ class FrfMixin:
         if state is None:
             return 0
         manager = self.analysis_managers["frf"]
-        page = self._analysis_page("frf")
         is_active = manager.get(manager.active) is state
+        if is_active:
+            self.chart_stack.ensure_analysis_page_ready("frf")
+        page = self._analysis_page("frf")
         submitted = 0
         for pane_idx, pane in enumerate(state.panes):
             if pane.input_source is None or pane.output_source is None:

@@ -104,7 +104,46 @@ def read_pe_imports(path: Path) -> set[str]:
         pe.close()
 
 
-def prune_bundle(exe: Path, flavor: str, report: Path, *, dry_run: bool = False) -> dict:
+def read_pe_runtime_signature(path: Path) -> tuple[int, tuple[int, ...], set[tuple[int, bytes | None]]]:
+    import pefile
+
+    pe = pefile.PE(str(path))
+    try:
+        if not getattr(pe, "VS_FIXEDFILEINFO", None) or not getattr(pe, "DIRECTORY_ENTRY_EXPORT", None):
+            raise ValueError(f"MSVC runtime lacks version/export evidence: {path}")
+        info = pe.VS_FIXEDFILEINFO[0]
+        version = (info.FileVersionMS >> 16, info.FileVersionMS & 0xffff,
+                   info.FileVersionLS >> 16, info.FileVersionLS & 0xffff)
+        exports = {(item.ordinal, item.name) for item in pe.DIRECTORY_ENTRY_EXPORT.symbols}
+        return pe.FILE_HEADER.Machine, version, exports
+    finally:
+        pe.close()
+
+
+def modular_crt_duplicates(internal: Path) -> dict[Path, str]:
+    """Retain Python's x64 CRT only after proving it covers Qt's older copy."""
+    canonical_files = {p.name.lower(): p for p in internal.iterdir() if p.is_file()}
+    duplicates = {}
+    for duplicate in (internal / "PyQt5/Qt5/bin").iterdir():
+        if duplicate.name.lower() not in {"vcruntime140.dll", "vcruntime140_1.dll"}:
+            continue
+        canonical = canonical_files.get(duplicate.name.lower())
+        if canonical is None:
+            raise ValueError(f"MSVC runtime has no canonical base copy: {duplicate}")
+        machine, version, exports = read_pe_runtime_signature(canonical)
+        old_machine, old_version, old_exports = read_pe_runtime_signature(duplicate)
+        if (machine != 0x8664 or old_machine != machine or version[0] != 14
+                or old_version[0] != 14 or version < old_version
+                or not old_exports or not old_exports <= exports):
+            raise ValueError(f"MSVC runtime replacement is not compatible: {canonical} vs {duplicate}")
+        duplicates[duplicate] = f"duplicate MSVC runtime; retain validated _internal/{canonical.name}"
+    return duplicates
+
+
+def prune_bundle(exe: Path, flavor: str, report: Path, *, dry_run: bool = False,
+                 profile: str = "bundled") -> dict:
+    if profile not in {"bundled", "modular"}:
+        raise ValueError(f"Unknown dependency profile: {profile}")
     excluded = excluded_modules(flavor) + UNUSED_QT_MODULES
     exe = exe.absolute()
     root = exe.parent
@@ -135,7 +174,12 @@ def prune_bundle(exe: Path, flavor: str, report: Path, *, dry_run: bool = False)
             reason = prune_reason(path.relative_to(internal), modules)
             if reason:
                 candidates[path] = reason
-    removed_dlls = {p.name.lower() for p in candidates if p.suffix.lower() == ".dll"}
+    crt_duplicates = modular_crt_duplicates(internal) if profile == "modular" else {}
+    candidates.update(crt_duplicates)
+    # CRT basenames remain available from the validated canonical base files.
+    # No other same-basename or dependency conflict is exempted here.
+    removed_dlls = {p.name.lower() for p in candidates
+                   if p.suffix.lower() == ".dll" and p not in crt_duplicates}
     # Qt also loads plugins dynamically; the explicit policy above covers those.
     # This guard additionally rejects new native dependencies after Qt upgrades.
     for path in files:
@@ -148,7 +192,7 @@ def prune_bundle(exe: Path, flavor: str, report: Path, *, dry_run: bool = False)
     before = sum(p.stat().st_size for p in files)
     candidate_bytes = sum(entry["bytes"] for entry in entries)
     result = {
-        "flavor": flavor, "exe": str(exe), "dry_run": dry_run,
+        "flavor": flavor, "profile": profile, "exe": str(exe), "dry_run": dry_run,
         "exe_sha256": hashlib.sha256(exe.read_bytes()).hexdigest(),
         "before_bytes": before, "candidate_bytes": candidate_bytes,
         "removed_bytes": 0, "after_bytes": before, "files": entries,
@@ -168,6 +212,7 @@ def prune_bundle(exe: Path, flavor: str, report: Path, *, dry_run: bool = False)
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--flavor", choices=("full", "lite"), required=True)
+    parser.add_argument("--profile", choices=("bundled", "modular"), default="bundled")
     parser.add_argument("--pyinstaller-args-json", action="store_true")
     parser.add_argument("--exe", type=Path)
     parser.add_argument("--report", type=Path)
@@ -178,7 +223,7 @@ def main(argv=None) -> int:
     else:
         if args.exe is None or args.report is None:
             parser.error("pruning requires --exe and --report")
-        result = prune_bundle(args.exe, args.flavor, args.report, dry_run=args.dry_run)
+        result = prune_bundle(args.exe, args.flavor, args.report, dry_run=args.dry_run, profile=args.profile)
         print(f"Bundle policy: {result['status']}; removed {result['removed_bytes'] / 2**20:.2f} MiB; "
               f"after {result['after_bytes'] / 2**20:.2f} MiB; report: {args.report}")
     return 0

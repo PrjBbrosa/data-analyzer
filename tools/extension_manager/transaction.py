@@ -7,9 +7,11 @@ verification.  Neutral tools layer: no Qt/UI; TUF stays out of this module.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 import os
 from pathlib import Path
 import shutil
+import time
 import uuid
 from typing import Any, Callable, Mapping, Sequence
 
@@ -390,6 +392,25 @@ class InstallTransaction:
         self._write_log("probed", probe=payload)
         return payload
 
+    def _retry_store_operation(self, operation: Callable, *paths: Path) -> None:
+        # Windows native-image consumers (observed: ARM XtaCache) can retain a
+        # probed DLL briefly after the child has exited. Keep the lease held,
+        # preserve cancellation, and never turn permanent failures into success.
+        for attempt in range(31):
+            self._raise_if_cancelled()
+            try:
+                operation(*paths)
+                return
+            except OSError as exc:
+                if getattr(exc, "winerror", None) not in {5, 32} or attempt == 30:
+                    raise
+                if attempt == 0:
+                    logging.getLogger(__name__).warning(
+                        "Windows store operation blocked (%s); retrying for up to 3s: %s",
+                        exc.winerror, paths,
+                    )
+                time.sleep(0.1)
+
     def publish_store(self) -> None:
         self._raise_if_cancelled()
         _call_hook(self.hooks.on_phase, "publish")
@@ -416,12 +437,12 @@ class InstallTransaction:
                     # Preserve damaged bytes for diagnosis/recovery under the held lock.
                     quarantine = self.extensions / ".quarantine" / self.transaction_id / source.verified.component
                     quarantine.parent.mkdir(parents=True, exist_ok=True)
-                    os.replace(dest, quarantine)
+                    self._retry_store_operation(os.replace, dest, quarantine)
                     self.cleanup_pending.append(quarantine.relative_to(self.extensions).as_posix())
                 else:
-                    shutil.rmtree(src)
+                    self._retry_store_operation(shutil.rmtree, src)
                     continue
-            os.replace(src, dest)
+            self._retry_store_operation(os.replace, src, dest)
             receipt = generate_receipt(
                 core_build_id=self.core.core_build_id,
                 package=source.verified.package,

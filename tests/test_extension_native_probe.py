@@ -10,6 +10,47 @@ from tools.extension_manager.transaction import InstallTransaction
 from tests.test_extension_transaction import _make_verified_zip
 
 
+@pytest.mark.parametrize('case', ['valid', 'changed_base', 'foreign_pyd', 'foreign_dll'])
+def test_loaded_pyd_identity_is_package_scoped_but_shared_dlls_remain_verified(tmp_path, case):
+    import hashlib
+    from types import SimpleNamespace
+    from mf4_analyzer.extensions.contract import ExtensionError, FileEntry
+    from mf4_analyzer.extensions.native_probe import _audit_loaded_native_paths
+
+    base = tmp_path / 'app'
+    component = base / 'extensions/matlab'
+    base_rel = '_internal/pandas/_libs/_cyutility.cp312-win_amd64.pyd'
+    component_rel = 'site-packages/scipy/_cyutility.cp312-win_amd64.pyd'
+    dll_rel = 'site-packages/scipy.libs/helper.dll'
+
+    def write(root, relative, data):
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        return FileEntry(relpath=relative, size=len(data), sha256=hashlib.sha256(data).hexdigest())
+
+    base_entry = write(base, base_rel, b'pandas-native-module')
+    component_entry = write(component, component_rel, b'scipy-native-module')
+    dll_entry = write(component, dll_rel, b'shared-library')
+    paths = [base / base_rel, component / component_rel, component / dll_rel]
+    if case == 'changed_base':
+        paths[0].write_bytes(b'corrupt')
+    elif case.startswith('foreign_'):
+        relative, data = ((component_rel, b'scipy-native-module') if case == 'foreign_pyd'
+                          else (dll_rel, b'shared-library'))
+        foreign = tmp_path / 'untrusted'
+        write(foreign, relative, data)
+        paths.append(foreign / relative)
+    kwargs = dict(manifests={'matlab': SimpleNamespace(files=(component_entry, dll_entry))},
+                  package_roots={'matlab': component}, core_root=base, core_files=(base_entry,))
+    if case == 'valid':
+        origins = _audit_loaded_native_paths(paths, **kwargs)
+        assert set(origins.values()) == {str(path.resolve()) for path in paths}
+    else:
+        with pytest.raises(ExtensionError, match='foreign loaded DLL'):
+            _audit_loaded_native_paths(paths, **kwargs)
+
+
 def test_a_marker_file_is_not_native_import_evidence(tmp_path):
     marker = tmp_path / 'media' / 'site-packages' / 'av' / '__init__.py'
     marker.parent.mkdir(parents=True)

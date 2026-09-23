@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 from pathlib import Path
 import shutil
 import sys
@@ -17,6 +18,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from mf4_analyzer.extensions.contract import bind_verified_package, parse_package_manifest
+from mf4_analyzer.extensions.locking import extensions_root
 from mf4_analyzer.extensions.native_identity import sha256_file
 from tools.extension_manager.engine import InstallEngine
 from tools.extension_manager.transaction import PackageSource
@@ -47,9 +49,16 @@ def run_matrix(app_root: Path, delivery: dict) -> dict:
     sources = build_sources(delivery)
     records = []
     # Same volume as the generated base (NTFS gate lives in the engine).
-    with tempfile.TemporaryDirectory(prefix='tracelab-combinations-', dir=app_root.parent) as directory:
+    # Cleanup also traverses content-addressed paths beyond MAX_PATH. Keep
+    # TemporaryDirectory's path extended on Windows, while exercising the
+    # installer's ordinary app-root input just as the user would supply it.
+    temp_parent = extensions_root(app_root).parent.parent
+    workspace = tempfile.TemporaryDirectory(prefix='tracelab-combinations-', dir=temp_parent)
+    directory = workspace.name
+    verification_failed = False
+    try:
         for names in ((), ('media',), ('matlab',), ('media', 'matlab')):
-            target = Path(directory) / ('-'.join(names) or 'base')
+            target = app_root.parent / Path(directory).name / ('-'.join(names) or 'base')
             shutil.copytree(app_root, target)
             engine = InstallEngine(target)
             if names:
@@ -60,6 +69,7 @@ def run_matrix(app_root: Path, delivery: dict) -> dict:
                                    exe=exe, app_root=target)
             records.append({'components': names, 'exit_code': code, 'evidence': payload})
             if code:
+                verification_failed = True
                 return {'ok': False, 'combinations': records}
             if len(names) == 2:
                 engine.uninstall(['matlab'])
@@ -67,7 +77,20 @@ def run_matrix(app_root: Path, delivery: dict) -> dict:
                 records.append({'components': ['media'], 'after_uninstall': 'matlab',
                                 'exit_code': code, 'evidence': payload})
                 if code:
+                    verification_failed = True
                     return {'ok': False, 'combinations': records}
+    except Exception:
+        verification_failed = True
+        raise
+    finally:
+        try:
+            workspace.cleanup()
+        except OSError:
+            if not verification_failed:
+                raise
+            logging.getLogger(__name__).exception(
+                'Could not clean verification workspace %s; preserving original failure', directory,
+            )
     return {'ok': True, 'combinations': records}
 
 

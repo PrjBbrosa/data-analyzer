@@ -8,6 +8,8 @@ can be tested off Windows; they are not NTFS / frozen-EXE acceptance.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import ctypes
+from ctypes import wintypes
 import os
 from pathlib import Path
 import sys
@@ -94,7 +96,13 @@ class LockBackend(Protocol):
 
 
 def extensions_root(app_root: str | Path) -> Path:
-    return Path(app_root).expanduser().resolve() / "extensions"
+    root = Path(app_root).expanduser().resolve()
+    # Content-addressed store paths can exceed MAX_PATH even in a normal app
+    # directory. Use the Win32 extended form for local extension I/O without
+    # changing persisted relative pointers or weakening the UNC refusal.
+    if sys.platform == "win32" and not is_unc_path(root) and not str(root).startswith("\\\\?\\"):
+        root = Path("\\\\?\\" + str(root))
+    return root / "extensions"
 
 
 def lease_path(app_root: str | Path) -> Path:
@@ -362,26 +370,27 @@ class WindowsAPI:
     GetLastError: Callable[[], int]
 
 
+class _OVERLAPPED(ctypes.Structure):
+    _fields_ = [
+        ("Internal", ctypes.c_ulonglong),
+        ("InternalHigh", ctypes.c_ulonglong),
+        ("Offset", wintypes.DWORD),
+        ("OffsetHigh", wintypes.DWORD),
+        ("hEvent", wintypes.HANDLE),
+    ]
+
+
+class _FILE_ID_INFO(ctypes.Structure):
+    _fields_ = [
+        ("VolumeSerialNumber", ctypes.c_uint64),
+        ("FileId", ctypes.c_ubyte * 16),
+    ]
+
+
 def _windows_structures() -> tuple[Any, Any]:
-    import ctypes
-    from ctypes import wintypes
-
-    class OVERLAPPED(ctypes.Structure):
-        _fields_ = [
-            ("Internal", ctypes.c_ulonglong),
-            ("InternalHigh", ctypes.c_ulonglong),
-            ("Offset", wintypes.DWORD),
-            ("OffsetHigh", wintypes.DWORD),
-            ("hEvent", wintypes.HANDLE),
-        ]
-
-    class FILE_ID_INFO(ctypes.Structure):
-        _fields_ = [
-            ("VolumeSerialNumber", ctypes.c_uint64),
-            ("FileId", ctypes.c_ubyte * 16),
-        ]
-
-    return OVERLAPPED, FILE_ID_INFO
+    # ctypes argtypes require the exact same class, not just the same layout.
+    # Defining these once also keeps concurrent backend creation consistent.
+    return _OVERLAPPED, _FILE_ID_INFO
 
 
 def load_real_windows_api() -> WindowsAPI:
@@ -708,7 +717,10 @@ def verify_staging_auth(
     staging = Path(staging_dir).expanduser().resolve()
     root = Path(extensions_root_path).expanduser().resolve()
     expected = (root / ".staging" / transaction_id).resolve()
-    if staging != expected:
+    # Normal and extended Win32 spellings may identify the same directory.
+    if staging != expected and not (
+        staging.is_dir() and expected.is_dir() and staging.samefile(expected)
+    ):
         raise ExtensionError(
             ReasonCode.VERIFICATION_FAILED,
             "probe staging path is not the authorized transaction staging directory",

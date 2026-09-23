@@ -337,9 +337,13 @@ class MainWindow(
         from .command_coordinator import CommandCoordinator
         self._command_coordinator = CommandCoordinator(self)
         self._command_coordinator.publish_quit(self._on_quit)
-        self._bind_help_extension_menu()
         self._init_drop_import()
         self._connect()
+        from .startup_coordinator import StartupCoordinator
+        self._startup_coordinator = StartupCoordinator(self)
+        self._startup_preload_armed = False
+        # Idle preload arms from showEvent (after first paint opportunity),
+        # not from construction — keeps blank-session unit tests stable.
 
     # -- compatibility shims for the custom-X holder (spec D-E2) -----------
     # State moved onto ``self._custom_xaxis``; these keep the historical
@@ -378,6 +382,24 @@ class MainWindow(
     @_custom_xlabel.setter
     def _custom_xlabel(self, value):
         self._custom_xaxis.xlabel = value
+
+    # Analysis canvases: delegate to ChartStack so deferred construction stays
+    # explicit (ensure via ChartStack properties / ensure_analysis_page_ready).
+    @property
+    def canvas_fft(self):
+        return self.chart_stack.canvas_fft
+
+    @property
+    def canvas_fft_time(self):
+        return self.chart_stack.canvas_fft_time
+
+    @property
+    def canvas_frf(self):
+        return self.chart_stack.canvas_frf
+
+    @property
+    def canvas_order(self):
+        return self.chart_stack.canvas_order
 
     # -- compatibility shim for the section progress tokens (spec D-E2) ----
     # The tokens now live on AnalysisJobService, whose batch lifetime they
@@ -471,7 +493,17 @@ class MainWindow(
         splitter = QSplitter(Qt.Horizontal, self)
         self.splitter = splitter
         self.navigator = FileNavigator(self)
-        self.chart_stack = ChartStack(self)
+        # Real product startup defers the four analysis chart cards unless the
+        # TRACELAB_EAGER_ANALYSIS_CHARTS diagnostic forces eager construction.
+        # Unit tests that construct ChartStack() directly keep the eager default.
+        from .startup_coordinator import eager_analysis_charts
+
+        self.chart_stack = ChartStack(
+            self, defer_analysis_charts=not eager_analysis_charts(),
+        )
+        self.chart_stack.register_analysis_page_ready_hook(
+            self._on_analysis_page_ready
+        )
         # Single-pane user navigation among the five chart sections. Split,
         # programmatic restore, and uncomputed targets stay direct-terminal.
         self.chart_stack.set_page_transition_motion_policy(POLICY_LIGHT)
@@ -542,21 +574,12 @@ class MainWindow(
 
         # Convenience aliases pointing to children of ChartStack / Navigator —
         # these are real widgets reachable via the new topology, not shims.
+        # Analysis canvases stay on ChartStack properties so deferred pages are
+        # not constructed during blank-window _init_ui / _connect.
         self.canvas_time = self.chart_stack.canvas_time
-        self.canvas_fft = self.chart_stack.canvas_fft
-        self.canvas_order = self.chart_stack.canvas_order
-        self.canvas_fft_time = self.chart_stack.canvas_fft_time
-        self.canvas_frf = self.chart_stack.canvas_frf
-        for canvas in (
-            self.canvas_time,
-            self.canvas_fft,
-            self.canvas_order,
-            self.canvas_fft_time,
-            self.canvas_frf,
-        ):
-            signal = getattr(canvas, "markup_revision_changed", None)
-            if signal is not None:
-                signal.connect(self._on_markup_revision_changed)
+        markup = getattr(self.canvas_time, "markup_revision_changed", None)
+        if markup is not None:
+            markup.connect(self._on_markup_revision_changed)
         self.channel_list = self.navigator.channel_list
         self.navigator.set_projection_role("time")
         # Time-domain cap is TIME_DOMAIN_MAX_VIEWS; analysis managers keep
@@ -677,7 +700,7 @@ class MainWindow(
         self._help_btn.setIconSize(QSize(18, 18))
         self._help_btn.setAutoRaise(True)
         self._help_btn.setCursor(Qt.PointingHandCursor)
-        self._help_btn.setToolTip("软件说明 · 扩展管理")
+        self._help_btn.setToolTip("软件说明")
         self._help_btn.clicked.connect(self._open_software_manual)
         self.statusBar.addPermanentWidget(self._help_btn)
 
@@ -870,21 +893,6 @@ class MainWindow(
         if value >= 10_000:
             return f"{value / 10_000:.1f} 万{unit}"
         return f"{value} {unit}"
-
-    def _bind_help_extension_menu(self):
-        """Put「扩展管理…」on the existing help button after its QAction exists."""
-        from PyQt5.QtWidgets import QMenu, QToolButton
-
-        from ..command_registry import CommandId
-
-        button = getattr(self, "_help_btn", None)
-        coordinator = getattr(self, "_command_coordinator", None)
-        if button is None or coordinator is None:
-            return
-        menu = QMenu(button)
-        menu.addAction(coordinator.action(CommandId.MANAGE_EXTENSIONS))
-        button.setMenu(menu)
-        button.setPopupMode(QToolButton.MenuButtonPopup)
 
     def _open_software_manual(self):
         """Open the whole-app TraceLab usage manual in the default browser."""
@@ -1502,19 +1510,10 @@ class MainWindow(
             page.compare_toggled.connect(
                 lambda key, on, s=sec: self._on_analysis_compare_toggled(
                     s, key, on))
-            # V8: colorbar-drag → inspector Z sync. Heatmap sections only
-            # (fft is a line section with no colorbar / no levels_changed).
-            # While levels are locked the page already mirrors the drag onto
-            # BOTH pane canvases internally (_on_locked_levels_changed); this
-            # MainWindow path is the SEPARATE concern of echoing the FOCUSED
-            # pane's dragged range back into the inspector Z controls. Pane 1
-            # is wired later in _connect_new_pane (it does not exist yet).
-            if sec in {'fft_time', 'order'}:
-                self._wire_heatmap_levels_echo(page.pane_canvas(0), sec, 0)
-            else:
-                self._connect_fft_preview_range_signal(page.pane_canvas(0), 0)
-            if sec in {'fft', 'fft_time', 'order'}:
-                self._wire_analysis_viewport_intent(page.pane_canvas(0), sec, 0)
+            # Canvas-level wiring (levels echo / preview range / viewport
+            # intent / markup) runs from _on_analysis_page_ready when the
+            # deferred chart is first prepared — not here, or blank startup
+            # would re-eager every analysis canvas via pane_canvas(0).
 
         # FFT vs Time primary compute.
         self.inspector.fft_time_requested.connect(
@@ -2014,12 +2013,56 @@ class MainWindow(
 
         self.toolbar.set_nav_open(state == PanelState.PINNED)
 
+    def _on_analysis_page_ready(self, section, page):
+        """MainWindow half of the unified ready/bind for analysis pane 0.
+
+        ChartStack already connected copy/annotation/cursor/pin. This applies
+        markup, viewport/levels echoes, and the latest inspector tick density
+        without changing mode, selection, or dirty state.
+        """
+        canvas = page.peek_pane_canvas(0)
+        if canvas is None:
+            return
+        if not getattr(canvas, "_mw_markup_revision_wired", False):
+            signal = getattr(canvas, "markup_revision_changed", None)
+            if signal is not None:
+                signal.connect(self._on_markup_revision_changed)
+            canvas._mw_markup_revision_wired = True
+        if section in {"fft_time", "order"}:
+            self._wire_heatmap_levels_echo(canvas, section, 0)
+        else:
+            self._connect_fft_preview_range_signal(canvas, 0)
+        if section in {"fft", "fft_time", "order"}:
+            self._wire_analysis_viewport_intent(canvas, section, 0)
+        try:
+            xt, yt = self.inspector.top.tick_density()
+        except Exception:
+            xt = yt = None
+        if xt is not None and yt is not None:
+            setter = getattr(self.chart_stack, "set_tick_density_controls", None)
+            if callable(setter):
+                setter(int(xt), int(yt))
+            canvas.set_tick_density(int(xt), int(yt))
+
     def _on_mode_changed(self, mode):
         self._time_render.pending_section_view = None
         old_mode = self.chart_stack.current_mode()
         uv = getattr(self, "_ultraview", None)
         source_modes = ("time", "fft", "fft_time", "frf", "order")
         opening = getattr(self, "_opening_project", False)
+        coord = getattr(self, "_startup_coordinator", None)
+        if mode in self.analysis_managers:
+            # User request always outranks idle order; sync ensure keeps the
+            # existing mode-entry apply/reveal contract (Task 2). Idle preload
+            # still never changes mode.
+            if coord is not None:
+                coord.prioritize(mode)
+            page = self.chart_stack.peek_analysis_page(mode)
+            if page is not None and not page.is_ready():
+                page.show_preparing_status()
+            # Charts must exist before begin_section_reveal / apply_context /
+            # hint-bar take. Does not switch mode or touch sibling pages.
+            self.chart_stack.ensure_analysis_page_ready(mode)
         if old_mode != mode and not opening:
             if old_mode == "time":
                 self._capture_focused_view()
@@ -2788,6 +2831,8 @@ class MainWindow(
         # (PgHeatmapCanvas) are pyqtgraph widgets — no ``fig``/``draw_idle``.
         # Their set_tick_density takes the same inspector tick COUNTS the
         # old MaxNLocator(nbins=...) loop consumed, so the knob semantics hold.
+        # Use peek/pane_count so a display-settings tick does not construct
+        # every deferred analysis page; latest values apply on page ready.
         for page in (
             self.chart_stack.page_fft,
             self.chart_stack.page_fft_time,
@@ -5746,6 +5791,22 @@ class MainWindow(
         """File → Quit. closeEvent is the single leave-decision point."""
         self.close()
 
+    def showEvent(self, event):  # noqa: N802 - Qt API
+        super().showEvent(event)
+        if getattr(self, "_startup_preload_armed", False):
+            return
+        coord = getattr(self, "_startup_coordinator", None)
+        if coord is None:
+            return
+        from .startup_coordinator import eager_analysis_charts
+
+        if eager_analysis_charts():
+            return
+        self._startup_preload_armed = True
+        from PyQt5.QtCore import QTimer
+
+        QTimer.singleShot(0, coord.start)
+
     def closeEvent(self, event):
         """Dirty guard first; only then drain jobs and destroy tool windows."""
         from PyQt5 import sip
@@ -5814,6 +5875,9 @@ class MainWindow(
         # that is being torn down.
         self._time_render.clear_pending_switch()
         self._time_render.pending_section_view = None
+        coord = getattr(self, "_startup_coordinator", None)
+        if coord is not None:
+            coord.shutdown()
         self._analysis_jobs.shutdown()
         super().closeEvent(event)
 

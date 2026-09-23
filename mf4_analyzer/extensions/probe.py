@@ -25,7 +25,7 @@ from mf4_analyzer.extensions.contract import (
     ReasonCode,
     dumps_json,
 )
-from mf4_analyzer.extensions.locking import verify_staging_auth
+from mf4_analyzer.extensions.locking import extensions_root, verify_staging_auth
 from mf4_analyzer.frozen_evidence_paths import UnsafeEvidencePath, reject_aliased_evidence
 
 
@@ -152,7 +152,7 @@ def _protected_result_targets(app_root: Path | None, extra: Sequence[Path] = ())
                 root / "core.json",
                 root / "core-files.json",
                 root / "installer.exe",
-                root / "extensions" / "active.json",
+                extensions_root(root) / "active.json",
             ]
         )
         exe_candidates = list(root.glob("*.exe"))
@@ -340,7 +340,7 @@ def child_main(argv: Sequence[str] | None = None) -> int:
                         raise ProbeError(ReasonCode.PROBE_FAILED, "installed selection unavailable")
                     if [item.package_sha256 for item in available] != request["package_hashes"]:
                         raise ProbeError(ReasonCode.PROBE_FAILED, "installed selection changed")
-                    payload = run_native_reads({item.component: resolve_inside(app_root / "extensions", item.package_relpath)
+                    payload = run_native_reads({item.component: resolve_inside(extensions_root(app_root), item.package_relpath)
                                                 for item in available})
                 payload.update({key: request.get(key) for key in
                                 ("core_build_id", "runtime_id", "components", "package_hashes", "probe_types")})
@@ -350,7 +350,7 @@ def child_main(argv: Sequence[str] | None = None) -> int:
         else:
             staging = verify_staging_auth(
                 Path(args.staging_dir), args.staging_nonce,
-                extensions_root_path=app_root / "extensions",
+                extensions_root_path=extensions_root(app_root),
                 transaction_id=request["transaction_id"],
             )
             payload = evaluate_staging_probe(request, staging)

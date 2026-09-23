@@ -195,6 +195,13 @@ _HINTS = (
         priority=27,
     ),
     Hint(
+        id="analysis.page_prepare",
+        text="分析页空闲时自动准备",
+        surface="discovery",
+        modes=frozenset({"fft", "fft_time", "frf", "order"}),
+        priority=22,
+    ),
+    Hint(
         id="time.time_range_mode",
         text="全时段完整；数字仍随视窗",
         surface="discovery",
@@ -279,12 +286,6 @@ _HINTS = (
         text="ZFD 时基无效则拒绝导入",
         surface="discovery",
         priority=42,
-    ),
-    Hint(
-        id="file.extension_manager",
-        text="模块化版本可管理音视频和 MAT 扩展",
-        surface="discovery",
-        priority=27,
     ),
     Hint(
         id="time.custom_x_paths",

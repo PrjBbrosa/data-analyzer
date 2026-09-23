@@ -36,6 +36,7 @@ from PyQt5.QtWidgets import QWidget
 # whole set onward, and `hc._auto_db_window`-style module-attribute access in
 # the tests still resolves.
 from mf4_analyzer.qt_analysis_shared import (  # noqa: F401
+    _AUTO_CEILING_HEADROOM_DB,
     _AUTO_CEILING_PCT,
     _AUTO_SPAN_DB,
     _SLICE_MAX_SPAN_DB,

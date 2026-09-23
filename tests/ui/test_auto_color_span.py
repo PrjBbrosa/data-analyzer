@@ -1,10 +1,8 @@
-"""Auto color-scale span (Phase A1): default 30 dB + single-source window.
+"""Auto color-scale window: 30 dB below the percentile, +5 dB headroom.
 
-The absolute-dB auto colour window historically used a fixed 40 dB span. Noise
-analysis mostly wants a 30 dB window, so the default span drops to 30; the
-ceiling stays the robust high-percentile anchor. Both the heatmap z_auto path
-and the Order render override must resolve through the SAME helper so the two
-windows can never drift apart (the recurring compute-vs-display disease).
+The floor stays a fixed 30 dB under the robust percentile. The ceiling is
+that percentile plus 5 dB, capped at the finite maximum. Heatmap, Order and
+the batch renderer's finite-data branch all resolve through ``_auto_db_window``.
 """
 import numpy as np
 
@@ -12,14 +10,16 @@ import numpy as np
 def test_auto_db_window_default_span_is_30(qapp):
     from mf4_analyzer.ui.pg_canvas import heatmap_canvas as hc
 
-    # A flat ramp [-50, 10]: the 99th-percentile ceiling lands near the top (10).
+    # A flat ramp [-50, 10]: the percentile sits just under the maximum, so
+    # the ceiling caps at the maximum and the floor stays 30 dB below p99.
     m = np.linspace(-50.0, 10.0, 6001).reshape(1, -1)
     vmin, vmax = hc._auto_db_window(m)
 
-    ceiling = hc._robust_db_ceiling(m, hc._AUTO_CEILING_PCT)
-    assert vmax == ceiling                       # ceiling unchanged (robust p99)
-    assert abs((vmax - vmin) - 30.0) < 1e-9      # default span is 30, not 40
-    assert hc._AUTO_SPAN_DB == 30.0              # the module default itself
+    anchor = hc._robust_db_ceiling(m, hc._AUTO_CEILING_PCT)
+    assert vmax == float(np.max(m))
+    assert abs(vmin - (anchor - hc._AUTO_SPAN_DB)) < 1e-9
+    assert hc._AUTO_SPAN_DB == 30.0
+    assert hc._AUTO_CEILING_HEADROOM_DB == 5.0
 
 
 def test_auto_db_window_is_nan_safe(qapp):
@@ -27,5 +27,8 @@ def test_auto_db_window_is_nan_safe(qapp):
 
     m = np.array([[-30.0, np.nan, -10.0, np.inf, -20.0]])
     vmin, vmax = hc._auto_db_window(m)
+    anchor = hc._robust_db_ceiling(m, hc._AUTO_CEILING_PCT)
+    finite_peak = float(np.max(m[np.isfinite(m)]))
     assert np.isfinite(vmin) and np.isfinite(vmax)
-    assert abs((vmax - vmin) - hc._AUTO_SPAN_DB) < 1e-9
+    assert vmin == anchor - hc._AUTO_SPAN_DB
+    assert vmax == min(finite_peak, anchor + hc._AUTO_CEILING_HEADROOM_DB)

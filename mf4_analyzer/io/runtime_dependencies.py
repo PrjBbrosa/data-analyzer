@@ -20,6 +20,10 @@ COMPONENT_MEDIA = "media"
 COMPONENT_MATLAB = "matlab"
 COMPONENT_OWNERS = frozenset({COMPONENT_BASE, COMPONENT_MEDIA, COMPONENT_MATLAB})
 
+COLLECTION_COLLECT_ALL = "collect_all"
+COLLECTION_STANDARD_HOOK = "standard_hook"
+COLLECTION_STRATEGIES = frozenset({COLLECTION_COLLECT_ALL, COLLECTION_STANDARD_HOOK})
+
 DEPENDENCY_PROFILES = frozenset({"bundled", "modular"})
 DEFAULT_DEPENDENCY_PROFILE = "bundled"
 
@@ -33,6 +37,9 @@ class FrozenImportDependency:
     extensions: tuple[str, ...]
     purpose: str
     component: str = COMPONENT_BASE
+    # ``collect_all`` → PyInstaller ``--collect-all`` (format data/binaries).
+    # ``standard_hook`` → rely on PyInstaller's package hook; never ``--collect-all``.
+    collection: str = COLLECTION_COLLECT_ALL
 
 
 WINDOWS_BUILD_FLAVORS = frozenset({"full", "lite"})
@@ -40,9 +47,19 @@ WINDOWS_BUILD_FLAVORS = frozenset({"full", "lite"})
 
 # Keep this list small and product-facing: a package belongs here only when a
 # documented import or export path needs it at runtime.  The Windows builders turn
-# it into ``--collect-all`` arguments, including compiled extensions and data
-# files which a lazy import might otherwise evade during PyInstaller analysis.
+# ``collect_all`` entries into ``--collect-all`` arguments, including compiled
+# extensions and data files which a lazy import might otherwise evade during
+# PyInstaller analysis.  ``standard_hook`` entries (e.g. pandas) stay declared for
+# the lazy-import scan but rely on PyInstaller's normal package hook.
 FROZEN_IMPORT_DEPENDENCIES = (
+    FrozenImportDependency(
+        package="pandas",
+        requirement_name="pandas",
+        extensions=(),
+        purpose="tabular DataFrame materialization for CSV/Excel/MDF/HDF paths",
+        component=COMPONENT_BASE,
+        collection=COLLECTION_STANDARD_HOOK,
+    ),
     FrozenImportDependency(
         package="asammdf",
         requirement_name="asammdf",
@@ -221,6 +238,16 @@ def pyinstaller_collection_args(
 
     args: list[str] = []
     for dependency in frozen_dependencies_for_profile(profile):
+        if dependency.collection not in COLLECTION_STRATEGIES:
+            raise ValueError(
+                f"unknown collection strategy for {dependency.package}: "
+                f"{dependency.collection!r}"
+            )
+        if dependency.collection == COLLECTION_STANDARD_HOOK:
+            # Base packages such as pandas: PyInstaller's standard hook collects
+            # them when analysis sees the function-level import. Do not expand
+            # the onedir with ``--collect-all pandas``.
+            continue
         if flavor == "lite" and dependency.package == "scipy":
             # Let PyInstaller trace the loadmat import graph instead of adding
             # unrelated SciPy toolkits. Its standard SciPy hook still includes
@@ -268,20 +295,24 @@ def validate_windows_packaging_contract(
         label = Path(script).name
         if "windows_runtime_dependencies.py" not in text:
             failures.append(f"{label} 未调用统一的运行依赖清单")
-        flavor = _build_script_flavor(text)
+        flavor, profile = _build_script_delivery(text)
         if flavor is None:
             failures.append(f"{label} does not declare a frozen-build flavor")
             continue
+        if profile is None:
+            failures.append(f"{label} does not declare a supported dependency profile")
+            continue
         failures.extend(
             _excluded_runtime_dependency_failures(
-                label, flavor, _script_excluded_modules(text)
+                label, flavor, _script_excluded_modules(text), profile=profile
             )
         )
         failures.extend(
             _excluded_runtime_dependency_failures(
                 "shared frozen runtime arguments",
                 flavor,
-                _pyinstaller_excluded_modules(pyinstaller_collection_args(flavor)),
+                _pyinstaller_excluded_modules(pyinstaller_collection_args(flavor, profile)),
+                profile=profile,
             )
         )
 
@@ -298,6 +329,11 @@ def validate_windows_packaging_contract(
             failures.append(
                 f"{dependency.package} 缺少合法组件归属 "
                 f"(base/media/matlab)，当前为 {dependency.component!r}"
+            )
+        if dependency.collection not in COLLECTION_STRATEGIES:
+            failures.append(
+                f"{dependency.package} 缺少合法收集策略 "
+                f"(collect_all/standard_hook)，当前为 {dependency.collection!r}"
             )
     lazy_modules = lazy_import_dependency_roots(
         Path(requirements_path).parent / "mf4_analyzer" / "io"
@@ -341,9 +377,35 @@ def validate_windows_packaging_contract(
     return tuple(failures)
 
 
-def _build_script_flavor(text: str) -> str | None:
-    match = re.search(r"--pyinstaller-args-json\s+--flavor\s+(full|lite)\b", text)
-    return match.group(1) if match else None
+def _build_script_delivery(text: str) -> tuple[str | None, str | None]:
+    """Read literal options or typed string parameter defaults used by builders.
+
+    This is a source contract, not a PowerShell interpreter. Unresolved or
+    unsupported options fail closed rather than assuming a bundled build.
+    """
+    source = re.sub(r"(?m)^\s*#.*$", "", text)
+    match = re.search(
+        r"--pyinstaller-args-json\s+--flavor\s+([\w$]+)"
+        r"(?:\s+--profile\s+([\w$]+))?", source,
+    )
+    if not match:
+        return None, None
+
+    def resolve(token: str) -> str | None:
+        if token.startswith("$"):
+            default = re.search(
+                r'\[string\]\s*' + re.escape(token) + r'\s*=\s*["\']([^"\']+)["\']',
+                source, flags=re.IGNORECASE,
+            )
+            return default.group(1) if default else None
+        return token
+
+    flavor = resolve(match.group(1))
+    profile = resolve(match.group(2) or DEFAULT_DEPENDENCY_PROFILE)
+    return (
+        flavor if flavor in WINDOWS_BUILD_FLAVORS else None,
+        profile if profile in DEPENDENCY_PROFILES else None,
+    )
 
 
 def _script_excluded_modules(text: str) -> tuple[str, ...]:
@@ -366,7 +428,8 @@ def _pyinstaller_excluded_modules(args: Iterable[str]) -> tuple[str, ...]:
 
 
 def _excluded_runtime_dependency_failures(
-    label: str, flavor: str, exclusions: Iterable[str]
+    label: str, flavor: str, exclusions: Iterable[str], *,
+    profile: str = DEFAULT_DEPENDENCY_PROFILE,
 ) -> list[str]:
     """Check only declared product dependencies for this build flavor.
 
@@ -375,7 +438,9 @@ def _excluded_runtime_dependency_failures(
     scan: development-only ``tools/`` imports and unrelated PyInstaller
     pruning are outside the frozen product runtime contract.
     """
-    required_roots = REQUIRED_EXTERNAL_RUNTIME_ROOTS_BY_FLAVOR[flavor]
+    required_roots = REQUIRED_EXTERNAL_RUNTIME_ROOTS_BY_FLAVOR[flavor].intersection(
+        dependency.package for dependency in frozen_dependencies_for_profile(profile)
+    )
     intentional_roots = INTENTIONAL_EXCLUDED_ROOTS_BY_FLAVOR[flavor]
     intentional_submodules = INTENTIONAL_EXCLUDED_SUBMODULES_BY_FLAVOR[flavor]
     failures: list[str] = []

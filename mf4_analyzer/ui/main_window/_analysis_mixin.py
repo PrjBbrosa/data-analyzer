@@ -2544,6 +2544,12 @@ class AnalysisMixin:
         """
         from ..analysis_view_state import analysis_view_has_sources
 
+        # Canvas-backed restore/render must explicitly request readiness; do not
+        # rely on the user having visited the section (Task 3).
+        ensure = getattr(self.chart_stack, "ensure_analysis_page_ready", None)
+        if callable(ensure):
+            ensure(section)
+
         mgr = self.analysis_managers.get(section)
         if mgr is not None:
             # Persisted view identity, not a mutable list position, owns a
@@ -2751,8 +2757,12 @@ class AnalysisMixin:
             )
         )
         page = self._analysis_page(section)
+        if page is None or not page.is_ready():
+            # Deferred pages keep nudge facts on View/inspector authority until
+            # the chart exists; stamping a missing canvas must not construct.
+            return
         idx = page.focused_index()
-        canvas = page.pane_canvas(idx)
+        canvas = page.peek_pane_canvas(idx)
         if canvas is None:
             return
         canvas.db_reference_nudge_facts = {
@@ -2767,7 +2777,8 @@ class AnalysisMixin:
         # OUTSIDE any such signal -- force the same footer refresh here so
         # it never lags a stamp that happens without an accompanying
         # re-render (e.g. a plain View-mode toggle).
-        card = page._cards[idx] if 0 <= idx < len(page._cards) else None
+        cards = page.peek_cards()
+        card = cards[idx] if 0 <= idx < len(cards) else None
         refresh = getattr(card, 'refresh_nudge_state', None)
         if callable(refresh):
             refresh()

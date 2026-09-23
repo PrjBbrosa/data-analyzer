@@ -2719,7 +2719,7 @@ def test_preset_bar_summary_uses_name_value_colours(qapp):
 
 def test_preset_bar_uses_custom_hover_card_instead_of_qtooltip(qapp, qtbot):
     from PyQt5.QtCore import Qt
-    from PyQt5.QtWidgets import QFrame, QLabel
+    from PyQt5.QtWidgets import QFrame, QLabel, QWidget
     from mf4_analyzer.ui.inspector_sections import PresetBar
 
     current = lambda: {
@@ -2749,6 +2749,10 @@ def test_preset_bar_uses_custom_hover_card_instead_of_qtooltip(qapp, qtbot):
     assert panel is not None
     assert panel.testAttribute(Qt.WA_StyledBackground)
     assert bar._hover_card.findChild(QLabel, 'presetHoverTitle').text() == '配置1'
+    rows = bar._hover_card.findChildren(QWidget, 'presetHoverChipRow')
+    assert rows
+    assert 'QWidget#presetHoverChipRow' in bar._hover_card.styleSheet()
+    assert all(not row.autoFillBackground() for row in rows)
     chips = [c.text() for c in bar._hover_card.findChildren(QLabel, 'presetChip')]
     assert any('窗函数' in c and 'hanning' in c for c in chips)
     assert any('NFFT' in c and '4096' in c for c in chips)

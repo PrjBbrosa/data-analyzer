@@ -328,6 +328,8 @@ class OrderMixin:
         mgr = self.analysis_managers["order"]
         is_active = mgr.get(mgr.active) is state
         plot_live = is_active and self.chart_stack.current_mode() == "order"
+        if plot_live:
+            self.chart_stack.ensure_analysis_page_ready("order")
         page = self._analysis_page("order")
         cache = self.analysis_caches["order"]
         jobs = []
@@ -691,15 +693,13 @@ class OrderMixin:
         z_floor = float(order_params.get('z_floor', -30.0))
         z_ceiling = float(order_params.get('z_ceiling', 0.0))
 
-        # For the dB path: compute auto levels using the same fixed-SPAN
-        # anchor used by plot_result — [ceiling - AUTO_SPAN_DB, ceiling] in
-        # absolute dB — and pass them as explicit vmin/vmax so the canvas
-        # does not fall back to the full data range (which may span 80+ dB
-        # of noise floor).  This makes Order's auto/manual transition as
-        # jump-free as FFT-vs-Time's.  The ceiling is a robust high
-        # percentile (NOT the literal max) so a lone transient peak does not
-        # drag the window up and bury the bulk below the floor — parity with
-        # plot_result's _robust_db_ceiling.
+        # dB auto levels come from the same ``_auto_db_window`` as
+        # plot_result: floor is the robust percentile minus the fixed span,
+        # ceiling is that percentile plus a few dB of headroom capped at the
+        # finite max. Pass them as explicit vmin/vmax so the canvas does not
+        # fall back to the full data range (which may span 80+ dB of noise
+        # floor). Order's auto→manual transition stays jump-free with
+        # FFT-vs-Time, and a lone transient still cannot lift the floor.
         vmin_override = None
         vmax_override = None
         shifted_manual_levels = None
@@ -789,7 +789,11 @@ class OrderMixin:
         notify_ultraview_plot(self, "order", "order-plot")
         self._restore_analysis_canvas_viewport("order", canvas)
         page = self._analysis_page("order")
-        if canvas is page.pane_canvas(page.focused_index()):
+        focused = (
+            page.peek_pane_canvas(page.focused_index())
+            if page is not None else None
+        )
+        if focused is not None and canvas is focused:
             self._sync_order_effective_facts()
 
     def _render_order_time(self, result, *, emit_feedback=True, source=None):

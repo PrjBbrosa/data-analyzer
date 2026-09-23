@@ -2586,23 +2586,16 @@ def test_plot_result_db_vmin_vmax_not_overridden_by_internal_auto(qapp):
 
 
 def test_plot_result_db_auto_span_tracks_robust_ceiling(qapp):
-    """Auto color-scale uses a fixed _AUTO_SPAN_DB span anchored at a robust
-    high-percentile ceiling — NOT the z_floor spin value, and NOT the literal
-    data max.
+    """Auto color-scale floor is the percentile minus _AUTO_SPAN_DB.
 
-    Old contract (peak-offset): z_floor was treated as a *peak offset*, so the
-    auto and manual windows used different semantics (peak-relative vs absolute),
-    causing a 30+ dB jump when the user toggled auto off.
-
-    Current contract: hi = _robust_db_ceiling(matrix) (the _AUTO_CEILING_PCT
-    percentile) and lo = hi - _AUTO_SPAN_DB ALWAYS, regardless of z_floor.
-    z_floor/z_ceiling have a single meaning: absolute dB values used in MANUAL
-    mode only.  Anchoring on a percentile (not np.nanmax) keeps a lone transient
-    peak from dragging the window up — see
+    The ceiling is that percentile plus _AUTO_CEILING_HEADROOM_DB, capped at
+    the finite maximum. z_floor/z_ceiling are absolute dB and apply in MANUAL
+    mode only. A lone transient still must not lift the floor — see
     test_plot_result_db_auto_ceiling_ignores_outlier_peak.
     """
     from mf4_analyzer.ui.pg_canvas.heatmap_canvas import (
-        _AUTO_CEILING_PCT, _AUTO_SPAN_DB, _robust_db_ceiling)
+        _AUTO_CEILING_HEADROOM_DB, _AUTO_CEILING_PCT, _AUTO_SPAN_DB,
+        _robust_db_ceiling)
 
     c = PgHeatmapCanvas(with_slice=True)
     c.resize(640, 480)
@@ -2621,13 +2614,13 @@ def test_plot_result_db_auto_span_tracks_robust_ceiling(qapp):
     )
 
     ceiling = _robust_db_ceiling(c._matrix_disp, _AUTO_CEILING_PCT)
+    peak = float(np.nanmax(c._matrix_disp))
     lo, hi = c._img.getLevels()
-    assert hi == pytest.approx(ceiling)
-    # Fixed-span contract: lo = ceiling - _AUTO_SPAN_DB, regardless of z_floor.
     assert lo == pytest.approx(ceiling - _AUTO_SPAN_DB)
+    assert hi == pytest.approx(min(peak, ceiling + _AUTO_CEILING_HEADROOM_DB))
     assert hi < -100.0
     # Auto window is stored for the inspector write-back (auto→manual no jump).
-    assert c._last_auto_levels == pytest.approx((ceiling - _AUTO_SPAN_DB, ceiling))
+    assert c._last_auto_levels == pytest.approx((lo, hi))
     c.deleteLater()
 
 
@@ -2638,9 +2631,9 @@ def test_auto_db_window_default_span_is_30(qapp):
 
     vmin, vmax = hc._auto_db_window(matrix)
 
-    ceiling = hc._robust_db_ceiling(matrix, hc._AUTO_CEILING_PCT)
-    assert vmax == pytest.approx(ceiling)
-    assert (vmax - vmin) == pytest.approx(30.0)
+    anchor = hc._robust_db_ceiling(matrix, hc._AUTO_CEILING_PCT)
+    assert vmin == pytest.approx(anchor - hc._AUTO_SPAN_DB)
+    assert vmax == pytest.approx(float(np.max(matrix)))
 
 
 def test_plot_result_db_z_auto_window_uses_30db_span(qapp):
@@ -2660,8 +2653,15 @@ def test_plot_result_db_z_auto_window_uses_30db_span(qapp):
         z_auto=True, z_floor=-80.0, z_ceiling=0.0,
     )
 
+    from mf4_analyzer.ui.pg_canvas.heatmap_canvas import (
+        _AUTO_CEILING_HEADROOM_DB, _AUTO_CEILING_PCT, _AUTO_SPAN_DB,
+        _robust_db_ceiling)
+
+    anchor = _robust_db_ceiling(c._matrix_disp, _AUTO_CEILING_PCT)
+    peak = float(np.nanmax(c._matrix_disp))
     vmin, vmax = c._last_auto_levels
-    assert (vmax - vmin) == pytest.approx(30.0)
+    assert vmin == pytest.approx(anchor - _AUTO_SPAN_DB)
+    assert vmax == pytest.approx(min(peak, anchor + _AUTO_CEILING_HEADROOM_DB))
     assert c._img.getLevels() == pytest.approx((vmin, vmax))
     c.deleteLater()
 
@@ -2674,11 +2674,12 @@ def test_plot_result_db_auto_ceiling_ignores_outlier_peak(qapp):
     pre-fix auto window anchored the ceiling on np.nanmax, so the ceiling sat
     on the outlier and the whole field fell below the floor → an all-dark image
     the user had to drag down ~38 dB to read (the "拖色阶 vs 重算图不一样"
-    report).  The robust percentile ceiling tracks the bulk top instead, so the
-    outlier is clipped (saturated) and the bulk maps across the colormap.
+    report).  The robust percentile anchors the floor. The ceiling may sit
+    5 dB above that percentile; the outlier still saturates.
     """
     from mf4_analyzer.ui.pg_canvas.heatmap_canvas import (
-        _AUTO_CEILING_PCT, _AUTO_SPAN_DB, _robust_db_ceiling)
+        _AUTO_CEILING_HEADROOM_DB, _AUTO_CEILING_PCT, _AUTO_SPAN_DB,
+        _robust_db_ceiling)
 
     rng = np.random.default_rng(0)
     # Bulk spread around -30 dB; ONE +30 dB transient outlier (a 1e3x spike).
@@ -2705,10 +2706,10 @@ def test_plot_result_db_auto_ceiling_ignores_outlier_peak(qapp):
     ceiling = _robust_db_ceiling(c._matrix_disp, _AUTO_CEILING_PCT)
     lo, hi = c._img.getLevels()
     assert peak == pytest.approx(30.0, abs=0.5)         # outlier present
-    assert hi == pytest.approx(ceiling)                 # ceiling = robust pct
+    assert lo == pytest.approx(ceiling - _AUTO_SPAN_DB)
+    assert hi == pytest.approx(ceiling + _AUTO_CEILING_HEADROOM_DB)
     assert hi < peak - 25.0                             # NOT pinned to the peak
     assert -40.0 <= hi <= 0.0                           # sits in the bulk band
-    assert lo == pytest.approx(hi - _AUTO_SPAN_DB)      # fixed span preserved
     # Old (buggy) behaviour would have put hi == peak (~+30 dB); guard it.
     assert hi != pytest.approx(peak)
     c.deleteLater()
@@ -3926,11 +3927,12 @@ def test_plot_result_auto_decoupled_from_spin_values(qapp):
 
     Before the fix, z_auto=True used z_floor/z_ceiling as peak offsets,
     so different spin values produced different windows.  After the fix,
-    [ceiling - AUTO_SPAN_DB, ceiling] is always used regardless of spin
-    values, where ceiling is the robust _AUTO_CEILING_PCT percentile.
+    the window is data-driven: floor is the percentile minus the span,
+    ceiling is the percentile plus headroom capped at the finite max.
     """
     from mf4_analyzer.ui.pg_canvas.heatmap_canvas import (
-        _AUTO_CEILING_PCT, _AUTO_SPAN_DB, _robust_db_ceiling)
+        _AUTO_CEILING_HEADROOM_DB, _AUTO_CEILING_PCT, _AUTO_SPAN_DB,
+        _robust_db_ceiling)
 
     c = PgHeatmapCanvas(with_slice=False)
     c.resize(320, 240)
@@ -3950,16 +3952,16 @@ def test_plot_result_auto_decoupled_from_spin_values(qapp):
     assert hi_a == pytest.approx(hi_b, abs=0.5), (
         f"auto window hi changed with spin values: {hi_a:.3f} vs {hi_b:.3f}")
 
-    # Also verify the window is [ceiling - AUTO_SPAN_DB, ceiling] where
-    # ceiling is the robust percentile (NOT np.nanmax).
     from mf4_analyzer.signal.spectrogram import SpectrogramAnalyzer
     m_db = SpectrogramAnalyzer.amplitude_to_db(result.amplitude, 1.0)
-    expected_hi = _robust_db_ceiling(m_db, _AUTO_CEILING_PCT)
-    expected_lo = expected_hi - _AUTO_SPAN_DB
+    anchor = _robust_db_ceiling(m_db, _AUTO_CEILING_PCT)
+    peak = float(np.nanmax(m_db))
+    expected_lo = anchor - _AUTO_SPAN_DB
+    expected_hi = min(peak, anchor + _AUTO_CEILING_HEADROOM_DB)
     assert hi_a == pytest.approx(expected_hi, abs=0.5), (
-        f"auto hi should be robust ceiling={expected_hi:.3f}, got {hi_a:.3f}")
+        f"auto hi should be {expected_hi:.3f}, got {hi_a:.3f}")
     assert lo_a == pytest.approx(expected_lo, abs=0.5), (
-        f"auto lo should be ceiling-SPAN={expected_lo:.3f}, got {lo_a:.3f}")
+        f"auto lo should be {expected_lo:.3f}, got {lo_a:.3f}")
     c.deleteLater()
 
 

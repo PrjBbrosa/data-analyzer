@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
-import pandas as pd
 
 from .wwt_display import (
     WwtCurveDisplay,
@@ -640,6 +639,7 @@ def _materialize_groups(
         smeta = dict(smeta_base)
         smeta["renamed_channels"] = renamed
         smeta["zeit_record_indices"] = tuple(blk["zeit_indices"])
+        import pandas as pd
         groups.append({
             "data": pd.DataFrame(frame), "channels": list(frame.keys()),
             "units": units, "channel_metadata": cmeta,

@@ -6,9 +6,9 @@ verification-only harness does: it drives the same prepared arrays into the
 new report renderer and the existing single-file pyqtgraph canvases, derives
 plot crops from live scene geometry, and records structural + visual tokens.
 
-Reference levels / colormap names must be read back from product constants
-(``_AUTO_CEILING_PCT`` / ``_AUTO_SPAN_DB`` / ``DEFAULT_HEATMAP_CMAP``), never
-re-declared as literals — see
+Reference levels / colormap names must come from the product helpers
+(``_auto_db_window`` / ``DEFAULT_HEATMAP_CMAP``), never a re-declared
+percentile formula — see
 ``docs/analyzer/specs/2026-08-12-guideline-hardening-spec.md`` §3.3
 (C2/C3 verify-tool contract).
 """
@@ -46,8 +46,7 @@ from mf4_analyzer.batch_render_qt._dispatch import ensure_app
 from mf4_analyzer.batch_render_qt._export import render_scene_image
 from mf4_analyzer.qt_analysis_shared import (
     DEFAULT_HEATMAP_CMAP,
-    _AUTO_CEILING_PCT,
-    _AUTO_SPAN_DB,
+    _auto_db_window,
 )
 from mf4_analyzer.batch_render_qt._page import render_metadata
 from mf4_analyzer.qt_chart_fonts import chart_font
@@ -239,8 +238,7 @@ def _cases() -> list[ParityCase]:
         }
 
     linear_levels = (float(np.min(heatmap_linear)), float(np.max(heatmap_linear)))
-    db_ceiling = float(np.percentile(heatmap_db, _AUTO_CEILING_PCT))
-    db_auto_levels = (db_ceiling - _AUTO_SPAN_DB, db_ceiling)
+    db_auto_levels = _auto_db_window(heatmap_db)
     db_label = "Amplitude (dB re 1×10⁰)"
     invalid_warning = (
         f"Invalid colormap 'not-a-real-map'; using '{DEFAULT_HEATMAP_CMAP}'."

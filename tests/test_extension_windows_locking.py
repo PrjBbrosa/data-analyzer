@@ -32,6 +32,26 @@ NATIVE_SKIP_REASON = (
 requires_native_ntfs = pytest.mark.skipif(sys.platform != "win32", reason=NATIVE_SKIP_REASON)
 
 
+@requires_native_ntfs
+def test_deep_install_reads_and_uninstalls_long_store_paths(tmp_path):
+    from mf4_analyzer.extensions.runtime import load_runtime, STATUS_READY
+    from tests.test_extension_transaction import _engine, _make_verified_zip
+
+    # A normal app path can produce >260-character content-addressed paths.
+    app_root = tmp_path / ("deep-install-" + "x" * 70)
+    _write_core(app_root)
+    source = _make_verified_zip(tmp_path, "media")
+    engine = _engine(app_root, MemoryLockBackend())
+    engine.install([source])
+    snapshot = load_runtime(app_root, frozen=True, acquire_lease=False)
+    assert snapshot.availability("media").status == STATUS_READY
+    package = snapshot.planned.module_roots[0] / "av" / "__init__.py"
+    assert len(str(package)) > 260
+    assert package.read_bytes() == b"__version__ = '1'\n"
+    engine.uninstall(["media"])
+    assert not load_runtime(app_root, frozen=True, acquire_lease=False).planned.module_roots
+
+
 class FakeKernel32:
     """Explicit LockFileEx surface.  Not MagicMock."""
 
@@ -125,6 +145,18 @@ def test_skip_reason_documents_unknown_native_acceptance():
     assert "UNKNOWN" in NATIVE_SKIP_REASON
     assert "not product proof" in NATIVE_SKIP_REASON.lower()
     assert "LockFileEx" in NATIVE_SKIP_REASON
+
+
+def test_windows_structures_match_previously_bound_ctypes_pointer_types():
+    import ctypes
+    from mf4_analyzer.extensions.locking import _windows_structures
+
+    # Binding argtypes and acquiring a lease ask for structures separately.
+    # ctypes rejects pointers to an independently redefined, identical class.
+    bound_types = _windows_structures()
+    acquired_types = _windows_structures()
+    for bound, acquired in zip(bound_types, acquired_types):
+        ctypes.POINTER(bound).from_param(ctypes.byref(acquired()))
 
 
 def test_unc_paths_are_refused_before_lock():

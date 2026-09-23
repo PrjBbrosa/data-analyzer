@@ -38,9 +38,9 @@ from mf4_analyzer.qt_analysis_shared import (
     DEFAULT_HEATMAP_INTERP,
     HEATMAP_SMOOTH_INTERP_MODES,
     SUPPORTED_HEATMAP_COLORMAPS,
-    _AUTO_CEILING_PCT,
     _AUTO_SPAN_DB,
     _SmoothImageItem,
+    _auto_db_window,
     amplitude_mode_is_db,
     default_amplitude_mode_for_kind,
     _resolve_colormap,
@@ -224,11 +224,18 @@ def _rendered_db_fact(kind: str, params: Mapping[str, Any]) -> str:
 
 
 def _auto_db_color_limits(values) -> tuple[float, float]:
+    """Batch colour window. Finite data uses ``_auto_db_window``.
+
+    Empty / all-non-finite input keeps the batch ``_EMPTY_DB_LEVEL``
+    baseline instead of the interactive helper's ``None``.
+    """
     finite = _finite_values(values)
     if finite.size == 0:
         return (_EMPTY_DB_LEVEL - _AUTO_SPAN_DB, _EMPTY_DB_LEVEL)
-    ceiling = float(np.percentile(finite, _AUTO_CEILING_PCT))
-    return (ceiling - _AUTO_SPAN_DB, ceiling)
+    window = _auto_db_window(finite)
+    if window is None:
+        return (_EMPTY_DB_LEVEL - _AUTO_SPAN_DB, _EMPTY_DB_LEVEL)
+    return window
 
 
 def _finite_limits(values) -> tuple[float, float]:

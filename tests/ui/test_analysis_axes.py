@@ -25,6 +25,7 @@ import pytest
 from mf4_analyzer.ui.pg_canvas.analysis_axes import (
     _apply_axis_tick_density,
     _apply_neutral_axis_frame,
+    _AUTO_CEILING_HEADROOM_DB,
     _AUTO_CEILING_PCT,
     _AUTO_SPAN_DB,
     _auto_db_window,
@@ -148,17 +149,48 @@ def test_robust_db_ceiling_falls_back_when_nothing_is_finite():
     assert _robust_db_ceiling(np.full((4, 4), np.nan)) is None
 
 
-def test_auto_db_window_is_a_fixed_span_below_the_robust_ceiling():
+def test_auto_db_window_caps_a_short_tail_at_the_finite_max():
+    # arange tail is under 1 dB, so the 5 dB headroom must not open empty scale.
     values = np.arange(100, dtype=float)
+    anchor = _robust_db_ceiling(values, _AUTO_CEILING_PCT)
     vmin, vmax = _auto_db_window(values)
-    assert vmax == pytest.approx(_robust_db_ceiling(values, _AUTO_CEILING_PCT))
-    assert vmax - vmin == pytest.approx(_AUTO_SPAN_DB)
-    assert (vmin, vmax) == pytest.approx((68.01, 98.01))
+    assert vmin == pytest.approx(anchor - _AUTO_SPAN_DB)
+    assert vmax == pytest.approx(float(np.max(values)))
+    assert (vmin, vmax) == pytest.approx((68.01, 99.0))
+
+
+def test_auto_db_window_headroom_does_not_lift_the_floor():
+    # One transient sits far above the percentile. Ceiling gains 5 dB;
+    # the floor stays 30 dB below the percentile, not below the new ceiling.
+    spiky = np.concatenate([np.full(999, -50.0), np.array([100.0])])
+    anchor = _robust_db_ceiling(spiky, _AUTO_CEILING_PCT)
+    vmin, vmax = _auto_db_window(spiky)
+    assert anchor == pytest.approx(-50.0)
+    assert vmin == pytest.approx(anchor - _AUTO_SPAN_DB)
+    assert vmax == pytest.approx(anchor + _AUTO_CEILING_HEADROOM_DB)
+    assert vmax < float(np.max(spiky))
 
 
 def test_auto_db_window_default_span_is_30_db():
     assert _AUTO_SPAN_DB == 30.0
     assert _AUTO_CEILING_PCT == 99.0
+    assert _AUTO_CEILING_HEADROOM_DB == 5.0
+
+
+def test_batch_finite_auto_db_limits_match_the_shared_window():
+    from mf4_analyzer.batch_render_qt._builder import (
+        _EMPTY_DB_LEVEL,
+        _auto_db_color_limits,
+    )
+
+    values = np.array([-80.0, -40.0, -10.0, 5.0, 40.0, np.nan])
+    assert _auto_db_color_limits(values) == pytest.approx(_auto_db_window(values))
+    empty = _auto_db_color_limits(np.array([np.nan, np.inf]))
+    assert empty == pytest.approx((
+        _EMPTY_DB_LEVEL - _AUTO_SPAN_DB,
+        _EMPTY_DB_LEVEL,
+    ))
+    assert _auto_db_window(np.array([np.nan, np.inf])) is None
 
 
 def test_auto_db_window_on_an_all_zero_matrix():

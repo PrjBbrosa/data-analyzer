@@ -24,15 +24,10 @@ import json
 import math
 import os
 from pathlib import Path
+import sys
 from typing import Callable, Mapping
 
 import numpy as np
-import pandas as pd
-
-try:
-    from asammdf.blocks.utils import MdfException as _AsamMdfException
-except ImportError:  # pragma: no cover - optional dependency boundary
-    _AsamMdfException = None
 
 from .channel_frame import (
     frame_column_names,
@@ -43,13 +38,6 @@ from .channel_frame import (
 from .file_data import FileData, _TIME_NAMES
 from . import loader as _loader
 from .loader import AUDIO_VIDEO_EXTS, DataLoader, unique_mdf_channel_locations
-
-
-_MDF_PROBE_IO_ERRORS = (
-    (OSError, _AsamMdfException)
-    if _AsamMdfException is not None
-    else (OSError,)
-)
 
 
 class UnsupportedSourceFormatError(ValueError):
@@ -330,15 +318,36 @@ def _group_identity(adapter_key: str, group: Mapping[str, object]) -> str:
     )
 
 
+def _mdf_probe_io_errors() -> tuple[type[BaseException], ...]:
+    """Resolve MDF probe I/O exception types without importing at module load.
+
+    Call only on the MF4 probe path (after MDF is required). ``find_spec`` /
+    blank startup must not pull asammdf in just to build this tuple.
+    """
+    errors: list[type[BaseException]] = [OSError]
+    try:
+        from asammdf.blocks.utils import MdfException
+    except ImportError:
+        return tuple(errors)
+    errors.append(MdfException)
+    return tuple(errors)
+
+
 def _safe_metadata(value):
     """Copy probe metadata without retaining samples or pandas containers."""
+    pd = sys.modules.get("pandas")
+    frame_types = ()
+    if pd is not None:
+        frame_types = (pd.DataFrame, pd.Series)
     if isinstance(value, Mapping):
         return {
             str(key): _safe_metadata(item)
             for key, item in value.items()
-            if not isinstance(item, (pd.DataFrame, pd.Series))
+            if not (frame_types and isinstance(item, frame_types))
         }
-    if isinstance(value, (pd.DataFrame, pd.Series, np.ndarray)):
+    if frame_types and isinstance(value, frame_types):
+        return "<sample data omitted>"
+    if isinstance(value, np.ndarray):
         return "<sample data omitted>"
     if isinstance(value, np.generic):
         return value.item()
@@ -415,15 +424,19 @@ def _mdf_channel_facts(mdf) -> tuple[tuple[str, ...], dict, dict]:
 
 def _probe_mdf(path: str, adapter: "SourceAdapter") -> tuple[SourceDescriptor, ...]:
     MDF = getattr(_loader, "MDF", None)
-    if MDF is None:  # pragma: no cover - guarded by availability
-        raise SourceUnavailableError("asammdf is required for MDF sources")
+    if MDF is None:
+        try:
+            MDF = _loader.ensure_mdf()
+        except ImportError as exc:
+            raise SourceUnavailableError("asammdf is required for MDF sources") from exc
 
     canonical = canonical_source_path(path)
     mdf = None
+    io_errors = _mdf_probe_io_errors()
     try:
         mdf = MDF(path)
         channels, units, channel_metadata = _mdf_channel_facts(mdf)
-    except _MDF_PROBE_IO_ERRORS as exc:
+    except io_errors as exc:
         raise SourceUnavailableError(
             f'MDF metadata unavailable for "{path}": {exc}'
         ) from exc

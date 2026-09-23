@@ -4,6 +4,7 @@ param(
     [string]$Flavor = "lite",
     [string]$DependencyProfile = "modular",
     [string]$ManagerSource = "",
+    [string]$RepositoryConfig = "",
     [switch]$Console,
     [switch]$SkipInstall,
     [switch]$KeepPrevious
@@ -28,6 +29,7 @@ param(
 # - Emits core.json / core-files.json, content-addressed component ZIPs,
 #   licenses, dependency lists, native-identity audit, and a tested-manager
 #   copy step (refuse publication without a self-tested Windows installer.exe).
+#   Without -ManagerSource, build and self-test the manager automatically first.
 # - Importer gates are split: base expected-missing vs installed-available.
 #   A permanent skip is not recorded as success. Frozen WAV/MP4 reads are
 #   not claimed without a frozen child.
@@ -284,7 +286,7 @@ if ($env:OS -ne "Windows_NT") {
     Write-Warning "This script is intended to build a Windows .exe from Windows."
 }
 
-$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).ProviderPath
 $EntryScript = Join-Path $RepoRoot "MF4 Data Analyzer V1.py"
 $Requirements = Join-Path $RepoRoot "requirements.txt"
 $StyleQss = Join-Path $RepoRoot "mf4_analyzer\ui_kit\style.qss"
@@ -297,9 +299,6 @@ $BatchRenderSmokeTool = Join-Path $PSScriptRoot "verify_frozen_batch_render.py"
 $ExtensionBuildTool = Join-Path $PSScriptRoot "build_windows_extensions.py"
 $ExtensionVerifyTool = Join-Path $PSScriptRoot "verify_extension_installation.py"
 $ExtensionInstallerScript = Join-Path $PSScriptRoot "build_windows_extension_installer.ps1"
-if (-not $ManagerSource -or -not (Test-Path -LiteralPath $ManagerSource -PathType Leaf)) {
-    throw "ManagerSource must point to a tested installer.exe; modular release refuses a placeholder manager."
-}
 $VenvDir = Join-Path $RepoRoot ".venv-build-win"
 $VenvPython = Join-Path $VenvDir "Scripts\python.exe"
 $DistDir = Join-Path $RepoRoot "dist"
@@ -316,6 +315,7 @@ $script:PyInstallerStarted = $false
 $script:ExeGenerated = $false
 $script:PostCheckResults = New-Object System.Collections.ArrayList
 $BuildSucceeded = $false
+$SmokeRoot = $null
 New-Item -ItemType Directory -Force -Path $BuildEvidenceDir | Out-Null
 Start-Transcript -LiteralPath $BuildLog -NoClobber | Out-Host
 try {
@@ -342,6 +342,23 @@ foreach ($RequiredPath in @($EntryScript, $Requirements, $StyleQss, $RuntimeDepe
     }
 }
 Copy-Item -LiteralPath $Requirements -Destination $BuildEvidenceDir
+
+if (-not $ManagerSource) {
+    Write-Step "Building and self-testing the extension manager"
+    $ManagerBuildArgs = @{
+        RepositoryConfig = $RepositoryConfig
+        SkipInstall = $SkipInstall
+        Console = $Console
+    }
+    & $ExtensionInstallerScript @ManagerBuildArgs
+    $ManagerSource = Join-Path $RepoRoot "dist\TraceLabExtensionManager\installer.exe"
+}
+if (-not (Test-Path -LiteralPath $ManagerSource -PathType Leaf)) {
+    throw "ManagerSource must point to a tested installer.exe; modular release refuses a placeholder manager."
+}
+# Resolve before child builders change their working directory.
+$ManagerSource = (Resolve-Path -LiteralPath $ManagerSource).ProviderPath
+Write-Host "Tested manager: $ManagerSource"
 
 Write-Step "Preparing build environment"
 if (-not (Test-Path $VenvPython)) {
@@ -528,6 +545,7 @@ Invoke-LoggedNative -Executable $VenvPython -Arguments $PyInstallerArgs
 if (-not (Test-Path $ExePath)) {
     throw "Build finished but exe was not found: $ExePath"
 }
+$script:ExeGenerated = $true
 
 Write-Step "Verifying required Qt platform plugins"
 $QtPlatformsDir = Join-Path $OutputDir "_internal\PyQt5\Qt5\plugins\platforms"
@@ -563,14 +581,15 @@ if ($OptionalLeaks.Count -ne 0) {
 }
 
 Write-Step "Pruning unused bundle payloads"
-Invoke-LoggedNative -Executable $VenvPython -Arguments @($BundlePolicyTool, "--flavor", $Flavor, "--exe", $ExePath, "--report", (Join-Path $BuildEvidenceDir "bundle-prune.json"))
+Invoke-LoggedNative -Executable $VenvPython -Arguments @($BundlePolicyTool, "--flavor", $Flavor, "--profile", $DependencyProfile, "--exe", $ExePath, "--report", (Join-Path $BuildEvidenceDir "bundle-prune.json"))
 
 Write-Step "Emitting core manifests, component ZIPs, identity audit, and manager copy"
 $ExtensionOutputDir = Join-Path $BuildEvidenceDir "extension-delivery"
 New-Item -ItemType Directory -Force -Path $ExtensionOutputDir | Out-Null
-$SitePackagesJson = Invoke-LoggedNative -Executable $VenvPython -Arguments @("-c", "import json, site; print(json.dumps(site.getsitepackages()))") -CaptureStdout
-$SitePackagesList = @(ConvertFrom-Json -InputObject $SitePackagesJson)
-$SitePackages = [string]$SitePackagesList[0]
+# Windows getsitepackages() also returns the venv root. Ask for the actual
+# native-package directory as one JSON string, avoiding PS 5.1 nested arrays.
+$SitePackagesJson = Invoke-LoggedNative -Executable $VenvPython -Arguments @("-c", "import json, sysconfig; print(json.dumps(sysconfig.get_path('platlib')))") -CaptureStdout
+$SitePackages = [string](ConvertFrom-Json -InputObject $SitePackagesJson)
 $ExtensionEmitArgs = @(
     $ExtensionBuildTool,
     "--flavor", $Flavor,
@@ -583,11 +602,19 @@ $ExtensionEmitArgs = @(
 $ExtensionEmitArgs += @("--manager-source", $ManagerSource)
 Invoke-LoggedNative -Executable $VenvPython -Arguments $ExtensionEmitArgs
 
-$script:ExeGenerated = $true
+Write-Step "Preparing local Windows verification copy"
+# Build sources may be on a Parallels/UNC share. Extension transactions must
+# still exercise the real local-filesystem guard on a disposable local copy.
+$SmokeRoot = Join-Path ([System.IO.Path]::GetTempPath()) "TraceLab-modular-$BuildRunId"
+New-Item -ItemType Directory -Path $SmokeRoot | Out-Null
+Copy-Item -LiteralPath $OutputDir -Destination $SmokeRoot -Recurse
+$VerificationAppDir = Join-Path $SmokeRoot $AppName
+$VerificationExe = Join-Path $VerificationAppDir "$AppName.exe"
+
 Write-Step "Verifying frozen batch rendering (independent post-checks)"
-Invoke-IndependentPostCheck -Name "offscreen" -Executable $VenvPython -Arguments @($BatchRenderSmokeTool, "--exe", $ExePath, "--platform", "offscreen", "--evidence-json", $BatchRenderOffscreenSmokeEvidence, "--diagnostics-dir", (Join-Path $BuildEvidenceDir "render-offscreen")) -TimeoutSeconds 300
-Invoke-IndependentPostCheck -Name "windows" -Executable $VenvPython -Arguments @($BatchRenderSmokeTool, "--exe", $ExePath, "--platform", "windows", "--evidence-json", $BatchRenderWindowsSmokeEvidence, "--diagnostics-dir", (Join-Path $BuildEvidenceDir "render-windows")) -TimeoutSeconds 300
-$CoreJson = Join-Path $OutputDir "core.json"
+Invoke-IndependentPostCheck -Name "offscreen" -Executable $VenvPython -Arguments @($BatchRenderSmokeTool, "--exe", $VerificationExe, "--platform", "offscreen", "--evidence-json", $BatchRenderOffscreenSmokeEvidence, "--diagnostics-dir", (Join-Path $BuildEvidenceDir "render-offscreen")) -TimeoutSeconds 300
+Invoke-IndependentPostCheck -Name "windows" -Executable $VenvPython -Arguments @($BatchRenderSmokeTool, "--exe", $VerificationExe, "--platform", "windows", "--evidence-json", $BatchRenderWindowsSmokeEvidence, "--diagnostics-dir", (Join-Path $BuildEvidenceDir "render-windows")) -TimeoutSeconds 300
+$CoreJson = Join-Path $VerificationAppDir "core.json"
 $FirstPackageJson = $null
 $PackageJsonCandidates = @(
     foreach ($item in @(Get-ChildItem -LiteralPath (Join-Path $ExtensionOutputDir "staging") -Filter "package.json" -Recurse -ErrorAction SilentlyContinue)) {
@@ -598,20 +625,20 @@ if ($PackageJsonCandidates.Count -ge 1) { $FirstPackageJson = [string]$PackageJs
 $BaseMissingEvidence = Join-Path $BuildEvidenceDir "importer-base-missing.json"
 $InstalledContractEvidence = Join-Path $BuildEvidenceDir "importer-installed-contract.json"
 $FallbackEvidence = Join-Path $BuildEvidenceDir "importer-fallback-contract.json"
-Invoke-IndependentPostCheck -Name "importer-base-missing" -Executable $VenvPython -Arguments @($ExtensionVerifyTool, "--mode", "base-expected-missing", "--exe", $ExePath, "--core-json", $CoreJson, "--expect-missing", "--app-root", $OutputDir, "--evidence-json", $BaseMissingEvidence) -TimeoutSeconds 60
+Invoke-IndependentPostCheck -Name "importer-base-missing" -Executable $VenvPython -Arguments @($ExtensionVerifyTool, "--mode", "base-expected-missing", "--exe", $VerificationExe, "--core-json", $CoreJson, "--expect-missing", "--app-root", $VerificationAppDir, "--evidence-json", $BaseMissingEvidence) -TimeoutSeconds 60
 if ($FirstPackageJson) {
-    Invoke-IndependentPostCheck -Name "importer-installed-contract" -Executable $VenvPython -Arguments @($ExtensionVerifyTool, "--mode", "combination-contract", "--core-json", $CoreJson, "--package-json", $FirstPackageJson, "--app-root", $OutputDir, "--evidence-json", $InstalledContractEvidence) -TimeoutSeconds 60
+    Invoke-IndependentPostCheck -Name "importer-installed-contract" -Executable $VenvPython -Arguments @($ExtensionVerifyTool, "--mode", "combination-contract", "--core-json", $CoreJson, "--package-json", $FirstPackageJson, "--app-root", $VerificationAppDir, "--evidence-json", $InstalledContractEvidence) -TimeoutSeconds 60
 } else {
     Write-Host "importer-installed-contract: not_run (no component package.json; not claimed as WAV/MP4 success)"
 }
 if ($FirstPackageJson) {
-    Invoke-IndependentPostCheck -Name "importer-fallback-contract" -Executable $VenvPython -Arguments @($ExtensionVerifyTool, "--mode", "fallback-contract", "--core-json", $CoreJson, "--remaining-package-json", $FirstPackageJson, "--removed-component", "matlab", "--app-root", $OutputDir, "--evidence-json", $FallbackEvidence) -TimeoutSeconds 60
+    Invoke-IndependentPostCheck -Name "importer-fallback-contract" -Executable $VenvPython -Arguments @($ExtensionVerifyTool, "--mode", "fallback-contract", "--core-json", $CoreJson, "--remaining-package-json", $FirstPackageJson, "--removed-component", "matlab", "--app-root", $VerificationAppDir, "--evidence-json", $FallbackEvidence) -TimeoutSeconds 60
 } else {
     Write-Host "importer-fallback-contract: not_run (no remaining package; not claimed as success)"
 }
 Write-Host "Not invoking verify_lite_importer_runtime.py: that gate requires frozen av/MAT success and is the bundled Lite path."
 $DeliveryVerifyTool = Join-Path $PSScriptRoot "verify_extension_delivery.py"
-Invoke-IndependentPostCheck -Name "extension-combinations" -Executable $VenvPython -Arguments @($DeliveryVerifyTool, "--app-root", $OutputDir, "--delivery-audit", (Join-Path $ExtensionOutputDir "delivery-audit.json"), "--evidence-json", (Join-Path $BuildEvidenceDir "extension-combinations.json")) -TimeoutSeconds 600
+Invoke-IndependentPostCheck -Name "extension-combinations" -Executable $VenvPython -Arguments @($DeliveryVerifyTool, "--app-root", $VerificationAppDir, "--delivery-audit", (Join-Path $ExtensionOutputDir "delivery-audit.json"), "--evidence-json", (Join-Path $BuildEvidenceDir "extension-combinations.json")) -TimeoutSeconds 600
 Write-PostCheckSummary
 if (-not (Test-AllPostChecksPassed)) {
     throw "Post-build checks failed; EXE generated; see evidence under $BuildEvidenceDir"
@@ -631,6 +658,13 @@ $BuildSucceeded = $true
     Write-Host $_.ScriptStackTrace
     throw
 } finally {
+    if ($SmokeRoot -and (Test-Path -LiteralPath $SmokeRoot)) {
+        try {
+            Remove-Item -LiteralPath $SmokeRoot -Recurse -Force
+        } catch {
+            Write-Warning "Could not remove local verification copy ${SmokeRoot}: $_"
+        }
+    }
     try {
         Save-BuildDiagnostics
     } catch {

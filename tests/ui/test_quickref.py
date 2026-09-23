@@ -569,14 +569,12 @@ def test_catalog_bottom_bar_is_question_mark_quickref():
     assert "📖" not in manual.gesture
 
 
-def test_quickref_documents_extension_manager():
-    row = _row_by_desc("扩展管理…")
-    assert "安装器" in row.sub
-    assert "关闭" in row.sub
-    assert "HDF" in row.sub and "MAT" in row.sub
-    assert "离线" in row.sub
-    assert "磁盘" in row.sub
-    assert "状态栏" in (row.gesture or "")
+def test_quickref_hides_extension_manager():
+    assert all(
+        row.desc != "扩展管理…"
+        for group in quickref.QUICKREF
+        for row in group.rows
+    )
 
 
 def test_catalog_channel_editor_create_and_param_help():

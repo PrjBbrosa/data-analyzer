@@ -9,6 +9,7 @@ import tempfile
 import uuid
 
 from .contract import ReasonCode
+from .locking import extensions_root
 from .probe import (PROBE_REQUEST_FLAG, PROBE_RESULT_FLAG, ProbeError, ProbeTimeout,
                     build_probe_request, run_authorized_probe)
 from .runtime import (STATUS_CORRUPT, STATUS_READY, content_identity_bytes,
@@ -39,7 +40,7 @@ def ensure_runtime_health(snapshot, *, runner=run_authorized_probe):
         return snapshot
     key = {"core_build_id": snapshot.core.core_build_id,
            "packages": {name: snapshot.availability(name).package_sha256 for name in names}}
-    cache = snapshot.app_root / "extensions" / "health" / (content_identity_bytes(key) + ".json")
+    cache = extensions_root(snapshot.app_root) / "health" / (content_identity_bytes(key) + ".json")
     try:
         cached = json.loads(cache.read_bytes())
     except (OSError, ValueError):

@@ -40,6 +40,7 @@ from mf4_analyzer.ui_kit.ticks_math import finite_non_degenerate_range
 # module's own call sites because they resolve the bare names through these
 # globals. Do NOT rewrite the internal call sites to qualify the module.
 from mf4_analyzer.ui.pg_canvas.analysis_axes import (  # noqa: F401
+    _AUTO_CEILING_HEADROOM_DB,
     _AUTO_CEILING_PCT,
     _AUTO_SPAN_DB,
     _BOUNDARY_GRID_EPS_PX,
@@ -1636,15 +1637,13 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
                 # code used z_floor/z_ceiling as *peak offsets* while the
                 # manual path treated them as absolute values.
                 #
-                # The ceiling is the _AUTO_CEILING_PCT percentile, NOT the
-                # literal max: real spectra have transient peaks tens of dB
-                # above the bulk, and anchoring on the max buried the whole
-                # informative field below the floor (an all-dark image the
-                # user had to drag down ~38 dB to read).  _AUTO_SPAN_DB and
-                # the percentile are intentionally NOT read from the spin
-                # widgets, to prevent a feedback loop. Auto levels simply
-                # re-derive from the new matrix — no reference-delta shift
-                # needed (spec §8.3.1: "自动色阶不需处理").
+                # Floor is the percentile minus _AUTO_SPAN_DB. Ceiling is that
+                # percentile plus _AUTO_CEILING_HEADROOM_DB, capped at the
+                # finite max. A lone transient still saturates instead of
+                # burying the bulk; a ridge within the headroom stays on the
+                # scale. Neither number is read from the spin widgets.
+                # Auto levels re-derive from the new matrix — no
+                # reference-delta shift (spec §8.3.1: "自动色阶不需处理").
                 window = _auto_db_window(m)
                 if window is None:
                     # All-non-finite matrix: keep a display placeholder and
