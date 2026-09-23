@@ -8,7 +8,8 @@ from PyQt5 import sip
 from PyQt5.QtCore import QEvent, QObject, QPoint, QTimer, Qt
 from PyQt5.QtGui import QColor, QFontMetrics, QPainter, QPainterPath, QPen
 from PyQt5.QtWidgets import (
-    QApplication, QFrame, QLabel, QScrollArea, QVBoxLayout, QWidget,
+    QApplication, QFrame, QLabel, QProxyStyle, QScrollArea, QStyle,
+    QVBoxLayout, QWidget,
 )
 
 from .dialog_geometry import (
@@ -26,6 +27,8 @@ _LAYOUT_H_MARGINS = 24
 _LAYOUT_V_MARGINS = 12
 _LIST_SUMMARY_TRIGGER = 12
 _LIST_SUMMARY_KEEP = 8
+_TOOLTIP_WAKE_DELAY_MS = 350
+_tooltip_wake_style = None
 
 
 def _wrap_anywhere(text, font, max_width):
@@ -218,6 +221,35 @@ class _TooltipEventFilter(QObject):
 _filter = None
 
 
+class _TooltipWakeStyle(QProxyStyle):
+    """Keep the active Qt style while giving ordinary tooltips one wake delay."""
+
+    def __init__(self, base_style):
+        style_name = base_style.objectName()
+        super().__init__(base_style)
+        self.setObjectName(style_name)
+
+    def styleHint(self, hint, option=None, widget=None, returnData=None):  # noqa: N802
+        if hint == QStyle.SH_ToolTip_WakeUpDelay:
+            return _TOOLTIP_WAKE_DELAY_MS
+        return super().styleHint(hint, option, widget, returnData)
+
+
+def _install_tooltip_wake_policy(app):
+    """Wrap the current style once, preserving every hint except tooltip wake."""
+    global _tooltip_wake_style
+    current = app.style()
+    if isinstance(current, _TooltipWakeStyle):
+        _tooltip_wake_style = current
+        return current
+    if _tooltip_wake_style is not None and sip.isdeleted(_tooltip_wake_style):
+        _tooltip_wake_style = None
+    style = _TooltipWakeStyle(current)
+    app.setStyle(style)
+    _tooltip_wake_style = style
+    return style
+
+
 def install_glass_tooltips(app=None):
     """Replace native Qt tooltips with glass-style popups app-wide."""
     from PyQt5.QtWidgets import QApplication
@@ -226,5 +258,6 @@ def install_glass_tooltips(app=None):
     target = app or QApplication.instance()
     if target is None:
         raise RuntimeError("QApplication must exist before install_glass_tooltips()")
+    _install_tooltip_wake_policy(target)
     _filter = _TooltipEventFilter()
     target.installEventFilter(_filter)

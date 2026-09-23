@@ -1,12 +1,13 @@
 import pytest
 from PyQt5 import sip
 from PyQt5.QtCore import QEvent, QPoint
-from PyQt5.QtWidgets import QWidget
+from PyQt5.QtWidgets import QStyle, QWidget
 
 from mf4_analyzer.ui_kit.dialog_geometry import IntRect, SCREEN_MARGIN, as_rect
 from mf4_analyzer.ui_kit.glass_tooltip import (
     _GlassTooltipPopup,
     _TooltipEventFilter,
+    _install_tooltip_wake_policy,
 )
 
 
@@ -45,6 +46,21 @@ def test_hide_event_ignores_deleted_popup_without_recreating(qapp):
 
     assert event_filter.eventFilter(watched, QEvent(QEvent.Hide)) is False
     assert _GlassTooltipPopup._instance is None
+
+
+def test_tooltip_wake_policy_is_shared_and_preserves_fall_asleep_delay(qapp):
+    qapp.setStyle("Fusion")
+    style_name_before = qapp.style().objectName()
+    fall_asleep_before = qapp.style().styleHint(
+        QStyle.SH_ToolTip_FallAsleepDelay,
+    )
+
+    style = _install_tooltip_wake_policy(qapp)
+
+    assert style.styleHint(QStyle.SH_ToolTip_WakeUpDelay) == 350
+    assert style.styleHint(QStyle.SH_ToolTip_FallAsleepDelay) == fall_asleep_before
+    assert style.objectName() == style_name_before
+    assert _install_tooltip_wake_policy(qapp) is style
 
 
 def test_long_tooltip_stays_inside_injected_work_area(qapp, qtbot, monkeypatch):

@@ -427,7 +427,8 @@ def test_time_single_pane_user_switch_keeps_light_and_matches_off_terminal(
     assert window.view_manager.active == 1
     assert [item["token"] is not None for item in begins] == [True]
     assert captures and captures[0]["null"] is False
-    assert all(item["exclude_overlay"] is False for item in captures)
+    assert [item["exclude_overlay"] for item in captures] == [False, True]
+    assert all(item["null"] is False for item in captures)
     light = _time_terminal(window)
     assert light["view_id"] == view1_id
     assert light["channels"] == ((fid, "torque"),)

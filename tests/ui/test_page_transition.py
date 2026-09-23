@@ -421,3 +421,113 @@ def test_target_paint_timeout_warns_with_section_and_view_before_cancel(qtbot, c
     assert "section=time" in message
     assert "view=fft-view" in message
     assert not controller.is_active()
+
+
+def test_identical_dark_live_endpoints_never_reveal_host_background(qtbot):
+    """A warm chart return must not fade black -> white -> black.
+
+    QWidget omits update-disabled children while a translucent sibling is
+    composited. A paint-count-only test misses the exposed host background.
+    """
+    host = _ColorHost("#ffffff")
+    host.resize(240, 160)
+    qtbot.addWidget(host)
+    surface = _LiveInputSurface(host)
+    surface.color = QColor("#000000")
+    surface.setGeometry(host.rect())
+    host.show()
+    surface.show()
+    qtbot.waitExposed(host)
+    QApplication.processEvents()
+    controller = PageTransitionController(host, policy=POLICY_LIGHT)
+    for generation in range(3):
+        source, target = _token("A", generation), _token("B", generation)
+        assert controller.begin_departure(source, _frame("#000000"))
+        assert controller.arm_target(target)
+        assert controller.watch_input_targets(target, (surface,))
+        assert controller.accept_target(target)
+        QApplication.processEvents()
+        assert controller._overlay.has_target()
+        controller._driver.clock().pause()
+        for progress in (0.0, 0.25, 0.5, 0.75, 1.0):
+            controller._overlay.set_progress(progress)
+            color = host.grab().toImage().pixelColor(120, 80)
+            assert color == QColor("#000000"), (generation, progress, color.name())
+        controller.cancel("pixel-probe-complete")
+        assert surface.updatesEnabled()
+        assert host.grab().toImage().pixelColor(120, 80) == QColor("#000000")
+
+
+def test_two_endpoint_composite_is_opaque_and_blends_only_endpoints(qtbot):
+    controller = _controller(qtbot)
+    assert controller.begin_departure(_token("A"), _frame("#000000"))
+    assert controller.arm_target(_token("B"))
+    assert controller.accept_target(_token("B"), _frame("#000000"))
+    controller._driver.clock().pause()
+    controller._overlay.set_progress(0.5)
+    color = controller._overlay.composite_snapshot().toImage().pixelColor(120, 80)
+    assert color.alpha() == 255
+    assert color == QColor("#000000")
+    controller._overlay.set_target(_frame("#ffffff"))
+    controller._overlay.set_progress(0.5)
+    color = controller._overlay.composite_snapshot().toImage().pixelColor(120, 80)
+    assert color.alpha() == 255
+    assert abs(color.red() - 128) <= 1
+    controller.cancel("pixel-probe-complete")
+
+
+def test_queued_target_snapshot_preserves_crop_and_dpr(qtbot, monkeypatch):
+    host = _ColorHost("#ffffff")
+    host.resize(240, 160)
+    qtbot.addWidget(host)
+    host.show()
+    qtbot.waitExposed(host)
+    QApplication.processEvents()
+    controller = PageTransitionController(host, policy=POLICY_LIGHT)
+    region = QRect(40, 30, 120, 80)
+    endpoint = QPixmap(480, 320)
+    endpoint.setDevicePixelRatio(2.0)
+    endpoint.fill(QColor("#ffffff"))
+    painter = QPainter(endpoint)
+    painter.fillRect(region, QColor("#204080"))
+    painter.end()
+    calls = []
+
+    def capture(widget, *, exclude_overlay=False):
+        calls.append((widget, exclude_overlay))
+        return endpoint
+
+    monkeypatch.setattr(controller, "capture_local_endpoint", capture)
+    assert controller.begin_departure(_token("A"), _frame("#204080"), overlay_rect=region)
+    assert controller.arm_target(_token("B"))
+    assert controller.accept_target(_token("B"))
+    assert calls == [], "never grab inside the target's natural paint callback"
+    QApplication.processEvents()
+    assert calls == [(host, True)]
+    snapshot = controller._overlay._target
+    assert snapshot.devicePixelRatioF() == 2.0
+    assert snapshot.size().width() == 240
+    assert snapshot.size().height() == 160
+    for x, y in ((0, 0), (239, 159), (120, 80)):
+        assert snapshot.toImage().pixelColor(x, y) == QColor("#204080")
+    controller.cancel("crop-probe-complete")
+
+
+def test_unavailable_target_snapshot_reveals_live_target_without_freezing(qtbot, monkeypatch):
+    controller = _controller(qtbot)
+    QApplication.processEvents()
+    surface = _LiveInputSurface(controller._host)
+    surface.setGeometry(controller._host.rect())
+    surface.show()
+    QApplication.processEvents()
+    cancelled = []
+    controller.transition_cancelled.connect(cancelled.append)
+    monkeypatch.setattr(controller, "capture_local_endpoint", lambda *a, **kw: QPixmap())
+    assert controller.begin_departure(_token("A"), _frame("#204080"))
+    assert controller.arm_target(_token("B"))
+    assert controller.watch_input_targets(_token("B"), (surface,))
+    assert controller.accept_target(_token("B"))
+    QApplication.processEvents()
+    assert cancelled == ["target-frame-unavailable"]
+    assert surface.updatesEnabled()
+    assert controller.image_bytes() == 0

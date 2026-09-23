@@ -1,9 +1,9 @@
 """Local, interruptible presentation-only chart page transitions.
 
 Business owners commit their View/Section state before this controller sees a
-request.  The controller can crossfade two already-correct temporary pixmaps,
-or fade one outgoing pixmap over a naturally painted live target; it never
-renders data, restores axes, submits compute, or persists state.
+request. The controller holds the outgoing pixmap until a natural target
+paint, then queues one target snapshot and crossfades the complete pair. It
+never restores axes, submits compute, or persists state.
 """
 from __future__ import annotations
 
@@ -127,11 +127,12 @@ class TransitionOverlay(QWidget):
             painter.drawPixmap(target, self._source)
             painter.setOpacity(1.0)
             return
-        progress = self._progress
-        painter.setOpacity(1.0 - progress)
-        painter.drawPixmap(target, self._source)
-        painter.setOpacity(progress)
+        # SourceOver needs an opaque foundation. Drawing both endpoints with
+        # fractional opacity leaks the host through (25% at the midpoint).
+        painter.setOpacity(1.0)
         painter.drawPixmap(target, self._target)
+        painter.setOpacity(1.0 - self._progress)
+        painter.drawPixmap(target, self._source)
         painter.setOpacity(1.0)
 
 
@@ -481,11 +482,9 @@ class PageTransitionController(QObject):
     ) -> bool:
         """Start after a matching natural target paint acknowledgement.
 
-        Passing no pixmap fades the held source over the real target that has
-        already painted below the transparent input overlay.  This is the
-        production path: it keeps B's crossfade without a second synchronous
-        target grab.  Tests and other measured callers can still provide a
-        target endpoint when that has independently been admitted.
+        Passing no pixmap queues one target snapshot after the paint callback
+        has unwound. Until then the opaque outgoing frame covers the live
+        target. Only a complete pair of endpoints may cover frozen widgets.
         """
         if (
             not self._policy.interpolates()
@@ -500,10 +499,9 @@ class PageTransitionController(QObject):
         self._target_ack_watchdog.stop()
         self._target_ack_watchdog_token = None
         self._target_ready = True
-        # The admitted target has already painted.  Overlay frames are the
-        # same presentation, so further GraphicsView replays are duplicate
-        # work; quality/update requests stay queued until this cover lifts.
-        QTimer.singleShot(0, self._freeze_input_target_updates)
+        # Never grab inside the GraphicsView paint acknowledgement. On the
+        # next turn, retain the target pixels BEFORE suppressing chart replays.
+        QTimer.singleShot(0, self._prepare_target_frame_and_freeze)
         self._driver.snap(0.0)
         self._driver.go(
             1.0, duration_ms=duration_ms("page_transition", self._policy),
@@ -687,14 +685,37 @@ class PageTransitionController(QObject):
         self._input_target_destroyed_slots.clear()
         self._input_targets = ()
 
-    def _freeze_input_target_updates(self) -> None:
-        """Drop duplicate exposes of the already-admitted live target.
+    def _prepare_target_frame_and_freeze(self) -> None:
+        """Cache the admitted target, then suppress duplicate chart exposes.
 
-        Overlay opacity changes are presentation-only.  They must not replay
-        curve painting.  Queued quality ``update()`` calls resume on thaw.
+        setUpdatesEnabled(False) removes a child from sibling composition; it
+        does not preserve its backing pixels below a translucent overlay.
+        Capturing once outside paint keeps both correctness and bounded work.
         """
         if not self._target_ready or self._source_token is None:
             return
+        if self._frozen_input_targets:
+            return
+        if not self._overlay.has_target():
+            token = self._target_token
+            frame = self.capture_local_endpoint(self._host, exclude_overlay=True)
+            # A grab can flush layouts and invalidate this presentation.
+            if token != self._target_token or not self._target_ready:
+                return
+            if frame.isNull():
+                self.cancel("target-frame-unavailable")
+                return
+            dpr = float(frame.devicePixelRatioF())
+            rect = self._overlay.geometry()
+            crop = QRect(
+                round(rect.x() * dpr), round(rect.y() * dpr),
+                round(rect.width() * dpr), round(rect.height() * dpr),
+            )
+            target = frame.copy(crop)
+            target.setDevicePixelRatio(dpr)
+            progress = self._overlay._progress
+            self._overlay.set_target(target)
+            self._overlay.set_progress(progress)
         self._thaw_input_target_updates()
         frozen = []
         for widget in self._input_targets:

@@ -3,8 +3,8 @@
 The compositor itself is covered by ``test_page_transition.py``.  These tests
 exercise the bridge which owns the important ordering: a normal navigation
 commits first, the outgoing page is copied once, a target canvas must report a
-natural paint, and only then may ChartStack fade that source over the live
-target.  It never synchronously captures the incoming endpoint.
+natural paint, and only then may ChartStack queue a target snapshot for the
+fade. It never captures the incoming endpoint inside its paint callback.
 """
 from __future__ import annotations
 
@@ -179,12 +179,20 @@ def test_light_transition_waits_for_natural_paint_then_fades_to_live_target(
     fence.acknowledge()
 
     # A GraphicsView paint callback must never synchronously grab another
-    # QWidget.  The held source fades over the real target that natural paint
-    # already proved, so no target endpoint is copied at all.
+    # QWidget. The target snapshot is queued until this callback unwinds.
     assert calls == [(chart_stack.stack, False, False)]
     assert chart_stack.page_transition().is_active()
     assert chart_stack.page_transition().image_bytes() == (
         _plot_surface_image_bytes(chart_stack)
+    )
+
+    QApplication.processEvents()
+    assert calls == [
+        (chart_stack.stack, False, False),
+        (chart_stack.stack, True, True),
+    ]
+    assert chart_stack.page_transition().image_bytes() == (
+        2 * _plot_surface_image_bytes(chart_stack)
     )
 
     chart_stack.page_transition()._driver.clock().setCurrentTime(duration)
@@ -444,6 +452,8 @@ def test_rapid_live_redirect_cleans_up_and_finishes_on_c(qtbot, monkeypatch):
     captures = iter(("#ff0000", "#7f0080"))
 
     def _capture(widget, *, exclude_overlay=False):
+        if exclude_overlay:
+            return _frame(widget, "#20a060")
         return _frame(widget, next(captures))
 
     monkeypatch.setattr(controller, "capture_local_endpoint", _capture)
@@ -546,3 +556,54 @@ def test_time_tab_switch_completes_natural_fade(qtbot, qapp, loaded_csv):
     # Overlay frames must not drive a 60 Hz GraphicsView replay.  A few
     # natural/quality paints during the handoff are expected.
     assert len(under_paints) <= 8, len(under_paints)
+
+
+def test_real_heatmap_repeat_fade_keeps_dark_plot_pixels(qtbot):
+    """Exercise the actual GraphicsView + slice input surfaces, not paint counts."""
+    import numpy as np
+    from PyQt5.QtGui import QImage
+    from PyQt5.QtWidgets import QVBoxLayout
+    from mf4_analyzer.ui.pg_canvas.heatmap_canvas import PgHeatmapCanvas
+    from tests.ui.test_pg_heatmap_canvas import _spec_result
+
+    host = QWidget()
+    qtbot.addWidget(host)
+    layout = QVBoxLayout(host)
+    canvas = PgHeatmapCanvas(with_slice=True)
+    layout.addWidget(canvas)
+    host.resize(900, 560)
+    host.show()
+    canvas.plot_result(_spec_result())
+    qtbot.waitExposed(host)
+    qtbot.wait(50)  # Drain the heatmap's existing first-show layout/AA settle.
+    from mf4_analyzer.ui.chart_stack.page_transition import PageTransitionController
+    controller = PageTransitionController(host, policy=POLICY_LIGHT)
+    canvas.presentation_paint_acknowledged.connect(controller.accept_target)
+
+    def rgb(pixmap):
+        image = pixmap.toImage().convertToFormat(QImage.Format_RGBA8888)
+        data = image.bits()
+        data.setsize(image.byteCount())
+        return np.frombuffer(data, np.uint8).reshape(
+            image.height(), image.bytesPerLine() // 4, 4,
+        )[:, :image.width(), :3].copy()
+
+    for index in range(3):
+        source = host.grab()
+        dark = rgb(source).max(axis=2) < 30
+        assert dark.sum() > 100
+        token = controller.begin_transition(
+            source_section="fft_time", source_view_id=f"A-{index}",
+            target_section="fft_time", target_view_id=f"B-{index}",
+            source_pixmap=source,
+        )
+        assert token is not None
+        assert controller.watch_input_targets(token, canvas.page_transition_input_widgets())
+        assert canvas.request_presentation_paint_ack(token)
+        qtbot.waitUntil(controller._overlay.has_target, timeout=1500)
+        controller._driver.clock().pause()
+        for progress in (0.25, 0.5, 0.75, 0.99):
+            controller._overlay.set_progress(progress)
+            assert float(rgb(host.grab())[dark].mean()) < 30
+        controller.cancel("heatmap-pixel-probe-complete")
+        QApplication.processEvents()
