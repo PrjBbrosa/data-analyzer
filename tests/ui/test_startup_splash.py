@@ -68,6 +68,36 @@ def _sample(image: QImage, pt: QPointF) -> QColor:
     return image.pixelColor(x, y)
 
 
+def test_spectrum_does_not_add_a_rectangular_blue_backing(splash_host):
+    """The HTML has only spectrum strokes, not a second tinted rectangle."""
+    from PyQt5.QtGui import QPainter
+
+    splash, _ = splash_host
+    image = QImage(splash.size(), QImage.Format_ARGB32_Premultiplied)
+    image.fill(Qt.transparent)
+    painter = QPainter(image)
+    splash._paint_spectrum(painter)
+    painter.end()
+    rect = splash._spectrum_rect()
+    # Below the wave paths and above captions: no graph or text ink here.
+    point = QPointF(rect.center().x(), rect.bottom() - splash._s(28))
+    assert _sample(image, point).alpha() == 0
+
+
+def test_card_starts_with_neutral_white_not_uniform_blue(splash_host):
+    from PyQt5.QtGui import QPainter
+
+    splash, _ = splash_host
+    image = QImage(splash.size(), QImage.Format_ARGB32_Premultiplied)
+    image.fill(Qt.transparent)
+    painter = QPainter(image)
+    splash._paint_card(painter, splash._card_rect())
+    painter.end()
+    color = _sample(image, QPointF(splash.width() * .1, splash.height() * .15))
+    assert color.red() >= 250
+    assert color.blue() - color.red() <= 5
+
+
 def test_stage_copy_and_right_label(splash_host):
     splash, _host = splash_host
     assert splash.status_text() == "正在启动 TraceLab…"

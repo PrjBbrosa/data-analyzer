@@ -13,9 +13,9 @@ from typing import Any, Optional, Tuple
 
 PANEL_BASE_RGB: Tuple[int, int, int] = (244, 250, 255)  # #f4faff
 GLASS_ALPHA: int = 191  # 75% opacity ≈ 191/255
-# CSS blur reference for the HTML preview. Win32 Acrylic has no radius argument.
+# CSS blur reference; AppKit / Win32 materials control their own blur radius.
 FROST_REFERENCE_PX: int = 25
-FALLBACK_GLASS_ALPHA: int = 242  # high-opacity readable fallback
+FALLBACK_GLASS_ALPHA: int = 255  # no sharp background ghosts without native blur
 INK_HEX = "#223a58"
 SECONDARY_HEX = "#576f8c"
 ACCENT_HEX = "#1976e9"
@@ -88,7 +88,41 @@ def glass_fill_color(*, fallback: bool = False):
 
 def glass_fill_css(*, fallback: bool = False) -> str:
     r, g, b = PANEL_BASE_RGB
-    return f"rgba({r}, {g}, {b}, {glass_alpha(fallback=fallback)})"
+    alpha = glass_alpha(fallback=fallback)
+    return (
+        "qlineargradient(x1:0, y1:0, x2:1, y2:1, "
+        f"stop:0 rgba(255, 255, 255, {alpha}), "
+        f"stop:1 rgba({r}, {g}, {b}, {alpha}))"
+    )
+
+
+def paint_panel_fill(painter, rect, radius: float, *, fallback: bool):
+    """HTML's white-to-ice surface and two elliptical, localized color washes."""
+    from PyQt5.QtCore import QRectF
+    from PyQt5.QtGui import QColor, QLinearGradient, QPainterPath, QRadialGradient
+
+    path = QPainterPath()
+    path.addRoundedRect(rect, radius, radius)
+    alpha = glass_alpha(fallback=fallback)
+    gradient = QLinearGradient(rect.topLeft(), rect.bottomRight())
+    gradient.setColorAt(0, QColor(255, 255, 255, alpha))
+    gradient.setColorAt(1, glass_fill_color(fallback=fallback))
+    painter.fillPath(path, gradient)
+    painter.save()
+    painter.setClipPath(path)
+    painter.translate(rect.topLeft())
+    painter.scale(rect.width(), rect.height())
+    # Normalized coordinates keep these elliptical instead of wide blue disks.
+    for which, x, y, extent in (("tr", 1., 0., .68), ("bl", .02, .8, .57)):
+        color = glow_color(which)
+        wash = QRadialGradient(x, y, extent)
+        wash.setColorAt(0, color)
+        clear = QColor(color)
+        clear.setAlpha(0)
+        wash.setColorAt(1, clear)
+        painter.fillRect(QRectF(0, 0, 1, 1), wash)
+    painter.restore()
+    return path
 
 
 def spectrum_stop_colors():
@@ -249,18 +283,19 @@ def panel_font_family_css() -> str:
     return f'"{escaped}"'
 
 
-# --- Native surface (Windows 11 Acrylic) ------------------------------------
+# --- Native surface (Cocoa material / Windows 11 Acrylic) -------------------
 
 
 class PanelSurfaceState:
     """Observable result of one apply/release attempt."""
 
-    __slots__ = ("applied", "reason", "fallback")
+    __slots__ = ("applied", "reason", "fallback", "native")
 
     def __init__(self, *, applied: bool, reason: str = "", fallback: bool = True):
         self.applied = bool(applied)
         self.reason = str(reason or "")
         self.fallback = bool(fallback) if not applied else False
+        self.native = None
 
 
 def _windows_build_number() -> int:
@@ -334,6 +369,13 @@ def _set_system_backdrop(hwnd: int, backdrop: int, *, dwmapi=None) -> Tuple[bool
     if dwmapi is None:
         try:
             dwmapi = ctypes.windll.dwmapi  # type: ignore[attr-defined]
+            from ctypes import wintypes
+
+            # HWND is pointer-sized; ctypes' implicit int truncates it on Win64.
+            dwmapi.DwmSetWindowAttribute.argtypes = (
+                wintypes.HWND, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD,
+            )
+            dwmapi.DwmSetWindowAttribute.restype = ctypes.c_long
         except AttributeError:
             return False, "dwm_failed"
 
@@ -366,10 +408,10 @@ def apply_native_panel_surface(
     transparency_enabled: Optional[bool] = None,
     hwnd: Optional[int] = None,
 ) -> PanelSurfaceState:
-    """Apply Windows 11 transient Acrylic to ``widget``'s HWND when capable.
+    """Apply native Cocoa glass or Windows 11 transient Acrylic when capable.
 
-    Idempotent. On non-Windows / capability failure returns a one-shot
-    degradation reason and expects callers to paint the high-opacity fallback.
+    Idempotent. On unsupported platforms / capability failure returns a one-shot
+    degradation reason and expects callers to paint the opaque fallback.
     Success of this call is NOT visual acceptance of frosted glass.
     """
     plat = platform if platform is not None else sys.platform
@@ -381,6 +423,27 @@ def apply_native_panel_surface(
         and not existing.fallback
     ):
         return existing
+
+    if plat == "darwin":
+        from PyQt5.QtGui import QGuiApplication
+
+        if QGuiApplication.platformName() == "cocoa":
+            from .qt_panel_cocoa import CocoaBackdrop
+
+            if isinstance(existing, PanelSurfaceState) and existing.native is not None:
+                existing.native.release()
+            try:
+                native = CocoaBackdrop(widget)
+            except OSError:
+                # A missing native runtime is a capability failure, not a
+                # reason to keep a translucent surface without any blur.
+                state = PanelSurfaceState(applied=False, reason="cocoa_unavailable")
+                setattr(widget, _SURFACE_ATTR, state)
+                return state
+            state = PanelSurfaceState(applied=native.applied, reason=native.reason)
+            state.native = native
+            setattr(widget, _SURFACE_ATTR, state)
+            return state
 
     if plat != "win32":
         state = PanelSurfaceState(
@@ -450,6 +513,10 @@ def release_native_panel_surface(
 ) -> None:
     """Clear backdrop type when previously applied. Idempotent."""
     existing = getattr(widget, _SURFACE_ATTR, None)
+    if isinstance(existing, PanelSurfaceState) and existing.native is not None:
+        existing.native.release()
+        setattr(widget, _SURFACE_ATTR, PanelSurfaceState(applied=False, reason="released"))
+        return
     handle = int(hwnd) if hwnd is not None else _widget_hwnd(widget)
     if handle and isinstance(existing, PanelSurfaceState) and existing.applied:
         _set_system_backdrop(handle, _DWMSBT_NONE, dwmapi=dwmapi)
@@ -498,6 +565,7 @@ __all__ = [
     "glass_fill_css",
     "glow_color",
     "panel_color",
+    "paint_panel_fill",
     "panel_font",
     "panel_font_family_css",
     "panel_font_metrics",

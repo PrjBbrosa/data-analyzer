@@ -59,7 +59,7 @@ def test_glass_alpha_contract():
     assert style.GLASS_ALPHA == 191
     assert style.FROST_REFERENCE_PX == 25
     assert style.glass_alpha(fallback=False) == 191
-    assert style.glass_alpha(fallback=True) == style.FALLBACK_GLASS_ALPHA
+    assert style.glass_alpha(fallback=True) == 255  # no sharp text leaks without blur
     fill = style.glass_fill_color(fallback=False)
     assert fill.red() == 244 and fill.green() == 250 and fill.blue() == 255
     assert fill.alpha() == 191
@@ -233,3 +233,104 @@ def test_apply_is_idempotent_without_force(host):
         force=False,
     )
     assert len(fake.calls) == n
+
+
+@pytest.fixture
+def cocoa_calls(monkeypatch):
+    from mf4_analyzer import qt_panel_cocoa as cocoa
+
+    class Runtime:
+        def objc_getClass(self, name):
+            return 10
+
+    calls = []
+
+    def send(receiver, selector, result=None, types=(), values=()):
+        calls.append((receiver, selector))
+        return {"superview": 20, "alloc": 30, "initWithFrame:": 30}.get(selector, 0)
+
+    monkeypatch.setattr(cocoa, "_runtime", Runtime)
+    monkeypatch.setattr(cocoa, "_send", send)
+    return calls
+
+
+def test_cocoa_release_disconnects_destroyed_callback(host, cocoa_calls):
+    from PyQt5.QtCore import QCoreApplication, QEvent
+    from mf4_analyzer.qt_panel_cocoa import CocoaBackdrop
+
+    before = host.receivers(host.destroyed)
+    for _ in range(5):
+        native = CocoaBackdrop(host)
+        try:
+            assert native.applied
+            assert host.receivers(host.destroyed) > before
+        finally:
+            native.release()
+        native.release()
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        assert host.receivers(host.destroyed) == before
+    assert sum(selector == "release" for _, selector in cocoa_calls) == 5
+
+
+def test_cocoa_destroy_releases_view_once(qapp, cocoa_calls):
+    from PyQt5 import sip
+    from mf4_analyzer.qt_panel_cocoa import CocoaBackdrop
+
+    widget = QWidget()
+    native = CocoaBackdrop(widget)
+    try:
+        sip.delete(widget)
+    finally:
+        native.release()
+    assert not native.applied
+    assert sum(selector == "release" for _, selector in cocoa_calls) == 1
+
+
+def test_cocoa_respects_reduce_transparency(host, cocoa_calls, monkeypatch):
+    from mf4_analyzer import qt_panel_cocoa as cocoa
+
+    send = cocoa._send
+
+    def reduced(receiver, selector, *args, **kwargs):
+        if selector == "accessibilityDisplayShouldReduceTransparency":
+            return True
+        return send(receiver, selector, *args, **kwargs)
+
+    monkeypatch.setattr(cocoa, "_send", reduced)
+    native = cocoa.CocoaBackdrop(host)
+    assert not native.applied
+    assert native.reason == "transparency_disabled"
+    native.release()
+    assert not any(selector == "alloc" for _, selector in cocoa_calls)
+
+
+def test_cocoa_surface_force_replaces_and_releases(host, cocoa_calls, monkeypatch):
+    from PyQt5.QtGui import QGuiApplication
+
+    monkeypatch.setattr(QGuiApplication, "platformName", staticmethod(lambda: "cocoa"))
+    first = style.apply_native_panel_surface(host, platform="darwin")
+    try:
+        assert first.applied
+        assert style.apply_native_panel_surface(host, platform="darwin") is first
+        second = style.apply_native_panel_surface(host, platform="darwin", force=True)
+        assert second.applied
+        assert not first.native.applied
+    finally:
+        style.release_native_panel_surface(host)
+    assert style.uses_opaque_fallback(host)
+    assert sum(selector == "release" for _, selector in cocoa_calls) == 2
+
+
+def test_cocoa_runtime_unavailable_uses_opaque_surface(host, monkeypatch):
+    from PyQt5.QtGui import QGuiApplication
+    from mf4_analyzer import qt_panel_cocoa as cocoa
+
+    def missing():
+        raise OSError("runtime unavailable")
+
+    monkeypatch.setattr(QGuiApplication, "platformName", staticmethod(lambda: "cocoa"))
+    monkeypatch.setattr(cocoa, "_runtime", missing)
+    state = style.apply_native_panel_surface(host, platform="darwin")
+    assert not state.applied
+    assert state.reason == "cocoa_unavailable"
+    assert style.uses_opaque_fallback(host)

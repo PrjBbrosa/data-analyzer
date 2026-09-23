@@ -29,7 +29,6 @@ from PyQt5.QtGui import (
     QPainterPath,
     QPen,
     QPixmap,
-    QRadialGradient,
 )
 from PyQt5.QtWidgets import QWidget
 
@@ -42,8 +41,7 @@ from mf4_analyzer.qt_panel_style import (
     FONT_ROLE_TITLE,
     FONT_ROLE_WORDMARK,
     apply_native_panel_surface,
-    glass_fill_color,
-    glow_color,
+    paint_panel_fill,
     panel_color,
     panel_font,
     panel_font_metrics,
@@ -335,8 +333,9 @@ class StartupSplash(QWidget):
         # Readable on first show — no fade-in wait.
         self._apply_preferred_size()
         self._center_on_screen()
-        # Native acrylic when capable; otherwise paint high-opacity fallback.
+        # Native glass when capable; otherwise paint an opaque fallback.
         # Success here is not visual acceptance of frosted glass.
+        self.setProperty("panelCornerRadius", self._s(CORNER_RADIUS))
         apply_native_panel_surface(self)
         if not self._timer.isActive() and not self._reduced_motion:
             self._last_tick_ms = float(self._clock.elapsed())
@@ -585,28 +584,9 @@ class StartupSplash(QWidget):
         painter.end()
 
     def _paint_card(self, painter: QPainter, card: QRectF) -> None:
-        path = QPainterPath()
-        path.addRoundedRect(card, self._s(CORNER_RADIUS), self._s(CORNER_RADIUS))
-        fill = glass_fill_color(fallback=uses_opaque_fallback(self))
-        painter.fillPath(path, fill)
-        # Cold local glows (right-top / left-bottom); keep them inside the card.
-        painter.save()
-        painter.setClipPath(path)
-        tr = QRadialGradient(card.right(), card.top(), card.width() * 0.62)
-        glow_tr = glow_color("tr")
-        tr.setColorAt(0.0, glow_tr)
-        clear = QColor(glow_tr)
-        clear.setAlpha(0)
-        tr.setColorAt(1.0, clear)
-        painter.fillRect(card, tr)
-        bl = QRadialGradient(card.left(), card.bottom(), card.width() * 0.55)
-        glow_bl = glow_color("bl")
-        bl.setColorAt(0.0, glow_bl)
-        clear_bl = QColor(glow_bl)
-        clear_bl.setAlpha(0)
-        bl.setColorAt(1.0, clear_bl)
-        painter.fillRect(card, bl)
-        painter.restore()
+        path = paint_panel_fill(
+            painter, card, self._s(CORNER_RADIUS), fallback=uses_opaque_fallback(self)
+        )
         pen = QPen(_BORDER)
         pen.setWidthF(max(1.0, self._s(1.0)))
         painter.strokePath(path, pen)
@@ -641,15 +621,6 @@ class StartupSplash(QWidget):
 
     def _paint_spectrum(self, painter: QPainter) -> None:
         rect = self._spectrum_rect()
-        # Soft radial wash under the spectrum.
-        wash = QRadialGradient(
-            rect.center().x(), rect.bottom() - self._s(40.0), rect.width() * 0.55
-        )
-        wash.setColorAt(0.0, QColor(73, 142, 252, 40))
-        wash.setColorAt(0.7, QColor(73, 142, 252, 0))
-        wash.setColorAt(1.0, QColor(73, 142, 252, 0))
-        painter.fillRect(rect, wash)
-
         ox, oy = self._spectrum_map_origin()
         scale = self._spectrum_map_scale()
         grad = QLinearGradient(ox, oy, ox + SPECTRUM_REF_W * scale, oy)
@@ -783,9 +754,12 @@ class StartupSplash(QWidget):
             card.width(),
             tip_h,
         )
+        wash = QLinearGradient(tip.topLeft(), tip.bottomRight())
+        wash.setColorAt(0, _TIP_BG)
+        wash.setColorAt(1, QColor(73, 142, 252, 20))
+        painter.fillRect(tip, wash)
         painter.setPen(QPen(_TIP_BORDER, max(1.0, self._s(1.0))))
-        painter.setBrush(_TIP_BG)
-        painter.drawRect(tip)
+        painter.drawLine(tip.topLeft(), tip.topRight())
 
         left = self._content_left()
         right = self._content_right()
