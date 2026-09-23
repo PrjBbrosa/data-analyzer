@@ -39,7 +39,13 @@ STAGE_PRELOAD_COMPLETE = "preload_complete"
 STAGE_PAGE_READY = "page_ready"
 # Parent-side splash diagnostics (marks.jsonl). Never written by the splash child.
 STAGE_SPLASH_PAINTED = "splash_painted"
-STAGE_SPLASH_CLOSED = "splash_closed"
+STAGE_SPLASH_CLOSED = "splash_closed"  # legacy closed message
+STAGE_SPLASH_HIDDEN = "splash_hidden"
+STAGE_FINISH_REQUESTED = "finish_requested"
+STAGE_MAIN_SHOW_CALLED = "main_show_called"
+STAGE_MAIN_FIRST_FRAME = "main_first_frame"
+STAGE_CHILD_EXITED = "child_exited"
+STAGE_HANDOVER_FAILED = "handover_failed"
 
 # Probe message roles: feedback is a parent push; interactive is tool→app request.
 PROBE_ROLE_FEEDBACK = "feedback"

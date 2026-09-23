@@ -1,7 +1,8 @@
-"""Independent B-view startup splash: 「雾蓝频谱」.
+"""Independent B-view startup splash: 「晴空蓝白」.
 
 Display-only widget. No MainWindow / ui_kit / pyqtgraph / widgets imports.
 Controller / child-process wiring lives elsewhere (Task 2+).
+May import the lightweight ``mf4_analyzer.qt_panel_style`` helper (no numpy).
 """
 from __future__ import annotations
 
@@ -21,8 +22,6 @@ from PyQt5.QtCore import (
 from PyQt5.QtGui import (
     QColor,
     QCursor,
-    QFont,
-    QFontMetrics,
     QGuiApplication,
     QImage,
     QLinearGradient,
@@ -35,6 +34,23 @@ from PyQt5.QtGui import (
 from PyQt5.QtWidgets import QWidget
 
 from mf4_analyzer.app_meta import APP_CREDIT, APP_NAME, APP_VERSION, asset_path
+from mf4_analyzer.qt_panel_style import (
+    FONT_ROLE_BODY,
+    FONT_ROLE_CAPTION,
+    FONT_ROLE_CREDIT,
+    FONT_ROLE_EMPHASIS,
+    FONT_ROLE_TITLE,
+    FONT_ROLE_WORDMARK,
+    apply_native_panel_surface,
+    glass_fill_color,
+    glow_color,
+    panel_color,
+    panel_font,
+    panel_font_metrics,
+    release_native_panel_surface,
+    spectrum_stop_colors,
+    uses_opaque_fallback,
+)
 
 # --- Stage / copy -----------------------------------------------------------
 
@@ -64,29 +80,24 @@ TIPS: Tuple[Tuple[str, str], ...] = (
     ("让频率变化可见", "用「时频」查看频率成分随时间的变化。"),
 )
 
-# --- Colors (B cinematic) ---------------------------------------------------
+# --- Colors (晴空蓝白) ------------------------------------------------------
 
-_BG0 = QColor("#e8edf1")
-_BG1 = QColor("#dce5ec")
-_BG2 = QColor("#d2dfe8")
-_INK = QColor("#273d50")
-_SECONDARY = QColor("#576e82")
-_ACCENT = QColor("#426f94")
-_TIP_BG = QColor(204, 220, 232, 140)  # #ccdce88c
-_TIP_BORDER = QColor(180, 198, 214, 128)  # #b4c6d680
-_TIP_TITLE = QColor("#3a627e")
-_TIP_BODY = QColor("#425b73")
-_CREDIT_BG = QColor(214, 225, 233, 128)  # #d6e1e980
-_CREDIT_FG = QColor("#5e7386")
-_RAIL_TRACK = QColor("#bdcddb")
-_CAPTION_FG = QColor("#5d758b")
-_CAPTION_DOT = QColor("#398baf")
-_BORDER = QColor(246, 249, 251, 201)  # #f6f9fbc9
-_SPECTRUM_STOPS = (
-    (0.0, QColor("#6996b8")),
-    (0.4, QColor("#237f9b")),
-    (0.67, QColor("#397cad")),
-    (1.0, QColor("#83a6c0")),
+_INK = panel_color("ink")
+_SECONDARY = panel_color("secondary")
+_ACCENT = panel_color("accent")
+_TIP_BG = QColor(24, 193, 229, 28)  # light cyan wash
+_TIP_BORDER = QColor(255, 255, 255, 184)
+_TIP_TITLE = panel_color("tip_title")
+_TIP_BODY = panel_color("tip_body")
+_CREDIT_BG = QColor(255, 255, 255, 36)
+_CREDIT_FG = QColor("#617e98")
+_RAIL_TRACK = QColor(73, 142, 252, 38)
+_CAPTION_FG = panel_color("secondary")
+_CAPTION_DOT = QColor("#17b6df")
+_BORDER = panel_color("border")
+_SPECTRUM_STOPS = tuple(
+    (stop, color)
+    for stop, color in zip((0.0, 0.4, 0.67, 1.0), spectrum_stop_colors())
 )
 
 # --- Layout (logical px of the card) ----------------------------------------
@@ -99,7 +110,9 @@ CARD_HEIGHT = 470
 DISPLAY_SCALE = 1.5
 CORNER_RADIUS = 13.0
 CONTENT_PAD_X = 32.0
-SHADOW_PAD = 18.0
+# Former shadow gutter; outer drop-shadow layers are gone, keep 0 pad so the
+# card owns the window while AA rounded corners stay transparent.
+SHADOW_PAD = 0.0
 SPECTRUM_REF_W = 640.0
 SPECTRUM_REF_H = 184.0
 SPECTRUM_Y_TOP = 15.0
@@ -311,6 +324,7 @@ class StartupSplash(QWidget):
             self._timer.timeout.disconnect()
         except TypeError:
             pass
+        release_native_panel_surface(self)
         self.hide()
         self.close()
 
@@ -321,6 +335,9 @@ class StartupSplash(QWidget):
         # Readable on first show — no fade-in wait.
         self._apply_preferred_size()
         self._center_on_screen()
+        # Native acrylic when capable; otherwise paint high-opacity fallback.
+        # Success here is not visual acceptance of frosted glass.
+        apply_native_panel_surface(self)
         if not self._timer.isActive() and not self._reduced_motion:
             self._last_tick_ms = float(self._clock.elapsed())
             self._timer.start()
@@ -482,6 +499,8 @@ class StartupSplash(QWidget):
         if event.type() in watched:
             self._ensure_brand_pixmap(force=True)
             self._rebuild_paths_if_needed(force=True)
+            if self.isVisible() and not self._closed:
+                apply_native_panel_surface(self, force=True)
 
     # --- Animation tick -----------------------------------------------------
 
@@ -557,7 +576,6 @@ class StartupSplash(QWidget):
         painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
 
         card = self._card_rect()
-        self._paint_shadow(painter, card)
         self._paint_card(painter, card)
         self._paint_header(painter, card)
         self._paint_spectrum(painter)
@@ -566,25 +584,29 @@ class StartupSplash(QWidget):
         self._paint_credit(painter, card)
         painter.end()
 
-    def _paint_shadow(self, painter: QPainter, card: QRectF) -> None:
-        # Soft layered shadow; stays outside the rounded card.
-        for i, (dy, blur_alpha, inflate) in enumerate(
-            ((10.0, 28, 6.0), (3.0, 36, 2.0), (1.0, 40, 0.5))
-        ):
-            r = QRectF(card).adjusted(-inflate, -inflate + self._s(dy), inflate, inflate + self._s(dy))
-            path = QPainterPath()
-            path.addRoundedRect(r, self._s(CORNER_RADIUS + inflate * 0.3), self._s(CORNER_RADIUS + inflate * 0.3))
-            color = QColor(29, 56, 83, blur_alpha - i * 6)
-            painter.fillPath(path, color)
-
     def _paint_card(self, painter: QPainter, card: QRectF) -> None:
         path = QPainterPath()
         path.addRoundedRect(card, self._s(CORNER_RADIUS), self._s(CORNER_RADIUS))
-        grad = QLinearGradient(card.topLeft(), card.bottomRight())
-        grad.setColorAt(0.0, _BG0)
-        grad.setColorAt(0.58, _BG1)
-        grad.setColorAt(1.0, _BG2)
-        painter.fillPath(path, grad)
+        fill = glass_fill_color(fallback=uses_opaque_fallback(self))
+        painter.fillPath(path, fill)
+        # Cold local glows (right-top / left-bottom); keep them inside the card.
+        painter.save()
+        painter.setClipPath(path)
+        tr = QRadialGradient(card.right(), card.top(), card.width() * 0.62)
+        glow_tr = glow_color("tr")
+        tr.setColorAt(0.0, glow_tr)
+        clear = QColor(glow_tr)
+        clear.setAlpha(0)
+        tr.setColorAt(1.0, clear)
+        painter.fillRect(card, tr)
+        bl = QRadialGradient(card.left(), card.bottom(), card.width() * 0.55)
+        glow_bl = glow_color("bl")
+        bl.setColorAt(0.0, glow_bl)
+        clear_bl = QColor(glow_bl)
+        clear_bl.setAlpha(0)
+        bl.setColorAt(1.0, clear_bl)
+        painter.fillRect(card, bl)
+        painter.restore()
         pen = QPen(_BORDER)
         pen.setWidthF(max(1.0, self._s(1.0)))
         painter.strokePath(path, pen)
@@ -598,25 +620,20 @@ class StartupSplash(QWidget):
         if not self._brand_pix.isNull():
             painter.drawPixmap(QPointF(left, top), self._brand_pix)
 
-        word_font = QFont("Trebuchet MS")
-        if not word_font.exactMatch():
-            word_font = QFont("Segoe UI")
-        word_font.setPixelSize(max(12, int(round(self._s(31.0)))))
-        word_font.setBold(True)
+        word_px = max(12, int(round(self._s(31.0))))
+        word_font = panel_font(FONT_ROLE_WORDMARK, pixel_size=word_px)
         painter.setFont(word_font)
         painter.setPen(_INK)
         word_x = left + icon_size + self._s(12.0)
-        metrics = QFontMetrics(word_font)
+        metrics = panel_font_metrics(FONT_ROLE_WORDMARK, pixel_size=word_px)
         word_y = top + (icon_size + metrics.ascent() - metrics.descent()) * 0.5
         painter.drawText(QPointF(word_x, word_y), APP_NAME)
 
-        ver_font = QFont("Segoe UI")
-        if platform.system() == "Darwin":
-            ver_font = QFont(".AppleSystemUIFont")
-        ver_font.setPixelSize(max(9, int(round(self._s(11.0)))))
+        ver_px = max(9, int(round(self._s(11.0))))
+        ver_font = panel_font(FONT_ROLE_CAPTION, pixel_size=ver_px)
         painter.setFont(ver_font)
         painter.setPen(_SECONDARY)
-        ver_metrics = QFontMetrics(ver_font)
+        ver_metrics = panel_font_metrics(FONT_ROLE_CAPTION, pixel_size=ver_px)
         ver_text = APP_VERSION
         ver_x = self._content_right() - ver_metrics.horizontalAdvance(ver_text)
         ver_y = top + self._s(4.0) + ver_metrics.ascent()
@@ -624,11 +641,13 @@ class StartupSplash(QWidget):
 
     def _paint_spectrum(self, painter: QPainter) -> None:
         rect = self._spectrum_rect()
-        # Soft radial wash under the spectrum (demo `.spectrum` background).
-        wash = QRadialGradient(rect.center().x(), rect.bottom() - self._s(40.0), rect.width() * 0.55)
-        wash.setColorAt(0.0, QColor(184, 206, 221, 85))
-        wash.setColorAt(0.7, QColor(184, 206, 221, 0))
-        wash.setColorAt(1.0, QColor(184, 206, 221, 0))
+        # Soft radial wash under the spectrum.
+        wash = QRadialGradient(
+            rect.center().x(), rect.bottom() - self._s(40.0), rect.width() * 0.55
+        )
+        wash.setColorAt(0.0, QColor(73, 142, 252, 40))
+        wash.setColorAt(0.7, QColor(73, 142, 252, 0))
+        wash.setColorAt(1.0, QColor(73, 142, 252, 0))
         painter.fillRect(rect, wash)
 
         ox, oy = self._spectrum_map_origin()
@@ -658,20 +677,22 @@ class StartupSplash(QWidget):
             painter.restore()
 
         # Mode captions along the bottom of the spectrum band.
-        cap_font = QFont("Segoe UI")
-        if platform.system() == "Darwin":
-            cap_font = QFont(".AppleSystemUIFont")
-        cap_font.setPixelSize(max(8, int(round(self._s(9.0)))))
+        cap_px = max(8, int(round(self._s(9.0))))
+        cap_font = panel_font(FONT_ROLE_CAPTION, pixel_size=cap_px)
         painter.setFont(cap_font)
         painter.setPen(_CAPTION_FG)
-        metrics = QFontMetrics(cap_font)
+        metrics = panel_font_metrics(FONT_ROLE_CAPTION, pixel_size=cap_px)
         y = rect.bottom() - self._s(12.0)
         x = self._content_left()
         for label in _MODE_CAPTIONS:
             # Dot
             painter.setBrush(_CAPTION_DOT)
             painter.setPen(Qt.NoPen)
-            painter.drawEllipse(QPointF(x + self._s(2.0), y - metrics.ascent() * 0.35), self._s(2.0), self._s(2.0))
+            painter.drawEllipse(
+                QPointF(x + self._s(2.0), y - metrics.ascent() * 0.35),
+                self._s(2.0),
+                self._s(2.0),
+            )
             painter.setPen(_CAPTION_FG)
             painter.drawText(QPointF(x + self._s(10.0), y), label)
             x += self._s(16.0) + metrics.horizontalAdvance(label) + self._s(10.0)
@@ -687,7 +708,7 @@ class StartupSplash(QWidget):
         spin_r = self._s(6.5)
         cx = left + spin_r
         cy = row_top + self._s(11.0)
-        track = QPen(QColor("#b9cad7"), max(1.0, self._s(1.5)))
+        track = QPen(QColor(73, 142, 252, 61), max(1.0, self._s(1.5)))
         painter.setPen(track)
         painter.setBrush(Qt.NoBrush)
         painter.drawEllipse(QPointF(cx, cy), spin_r, spin_r)
@@ -711,25 +732,23 @@ class StartupSplash(QWidget):
                 -90 * 16,
             )
 
-        status_font = QFont("Segoe UI")
-        if platform.system() == "Darwin":
-            status_font = QFont(".AppleSystemUIFont")
-        status_font.setPixelSize(max(10, int(round(self._s(12.0)))))
-        status_font.setBold(True)
+        status_px = max(10, int(round(self._s(12.0))))
+        status_font = panel_font(FONT_ROLE_EMPHASIS, pixel_size=status_px, bold=True)
         painter.setFont(status_font)
-        painter.setPen(_ACCENT if (self._slow or self._clock.elapsed() >= _SLOW_AFTER_MS) else _INK)
+        painter.setPen(
+            _ACCENT if (self._slow or self._clock.elapsed() >= _SLOW_AFTER_MS) else _INK
+        )
         status = self.status_text()
-        sm = QFontMetrics(status_font)
+        sm = panel_font_metrics(FONT_ROLE_EMPHASIS, pixel_size=status_px, bold=True)
         status_x = left + spin_r * 2 + self._s(9.0)
         status_y = cy + sm.ascent() * 0.35
         painter.drawText(QPointF(status_x, status_y), status)
 
-        right_font = QFont(status_font)
-        right_font.setBold(False)
-        right_font.setPixelSize(max(8, int(round(self._s(10.0)))))
+        right_px = max(8, int(round(self._s(10.0))))
+        right_font = panel_font(FONT_ROLE_CAPTION, pixel_size=right_px)
         painter.setFont(right_font)
         painter.setPen(_SECONDARY)
-        rm = QFontMetrics(right_font)
+        rm = panel_font_metrics(FONT_ROLE_CAPTION, pixel_size=right_px)
         painter.drawText(
             QPointF(right - rm.horizontalAdvance(_RIGHT_LABEL), status_y),
             _RIGHT_LABEL,
@@ -772,13 +791,10 @@ class StartupSplash(QWidget):
         right = self._content_right()
         title, body = TIPS[self._tip_index]
 
-        heading_font = QFont("Segoe UI")
-        if platform.system() == "Darwin":
-            heading_font = QFont(".AppleSystemUIFont")
-        heading_font.setPixelSize(max(8, int(round(self._s(10.0)))))
-        heading_font.setBold(True)
+        heading_px = max(8, int(round(self._s(10.0))))
+        heading_font = panel_font(FONT_ROLE_TITLE, pixel_size=heading_px, bold=True)
         painter.setFont(heading_font)
-        hm = QFontMetrics(heading_font)
+        hm = panel_font_metrics(FONT_ROLE_TITLE, pixel_size=heading_px, bold=True)
         head_y = tip.top() + self._s(17.0) + hm.ascent()
 
         # Dot indicators first so the title can elide against their reserved width.
@@ -796,7 +812,7 @@ class StartupSplash(QWidget):
             h = self._s(4.0)
             dot_x -= w
             painter.setPen(Qt.NoPen)
-            painter.setBrush(_ACCENT if on else QColor("#acbfce"))
+            painter.setBrush(_ACCENT if on else QColor(73, 142, 252, 64))
             painter.drawRoundedRect(
                 QRectF(dot_x, dot_y - h * 0.5, w, h), h * 0.5, h * 0.5
             )
@@ -813,9 +829,8 @@ class StartupSplash(QWidget):
         elided = hm.elidedText(title, Qt.ElideRight, max(8, int(title_right - title_left)))
         painter.drawText(QPointF(title_left, head_y), elided)
 
-        body_font = QFont(heading_font)
-        body_font.setBold(False)
-        body_font.setPixelSize(max(9, int(round(self._s(12.0)))))
+        body_px = max(9, int(round(self._s(12.0))))
+        body_font = panel_font(FONT_ROLE_BODY, pixel_size=body_px)
         painter.setFont(body_font)
         painter.setPen(_TIP_BODY)
         body_rect = QRectF(
@@ -844,13 +859,11 @@ class StartupSplash(QWidget):
         painter.setBrush(_CREDIT_BG)
         painter.drawRect(credit)
 
-        font = QFont("Segoe UI")
-        if platform.system() == "Darwin":
-            font = QFont(".AppleSystemUIFont")
-        font.setPixelSize(max(7, int(round(self._s(9.0)))))
+        credit_px = max(7, int(round(self._s(9.0))))
+        font = panel_font(FONT_ROLE_CREDIT, pixel_size=credit_px)
         painter.setFont(font)
         painter.setPen(_CREDIT_FG)
-        metrics = QFontMetrics(font)
+        metrics = panel_font_metrics(FONT_ROLE_CREDIT, pixel_size=credit_px)
         y = credit.center().y() + metrics.ascent() * 0.35
         painter.drawText(QPointF(self._content_left(), y), _CREDIT_LEFT)
         painter.drawText(

@@ -165,7 +165,7 @@ _SHORTCUTS = {
 _HINTS = (
     Hint(
         id="startup.splash_panel",
-        text="启动面板表示启动中，就绪后自动关",
+        text="启动面板在主窗前关闭，表示启动中",
         surface="discovery",
         priority=21,
     ),

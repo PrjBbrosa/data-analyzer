@@ -156,6 +156,8 @@ def test_app_module_main_marks_python_entry_when_launched_directly(monkeypatch):
     feedback_calls: list[str] = []
 
     class _FakeFeedback:
+        session = "entry-test"
+
         def start(self, **kwargs):
             feedback_calls.append(("start", dict(kwargs)))
             calls.append("feedback:start")
@@ -172,6 +174,16 @@ def test_app_module_main_marks_python_entry_when_launched_directly(monkeypatch):
             feedback_calls.append(("close", None))
             calls.append("feedback:close")
 
+        def add_listener(self, _callback):
+            return None
+
+        def remove_listener(self, _callback):
+            return None
+
+        def snapshot(self):
+            # Splash is forced off; handover must reveal without a hidden ACK.
+            return {"degraded": True, "fail_reason": "disabled"}
+
     monkeypatch.setattr(
         "mf4_analyzer.startup_feedback.StartupFeedback",
         _FakeFeedback,
@@ -179,9 +191,9 @@ def test_app_module_main_marks_python_entry_when_launched_directly(monkeypatch):
 
     armed: list[tuple] = []
 
-    def _capture_arm(_app, _window, feedback=None):
+    def _capture_arm(_app, _window, feedback=None, handover=None):
         calls.append("arm")
-        armed.append(("arm", feedback))
+        armed.append(("arm", feedback, handover))
 
     monkeypatch.setattr(app_mod, "_arm_startup_observation", _capture_arm)
 

@@ -1,11 +1,16 @@
 """Integration coverage for ordinary-GUI StartupFeedback wiring (Task 3).
 
-Uses fakes/mocks only — never spawns a long-lived real splash child or GUI.
+Includes handover ordering (hidden before main show) and a real-child natural
+exit path. Does not claim Windows compositor visibility.
 """
 from __future__ import annotations
 
+import logging
+import os
 import runpy
 import sys
+import threading
+import time
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -14,6 +19,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 LAUNCHER = ROOT / "MF4 Data Analyzer V1.py"
+VENV_PYTHON = ROOT / ".venv" / "bin" / "python"
 
 
 class _RecordingFeedback:
@@ -26,6 +32,8 @@ class _RecordingFeedback:
         self.start_kwargs: dict[str, Any] | None = None
         self.finished = False
         self.closed = False
+        self.session = "recording-session"
+        self._listeners: list = []
         type(self).instances.append(self)
 
     def start(self, **kwargs) -> None:
@@ -38,6 +46,23 @@ class _RecordingFeedback:
     def set_slow(self, slow: bool) -> None:
         self.calls.append(("set_slow", bool(slow)))
 
+    def add_listener(self, callback) -> None:
+        self._listeners.append(callback)
+
+    def remove_listener(self, callback) -> None:
+        try:
+            self._listeners.remove(callback)
+        except ValueError:
+            return
+
+    def snapshot(self) -> dict[str, Any]:
+        return {
+            "session": self.session,
+            "degraded": False,
+            "fail_reason": None,
+            "hidden": False,
+        }
+
     def finish(self) -> None:
         self.finished = True
         self.calls.append(("finish", None))
@@ -45,6 +70,21 @@ class _RecordingFeedback:
     def close(self) -> None:
         self.closed = True
         self.calls.append(("close", None))
+
+    def emit_reveal(self, **extra: Any) -> None:
+        payload = {
+            "event": "can_reveal",
+            "session": self.session,
+            "reason": "hidden",
+            "hidden": True,
+            "hidden_reason": "finish_close",
+            "handover_failed": False,
+            "child_exit_code": 0,
+            "force_terminated": False,
+        }
+        payload.update(extra)
+        for callback in list(self._listeners):
+            callback(payload)
 
 
 def _install_fake_feedback(monkeypatch) -> type[_RecordingFeedback]:
@@ -130,6 +170,35 @@ def _stub_app_gui(monkeypatch, app_mod, *, calls: list[str], window_factory=None
     monkeypatch.setitem(sys.modules, "mf4_analyzer.ui.pg_canvas.fonts", fonts)
     monkeypatch.delenv("TRACELAB_LAYOUT_PROBE", raising=False)
 
+    # Handover: begin() finishes + reveal path for disabled/recording feedback.
+    class _FakeHandover:
+        def __init__(self, app, window, feedback, **_k):
+            self.app = app
+            self.window = window
+            self.feedback = feedback
+            self.show_called = False
+            calls.append("handover_init")
+
+        def begin(self):
+            calls.append("handover_begin")
+            self.feedback.finish()
+            # Recording feedback does not auto-reveal; simulate disabled path.
+            self.window.show()
+            self.show_called = True
+
+        def close(self):
+            calls.append("handover_close")
+
+        def mark_first_frame(self):
+            calls.append("first_frame")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "mf4_analyzer.startup_handover",
+        ModuleType("mf4_analyzer.startup_handover"),
+    )
+    sys.modules["mf4_analyzer.startup_handover"].StartupHandover = _FakeHandover
+
 
 def test_app_main_starts_feedback_before_bootstrap(monkeypatch):
     import mf4_analyzer.app as app_mod
@@ -143,9 +212,9 @@ def test_app_main_starts_feedback_before_bootstrap(monkeypatch):
     )
     arm_args: list[Any] = []
 
-    def _arm(app, window, feedback=None):
+    def _arm(app, window, feedback=None, handover=None):
         calls.append("arm")
-        arm_args.append((app, window, feedback))
+        arm_args.append((app, window, feedback, handover))
 
     monkeypatch.setattr(app_mod, "_arm_startup_observation", _arm)
     _stub_app_gui(monkeypatch, app_mod, calls=calls)
@@ -160,6 +229,7 @@ def test_app_main_starts_feedback_before_bootstrap(monkeypatch):
     assert fb.calls[1] == ("publish", "loading_components")
     assert ("publish", "preparing_workspace") in fb.calls
     assert calls.index("arm") < calls.index("show")
+    assert calls.index("handover_begin") < calls.index("show")
     assert arm_args and arm_args[0][2] is fb
     assert fb.closed
 
@@ -177,7 +247,6 @@ def test_root_launcher_ordinary_gui_enters_main_with_feedback(monkeypatch):
 
     def main():
         calls.append("gui")
-        # Prove ordinary path would start feedback inside main, not launcher.
         from mf4_analyzer.startup_feedback import StartupFeedback
 
         fb = StartupFeedback()
@@ -273,7 +342,6 @@ def test_slow_bootstrap_keeps_publish_order(monkeypatch):
 
     def slow_boot(**_k):
         calls.append("boot")
-        # Publish order must already include loading_components before we arrive.
         fb = Feedback.instances[-1]
         assert ("publish", "loading_components") in fb.calls
         assert ("publish", "preparing_workspace") not in fb.calls
@@ -321,34 +389,81 @@ def test_mainwindow_construct_error_closes_feedback_nonzero(monkeypatch):
     assert exit_codes == [1]
 
 
-def test_paint_finish_queued_after_paint_not_on_show(qtbot, monkeypatch):
-    """Finish only after a real Paint returns; show alone is not enough."""
+def test_handover_shows_once_after_hidden_not_on_construct(qtbot, monkeypatch):
+    """Main window is constructed without show; reveal only after hidden ACK."""
     from PyQt5.QtCore import QEvent
     from PyQt5.QtWidgets import QApplication, QWidget
 
-    import mf4_analyzer.app as app_mod
-
-    monkeypatch.setenv("TRACELAB_STARTUP_TIMING", "0")
-    # Force timing module to see disabled without leftover state.
+    from mf4_analyzer.startup_handover import StartupHandover
     from mf4_analyzer import startup_timing as st
 
     monkeypatch.setattr(st, "enabled", lambda: False)
+    monkeypatch.setattr(st, "record_splash_event", lambda *a, **k: None)
 
     fb = _RecordingFeedback()
     app = QApplication.instance() or QApplication([])
     window = QWidget()
     qtbot.addWidget(window)
+    shows = {"n": 0}
+    original_show = window.show
 
-    app_mod._arm_startup_observation(app, window, fb)
-    window.show()
-    # show() alone must not finish.
-    assert not fb.finished
+    def counting_show():
+        shows["n"] += 1
+        original_show()
 
-    # Deliver a Paint through the event filter path.
+    window.show = counting_show  # type: ignore[method-assign]
+
+    handover = StartupHandover(app, window, fb)
+    # begin issues finish; recording feedback does not auto-reveal.
+    handover.begin()
+    assert shows["n"] == 0
+    assert not window.isVisible()
+
+    fb.emit_reveal()
+    qtbot.waitUntil(lambda: shows["n"] == 1, timeout=2000)
+    assert shows["n"] == 1
+    assert handover.show_called
+
+    # Duplicate ACK must not show again.
+    fb.emit_reveal()
+    qtbot.wait(50)
+    assert shows["n"] == 1
+
+    # First-frame timing is independent and must not finish again.
+    import mf4_analyzer.app as app_mod
+
+    app_mod._arm_startup_observation(app, window, fb, handover)
     QApplication.sendEvent(window, QEvent(QEvent.Paint))
-    assert not fb.finished  # still waiting for the queued singleShot(0)
-    qtbot.waitUntil(lambda: fb.finished, timeout=2000)
-    assert fb.finished
+    qtbot.wait(50)
+    finish_calls = [c for c in fb.calls if c[0] == "finish"]
+    # begin() called finish once; paint must not add another.
+    assert len(finish_calls) == 1
+
+    handover.close()
+    # Late reveal after close must not revive show.
+    fb.emit_reveal()
+    qtbot.wait(50)
+    assert shows["n"] == 1
+
+
+def test_parent_close_blocks_late_reveal_show(qtbot, monkeypatch):
+    from PyQt5.QtWidgets import QApplication, QWidget
+
+    from mf4_analyzer.startup_handover import StartupHandover
+    from mf4_analyzer import startup_timing as st
+
+    monkeypatch.setattr(st, "record_splash_event", lambda *a, **k: None)
+    fb = _RecordingFeedback()
+    app = QApplication.instance() or QApplication([])
+    window = QWidget()
+    qtbot.addWidget(window)
+    handover = StartupHandover(app, window, fb)
+    handover.begin()
+    handover.close()
+    fb.emit_reveal()
+    qtbot.wait(80)
+    assert handover.show_called is False
+    assert not window.isVisible()
 
 
 def test_observation_armed_when_timing_disabled(qtbot, monkeypatch):
@@ -362,7 +477,7 @@ def test_observation_armed_when_timing_disabled(qtbot, monkeypatch):
     app = QApplication.instance() or QApplication([])
     window = QWidget()
     qtbot.addWidget(window)
-    app_mod._arm_startup_observation(app, window, fb)
+    app_mod._arm_startup_observation(app, window, fb, handover=None)
     assert getattr(window, "_tracelab_startup_observer", None) is not None
 
 
@@ -385,3 +500,86 @@ def test_offscreen_default_does_not_spawn_real_child(monkeypatch):
     assert fb.degraded
     assert fb.fail_reason == "disabled"
     fb.close()
+
+
+def test_real_child_finish_hidden_natural_exit_zero(monkeypatch, caplog):
+    """Real source child: painted → finish → hidden → exit 0, no force-kill."""
+    if not VENV_PYTHON.is_file():
+        pytest.skip("project .venv python missing")
+
+    from mf4_analyzer.startup_feedback import (
+        ENV_SPLASH,
+        HIDDEN_FINISH_CLOSE,
+        StartupFeedback,
+    )
+
+    monkeypatch.setenv(ENV_SPLASH, "1")
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    monkeypatch.setenv("PYTHONPATH", str(ROOT))
+    monkeypatch.setenv("TMPDIR", "/tmp")
+    monkeypatch.setenv("MPLCONFIGDIR", "/tmp")
+
+    # Force child to use the project venv interpreter.
+    monkeypatch.setattr(
+        "mf4_analyzer.startup_feedback.sys.executable",
+        str(VENV_PYTHON),
+    )
+
+    feedback = StartupFeedback()
+    try:
+        with caplog.at_level(logging.WARNING):
+            feedback.start(allow_offscreen=True)
+            assert feedback.process is not None
+            assert _wait(lambda: feedback.painted, timeout_s=8.0), "child never painted"
+            feedback.finish()
+            assert _wait(lambda: feedback.hidden, timeout_s=5.0), "hidden ACK missing"
+            assert feedback.hidden_reason == HIDDEN_FINISH_CLOSE
+            assert _wait(
+                lambda: feedback.child_exited
+                or (
+                    feedback.process is not None and feedback.process.poll() is not None
+                ),
+                timeout_s=5.0,
+            )
+        code = feedback.child_exit_code
+        if code is None and feedback.process is not None:
+            code = feedback.process.poll()
+        assert code == 0
+        assert feedback.force_terminated is False
+        assert "still alive after finish; terminating" not in caplog.text
+    finally:
+        feedback.close()
+        proc = feedback.process
+        if proc is not None and proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=2)
+
+
+def test_cross_session_reveal_ignored_by_handover(qtbot, monkeypatch):
+    from PyQt5.QtWidgets import QApplication, QWidget
+
+    from mf4_analyzer.startup_handover import StartupHandover
+    from mf4_analyzer import startup_timing as st
+
+    monkeypatch.setattr(st, "record_splash_event", lambda *a, **k: None)
+    fb = _RecordingFeedback()
+    app = QApplication.instance() or QApplication([])
+    window = QWidget()
+    qtbot.addWidget(window)
+    handover = StartupHandover(app, window, fb)
+    handover.begin()
+    fb.emit_reveal(session="other-session")
+    qtbot.wait(80)
+    assert handover.show_called is False
+    fb.emit_reveal(session=fb.session)
+    qtbot.waitUntil(lambda: handover.show_called, timeout=2000)
+    handover.close()
+
+
+def _wait(predicate, timeout_s: float = 5.0) -> bool:
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.02)
+    return False

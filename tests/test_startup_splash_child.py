@@ -14,8 +14,12 @@ from types import ModuleType
 import pytest
 
 from mf4_analyzer.startup_feedback import (
+    HIDDEN_FINISH_CLOSE,
+    HIDDEN_NEVER_SHOWN,
+    HIDDEN_USER_CLOSE,
     MSG_FINISH,
     MSG_HELLO,
+    MSG_HIDDEN,
     MSG_PAINTED,
     MSG_STAGE,
     decode_frames,
@@ -24,6 +28,7 @@ from mf4_analyzer.startup_feedback import (
 from mf4_analyzer.startup_splash_child import (
     _SplashSession,
     child_main,
+    create_gui_dispatcher,
     create_splash_application,
     reject_abbreviated_splash_flags,
 )
@@ -46,6 +51,7 @@ class _FakeSplash:
         self.shown = False
         self.closed = False
         self._filters: list = []
+        self._visible = False
 
     def set_stage(self, stage: str) -> None:
         self.stages.append(stage)
@@ -58,21 +64,22 @@ class _FakeSplash:
 
     def show(self) -> None:
         self.shown = True
+        self._visible = True
         # Simulate a real paint arriving after show returns.
-        from PyQt5.QtCore import QEvent, QTimer
-        from PyQt5.QtWidgets import QApplication
+        from PyQt5.QtCore import QEvent
 
-        app = QApplication.instance()
         event = QEvent(QEvent.Paint)
         for watcher in list(self._filters):
             watcher.eventFilter(self, event)
-        if app is not None:
-            # Escape hatch so a missed finish/painted path cannot hang pytest.
-            QTimer.singleShot(0, app.quit)
-            QTimer.singleShot(2000, app.quit)
+        # Do NOT quit the host QApplication from show — that would fake finish
+        # success and poison later qtbot tests that share the process app.
+
+    def isVisible(self) -> bool:  # noqa: N802 - Qt API
+        return bool(self._visible) and not self.closed
 
     def close_splash(self) -> None:
         self.closed = True
+        self._visible = False
 
     def installEventFilter(self, watcher) -> None:  # noqa: N802 - Qt API
         self._filters.append(watcher)
@@ -111,6 +118,7 @@ def test_child_main_rejects_illegal_endpoint_without_gui(monkeypatch):
             "t",
         ]
     )
+    assert code == 0 or code == 2
     assert code == 2
     assert "widget" not in holder
 
@@ -125,6 +133,7 @@ def test_finish_before_show_never_shows_end_to_end(monkeypatch):
     session = "sess-early"
     token = "tok-early"
     done = threading.Event()
+    hidden_reason: list[str] = []
 
     def parent():
         conn, _ = listen.accept()
@@ -146,7 +155,20 @@ def test_finish_before_show_never_shows_end_to_end(monkeypatch):
                     }
                 )
             )
-            time.sleep(0.3)
+            # Child may ACK never_shown before exiting.
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline:
+                try:
+                    chunk = conn.recv(1024)
+                except socket.timeout:
+                    continue
+                if not chunk:
+                    break
+                buf.extend(chunk)
+                for message in decode_frames(buf):
+                    if message.get("type") == MSG_HIDDEN:
+                        hidden_reason.append(str(message.get("detail")))
+            time.sleep(0.1)
         finally:
             conn.close()
             listen.close()
@@ -169,6 +191,8 @@ def test_finish_before_show_never_shows_end_to_end(monkeypatch):
     widget = holder.get("widget")
     if widget is not None:
         assert widget.shown is False
+    if hidden_reason:
+        assert hidden_reason[0] == HIDDEN_NEVER_SHOWN
 
 
 def test_child_receives_stages_then_finish(monkeypatch):
@@ -181,13 +205,15 @@ def test_child_receives_stages_then_finish(monkeypatch):
     session = "sess-flow"
     token = "tok-flow"
     seen_painted = threading.Event()
+    seen_hidden = threading.Event()
+    hidden_detail: list[str] = []
 
     def parent():
         conn, _ = listen.accept()
         buf = bytearray()
         conn.settimeout(3.0)
         try:
-            while not seen_painted.is_set():
+            while not seen_hidden.is_set():
                 try:
                     chunk = conn.recv(1024)
                 except socket.timeout:
@@ -223,7 +249,10 @@ def test_child_receives_stages_then_finish(monkeypatch):
                                 }
                             )
                         )
-            time.sleep(0.2)
+                    if message.get("type") == MSG_HIDDEN:
+                        hidden_detail.append(str(message.get("detail")))
+                        seen_hidden.set()
+            time.sleep(0.1)
         finally:
             conn.close()
             listen.close()
@@ -241,11 +270,105 @@ def test_child_receives_stages_then_finish(monkeypatch):
         ]
     )
     assert seen_painted.wait(5)
+    assert seen_hidden.wait(5)
     assert code == 0
     widget = holder["widget"]
     assert widget.shown is True
     assert "loading_components" in widget.stages
     assert widget.closed is True
+    assert hidden_detail == [HIDDEN_FINISH_CLOSE]
+    # Hide happened before the ACK (closed flag set by close_splash).
+    assert widget.isVisible() is False
+
+
+def test_user_close_sends_hidden_after_hide(monkeypatch):
+    holder = _install_fake_splash(monkeypatch)
+    listen = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listen.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listen.bind(("127.0.0.1", 0))
+    listen.listen(1)
+    host, port = listen.getsockname()[:2]
+    session = "sess-user"
+    token = "tok-user"
+    seen_painted = threading.Event()
+    seen_hidden = threading.Event()
+    order: list[str] = []
+
+    def parent():
+        conn, _ = listen.accept()
+        buf = bytearray()
+        conn.settimeout(5.0)
+        try:
+            while not seen_hidden.is_set():
+                try:
+                    chunk = conn.recv(1024)
+                except socket.timeout:
+                    continue
+                if not chunk:
+                    break
+                buf.extend(chunk)
+                for message in decode_frames(buf):
+                    if message.get("type") == MSG_PAINTED:
+                        seen_painted.set()
+                        order.append("painted")
+                        # Ask the child view to close as a user would.
+                        # Delivered via Hide on the fake by calling close_splash
+                        # from the child process once painted — parent just waits.
+                    if message.get("type") == MSG_HIDDEN:
+                        order.append(f"hidden:{message.get('detail')}")
+                        seen_hidden.set()
+        finally:
+            conn.close()
+            listen.close()
+
+    threading.Thread(target=parent, daemon=True).start()
+
+    # Patch close watcher path: after show+paint, simulate user close on GUI.
+
+    def factory_with_user_close():
+        widget = _FakeSplash()
+        holder["widget"] = widget
+        from PyQt5.QtCore import QTimer
+        from PyQt5.QtWidgets import QApplication
+
+        def _user_close():
+            from PyQt5.QtCore import QEvent
+
+            event = QEvent(QEvent.Close)
+            for watcher in list(widget._filters):
+                watcher.eventFilter(widget, event)
+
+        def show_and_schedule_close():
+            _FakeSplash.show(widget)
+            app = QApplication.instance()
+            if app is not None:
+                QTimer.singleShot(50, _user_close)
+
+        widget.show = show_and_schedule_close  # type: ignore[method-assign]
+        return widget
+
+    splash_mod = ModuleType("mf4_analyzer.ui.startup_splash")
+    splash_mod.StartupSplash = factory_with_user_close
+    monkeypatch.setitem(sys.modules, "mf4_analyzer.ui.startup_splash", splash_mod)
+
+    code = child_main(
+        [
+            "--startup-splash-child",
+            "--startup-splash-session",
+            session,
+            "--startup-splash-endpoint",
+            f"{host}:{port}",
+            "--startup-splash-token",
+            token,
+        ]
+    )
+    assert seen_hidden.wait(5)
+    assert code == 0
+    assert any(item.startswith("hidden:") for item in order)
+    assert HIDDEN_USER_CLOSE in order[-1]
+    widget = holder["widget"]
+    assert widget.closed is True
+    assert widget.isVisible() is False
 
 
 def test_parent_eof_exits_child_without_atexit(monkeypatch):
@@ -320,6 +443,107 @@ def test_cross_session_message_does_not_mutate(monkeypatch):
     assert session.finished is False
 
 
+def test_reader_dispatches_stage_finish_eof_on_gui_thread(qtbot):
+    """Real Python reader → GUI dispatcher: callbacks run on the GUI thread."""
+    from PyQt5.QtCore import QThread
+    from PyQt5.QtWidgets import QApplication, QWidget
+
+    app = QApplication.instance() or QApplication([])
+    parent = QWidget()
+    qtbot.addWidget(parent)
+    gui_thread = app.thread()
+
+    session = _SplashSession(
+        session="disp",
+        token="tok",
+        host="127.0.0.1",
+        port=1,
+    )
+    dispatcher = create_gui_dispatcher(session, parent=parent)
+
+    class _NoQuitApp:
+        """Avoid app.quit() tearing down the shared pytest QApplication."""
+
+        def quit(self) -> None:
+            return None
+
+    session.bind_gui(_NoQuitApp(), dispatcher)
+
+    seen: dict[str, object] = {"ops": []}
+
+    original = session.handle_gui_command
+
+    def wrapped(command):
+        seen["thread"] = QThread.currentThread()
+        seen["op"] = command.get("op")
+        seen["ops"].append(command.get("op"))  # type: ignore[union-attr]
+        original(command)
+
+    session.handle_gui_command = wrapped  # type: ignore[method-assign]
+
+    def reader_stage():
+        session._handle_message(
+            {
+                "type": MSG_STAGE,
+                "session": "disp",
+                "seq": 1,
+                "stage": "preparing",
+                "slow": False,
+                "detail": None,
+            }
+        )
+
+    threading.Thread(target=reader_stage, daemon=True).start()
+    qtbot.waitUntil(lambda: "stage" in seen["ops"], timeout=2000)  # type: ignore[arg-type]
+    assert seen["thread"] is gui_thread
+
+    def reader_finish():
+        session._handle_message(
+            {
+                "type": MSG_FINISH,
+                "session": "disp",
+                "seq": 2,
+                "stage": None,
+                "slow": None,
+                "detail": None,
+            }
+        )
+
+    threading.Thread(target=reader_finish, daemon=True).start()
+    qtbot.waitUntil(lambda: "finish" in seen["ops"], timeout=2000)  # type: ignore[arg-type]
+    assert seen["thread"] is gui_thread
+
+    session2 = _SplashSession(session="disp2", token="t", host="127.0.0.1", port=1)
+    dispatcher2 = create_gui_dispatcher(session2, parent=parent)
+    session2.bind_gui(_NoQuitApp(), dispatcher2)
+    real_handle = session2.handle_gui_command
+
+    def wrap_eof(command):
+        assert QThread.currentThread() is gui_thread
+        real_handle(command)
+
+    session2.handle_gui_command = wrap_eof  # type: ignore[method-assign]
+    eof_ops: list[str] = []
+
+    def wrap_eof_track(command):
+        assert QThread.currentThread() is gui_thread
+        eof_ops.append(str(command.get("op")))
+        real_handle(command)
+
+    session2.handle_gui_command = wrap_eof_track  # type: ignore[method-assign]
+
+    def reader_eof():
+        session2._eof = True
+        session2._post_gui({"op": "shutdown", "reason": HIDDEN_NEVER_SHOWN})
+
+    threading.Thread(target=reader_eof, daemon=True).start()
+    qtbot.waitUntil(lambda: "shutdown" in eof_ops, timeout=2000)
+
+    dispatcher.deleteLater()
+    dispatcher2.deleteLater()
+    qtbot.wait(20)
+
+
 def test_child_entry_import_closure_stays_light_before_view():
     script = r"""
 import json
@@ -358,9 +582,6 @@ def parent():
     conn.settimeout(3.0)
     while b"\n" not in buf:
         buf.extend(conn.recv(1024))
-    # Hold the connection open; child will drain_pre_show then import Qt/view.
-    # We close immediately after hello so child suppresses show before view... 
-    # Actually we need to inspect modules AFTER connect and BEFORE view.
     time.sleep(0.5)
     conn.close()
     listen.close()
@@ -375,7 +596,6 @@ present = sorted(
     name for name in FORBIDDEN
     if name in sys.modules or any(m == name or m.startswith(name + ".") for m in sys.modules)
 )
-# Also reject MainWindow symbol path commonly loaded via ui package.
 ui_main = [m for m in sys.modules if "main_window" in m or m.endswith(".MainWindow")]
 print(json.dumps({"present": present, "main_window_modules": ui_main, "eof": sess.eof or sess.finished}))
 """

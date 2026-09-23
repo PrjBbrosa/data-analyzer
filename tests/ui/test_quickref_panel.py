@@ -51,14 +51,36 @@ def test_pin_toggles_stay_on_top(panel):
     assert not panel._pin_btn.isChecked()
 
 
-def test_shadow_layers_stay_light_and_inside_shell_margin():
-    """Keep the quickref float shadow subtle, not a thick Windows halo."""
-    layers = getattr(quickref_panel_module, "_SHADOW_LAYERS", None)
-    assert layers is not None, "shadow layers must be a testable visual token"
-    assert len(layers) <= 2
-    for grow, dy, color in layers:
-        assert color.alpha() <= 24
-        assert grow + dy <= quickref_panel_module._SHADOW_MARGIN
+def test_no_self_painted_outer_shadow_on_shell(panel, qtbot, qapp):
+    """No offset gray shadow blocks outside the card; shell corners stay clear."""
+    from PyQt5.QtGui import QImage
+    from PyQt5.QtWidgets import QApplication
+
+    assert not hasattr(quickref_panel_module, "_SHADOW_LAYERS")
+    assert getattr(quickref_panel_module, "_SHELL_MARGIN", None) == 0
+
+    panel.resize(420, 320)
+    panel.show()
+    qtbot.waitExposed(panel)
+    qapp.processEvents()
+
+    pix = panel.grab()
+    assert not pix.isNull()
+    image = pix.toImage().convertToFormat(QImage.Format_ARGB32)
+    # Outer shell pixels at the very corner must not carry an offset gray pedestal.
+    for x, y in ((0, 0), (1, 1), (2, 0), (0, 2)):
+        color = image.pixelColor(x, y)
+        # Either fully transparent (outside rounded card) or the bright glass fill —
+        # never a dark translucent shadow blob.
+        if color.alpha() >= 40:
+            assert color.value() >= 200, (x, y, color.name(), color.alpha())
+        else:
+            assert color.alpha() < 40
+
+    # Drain deferred deletes owned by this panel path.
+    panel.hide()
+    qapp.processEvents()
+    QApplication.sendPostedEvents(None, 0)
 
 
 def test_search_filters_rows(panel):
@@ -210,10 +232,11 @@ def test_card_carries_white_qss_not_translucent(panel):
     assert panel._card.testAttribute(Qt.WA_StyledBackground)
 
 
-def test_group_cards_use_white_surface_not_gray_fill(panel):
+def test_group_cards_use_transparent_surface_not_opaque_white(panel):
     sheet = panel.styleSheet()
     group_block = sheet.split("QFrame#quickrefGroup {", 1)[1].split("}", 1)[0]
-    assert "background-color: #ffffff;" in group_block
+    assert "background-color: transparent;" in group_block
+    assert "background-color: #ffffff;" not in group_block
     assert "background-color: #fafbfc;" not in group_block
 
 

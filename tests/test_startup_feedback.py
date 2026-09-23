@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import socket
 import subprocess
@@ -14,7 +15,10 @@ import pytest
 
 from mf4_analyzer.startup_feedback import (
     ENV_SPLASH,
-    FINISH_REAP_TIMEOUT_S,
+    HANDOVER_FALLBACK_TIMEOUT_S,
+    HIDDEN_ACK_TIMEOUT_S,
+    HIDDEN_FINISH_CLOSE,
+    MSG_HIDDEN,
     MSG_PAINTED,
     StartupFeedback,
     build_child_command,
@@ -42,7 +46,7 @@ import json
 import os
 import socket
 import sys
-import time
+time = __import__("time")
 
 argv = sys.argv[1:]
 flags = {}
@@ -105,6 +109,15 @@ while True:
         if msg.get("session") != session:
             continue
         if msg.get("type") == "finish":
+            seq += 1
+            send({
+                "type": "hidden",
+                "session": session,
+                "seq": seq,
+                "stage": msg.get("stage"),
+                "slow": msg.get("slow"),
+                "detail": "finish_close",
+            })
             sys.exit(0)
         if msg.get("type") == "stage" and not painted:
             painted = True
@@ -277,13 +290,20 @@ def test_publish_out_of_order_and_finish_is_terminal(monkeypatch, force_splash_e
         feedback.publish("preparing_workspace")
         feedback.publish("preparing")
         feedback.set_slow(True)
+        reveals: list[dict] = []
+        feedback.add_listener(
+            lambda p: reveals.append(p) if p.get("event") == "can_reveal" else None
+        )
         feedback.finish()
         feedback.publish("loading_components")  # ignored after finish
         feedback.finish()  # idempotent
+        assert _wait_until(lambda: feedback.hidden, timeout_s=5.0)
+        assert feedback.hidden_reason == HIDDEN_FINISH_CLOSE
         assert _wait_until(
             lambda: feedback.process is None or feedback.process.poll() is not None
         )
         assert feedback._finished
+        assert reveals
     finally:
         feedback.close()
         _reap(feedback)
@@ -300,7 +320,9 @@ def test_finish_before_child_connect_suppresses_late_show(monkeypatch, force_spl
     try:
         feedback.finish()
         assert _wait_until(
-            lambda: feedback.process is None or feedback.process.poll() is not None,
+            lambda: feedback.hidden
+            or feedback.process is None
+            or (feedback.process is not None and feedback.process.poll() is not None),
             timeout_s=5.0,
         )
     finally:
@@ -371,7 +393,7 @@ def test_parent_hard_kill_closes_child_socket(monkeypatch, force_splash_env, tmp
             _reap(feedback)
 
 
-def test_unresponsive_child_is_reaped_after_finish(monkeypatch, force_splash_env):
+def test_unresponsive_child_is_reaped_after_finish(monkeypatch, force_splash_env, caplog):
     feedback = _start_with_peer(
         monkeypatch,
         force_splash_env,
@@ -381,14 +403,70 @@ def test_unresponsive_child_is_reaped_after_finish(monkeypatch, force_splash_env
         assert _wait_until(lambda: feedback._hello_ok)
         proc = feedback.process
         assert proc is not None
-        feedback.finish()
-        assert _wait_until(
-            lambda: proc.poll() is not None,
-            timeout_s=FINISH_REAP_TIMEOUT_S + 3.0,
+        reveals: list[dict] = []
+        feedback.add_listener(
+            lambda p: reveals.append(p) if p.get("event") == "can_reveal" else None
         )
+        with caplog.at_level(logging.WARNING):
+            feedback.finish()
+            assert _wait_until(
+                lambda: proc.poll() is not None,
+                timeout_s=HIDDEN_ACK_TIMEOUT_S + HANDOVER_FALLBACK_TIMEOUT_S + 3.0,
+            )
+        assert feedback.force_terminated or feedback.handover_failed or feedback.child_exited
+        assert _wait_until(lambda: bool(reveals), timeout_s=3.0)
+        # GUI must not have blocked; reveal arrived via background path.
+        assert any(r.get("event") == "can_reveal" for r in reveals)
     finally:
         feedback.close()
         _reap(feedback)
+
+
+def test_unresponsive_child_fallback_marks_handover_failed(
+    monkeypatch, force_splash_env
+):
+    """If the held handle never exits, fallback still reveals with handover_failed."""
+
+    feedback = StartupFeedback()
+    held: dict[str, object] = {}
+
+    class _HangProc:
+        def poll(self):
+            return None
+
+        def terminate(self):
+            held["terminated"] = True
+
+        def kill(self):
+            held["killed"] = True
+
+        def wait(self, timeout=None):
+            raise subprocess.TimeoutExpired(cmd="hang", timeout=timeout or 0)
+
+    def fake_spawn(self):
+        self._proc = _HangProc()  # type: ignore[assignment]
+
+    monkeypatch.setattr(StartupFeedback, "_spawn_child", fake_spawn)
+    # Skip real listen accept by marking started manually after bind.
+    monkeypatch.setenv(ENV_SPLASH, "1")
+    feedback.start(allow_offscreen=True)
+    # Force hello so finish enqueues rather than immediate-disable path.
+    with feedback._lock:
+        feedback._hello_ok = True
+        feedback._degraded = False
+        feedback._fail_reason = None
+    reveals: list[dict] = []
+    feedback.add_listener(
+        lambda p: reveals.append(p) if p.get("event") == "can_reveal" else None
+    )
+    feedback.finish()
+    assert _wait_until(
+        lambda: feedback.handover_failed or bool(reveals),
+        timeout_s=HANDOVER_FALLBACK_TIMEOUT_S + 2.0,
+    )
+    assert feedback.handover_failed or feedback.force_terminated
+    assert held.get("terminated") or feedback.handover_failed
+    feedback.close()
 
 
 def test_two_sessions_do_not_cross_talk(monkeypatch, force_splash_env):
@@ -414,11 +492,63 @@ def test_two_sessions_do_not_cross_talk(monkeypatch, force_splash_env):
         assert _wait_until(lambda: first.painted)
         second.finish()
         first.finish()
+        assert _wait_until(lambda: first.hidden and second.hidden, timeout_s=5.0)
     finally:
         first.close()
         second.close()
         _reap(first)
         _reap(second)
+
+
+def test_duplicate_hidden_ack_does_not_re_reveal(monkeypatch, force_splash_env):
+    feedback = StartupFeedback()
+    reveals: list[dict] = []
+    feedback.add_listener(
+        lambda p: reveals.append(dict(p)) if p.get("event") == "can_reveal" else None
+    )
+    feedback._hello_ok = True
+    feedback._finished = True
+    feedback._finish_requested = True
+    feedback._handle_message(
+        {
+            "type": MSG_HIDDEN,
+            "session": feedback.session,
+            "seq": 2,
+            "stage": None,
+            "slow": None,
+            "detail": HIDDEN_FINISH_CLOSE,
+        }
+    )
+    assert feedback.hidden is True
+    assert _wait_until(lambda: len(reveals) >= 1, timeout_s=2.0)
+    feedback._handle_message(
+        {
+            "type": MSG_HIDDEN,
+            "session": feedback.session,
+            "seq": 3,
+            "stage": None,
+            "slow": None,
+            "detail": HIDDEN_FINISH_CLOSE,
+        }
+    )
+    time.sleep(0.1)
+    assert len([r for r in reveals if r.get("event") == "can_reveal"]) == 1
+
+
+def test_late_session_hidden_is_ignored(monkeypatch, force_splash_env):
+    feedback = StartupFeedback()
+    feedback._hello_ok = True
+    feedback._handle_message(
+        {
+            "type": MSG_HIDDEN,
+            "session": "other-session",
+            "seq": 1,
+            "stage": None,
+            "slow": None,
+            "detail": HIDDEN_FINISH_CLOSE,
+        }
+    )
+    assert feedback.hidden is False
 
 
 def test_close_and_finish_are_idempotent(monkeypatch, force_splash_env):
@@ -444,10 +574,10 @@ def test_disabled_start_creates_no_socket(monkeypatch):
     feedback.close()
 
 
-def test_painted_and_closed_forward_diagnostics_on_io_path(
+def test_painted_and_hidden_forward_diagnostics_on_io_path(
     monkeypatch, force_splash_env
 ):
-    """Controller must forward on the I/O path when painted/closed arrive.
+    """Controller must forward on the I/O path when painted/hidden arrive.
 
     Must not wait for main-window first_frame / interactive probe connect.
     """
@@ -481,18 +611,19 @@ def test_painted_and_closed_forward_diagnostics_on_io_path(
 
     feedback._handle_message(
         {
-            "type": "closed",
+            "type": MSG_HIDDEN,
             "session": feedback.session,
             "seq": 3,
             "stage": None,
             "slow": None,
-            "detail": None,
+            "detail": HIDDEN_FINISH_CLOSE,
         }
     )
-    assert feedback.child_closed is True
-    assert [name for name, _ in calls] == ["splash_painted", "splash_closed"]
+    assert feedback.hidden is True
+    assert feedback.hidden_reason == HIDDEN_FINISH_CLOSE
+    assert [name for name, _ in calls] == ["splash_painted", "splash_hidden"]
 
-    # Idempotent: duplicate painted/closed must not re-forward.
+    # Idempotent: duplicate painted/hidden must not re-forward.
     feedback._handle_message(
         {
             "type": MSG_PAINTED,
@@ -503,7 +634,53 @@ def test_painted_and_closed_forward_diagnostics_on_io_path(
             "detail": None,
         }
     )
-    assert [name for name, _ in calls] == ["splash_painted", "splash_closed"]
+    assert [name for name, _ in calls] == ["splash_painted", "splash_hidden"]
+
+
+def test_finish_enqueue_does_not_sendall_under_caller_lock(monkeypatch, force_splash_env):
+    """GUI-thread finish must only queue; worker owns sendall."""
+
+    feedback = StartupFeedback()
+    sent: list[bytes] = []
+
+    class _Conn:
+        def sendall(self, data):
+            sent.append(data)
+
+        def settimeout(self, *_a):
+            return None
+
+        def set_inheritable(self, *_a):
+            return None
+
+        def recv(self, *_a):
+            raise socket.timeout()
+
+        def close(self):
+            return None
+
+        def shutdown(self, *_a):
+            return None
+
+        def fileno(self):
+            return -1
+
+    feedback._hello_ok = True
+    feedback._started = True
+    feedback._conn = _Conn()  # type: ignore[assignment]
+    # Enqueue under lock without worker — must not call sendall inline.
+    with feedback._lock:
+        feedback._enqueue_locked(
+            {
+                "type": "finish",
+                "session": feedback.session,
+                "stage": None,
+                "slow": False,
+            }
+        )
+    assert sent == []
+    assert feedback._pending
+    feedback.close()
 
 
 def _reap(feedback: StartupFeedback) -> None:

@@ -2,6 +2,10 @@
 
 Validates the parent IPC session before creating a ``QApplication``. Does not
 bootstrap extensions and must not import ``mf4_analyzer.app`` or MainWindow.
+
+Reader-thread commands are marshalled to a GUI-owned ``QObject`` dispatcher via
+``Qt.QueuedConnection``. Widget work (stage / finish / EOF) never runs on the
+Python reader thread.
 """
 from __future__ import annotations
 
@@ -13,14 +17,17 @@ import socket
 import sys
 import threading
 import time
-from typing import Any, Callable
+from typing import Any
 
 from mf4_analyzer.startup_feedback import (
     FRAME_MAX_BYTES,
-    MSG_CLOSED,
+    HIDDEN_FINISH_CLOSE,
+    HIDDEN_NEVER_SHOWN,
+    HIDDEN_USER_CLOSE,
     MSG_DIAGNOSTIC,
     MSG_FINISH,
     MSG_HELLO,
+    MSG_HIDDEN,
     MSG_PAINTED,
     MSG_STAGE,
     VALID_STAGES,
@@ -43,6 +50,9 @@ SPLASH_ARGV_FLAGS = frozenset(
         SPLASH_TOKEN_FLAG,
     }
 )
+
+# Failure-only watchdog; never the normal close path.
+_FAILURE_WATCHDOG_MS = 8000
 
 
 class _WindowedArgumentParser(argparse.ArgumentParser):
@@ -117,13 +127,17 @@ class _SplashSession:
         self._protocol_error = False
         self._shown = False
         self._painted_sent = False
+        self._hidden_sent = False
         self._stage: str | None = None
         self._slow = False
         self._reader: threading.Thread | None = None
         self._app = None
         self._splash = None
         self._paint_watcher = None
-        self._on_gui: Callable[[Callable[[], None]], None] | None = None
+        self._dispatcher = None
+        self._owns_app = True
+        self._last_gui_thread = None  # test observability
+        self._close_reason: str | None = None
 
     @property
     def finished(self) -> bool:
@@ -136,6 +150,10 @@ class _SplashSession:
     @property
     def protocol_error(self) -> bool:
         return self._protocol_error
+
+    @property
+    def hidden_sent(self) -> bool:
+        return self._hidden_sent
 
     def connect(self) -> None:
         conn = socket.create_connection((self.host, self.port), timeout=5.0)
@@ -176,9 +194,10 @@ class _SplashSession:
     def should_suppress_show(self) -> bool:
         return self._finished or self._eof or self._protocol_error
 
-    def bind_gui(self, app, schedule: Callable[[Callable[[], None]], None]) -> None:
+    def bind_gui(self, app, dispatcher, *, owns_app: bool = True) -> None:
         self._app = app
-        self._on_gui = schedule
+        self._dispatcher = dispatcher
+        self._owns_app = bool(owns_app)
 
     def attach_splash(self, splash) -> None:
         self._splash = splash
@@ -202,24 +221,79 @@ class _SplashSession:
         )
 
     def notify_user_closed(self) -> None:
-        self._send(
-            {
-                "type": MSG_CLOSED,
-                "session": self.session,
-                "stage": self._stage,
-                "slow": self._slow,
-                "detail": None,
-            }
-        )
+        """GUI thread: hide first, then ACK ``hidden`` with ``user_close``."""
+
+        if self._hidden_sent:
+            return
+        self._finished = True
+        self._close_reason = HIDDEN_USER_CLOSE
+        self._hide_view_and_ack(HIDDEN_USER_CLOSE)
+        self._teardown_after_hidden()
+
+    def shutdown(self, *, reason: str | None = None) -> None:
+        """GUI or pre-GUI terminal cleanup. Prefer hide→hidden before IPC drop."""
+
+        if reason is None:
+            if self._shown:
+                reason = HIDDEN_FINISH_CLOSE
+            else:
+                reason = HIDDEN_NEVER_SHOWN
+        if not self._hidden_sent:
+            self._hide_view_and_ack(reason)
+        self._teardown_after_hidden()
+
+    def _hide_view_and_ack(self, reason: str) -> None:
         splash = self._splash
         self._splash = None
         if splash is not None:
             try:
-                splash.close_splash()
+                closer = getattr(splash, "close_splash", None)
+                if callable(closer):
+                    closer()
+                else:
+                    hide = getattr(splash, "hide", None)
+                    if callable(hide):
+                        hide()
+                    close = getattr(splash, "close", None)
+                    if callable(close):
+                        close()
             except Exception:
-                logger.exception("startup splash close_splash failed after user close")
+                logger.exception("startup splash close_splash failed")
+            # Prefer an explicit closed/hidden flag when doubles lack isVisible.
+            visible = False
+            try:
+                is_vis = getattr(splash, "isVisible", None)
+                if callable(is_vis):
+                    visible = bool(is_vis())
+            except Exception:
+                visible = False
+            closed_flag = bool(getattr(splash, "closed", False)) or bool(
+                getattr(splash, "_closed", False)
+            )
+            if visible and not closed_flag:
+                logger.warning(
+                    "startup splash still reports visible after close_splash"
+                )
+        elif not self._shown:
+            reason = HIDDEN_NEVER_SHOWN
+        self._send_hidden(reason)
 
-    def shutdown(self) -> None:
+    def _send_hidden(self, reason: str) -> None:
+        if self._hidden_sent:
+            return
+        self._hidden_sent = True
+        self._close_reason = reason
+        self._send(
+            {
+                "type": MSG_HIDDEN,
+                "session": self.session,
+                "stage": self._stage,
+                "slow": self._slow,
+                "detail": reason,
+            }
+        )
+
+    def _teardown_after_hidden(self) -> None:
         self._stop.set()
         conn = self._conn
         self._conn = None
@@ -232,15 +306,8 @@ class _SplashSession:
                 conn.close()
             except OSError:
                 pass
-        splash = self._splash
-        self._splash = None
-        if splash is not None:
-            try:
-                splash.close_splash()
-            except Exception:
-                logger.exception("startup splash close_splash failed on shutdown")
         app = self._app
-        if app is not None:
+        if app is not None and self._owns_app:
             try:
                 app.quit()
             except Exception:
@@ -298,7 +365,16 @@ class _SplashSession:
             if self._finished or self._protocol_error:
                 break
         if self._eof or self._protocol_error or self._finished:
-            self._schedule_shutdown()
+            self._post_gui({"op": "shutdown", "reason": self._shutdown_reason()})
+
+    def _shutdown_reason(self) -> str:
+        if self._close_reason is not None:
+            return self._close_reason
+        if self._finished and self._shown:
+            return HIDDEN_FINISH_CLOSE
+        if self._finished or not self._shown:
+            return HIDDEN_NEVER_SHOWN
+        return HIDDEN_FINISH_CLOSE
 
     def _handle_message(self, message: dict[str, Any]) -> None:
         if not isinstance(message, dict):
@@ -310,7 +386,8 @@ class _SplashSession:
         msg_type = message.get("type")
         if msg_type == MSG_FINISH:
             self._finished = True
-            self._schedule_shutdown()
+            self._close_reason = HIDDEN_FINISH_CLOSE
+            self._post_gui({"op": "finish"})
             return
         if msg_type == MSG_STAGE:
             if self._finished:
@@ -318,24 +395,56 @@ class _SplashSession:
             stage = message.get("stage")
             if stage is not None and stage not in VALID_STAGES:
                 self._protocol_error = True
-                self._schedule_shutdown()
+                self._post_gui({"op": "shutdown", "reason": HIDDEN_NEVER_SHOWN})
                 return
             if stage is not None:
                 self._stage = str(stage)
             if "slow" in message and message.get("slow") is not None:
                 self._slow = bool(message.get("slow"))
-            self._schedule_view_update()
+            self._post_gui(
+                {
+                    "op": "stage",
+                    "stage": self._stage,
+                    "slow": self._slow,
+                }
+            )
             return
-        if msg_type in {MSG_HELLO, MSG_PAINTED, MSG_CLOSED, MSG_DIAGNOSTIC}:
+        if msg_type in {MSG_HELLO, MSG_PAINTED, MSG_HIDDEN, MSG_DIAGNOSTIC}:
             return
         self._protocol_error = True
-        self._schedule_shutdown()
+        self._post_gui({"op": "shutdown", "reason": HIDDEN_NEVER_SHOWN})
 
-    def _schedule_view_update(self) -> None:
-        schedule = self._on_gui
-        if schedule is None:
+    def _post_gui(self, command: dict[str, Any]) -> None:
+        dispatcher = self._dispatcher
+        if dispatcher is None:
+            # Pre-GUI: only terminal ops stop the reader wait; stage is state-only.
+            if command.get("op") in {"finish", "shutdown"}:
+                self._stop.set()
             return
-        schedule(self._apply_state_to_view)
+        dispatcher.post(command)
+
+    def handle_gui_command(self, command: dict[str, Any]) -> None:
+        """Run on the GUI thread only (via the dispatcher slot)."""
+
+        from PyQt5.QtCore import QThread
+
+        self._last_gui_thread = QThread.currentThread()
+        op = command.get("op")
+        if op == "stage":
+            if command.get("stage") is not None:
+                self._stage = str(command["stage"])
+            if "slow" in command:
+                self._slow = bool(command.get("slow"))
+            self._apply_state_to_view()
+            return
+        if op == "finish":
+            self._finished = True
+            self.shutdown(reason=HIDDEN_FINISH_CLOSE)
+            return
+        if op == "shutdown":
+            reason = command.get("reason") or self._shutdown_reason()
+            self.shutdown(reason=str(reason))
+            return
 
     def _apply_state_to_view(self) -> None:
         splash = self._splash
@@ -345,13 +454,31 @@ class _SplashSession:
             splash.set_stage(self._stage)
         splash.set_slow(self._slow)
 
-    def _schedule_shutdown(self) -> None:
-        schedule = self._on_gui
-        if schedule is None:
-            # Pre-GUI: just mark; caller checks should_suppress_show().
-            self._stop.set()
-            return
-        schedule(self.shutdown)
+
+def create_gui_dispatcher(session: _SplashSession, parent=None):
+    """Build a GUI-thread QObject that receives reader commands via queued signal."""
+
+    from PyQt5.QtCore import QObject, Qt, pyqtSignal, pyqtSlot
+
+    class _GuiDispatcher(QObject):
+        command = pyqtSignal(object)
+
+        def __init__(self, owner: _SplashSession) -> None:
+            super().__init__(parent)
+            self._owner = owner
+            self.command.connect(self._on_command, type=Qt.QueuedConnection)
+
+        def post(self, payload: dict) -> None:
+            # emit is thread-safe; slot runs on this QObject's thread (GUI).
+            self.command.emit(payload)
+
+        @pyqtSlot(object)
+        def _on_command(self, payload: object) -> None:
+            if not isinstance(payload, dict):
+                return
+            self._owner.handle_gui_command(payload)
+
+    return _GuiDispatcher(session)
 
 
 def _install_paint_watcher(splash, session: _SplashSession):
@@ -426,25 +553,27 @@ def child_main(argv: list[str] | None = None) -> int:
 
     session.drain_pre_show()
     if session.should_suppress_show():
-        session.shutdown()
+        session.shutdown(reason=HIDDEN_NEVER_SHOWN)
         return 0
 
     # Qt / view imports stay below the connect gate so the import-closure probe
     # can prove the child entry stays light until a validated session exists.
     # High-DPI attributes must be set before this process creates QApplication;
     # the parent configures them only for its own later QApplication.
-    app = create_splash_application()
     from PyQt5.QtCore import QTimer
+    from PyQt5.QtWidgets import QApplication
 
     from mf4_analyzer.ui.startup_splash import StartupSplash
 
-    def schedule(callback: Callable[[], None]) -> None:
-        QTimer.singleShot(0, callback)
+    app_preexisting = QApplication.instance()
+    app = create_splash_application()
+    owns_app = app_preexisting is None
 
-    session.bind_gui(app, schedule)
+    dispatcher = create_gui_dispatcher(session, parent=app)
+    session.bind_gui(app, dispatcher, owns_app=owns_app)
 
     if session.should_suppress_show():
-        session.shutdown()
+        session.shutdown(reason=HIDDEN_NEVER_SHOWN)
         return 0
 
     splash = StartupSplash()
@@ -454,7 +583,7 @@ def child_main(argv: list[str] | None = None) -> int:
 
     # If finish/EOF arrived while constructing the view, never show.
     if session.should_suppress_show():
-        session.shutdown()
+        session.shutdown(reason=HIDDEN_NEVER_SHOWN)
         return 0
 
     splash.show()
@@ -462,8 +591,20 @@ def child_main(argv: list[str] | None = None) -> int:
     # User closing the panel only closes the panel; do not kill the parent.
     _install_close_watcher(splash, session)
 
-    code = app.exec_()
-    session.shutdown()
+    if owns_app:
+        # Failure-only watchdog — must not be the success path for finish/hide.
+        QTimer.singleShot(_FAILURE_WATCHDOG_MS, app.quit)
+        code = int(app.exec_() or 0)
+    else:
+        # Host already owns QApplication (in-process tests). Pump until hidden;
+        # never quit the shared application.
+        deadline = time.monotonic() + (_FAILURE_WATCHDOG_MS / 1000.0)
+        while time.monotonic() < deadline and not session.hidden_sent:
+            app.processEvents()
+            time.sleep(0.005)
+        code = 0
+    if not session.hidden_sent:
+        session.shutdown(reason=session._shutdown_reason())
     return int(code or 0)
 
 
@@ -480,7 +621,7 @@ def _install_close_watcher(splash, session: _SplashSession) -> None:
             if self._notified:
                 return False
             if event.type() in (QEvent.Close, QEvent.Hide):
-                if session.finished:
+                if session.finished or session.hidden_sent:
                     return False
                 self._notified = True
                 session.notify_user_closed()

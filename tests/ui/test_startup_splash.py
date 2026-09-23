@@ -30,11 +30,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SCREENSHOT_DIR = REPO_ROOT / ".state" / "startup-splash"
 SCREENSHOT_PATH = SCREENSHOT_DIR / "b-view.png"
 
-# Mist-blue background samples that must NOT be the peak ink.
+# Sky-glass background samples that must NOT be the peak ink.
 _BG_SAMPLES = {
-    QColor("#e8edf1").name().lower(),
-    QColor("#dce5ec").name().lower(),
-    QColor("#d2dfe8").name().lower(),
+    QColor("#f4faff").name().lower(),
+    QColor("#ffffff").name().lower(),
 }
 
 
@@ -134,8 +133,8 @@ def test_peak_pixel_is_not_clipped_flat(splash_host):
             if name in _BG_SAMPLES:
                 bg_hits += 1
                 continue
-            # Spectrum ink is teal/blue-grey: R < B and not near-white.
-            if color.blue() >= 120 and color.red() < color.blue() and color.value() < 230:
+            # Spectrum ink is teal/blue: R < B and not near-white glass fill.
+            if color.blue() >= 120 and color.red() < color.blue() and color.value() < 250:
                 ink_hits += 1
     assert ink_hits >= 3, (
         f"peak at {peak.x():.1f},{peak.y():.1f} lacks spectrum ink "
@@ -269,8 +268,8 @@ def test_screenshot_saved_and_geometry_asserted(splash_host):
     assert SCREENSHOT_PATH.is_file()
     assert SCREENSHOT_PATH.stat().st_size > 1000
 
-    # Geometry: card region is mist-blue, not pure white; corners outside card
-    # stay transparent (frameless shadow shell).
+    # Geometry: card region is sky-glass blue-white, not pure white; AA corners
+    # outside the rounded card stay transparent (frameless shell).
     card = splash.card_rect_logical()
     centre = _sample(image, card.center())
     assert centre.name().lower() != "#ffffff"
@@ -283,6 +282,31 @@ def test_screenshot_saved_and_geometry_asserted(splash_host):
     peak_color = _sample(image, peak)
     assert peak_color.name().lower() not in _BG_SAMPLES
     assert peak_color.blue() > peak_color.red()
+
+
+def test_no_self_painted_outer_shadow(splash_host):
+    """Outer drop-shadow layers are removed; shell pixels outside the card stay clear."""
+    splash, _host = splash_host
+    image = _grab(splash)
+    card = splash.card_rect_logical()
+    # Sample just outside the top-left rounded corner — must stay transparent,
+    # not an offset gray pedestal from the retired shadow stacks.
+    samples = [
+        image.pixelColor(0, 0),
+        image.pixelColor(1, 1),
+        image.pixelColor(2, 0),
+        image.pixelColor(0, 2),
+    ]
+    for color in samples:
+        assert color.alpha() < 40, color.name()
+        # No dark gray shadow ink outside the card.
+        if color.alpha() > 0:
+            assert color.value() > 180 or color.alpha() < 20
+    # Immediately below the card bottom (if any pad) should also be clear.
+    below_y = min(image.height() - 1, int(card.bottom()) + 2)
+    below = image.pixelColor(int(card.center().x()), below_y)
+    if below_y > int(card.bottom()):
+        assert below.alpha() < 40
 
 
 def test_invalid_stage_rejected(splash_host):
@@ -314,3 +338,8 @@ def test_module_avoids_forbidden_imports():
     for name in imported:
         for prefix in forbidden:
             assert name != prefix and not name.startswith(prefix + "."), name
+    # Lightweight panel helper is allowed.
+    assert any(
+        name == "mf4_analyzer.qt_panel_style" or name.startswith("mf4_analyzer.qt_panel_style.")
+        for name in imported
+    )

@@ -248,13 +248,12 @@ def _report_startup_failure(exc: BaseException, *, qapp_ready: bool) -> None:
     logging.getLogger(__name__).error("%s", message)
 
 
-def _arm_startup_observation(app, window, feedback=None) -> None:
-    """Watch first paint for splash handover and optional timing probes.
+def _arm_startup_observation(app, window, feedback=None, handover=None) -> None:
+    """Watch first paint for timing probes only — never drives splash.finish.
 
+    Splash handover is owned by ``StartupHandover`` (hide ACK → show once).
     ``show()`` returning and a lone 0 ms timer are never treated as ready.
-    Splash ``finish`` is queued after the first Paint returns, then re-checks
-    that the main window is still visible. Interactive probe wiring stays
-    gated on the timing switch; splash handover does not.
+    Interactive probe wiring stays gated on the timing switch.
     """
 
     from PyQt5.QtCore import QEvent, QObject, QSocketNotifier, QTimer
@@ -270,7 +269,6 @@ def _arm_startup_observation(app, window, feedback=None) -> None:
             self._sock = None
             self._notifier = None
             self._responded = False
-            self._splash_finished = False
 
         def eventFilter(self, obj, event):  # noqa: N802 - Qt API
             if self._framed or obj is not window:
@@ -278,6 +276,13 @@ def _arm_startup_observation(app, window, feedback=None) -> None:
             if event.type() != QEvent.Paint:
                 return False
             self._framed = True
+            if handover is not None:
+                try:
+                    handover.mark_first_frame()
+                except Exception:
+                    logging.getLogger(__name__).exception(
+                        "startup handover first-frame mark failed"
+                    )
             if timing_on:
                 try:
                     st.mark(st.STAGE_FIRST_FRAME)
@@ -285,33 +290,7 @@ def _arm_startup_observation(app, window, feedback=None) -> None:
                     print(f"startup timing: {exc}", file=sys.stderr)
                 # Queued connect only arms the probe channel; it is not interactive.
                 QTimer.singleShot(0, self._connect_probe)
-            # Paint filters run before the paint; finish after it returns.
-            QTimer.singleShot(0, self._finish_splash_after_paint)
             return False
-
-        def _finish_splash_after_paint(self) -> None:
-            if self._splash_finished:
-                return
-            self._splash_finished = True
-            if feedback is None:
-                return
-            try:
-                from PyQt5 import sip
-            except ImportError:
-                sip = None
-            if sip is not None:
-                try:
-                    deleted = sip.isdeleted(window)
-                except RuntimeError:
-                    return
-                if deleted:
-                    return
-            try:
-                if not window.isVisible():
-                    return
-            except RuntimeError:
-                return
-            feedback.finish()
 
         def _connect_probe(self) -> None:
             if not timing_on:
@@ -419,10 +398,20 @@ def main():
         window = MainWindow()
         startup_mark(STAGE_MAINWINDOW_CONSTRUCTED)
         install_excepthooks(on_error=lambda text: window.toast(text, "error"))
-        # Arm before show so the first real Paint is observed.
-        _arm_startup_observation(app, window, feedback)
-        window.show()
+        from mf4_analyzer.startup_handover import StartupHandover
+
+        # Construct without show; handover owns the single reveal after splash hide.
+        handover = StartupHandover(app, window, feedback)
+        app._tracelab_startup_handover = handover
+        # Timing / interactive probe only — must not call feedback.finish().
+        _arm_startup_observation(app, window, feedback, handover)
+        # Listener before finish so a fast hidden ACK cannot be missed.
+        handover.begin()
         code = app.exec_()
+        try:
+            handover.close()
+        except Exception:
+            logging.getLogger(__name__).exception("startup handover close failed")
         feedback.close()
         sys.exit(code)
     except SystemExit:
