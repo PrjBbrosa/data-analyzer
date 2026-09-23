@@ -871,6 +871,13 @@ def test_zfd_timebase_hint_stays_in_budget():
     assert hints.hint_display_width(hint.text) <= hints.HINT_MAX_WIDTH
 
 
+def test_mf4_shared_axis_hint_stays_in_budget():
+    hint = next(item for item in hints.all_hints() if item.id == "file.mf4_shared_axis")
+    assert "MF4" in hint.text
+    assert "时间范围" in hint.text
+    assert hints.hint_display_width(hint.text) <= hints.HINT_MAX_WIDTH
+
+
 def test_wwt_import_hint_mentions_ordinary_view_creation_only():
     hint = next(
         item for item in hints.all_hints() if item.id == "file.wwt_create_views"

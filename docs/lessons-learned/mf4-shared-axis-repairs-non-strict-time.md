@@ -18,14 +18,14 @@ decides which MF4/MDF channels reach the channel list.
 
 Past failure: A CANape MF4 showed two channels because five numeric ECU
 signals shared a raster with two duplicate timestamps. The loader required
-`diff(t) > 0` and otherwise dropped the whole channel, for every numeric
-dtype, with no skipped-channel notice.
+`diff(t) > 0` and otherwise dropped the whole channel. A later revision
+sorted backward steps, which kept only the later segment of a clock reset.
 
-Rule: Do not drop an MF4 numeric channel because its timestamps repeat or step
-backward. Collapse exact duplicate times (keep the last sample), stable-sort
-backward steps, and interpolate onto the longest prepared axis. Record
-non-numeric, empty, and unreadable channels in `skipped_channels`. Time
-masters are the X axis, not signal columns.
+Rule: Collapse exact duplicate MF4 timestamps and keep the last sample.
+Reject a backward step as `time-regression` instead of sorting it onto one
+axis. Interpolate onto the longest prepared axis only when the ranges
+overlap, and record range loss, endpoint fill, and skips. Time masters are
+the X axis, not signal columns.
 
-Verification: `tests/test_mf4_loader.py` covers duplicate timestamps, a
-backward step, same-count different clocks, and a non-numeric skip.
+Verification: `tests/test_mf4_loader.py` covers duplicate timestamps, clock
+reset rejection, coverage loss, no-overlap, and single-sample rules.

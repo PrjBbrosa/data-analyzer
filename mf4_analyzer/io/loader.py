@@ -2,9 +2,12 @@
 from collections import defaultdict
 from collections.abc import Mapping
 import importlib.util
+import logging
 from pathlib import Path
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 # Discoverability only — find_spec does not prove a native library is usable.
 # Real format paths call ensure_* / import the engine and keep missing vs
@@ -76,35 +79,86 @@ def _source_qualified_name_at(mdf, loc, base_name):
     return f"{source_path}.{base_name}" if source_path else ""
 
 
-def prepare_shared_time_series(timestamps, samples):
-    """Return a strictly increasing ``(time, values)`` pair for shared-axis import.
+def _blank_time_facts():
+    return {
+        "input_count": None,
+        "prepared_count": None,
+        "nonfinite_time_removed": 0,
+        "duplicate_time_removed": 0,
+        "time_regression_count": 0,
+        "input_range": None,
+        "skip_reason": None,
+    }
 
-    Non-finite timestamps are removed. A backward step is stable-sorted onto
-    the time axis. Exact duplicate timestamps keep the last sample so
-    ``np.interp`` can run. Returns ``None`` when no finite timestamp remains
-    or the two arrays differ in length — callers must not truncate with
-    ``min(len(t), len(y))``.
+
+def _prepare_mdf_time_series(timestamps, samples):
+    """Prepare one numeric series for the shared axis and return ``(prepared, facts)``.
+
+    ``prepared`` is ``(time, values)`` or ``None``. A backward step is
+    ``time-regression`` and is not sorted back together. Exact duplicate
+    timestamps keep the last sample. Shape and length are checked before any
+    numeric cast; nothing is flattened with ``reshape(-1)``.
     """
-    time_axis = np.asarray(timestamps, dtype=np.float64).reshape(-1)
-    values = np.asarray(samples, dtype=np.float64).reshape(-1)
+    facts = _blank_time_facts()
+    time_axis = np.asarray(timestamps)
+    values = np.asarray(samples)
+    if (
+        values.ndim != 1
+        or time_axis.ndim != 1
+        or getattr(values.dtype, "names", None)
+        or getattr(values.dtype, "kind", "") == "c"
+    ):
+        facts["skip_reason"] = "non-1d"
+        facts["input_count"] = int(values.size) if values.ndim > 0 else None
+        return None, facts
+    if values.size == 0 or time_axis.size == 0:
+        facts["skip_reason"] = "empty"
+        facts["input_count"] = int(values.size)
+        return None, facts
+    facts["input_count"] = int(values.size)
     if time_axis.size != values.size:
-        return None
-    finite_time = np.isfinite(time_axis)
-    time_axis = time_axis[finite_time]
-    values = values[finite_time]
-    if time_axis.size == 0:
-        return None
-    if time_axis.size > 1 and np.any(np.diff(time_axis) < 0):
-        order = np.argsort(time_axis, kind="stable")
-        time_axis = time_axis[order]
-        values = values[order]
-    if time_axis.size > 1:
-        last_at_time = np.empty(time_axis.size, dtype=bool)
-        last_at_time[-1] = True
-        last_at_time[:-1] = time_axis[:-1] != time_axis[1:]
-        time_axis = time_axis[last_at_time]
-        values = values[last_at_time]
-    return time_axis, values
+        facts["skip_reason"] = "length-mismatch"
+        return None, facts
+    if not np.issubdtype(values.dtype, np.number):
+        facts["skip_reason"] = "non-numeric"
+        return None, facts
+
+    time_f = np.asarray(time_axis, dtype=np.float64)
+    values_f = np.asarray(values, dtype=np.float64)
+    finite_time = np.isfinite(time_f)
+    facts["nonfinite_time_removed"] = int(np.count_nonzero(~finite_time))
+    time_f = time_f[finite_time]
+    values_f = values_f[finite_time]
+    if time_f.size == 0:
+        facts["skip_reason"] = "unusable-time"
+        return None, facts
+    facts["input_range"] = [float(np.min(time_f)), float(np.max(time_f))]
+    if time_f.size > 1:
+        steps = np.diff(time_f)
+        facts["time_regression_count"] = int(np.count_nonzero(steps < 0))
+        if facts["time_regression_count"]:
+            facts["skip_reason"] = "time-regression"
+            return None, facts
+        keep_last = np.empty(time_f.size, dtype=bool)
+        keep_last[-1] = True
+        keep_last[:-1] = time_f[:-1] != time_f[1:]
+        facts["duplicate_time_removed"] = int(time_f.size - np.count_nonzero(keep_last))
+        time_f = time_f[keep_last]
+        values_f = values_f[keep_last]
+    facts["prepared_count"] = int(time_f.size)
+    facts["input_range"] = [float(time_f[0]), float(time_f[-1])]
+    return (time_f, values_f), facts
+
+
+def prepare_shared_time_series(timestamps, samples):
+    """Return ``(time, values)`` or ``None`` for shared-axis import.
+
+    See :func:`_prepare_mdf_time_series` for the rejection rules. Duplicate
+    timestamps keep the last sample. A backward step is rejected rather than
+    sorted.
+    """
+    prepared, _facts = _prepare_mdf_time_series(timestamps, samples)
+    return prepared
 
 
 def _is_mdf_time_master(channel, version):
@@ -137,19 +191,272 @@ def _skip_mdf_channel(skipped, name, reason):
 
 
 def _read_mdf_signal(mdf, ch_name, group_idx, ch_idx):
-    """Read one physical channel. A name-only retry covers older asammdf.
+    """Read one physical ``(group, index)`` channel.
 
-    asammdf raises ``MdfException`` and occasionally ``RuntimeError`` for a
-    block it cannot decode. The caller records ``unreadable`` instead of
-    dropping the channel with no trace.
+    Only file and asammdf parse failures become ``unreadable``. A display-name
+    retry is intentionally absent: the same name can point at a different
+    physical channel. ``ValueError`` and ``RuntimeError`` propagate.
     """
+    del ch_name
+    from asammdf.blocks.utils import MdfException
+
     try:
         return mdf.get(group=group_idx, index=ch_idx)
-    except Exception:
-        try:
-            return mdf.get(ch_name)
-        except Exception:
-            return None
+    except (OSError, MdfException):
+        return None
+
+
+def _format_name_list(names):
+    unique = []
+    for name in names:
+        text = str(name)
+        if text not in unique:
+            unique.append(text)
+    if not unique:
+        return ""
+    shown = "、".join(unique[:3])
+    if len(unique) > 3:
+        return f"{shown} 等 {len(unique)} 个通道"
+    return shown
+
+
+def _ranges_overlap(left, right):
+    return not (left[1] < right[0] or right[1] < left[0])
+
+
+def _alignment_channel(name, occurrence, facts, **extra):
+    item = {
+        "name": str(name),
+        "physical_occurrence": [int(occurrence[0]), int(occurrence[1])],
+        "input_count": facts.get("input_count"),
+        "prepared_count": facts.get("prepared_count"),
+        "nonfinite_time_removed": int(facts.get("nonfinite_time_removed") or 0),
+        "duplicate_time_removed": int(facts.get("duplicate_time_removed") or 0),
+        "time_regression_count": int(facts.get("time_regression_count") or 0),
+        "input_range": facts.get("input_range"),
+        "outside_reference_count": None,
+        "endpoint_fill_count": None,
+        "alignment": "skipped",
+        "skip_reason": facts.get("skip_reason"),
+    }
+    item.update(extra)
+    return item
+
+
+def _mf4_alignment_warnings(items):
+    """At most three file-level sentences. Full counts stay in ``items``."""
+    warnings = []
+    dup_names = [
+        item["name"] for item in items if item["duplicate_time_removed"]
+    ]
+    dup_points = sum(item["duplicate_time_removed"] for item in items)
+    nonfinite = sum(item["nonfinite_time_removed"] for item in items)
+    prep = []
+    if dup_points:
+        prep.append(
+            f"重复时间戳保留最后值（{_format_name_list(dup_names)}，合并 {dup_points} 点）"
+        )
+    if nonfinite:
+        prep.append(f"移除了 {nonfinite} 个非有限时间点")
+    if prep:
+        warnings.append("时间整理：" + "；".join(prep))
+
+    linear = [item["name"] for item in items if item["alignment"] == "linear"]
+    lost = [
+        item["name"]
+        for item in items
+        if item["outside_reference_count"]
+    ]
+    filled = [
+        item["name"]
+        for item in items
+        if item["endpoint_fill_count"]
+    ]
+    cover = []
+    if linear:
+        cover.append(f"已按公共时间轴重采样（{_format_name_list(linear)}）")
+    if lost:
+        cover.append(f"{_format_name_list(lost)} 的部分时间范围未保留")
+    if filled:
+        cover.append(
+            f"{_format_name_list(filled)} 使用了端点填充，填充部分不是原始测量"
+        )
+    if cover:
+        warnings.append("；".join(cover))
+
+    reason_text = {
+        "time-regression": "因时间回退未导入",
+        "single-sample": "因只有单点未并入",
+        "no-time-overlap": "与公共轴没有重叠而未导入",
+    }
+    skip_bits = []
+    for reason, text in reason_text.items():
+        names = [
+            item["name"]
+            for item in items
+            if item["alignment"] == "skipped" and item["skip_reason"] == reason
+        ]
+        if names:
+            skip_bits.append(f"{_format_name_list(names)} {text}")
+    if skip_bits:
+        warnings.append("无法对齐：" + "；".join(skip_bits))
+    return warnings[:3]
+
+
+def _raise_unusable_mf4(skipped):
+    logger.warning("MF4 import skipped every channel: %s", skipped)
+    shown = skipped[:3]
+    detail = "；".join(
+        f"{entry['name']}（{entry['reason']}）" for entry in shown
+    )
+    extra = f" 等 {len(skipped)} 个通道" if len(skipped) > 3 else ""
+    raise ValueError(f"没有可导入的数值通道：{detail}{extra}")
+
+
+def _load_mf4_channels(mdf, channel_locations):
+    version = getattr(mdf, "version", "")
+    skipped = []
+    pending = []
+    for ch_name, occurrence in channel_locations.items():
+        group_idx, ch_idx = occurrence
+        block = _mdf_channel_block(mdf, group_idx, ch_idx)
+        if _is_mdf_time_master(block, version):
+            continue
+        sig = _read_mdf_signal(mdf, ch_name, group_idx, ch_idx)
+        if sig is None:
+            _skip_mdf_channel(skipped, ch_name, "unreadable")
+            continue
+        samples = np.asarray([] if sig.samples is None else sig.samples)
+        if samples.ndim != 1 or getattr(samples.dtype, "names", None):
+            if samples.size == 0 and samples.ndim <= 1 and not getattr(samples.dtype, "names", None):
+                _skip_mdf_channel(skipped, ch_name, "empty")
+            else:
+                _skip_mdf_channel(skipped, ch_name, "non-1d")
+            continue
+        if samples.size == 0:
+            _skip_mdf_channel(skipped, ch_name, "empty")
+            continue
+        if getattr(samples.dtype, "kind", "") == "c":
+            _skip_mdf_channel(skipped, ch_name, "non-1d")
+            continue
+        if not np.issubdtype(samples.dtype, np.number):
+            _skip_mdf_channel(skipped, ch_name, "non-numeric")
+            continue
+        prepared, facts = _prepare_mdf_time_series(sig.timestamps, samples)
+        record = {
+            "name": ch_name,
+            "occurrence": (int(group_idx), int(ch_idx)),
+            "prepared": prepared,
+            "facts": facts,
+            "unit": _resolve_channel_unit(mdf, sig, group_idx, ch_idx),
+        }
+        pending.append(record)
+        if prepared is None:
+            _skip_mdf_channel(skipped, ch_name, facts["skip_reason"] or "unusable-time")
+
+    usable = [record for record in pending if record["prepared"] is not None]
+    if not usable:
+        _raise_unusable_mf4(skipped)
+
+    multi = [record for record in usable if record["prepared"][0].size >= 2]
+    singles = [record for record in usable if record["prepared"][0].size < 2]
+    if not multi:
+        anchor = float(singles[0]["prepared"][0][0])
+        if any(float(record["prepared"][0][0]) != anchor for record in singles[1:]):
+            logger.warning(
+                "MF4 single-sample channels disagree in time: %s",
+                [(record["name"], float(record["prepared"][0][0])) for record in singles],
+            )
+            raise ValueError("单点通道时间不一致，无法在当前共享时间轴下合并")
+        reference = singles[0]
+    else:
+        reference = multi[0]
+        for record in multi[1:]:
+            if record["prepared"][0].size > reference["prepared"][0].size:
+                reference = record
+
+    ref_t = reference["prepared"][0]
+    ref_range = (float(ref_t[0]), float(ref_t[-1]))
+    data = {"Time": ref_t}
+    loaded_units = {}
+    alignment_items = []
+    for record in pending:
+        facts = record["facts"]
+        prepared = record["prepared"]
+        if prepared is None:
+            alignment_items.append(
+                _alignment_channel(record["name"], record["occurrence"], facts)
+            )
+            continue
+        channel_time, values = prepared
+        if multi and record is not reference and values.size < 2:
+            facts = dict(facts)
+            facts["skip_reason"] = "single-sample"
+            _skip_mdf_channel(skipped, record["name"], "single-sample")
+            alignment_items.append(
+                _alignment_channel(record["name"], record["occurrence"], facts)
+            )
+            continue
+        channel_range = (float(channel_time[0]), float(channel_time[-1]))
+        if record is not reference and not _ranges_overlap(channel_range, ref_range):
+            facts = dict(facts)
+            facts["skip_reason"] = "no-time-overlap"
+            _skip_mdf_channel(skipped, record["name"], "no-time-overlap")
+            alignment_items.append(_alignment_channel(
+                record["name"],
+                record["occurrence"],
+                facts,
+                outside_reference_count=int(channel_time.size),
+            ))
+            continue
+        outside = int(np.count_nonzero(
+            (channel_time < ref_range[0]) | (channel_time > ref_range[1])
+        ))
+        endpoint_fill = int(np.count_nonzero(
+            (ref_t < channel_range[0]) | (ref_t > channel_range[1])
+        ))
+        same_clock = (
+            channel_time.shape == ref_t.shape
+            and np.array_equal(channel_time, ref_t)
+        )
+        if same_clock:
+            aligned = values
+            how = "identity"
+        else:
+            aligned = np.interp(ref_t, channel_time, values)
+            how = "linear"
+        data[record["name"]] = aligned
+        loaded_units[record["name"]] = record["unit"]
+        alignment_items.append(_alignment_channel(
+            record["name"],
+            record["occurrence"],
+            facts,
+            outside_reference_count=outside,
+            endpoint_fill_count=endpoint_fill,
+            alignment=how,
+            skip_reason=None,
+        ))
+
+    if len(data) == 1:
+        _raise_unusable_mf4(skipped)
+
+    pd = _pandas()
+    frame = pd.DataFrame(data)
+    frame.attrs["source_metadata"] = {
+        "source_kind": "mdf",
+        "skipped_channels": skipped,
+        "warnings": _mf4_alignment_warnings(alignment_items),
+        "mf4_alignment": {
+            "policy": "shared-longest-axis-v1",
+            "reference_occurrence": [
+                int(reference["occurrence"][0]),
+                int(reference["occurrence"][1]),
+            ],
+            "output_range": [ref_range[0], ref_range[1]],
+            "channels": alignment_items,
+        },
+    }
+    return frame, list(data.keys()), loaded_units
 
 
 def unique_mdf_channel_locations(mdf):
@@ -481,86 +788,19 @@ class DataLoader:
 
         The longest prepared numeric series is the reference axis. Other
         series are copied only when their timestamps match that axis, and
-        otherwise linearly interpolated. Duplicate timestamps and backward
-        steps are repaired in :func:`prepare_shared_time_series` instead of
-        dropping the channel. Non-numeric, empty, and unreadable channels are
-        listed on ``DataFrame.attrs['source_metadata']['skipped_channels']``.
-        Time masters are the X axis and are not signal columns.
+        otherwise linearly interpolated when the ranges overlap. Duplicate
+        timestamps keep the last sample. A backward step, a single sample on
+        a longer axis, and a channel with no time overlap are skipped and
+        recorded. Diagnostics live on
+        ``DataFrame.attrs['source_metadata']``. Time masters are the X axis
+        and are not signal columns.
         """
         mdf = ensure_mdf()(fp)
         try:
             channel_locations = unique_mdf_channel_locations(mdf)
             if not channel_locations:
                 raise ValueError("No channels")
-
-            version = getattr(mdf, "version", "")
-            skipped = []
-            series = {}
-            units = {}
-            for ch_name, (group_idx, ch_idx) in channel_locations.items():
-                block = _mdf_channel_block(mdf, group_idx, ch_idx)
-                if _is_mdf_time_master(block, version):
-                    continue
-                sig = _read_mdf_signal(mdf, ch_name, group_idx, ch_idx)
-                if sig is None:
-                    _skip_mdf_channel(skipped, ch_name, "unreadable")
-                    continue
-                samples = (
-                    np.asarray(sig.samples)
-                    if sig.samples is not None
-                    else np.asarray([])
-                )
-                if samples.size == 0:
-                    _skip_mdf_channel(skipped, ch_name, "empty")
-                    continue
-                if samples.ndim > 1:
-                    samples = np.squeeze(samples)
-                if getattr(samples.dtype, "names", None) or samples.ndim != 1:
-                    _skip_mdf_channel(skipped, ch_name, "non-1d")
-                    continue
-                if not np.issubdtype(samples.dtype, np.number):
-                    _skip_mdf_channel(skipped, ch_name, "non-numeric")
-                    continue
-                prepared = prepare_shared_time_series(sig.timestamps, samples)
-                if prepared is None:
-                    reason = (
-                        "length-mismatch"
-                        if np.asarray(sig.timestamps).reshape(-1).size != samples.size
-                        else "unusable-time"
-                    )
-                    _skip_mdf_channel(skipped, ch_name, reason)
-                    continue
-                series[ch_name] = prepared
-                units[ch_name] = _resolve_channel_unit(mdf, sig, group_idx, ch_idx)
-
-            if not series:
-                raise ValueError("No valid numeric data")
-
-            ref_name = max(series, key=lambda name: series[name][0].size)
-            ref_t = series[ref_name][0]
-            data = {"Time": ref_t}
-            loaded_units = {}
-            for name, (channel_time, values) in series.items():
-                if values.size < 2 and ref_t.size != values.size:
-                    _skip_mdf_channel(skipped, name, "single-sample")
-                    continue
-                if (
-                    channel_time.shape == ref_t.shape
-                    and np.array_equal(channel_time, ref_t)
-                ):
-                    aligned = values
-                else:
-                    aligned = np.interp(ref_t, channel_time, values)
-                data[name] = aligned
-                loaded_units[name] = units.get(name, "")
-
-            pd = _pandas()
-            frame = pd.DataFrame(data)
-            frame.attrs["source_metadata"] = {
-                "source_kind": "mdf",
-                "skipped_channels": skipped,
-            }
-            return frame, list(data.keys()), loaded_units
+            return _load_mf4_channels(mdf, channel_locations)
         finally:
             mdf.close()
 

@@ -383,6 +383,7 @@ def test_view_compact_tabs_ranks_between_coaxis_custom_action_and_batch_export()
         "batch.layout_when_separate",
         "file.zfd_timebase",
         "batch.result_details",
+        "file.mf4_shared_axis",
         "chart.toolbar_pan",
         "batch.fft_single_frame",
         "toolbar.save_as_menu",
@@ -396,6 +397,7 @@ def test_view_compact_tabs_ranks_between_coaxis_custom_action_and_batch_export()
         "preset.baseline_highlight",
         "preset.target_axis_dot",
         "preset.slot_source_note",
+        "time.time_range_mode",
     ]
 
 

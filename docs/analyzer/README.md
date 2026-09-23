@@ -24,7 +24,7 @@ Published guide entry points:
 
 ## Current Product Baseline
 
-The current baseline is TraceLab 8.3.1. It retains the 7.6 ASCII (`.asc`),
+The current baseline is TraceLab 8.3.2. It retains the 7.6 ASCII (`.asc`),
 NI TDMS (`.tdms`), and the original 12-View expansion (time-domain is now 24
 Views; the four analysis sections stay at 12), as well as the native WinWert
 (`.wwt`), ZFGE2/TestRunPRO (`.zfd`), and MATLAB (`.mat`) imports introduced
@@ -135,6 +135,11 @@ explicit color override now take the default palette by load order, so a missing
 file can shift later files' default colors.
 8.3.1 vertically centers the pinned-readout identity (`P7`) with the
 数值 / 完整 title chrome.
+8.3.2 keeps numeric MF4 channels on one shared time axis: duplicate timestamps
+keep the last sample, a backward step skips that channel, and range loss,
+resampling, and endpoint hold are reported. A channel with no overlap is not
+imported as a constant. Single-sample channels merge only when their timestamps
+match exactly. A real signal named `t` or `time` stays if it is not a time master.
 Update the published guides when these behaviours change; preserve each loader's
 timing and unit boundaries instead of describing inferred metadata as measured
 truth.

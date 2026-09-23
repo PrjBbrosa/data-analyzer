@@ -288,6 +288,12 @@ _HINTS = (
         priority=42,
     ),
     Hint(
+        id="file.mf4_shared_axis",
+        text="MF4 共享轴会提示时间范围",
+        surface="discovery",
+        priority=41,
+    ),
+    Hint(
         id="time.custom_x_paths",
         text="显示设置：极值点/差值；数值/完整；X↑/X↓",
         surface="discovery",

@@ -17,7 +17,10 @@ from mf4_analyzer.io.source_adapters import (
     UnsupportedSourceFormatError,
     bind_extension_runtime,
 )
-from tests._helpers.mf4_factory import write_single_channel_mf4
+from tests._helpers.mf4_factory import (
+    write_signal_groups_mf4,
+    write_single_channel_mf4,
+)
 
 
 REQUIRED_EXTENSIONS = {
@@ -539,3 +542,79 @@ def test_modular_does_not_change_base_mdf_find_spec_gate(tmp_path, monkeypatch):
     assert mdf.status == "unavailable"
     assert mdf.missing_packages == ("asammdf",)
     assert mdf.action == ""
+
+
+def test_mdf_probe_filters_all_group_time_masters(tmp_path):
+    path = write_signal_groups_mf4(tmp_path / "two-groups.mf4", [
+        [("a", [1, 2], [0, 1])],
+        [("b", [3, 4], [0, 1])],
+    ])
+    adapter = SourceAdapterRegistry.default().adapter_for(str(path))
+    descriptor = adapter.probe_sources(str(path))[0]
+    assert set(descriptor.channel_names) == {"a", "b"}
+    assert descriptor.source_id == adapter.load_sources(str(path))[0].source_id
+
+
+def test_mdf_channel_facts_use_channel_type_not_display_name():
+    from mf4_analyzer.io import source_adapters as sa
+
+    class _Channel:
+        def __init__(self, name, kind, sync=0):
+            self.name = name
+            self.channel_type = kind
+            self.sync_type = sync
+            self.unit = "V"
+            self.conversion = None
+            self.source = None
+
+    class _Fake:
+        def __init__(self, version, channels):
+            self.version = version
+            self.groups = [SimpleNamespace(channels=channels)]
+            self.channels_db = {}
+            for index, channel in enumerate(channels):
+                self.channels_db.setdefault(channel.name, []).append((0, index))
+
+    v3 = _Fake("3.30", [
+        _Channel("Zeit", 1),
+        _Channel("time", 0),
+    ])
+    names, _units, _meta = sa._mdf_channel_facts(v3)
+    assert names == ("time",)
+
+    v4 = _Fake("4.10", [
+        _Channel("time", 2, 1),
+        _Channel("angle", 2, 2),
+        _Channel("virt", 3, 1),
+        _Channel("t", 0, 0),
+    ])
+    names, _units, meta = sa._mdf_channel_facts(v4)
+    assert set(names) == {"angle", "t"}
+    assert meta["t"]["physical_occurrence"] == (0, 3)
+
+
+def test_mdf_probe_does_not_read_samples(tmp_path, monkeypatch):
+    path = write_single_channel_mf4(tmp_path / "signal.mf4")
+    from mf4_analyzer.io import loader as loader_mod
+
+    real = loader_mod.ensure_mdf()
+
+    class _Spy:
+        def __init__(self, source):
+            self._source = source
+
+        def __getattr__(self, name):
+            return getattr(self._source, name)
+
+        def get(self, *args, **kwargs):
+            raise AssertionError("probe read samples")
+
+        def close(self):
+            self._source.close()
+
+    monkeypatch.setattr(
+        loader_mod, "MDF", lambda source: _Spy(real(source)),
+    )
+    adapter = SourceAdapterRegistry.default().adapter_for(str(path))
+    descriptor = adapter.probe_sources(str(path))[0]
+    assert "sig" in descriptor.channel_names

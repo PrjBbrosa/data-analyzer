@@ -95,6 +95,11 @@ def test_supported_formats_include_v77_imports():
     formats = next(r for r in start.rows if r.desc == "支持格式")
     for name in ("ASCII", "TDMS", "WWT", "ZFD", "MAT"):
         assert name in formats.sub
+    mf4 = next(r for r in start.rows if r.desc == "MF4 共享时间轴")
+    assert "重采样" in mf4.sub
+    assert "最后值" in mf4.sub
+    assert "时间回退" in mf4.sub
+    assert "端点填充" in mf4.sub
 
 
 def test_every_keyboard_chip_resolves():

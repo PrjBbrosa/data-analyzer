@@ -37,7 +37,12 @@ from .channel_frame import (
 )
 from .file_data import FileData, _TIME_NAMES
 from . import loader as _loader
-from .loader import AUDIO_VIDEO_EXTS, DataLoader, unique_mdf_channel_locations
+from .loader import (
+    AUDIO_VIDEO_EXTS,
+    DataLoader,
+    _is_mdf_time_master,
+    unique_mdf_channel_locations,
+)
 
 
 class UnsupportedSourceFormatError(ValueError):
@@ -390,12 +395,12 @@ def _mdf_channel_facts(mdf) -> tuple[tuple[str, ...], dict, dict]:
     channel_metadata = {}
     for display_name, (group_index, channel_index) in locations.items():
         name = str(display_name)
-        if name.lower() in _TIME_NAMES:
-            continue
         try:
             channel = mdf.groups[group_index].channels[channel_index]
-        except Exception:
+        except (AttributeError, IndexError, TypeError):
             channel = None
+        if _is_mdf_time_master(channel, getattr(mdf, "version", "")):
+            continue
         if channel is None:
             unit = None
             source = None
