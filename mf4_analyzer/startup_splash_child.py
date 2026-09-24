@@ -210,13 +210,27 @@ class _SplashSession:
         if self._painted_sent:
             return
         self._painted_sent = True
+        detail = None
+        splash = self._splash
+        reader = getattr(splash, "launch_screen_rect", None)
+        if callable(reader):
+            try:
+                rect = reader()
+            except (TypeError, ValueError):
+                rect = None
+            if (
+                isinstance(rect, tuple)
+                and len(rect) == 4
+                and all(isinstance(item, int) for item in rect)
+            ):
+                detail = {"screen": list(rect)}
         self._send(
             {
                 "type": MSG_PAINTED,
                 "session": self.session,
                 "stage": self._stage,
                 "slow": self._slow,
-                "detail": None,
+                "detail": detail,
             }
         )
 

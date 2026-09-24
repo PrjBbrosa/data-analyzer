@@ -389,6 +389,27 @@ def test_mainwindow_construct_error_closes_feedback_nonzero(monkeypatch):
     assert exit_codes == [1]
 
 
+def test_handover_opens_the_main_window_on_the_splash_screen(qtbot, monkeypatch):
+    from PyQt5.QtWidgets import QApplication, QWidget
+
+    from mf4_analyzer.startup_handover import StartupHandover
+    from mf4_analyzer import startup_timing as st
+
+    monkeypatch.setattr(st, "record_splash_event", lambda *a, **k: None)
+    fb = _RecordingFeedback()
+    fb.launch_screen = (-1920, 0, 1920, 1080)
+    app = QApplication.instance() or QApplication([])
+    window = QWidget()
+    qtbot.addWidget(window)
+    window.resize(1450, 850)
+    handover = StartupHandover(app, window, fb)
+    handover.begin()
+    fb.emit_reveal()
+    qtbot.waitUntil(lambda: handover.show_called, timeout=2000)
+    assert (window.x(), window.y()) == (-1820, 100)
+    handover.close()
+
+
 def test_handover_shows_once_after_hidden_not_on_construct(qtbot, monkeypatch):
     """Main window is constructed without show; reveal only after hidden ACK."""
     from PyQt5.QtCore import QEvent

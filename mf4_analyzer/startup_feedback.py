@@ -23,6 +23,8 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
+from mf4_analyzer.qt_app_support import parse_screen_rect
+
 logger = logging.getLogger(__name__)
 
 ENV_SPLASH = "TRACELAB_STARTUP_SPLASH"
@@ -241,6 +243,8 @@ class StartupFeedback:
         self._child_exited = False
         self._reveal_notified = False
         self._cancel_spawn = False
+        # Screen the splash actually used, so the main window can open there.
+        self._launch_screen: tuple[int, int, int, int] | None = None
 
     @property
     def session(self) -> str:
@@ -253,6 +257,13 @@ class StartupFeedback:
     @property
     def painted(self) -> bool:
         return self._painted
+
+    @property
+    def launch_screen(self) -> tuple[int, int, int, int] | None:
+        """Splash work area in virtual-desktop coordinates, if the child reported it."""
+
+        with self._lock:
+            return self._launch_screen
 
     @property
     def child_closed(self) -> bool:
@@ -1038,8 +1049,11 @@ class StartupFeedback:
             if msg_type == MSG_PAINTED:
                 if not self._painted:
                     self._painted = True
-                    emit_event = "splash_painted"
                     emit_detail = message.get("detail")
+                    screen = parse_screen_rect(emit_detail)
+                    if screen is not None:
+                        self._launch_screen = screen
+                    emit_event = "splash_painted"
             elif msg_type == MSG_HIDDEN:
                 if not self._hidden:
                     reason = message.get("detail")

@@ -163,6 +163,7 @@ class StartupHandover:
         if session is not None and session != self._feedback.session:
             return
         self._show_called = True
+        self._move_onto_launch_screen()
         try:
             from mf4_analyzer.startup_timing import record_splash_event
 
@@ -186,3 +187,53 @@ class StartupHandover:
                 self._on_show()
             except Exception:
                 logger.exception("startup handover on_show failed")
+
+    def _move_onto_launch_screen(self) -> None:
+        """Open the main window on the screen the splash already used.
+
+        The splash follows the cursor at launch. ``setGeometry(100, 100)`` is
+        the primary screen's origin, so a second monitor would otherwise show
+        the two windows apart. If the splash never reported a screen, use the
+        same cursor rule at reveal time.
+        """
+
+        window = self._window
+        move = getattr(window, "move", None)
+        size_of = getattr(window, "size", None)
+        if not callable(move) or not callable(size_of):
+            return
+        rect = getattr(self._feedback, "launch_screen", None)
+        if rect is None:
+            rect = _cursor_available_rect()
+        if rect is None:
+            return
+        try:
+            size = size_of()
+            width = int(size.width())
+            height = int(size.height())
+        except (AttributeError, TypeError, ValueError):
+            return
+        if width <= 0 or height <= 0:
+            return
+        from mf4_analyzer.qt_app_support import window_origin_on_screen
+
+        x, y = window_origin_on_screen(rect, width, height)
+        move(x, y)
+
+
+def _cursor_available_rect() -> tuple[int, int, int, int] | None:
+    """Work area under the pointer, else the primary screen. Same rule as the splash."""
+
+    from PyQt5.QtGui import QCursor, QGuiApplication
+
+    if QGuiApplication.instance() is None:
+        return None
+    screen = None
+    if hasattr(QGuiApplication, "screenAt"):
+        screen = QGuiApplication.screenAt(QCursor.pos())
+    if screen is None:
+        screen = QGuiApplication.primaryScreen()
+    if screen is None:
+        return None
+    avail = screen.availableGeometry()
+    return (int(avail.x()), int(avail.y()), int(avail.width()), int(avail.height()))

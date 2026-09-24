@@ -36,6 +36,26 @@ from mf4_analyzer.startup_splash_child import (
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_first_paint_reports_the_splash_screen():
+    session = _SplashSession(
+        session="screen",
+        token="tok",
+        host="127.0.0.1",
+        port=1,
+    )
+    sent: list[dict] = []
+    session._send = sent.append  # type: ignore[method-assign]
+
+    class _Splash:
+        def launch_screen_rect(self):
+            return (-1920, 0, 1920, 1080)
+
+    session._splash = _Splash()
+    session.note_first_paint()
+    assert sent[-1]["type"] == MSG_PAINTED
+    assert sent[-1]["detail"] == {"screen": [-1920, 0, 1920, 1080]}
+
+
 def test_splash_application_configures_high_dpi_before_qapplication():
     import inspect
 
