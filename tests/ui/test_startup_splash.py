@@ -133,10 +133,54 @@ def test_meta_and_tips_match_contract():
     assert APP_NAME == "TraceLab"
     assert APP_VERSION.startswith("v")
     assert APP_CREDIT
-    assert len(TIPS) == 5
+    assert len(TIPS) >= 20
     assert TIPS[0][0] == "找回全局视野"
     assert "Home" in TIPS[0][1]
-    assert TIPS[4][0] == "让频率变化可见"
+    titles = {title for title, _body in TIPS}
+    assert {"操作速查", "阶次看转速", "一次处理多文件", "固定读数"} <= titles
+    assert any("电机转速" in body for _title, body in TIPS)
+
+
+def test_every_tip_fits_the_compact_card(qapp):
+    """Bodies stay inside the 1× tip band, including on a 1080p desktop."""
+    del qapp
+    from PyQt5.QtCore import Qt
+
+    from mf4_analyzer.qt_panel_style import (
+        FONT_ROLE_BODY,
+        FONT_ROLE_TITLE,
+        panel_font_metrics,
+    )
+
+    scale = 1.0
+
+    def _s(value: float) -> float:
+        return value * scale
+
+    content_w = (CARD_WIDTH - 64) * scale
+    dots_w = 0.0
+    for index in range(len(TIPS)):
+        dots_w += _s(12.0 if index == 0 else 4.0)
+        if index:
+            dots_w += _s(4.0)
+    title_budget = content_w - _s(18.0) - dots_w - _s(10.0)
+    heading_px = max(8, int(round(_s(10.0))))
+    body_px = max(9, int(round(_s(12.0))))
+    heading = panel_font_metrics(FONT_ROLE_TITLE, pixel_size=heading_px, bold=True)
+    body_metrics = panel_font_metrics(FONT_ROLE_BODY, pixel_size=body_px)
+    body_h = _s(92.0) - _s(17.0 + 8.0 + 14.0) - _s(10.0)
+    assert title_budget > 80
+    for title, body in TIPS:
+        assert heading.horizontalAdvance(title) <= title_budget + 1, title
+        rect = body_metrics.boundingRect(
+            0,
+            0,
+            int(content_w),
+            4000,
+            int(Qt.TextWordWrap | Qt.AlignLeft | Qt.AlignTop),
+            body,
+        )
+        assert rect.height() <= body_h + 1, (title, rect.height(), body_h)
 
 
 def test_spectrum_reference_y_in_svg_band():
