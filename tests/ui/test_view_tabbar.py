@@ -2376,6 +2376,23 @@ def test_light_policy_snaps_marker_inside_confirmed_tab(qtbot):
     assert not bar._marker_driver.is_active()
 
 
+def test_adding_views_keeps_marker_on_final_tab_geometry(qtbot, qapp):
+    load_stylesheet(qapp)
+    manager, bar = _motion_shown_bar(qtbot, count=1)
+    bar.resize(1000, bar.height())
+    QApplication.processEvents()
+    bar.new_requested.connect(manager.new_view)
+    row_width = bar.width()
+
+    for _ in range(4):
+        qtbot.mouseClick(bar._plus, Qt.LeftButton)
+        QApplication.processEvents()
+        assert bar.width() == row_width
+        expected = tab_marker_rect(bar.tabBar().tabRect(manager.active))
+        assert bar._marker_rect == expected
+        assert not bar._marker_driver.is_active()
+
+
 def test_off_and_reduced_remove_marker_and_keep_selected_background(qtbot):
     manager, bar = _motion_shown_bar(qtbot, count=3, active=1)
     switches = []

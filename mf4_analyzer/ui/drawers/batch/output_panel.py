@@ -229,7 +229,7 @@ QPushButton#batchOutputRestoreDefaults:hover {
         # Compact export row. Detailed options stay collapsed until the user
         # clicks the settings button immediately after "图片".
         self._chk_data = QCheckBox("数据文件", self)
-        self._chk_data.setChecked(True)
+        self._chk_data.setChecked(False)
         self._chk_image = QCheckBox("图片", self)
         self._chk_image.setChecked(True)
         self._btn_output_settings = QPushButton(self)
@@ -308,6 +308,14 @@ QPushButton#batchOutputSettingsButton:checked {
         )
         self._data_only_note.hide()
         export_lay.addWidget(self._data_only_note)
+        self._xlsx_warning = QLabel(export_host)
+        self._xlsx_warning.setObjectName("batchXlsxSizeWarning")
+        self._xlsx_warning.setWordWrap(True)
+        self._xlsx_warning.setMinimumWidth(0)
+        self._xlsx_warning.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self._xlsx_warning.setStyleSheet("color:#b42318;font-size:11px;")
+        self._xlsx_warning.hide()
+        export_lay.addWidget(self._xlsx_warning)
         form.addRow("导出内容", export_host)
 
         self._output_settings = QFrame(self)
@@ -1091,6 +1099,10 @@ QGroupBox#axisSettingsGroup QWidget#axisRow {
 
     def output_preview_text(self) -> str:
         return self._output_preview.text()
+
+    def set_xlsx_size_warning(self, text: str) -> None:
+        self._xlsx_warning.setText(text)
+        self._xlsx_warning.setVisible(bool(text))
 
     def set_output_preview(self, preview=None, *, error: str = "") -> None:
         """Keep planning facts available to callers without adding UI noise.

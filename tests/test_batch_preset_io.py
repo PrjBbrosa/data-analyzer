@@ -219,7 +219,16 @@ def test_legacy_output_json_without_phase3_fields_migrates_to_defaults(tmp_path)
 
     loaded = load_preset_from_json(path)
 
-    assert loaded.outputs == BatchOutput()
+    assert loaded.outputs == BatchOutput(export_data=True)
+
+
+def test_omitted_data_export_is_opt_in(tmp_path):
+    path = tmp_path / 'default-output.json'
+    path.write_text(json.dumps({
+        'schema_version': 1, 'method': 'fft', 'target_signals': ['sig'],
+        'params': {'nfft': 1024},
+    }), encoding='utf-8')
+    assert load_preset_from_json(path).outputs.export_data is False
 
 
 @pytest.mark.parametrize("method", ("fft", "fft_time", "order_time"))

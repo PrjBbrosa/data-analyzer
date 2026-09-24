@@ -2099,14 +2099,14 @@ class MainWindow(
                 idx = self.view_manager.active
             if idx is not None and 0 <= idx < len(self.view_manager.views):
                 self._project_view_controls(idx)
-            # §6.2 auto re-plot on entering time mode with checked channels.
+            # Complete every Time entry, including the empty selection: the
+            # outgoing page cover still needs a natural target-paint ack.
             # Defer by one tick: QStackedWidget has not yet laid out the newly
             # visible canvas, and drawing now paints onto a backing store that
             # is discarded when the layout pass fires (observed regression:
             # plot blanks after fft → time toggle).
             if (
                 self.files
-                and self.navigator.get_checked_channels()
                 and not opening
                 and idx is not None
                 and 0 <= idx < len(self.view_manager.views)
@@ -2259,7 +2259,11 @@ class MainWindow(
             or self._project_dirty.close_teardown_started
         ):
             return
-        self._plot_time_preserving_xlim(section_entry=True)
+        # An empty selection retains the existing Time presentation (and its
+        # camera), but must still acknowledge it to release the outgoing cover.
+        # Checkbox changes already clear/redraw through _ch_changed.
+        if self.navigator.get_checked_channels():
+            self._plot_time_preserving_xlim(section_entry=True)
         canvas = self.canvas_time
         settle = getattr(canvas, "settle_view_restore", None)
         if callable(settle):

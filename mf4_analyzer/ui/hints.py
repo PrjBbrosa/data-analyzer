@@ -381,6 +381,13 @@ _HINTS = (
         priority=45,
     ),
     Hint(
+        id="batch.data_export_opt_in",
+        text="数据默认不导出 · 大 XLSX 运行前红色提示",
+        surface="discovery",
+        retire_on="batch_open",
+        priority=39,
+    ),
+    Hint(
         id="batch.layout_when_separate",
         text="每项单独时图内布局不可改",
         surface="discovery",

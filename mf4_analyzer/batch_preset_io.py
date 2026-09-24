@@ -211,7 +211,7 @@ def load_preset_from_json(path: str | Path) -> AnalysisPreset | None:
         target_policy=raw.get("target_policy", "common"),
         params=params_dict,
         outputs=BatchOutput(
-            export_data=bool(outputs_raw.get("export_data", True)),
+            export_data=bool(outputs_raw.get("export_data", False)),
             export_image=bool(outputs_raw.get("export_image", True)),
             data_format=str(outputs_raw.get("data_format", "csv")),
             image_format=image_format,

@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class BatchOutput:
-    export_data: bool = True
+    export_data: bool = False
     export_image: bool = True
     data_format: str = 'csv'
     image_format: str = 'png'

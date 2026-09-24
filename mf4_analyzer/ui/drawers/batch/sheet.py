@@ -1524,6 +1524,7 @@ class BatchSheet(QDialog):
         outputs = self._output_panel.get_outputs()
         export_data = outputs.export_data
         export_image = outputs.export_image
+        self._update_xlsx_size_warning()
         output_issues = tuple(
             issue for issue in preflight_issues
             if issue.field in _OUTPUT_ISSUE_FIELDS
@@ -1884,7 +1885,11 @@ class BatchSheet(QDialog):
                 prefs.open_folder_after_run
             )
             self._output_panel.apply_render_style_params(prefs.render_style)
-            self._output_panel.apply_outputs(prefs.as_output())
+            # Data export requires an opt-in for each newly opened panel.
+            # Explicitly imported presets still restore their saved intent.
+            self._output_panel.apply_outputs(
+                dataclasses.replace(prefs.as_output(), export_data=False)
+            )
         finally:
             self._applying_analysis_preset = False
 
@@ -2510,6 +2515,34 @@ class BatchSheet(QDialog):
     def _outputs_per_task(self) -> int:
         outputs = self._output_panel.get_outputs()
         return int(bool(outputs.export_data)) + int(bool(outputs.export_image))
+
+    def _update_xlsx_size_warning(self) -> None:
+        from ....batch_export_size import (
+            estimate_table_size, source_size_facts, xlsx_size_warning,
+        )
+
+        outputs = self._output_panel.get_outputs()
+        text = ""
+        if outputs.export_data and outputs.data_format == "xlsx":
+            preset = self.get_preset()
+            try:
+                tasks = self._make_runner().plan_render_tasks(
+                    preset, source_channels=self._input_panel.source_channel_sets(),
+                )
+            except (TypeError, ValueError, OSError):
+                text = "XLSX 大小暂无法估算，请先完善输入和分析配置。"
+            else:
+                rows = {row.source_id: row for row in self._input_panel._file_list.loaded_rows()}
+                sizes = []
+                for task in tasks:
+                    fd = self._files.get(task.source_key)
+                    row = rows.get(task.source_key)
+                    facts = source_size_facts(fd) if fd is not None else (
+                        row.metadata if row is not None else {}
+                    )
+                    sizes.append(estimate_table_size(preset.method, preset.params, facts))
+                text = xlsx_size_warning(sizes)
+        self._output_panel.set_xlsx_size_warning(text)
 
     def _make_runner(self) -> BatchRunner:
         """Build the GUI-free runner with the parent catalog snapshot."""

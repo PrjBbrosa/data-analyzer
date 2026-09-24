@@ -2295,6 +2295,55 @@ def test_e5_directed_cross_section_user_navigation_matrix(
     _assert_no_transition_residue(window)
 
 
+@pytest.mark.parametrize("source", ["fft_time", "order"])
+def test_return_to_empty_time_finishes_and_channel_selection_draws(
+    qtbot, qapp, loaded_csv, source,
+):
+    window = _make_loaded_window(qtbot, qapp, loaded_csv)
+    _seed_all_section_cache_homes(qtbot, qapp, window)
+    _set_checked(window)
+    window.plot_time()
+    window._capture_current_view()
+    _ensure_section(qtbot, qapp, window, source)
+    controller, started, cancelled, finished = _connect_transition_lifecycle(window)
+
+    window.toolbar._set_mode("time")
+    _wait_idle(qtbot, window)
+    assert started and finished
+    assert cancelled == []  # Empty content completes normally, without timeout.
+    assert not window.canvas_time.axes_list
+    _assert_no_transition_residue(window)
+
+    # Use the same selection signal as a channel checkbox, without calling plot.
+    _set_checked(window, "speed")
+    window.navigator.channels_changed.emit()
+    qtbot.waitUntil(lambda: len(window.canvas_time.axes_list) == 1)
+    assert window.canvas_time.isVisible()
+    _assert_no_transition_residue(window)
+
+
+def test_empty_time_entry_redirect_does_not_cover_new_section(
+    qtbot, qapp, loaded_csv,
+):
+    window = _make_loaded_window(qtbot, qapp, loaded_csv)
+    _seed_all_section_cache_homes(qtbot, qapp, window)
+    _set_checked(window)
+    window.plot_time()
+    window._capture_current_view()
+    _ensure_section(qtbot, qapp, window, "order")
+
+    window.toolbar._set_mode("time")
+    window.toolbar._set_mode("fft_time")
+    _wait_idle(qtbot, window)
+    assert window.chart_stack.current_mode() == "fft_time"
+    assert window.chart_stack.page_fft_time.pane_canvas(0).has_result()
+    _assert_no_transition_residue(window)
+    window.toolbar._set_mode("time")
+    _wait_idle(qtbot, window)
+    assert not window.canvas_time.axes_list
+    _assert_no_transition_residue(window)
+
+
 def test_e5_abc_redirect_late_b_does_not_become_c(
     qtbot, qapp, loaded_csv,
 ):

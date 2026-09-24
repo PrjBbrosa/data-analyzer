@@ -323,7 +323,7 @@ class PageTransitionController(QObject):
         return None
 
     def watch_target_ack(self, token: PresentationToken) -> bool:
-        """Fail closed if a requested natural target paint never arrives.
+        """Fail closed if target preparation or its natural paint never arrives.
 
         The timer never marks a target ready or starts an animation.  It only
         drops an old cover so the real target can remain the visible source of
@@ -444,6 +444,10 @@ class PageTransitionController(QObject):
             return False
         self._target_token = token
         self._target_ready = False
+        # Cover lifetime must be bounded even if an empty/aborted render never
+        # reaches request_page_transition_target(). That later request renews
+        # the same token's deadline while waiting for its natural paint.
+        self.watch_target_ack(token)
         return True
 
     def watch_input_targets(self, token: PresentationToken, targets) -> bool:

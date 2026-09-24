@@ -1679,7 +1679,7 @@ def test_restore_defaults_clears_the_memory_and_resets_the_panel(qtbot, tmp_path
         "font_scale": DEFAULT_FONT_SCALE,
     }
     assert sheet.output_dir() == default_output_dir()
-    assert sheet.export_data() is True
+    assert sheet.export_data() is False
     assert sheet._output_panel.open_folder_after_run() is True
     # The key is gone, so reopening starts from the hard-coded defaults again.
     assert _prefs_store(tmp_path).load() == BatchPanelPrefs()

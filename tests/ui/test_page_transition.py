@@ -379,6 +379,21 @@ def test_host_close_cancels_ready_fade_and_releases_frames(qtbot):
     assert not controller.is_active()
 
 
+def test_armed_target_without_paint_request_releases_cover(qtbot):
+    controller = _controller(qtbot)
+    cancelled = []
+    controller.transition_cancelled.connect(cancelled.append)
+    controller._target_ack_watchdog.setInterval(20)
+    assert controller.begin_departure(_token("A"), _frame("#204080"))
+    assert controller.arm_target(_token("B"))
+
+    # An empty/aborted render may never request a natural paint acknowledgement.
+    qtbot.waitUntil(lambda: controller.image_bytes() == 0, timeout=500)
+    assert cancelled == ["target-paint-timeout"]
+    assert not controller._overlay.isVisible()
+    assert not controller.is_active()
+
+
 def test_missing_natural_ack_times_out_without_starting_a_fade(qtbot):
     controller = _controller(qtbot)
     cancelled = []

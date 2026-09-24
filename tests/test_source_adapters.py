@@ -114,6 +114,8 @@ def test_single3_and_single5_adapters_normalize_to_loaded_source(
     assert probed[0].channel_names == ("sig",) if "sig" in result[1] else ("audio",)
     assert probed[0].source_id == loaded[0].source_id
     assert probed[0].group_id == loaded[0].group_id == "root"
+    assert probed[0].metadata['sample_count'] == len(loaded[0].file_data.time_array)
+    assert probed[0].metadata['sample_rate'] == loaded[0].file_data.fs
 
 
 @pytest.mark.parametrize(

@@ -376,6 +376,15 @@ def _descriptor_from_loaded(
     units = {name: str(fd.channel_units.get(name, "") or "") for name in channels}
     metadata = _safe_metadata(dict(loaded.metadata))
     metadata.update({"adapter_key": adapter_key, "probe_cost": probe_cost})
+    # Scalar size facts survive the full probe; Batch preflight must not
+    # reload a source or retain its samples just to warn about a large table.
+    axis = fd.time_array
+    metadata.update({
+        "sample_count": frame_row_count(fd.data),
+        "sample_rate": _finite_float(fd.fs),
+        "time_start": _finite_float(axis[0]) if axis is not None and len(axis) else None,
+        "time_end": _finite_float(axis[-1]) if axis is not None and len(axis) else None,
+    })
     return SourceDescriptor(
         source_id=loaded.source_id,
         source_path=loaded.source_path,

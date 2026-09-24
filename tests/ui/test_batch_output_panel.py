@@ -856,6 +856,7 @@ def test_batch_output_summary_stays_fixed_after_legacy_import(qtbot):
 
     panel = _make_panel(qtbot)
     panel.apply_outputs(BatchOutput(
+        export_data=True,
         data_format="xlsx",
         image_format="png",
         image_size="2560x1440",
@@ -884,6 +885,8 @@ def test_batch_output_checkboxes_only_choose_fixed_artifacts(qtbot):
     from mf4_analyzer.batch import BatchOutput
 
     panel = _make_panel(qtbot)
+    assert panel._chk_data.isChecked() is False
+    panel._chk_data.setChecked(True)
     panel._chk_image.setChecked(False)
     outputs = panel.get_outputs()
     assert outputs.export_image is False
@@ -1127,10 +1130,11 @@ def test_batch_output_data_only_note_four_export_combinations(qtbot):
     panel = _make_panel(qtbot)
     note = panel._data_only_note
 
-    assert panel._chk_data.isChecked()
+    assert not panel._chk_data.isChecked()
     assert panel._chk_image.isChecked()
     assert note.isHidden() is True
 
+    panel._chk_data.setChecked(True)
     panel._chk_image.setChecked(False)
     assert note.isHidden() is False
     assert note.text() == _XLSX_ONLY_PREVIEW_NOTE
@@ -1190,6 +1194,7 @@ def test_single_analysis_linear_keeps_db_catalog_manage_available(qtbot):
 
 def test_batch_output_data_only_note_wraps_in_288px_column(qtbot):
     panel = _make_panel(qtbot)
+    panel._chk_data.setChecked(True)
     panel._chk_image.setChecked(False)
     panel.resize(288, 1200)
     panel.show()

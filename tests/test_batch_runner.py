@@ -638,6 +638,7 @@ def test_cancel_no_half_written_files(tmp_path):
     preset = AnalysisPreset.free_config(
         name="cw", method="fft", target_signals=("sig",),
         params={"fs": 1024.0, "window": "hanning", "nfft": 1024},
+        outputs=BatchOutput(export_data=True),
     )
     preset = replace(preset, file_ids=(0, 1))
     token = threading.Event()

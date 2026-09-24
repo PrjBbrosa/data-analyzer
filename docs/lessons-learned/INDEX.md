@@ -280,6 +280,8 @@ lesson by default.
 | [Splash Thread Dispatch Needs A Real GUI Receiver](splash-thread-dispatch-needs-real-gui-receiver.md) | Dispatching splash IPC state from a Python reader thread into Qt GUI callbacks, or changing splash-to-main-window handover. | See lesson |
 | [Native glass needs a real backdrop and an opaque fallback](native-glass-needs-backdrop-and-opaque-fallback.md) | Translating an HTML glass prototype to Qt translucent panels. | See lesson |
 | [Windows DWM Backdrop Can Fill Rounded Splash Corners](windows-dwm-backdrop-can-fill-rounded-splash-corners.md) | Adding a Windows system backdrop to a translucent, frameless Qt panel whose visible card is painted with rounded corners. | See lesson |
+| [Empty Target Must Complete Its Page Transition](page-transition-empty-target-completion.md) | A chart transition holds the outgoing image while the destination may skip rendering because its selection is empty. | See lesson |
+| [View Marker Must Follow The Child Strip Layout](view-marker-follows-child-layout.md) | A cached selection marker uses QTabBar tabRect while labels, tab count, or visible widths change. | See lesson |
 
 ## Selection Rules
 

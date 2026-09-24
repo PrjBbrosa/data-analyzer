@@ -235,6 +235,14 @@ class _ViewTabs(QTabBar):
         self.clear_interaction_state()
         super().hideEvent(event)
 
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        # Adding a View changes the strip width on a later layout pass even
+        # when the outer rail does not resize. Discard pre-layout coordinates.
+        bar = self._bar()
+        if bar is not None:
+            bar._relocate_marker(interpolate=False)
+
     def paintEvent(self, event):
         super().paintEvent(event)
         bar = self._bar()
