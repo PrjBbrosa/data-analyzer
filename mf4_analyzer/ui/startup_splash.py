@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 import platform
+import random
 import subprocess
 from dataclasses import dataclass
 from typing import Optional, Sequence, Tuple
@@ -268,7 +269,7 @@ class StartupSplash(QWidget):
         self._slow = False
         self._reduced_motion = detect_system_reduced_motion()
         self._closed = False
-        self._tip_index = 0
+        self._tip_index = random.randrange(len(TIPS)) if TIPS else 0
         self._last_tip_ms = 0.0
         self._breathe_phase = 0.0
         self._rail_phase = 0.0
@@ -517,7 +518,8 @@ class StartupSplash(QWidget):
             self._rail_phase = (self._rail_phase + delta / _RAIL_PERIOD_MS) % 1.0
             self._spinner_phase = (self._spinner_phase + delta / 1000.0) % 1.0
 
-        # Tip rotation from real elapsed time; first tip already visible at 0.
+        # Rotate from the randomly chosen opening tip; the first change waits
+        # one full interval so the opening tip is actually readable.
         if now - self._last_tip_ms >= _TIP_INTERVAL_MS:
             steps = int((now - self._last_tip_ms) // _TIP_INTERVAL_MS)
             if steps > 0:

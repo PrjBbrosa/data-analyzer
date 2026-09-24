@@ -115,6 +115,20 @@ def test_stage_copy_and_right_label(splash_host):
     assert "已就绪" not in splash.status_text()
 
 
+def test_opening_tip_is_chosen_at_random(qtbot, monkeypatch):
+    """Each splash picks one tip up front instead of always starting at 0."""
+    monkeypatch.setattr(
+        "mf4_analyzer.ui.startup_splash.random.randrange",
+        lambda stop: 3 if stop == len(TIPS) else 0,
+    )
+    host = QWidget()
+    host.setObjectName("startupSplashRandomTipHost")
+    qtbot.addWidget(host)
+    splash = StartupSplash(host)
+    qtbot.addWidget(splash)
+    assert splash.tip_index == 3
+
+
 def test_meta_and_tips_match_contract():
     assert APP_NAME == "TraceLab"
     assert APP_VERSION.startswith("v")
