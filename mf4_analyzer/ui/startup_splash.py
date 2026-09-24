@@ -298,6 +298,7 @@ class StartupSplash(QWidget):
         self._rail_phase = 0.0
         self._spinner_phase = 0.0
         self._scale = DISPLAY_SCALE_COMPACT
+        self._launch_screen_rect: Optional[Tuple[int, int, int, int]] = None
         self._path_build_count = 0
         self._cached_paths: list[QPainterPath] = []
         self._cached_path_key: Optional[Tuple[float, float, float, float, float]] = None
@@ -453,11 +454,22 @@ class StartupSplash(QWidget):
         h = int(round((CARD_HEIGHT + 2 * SHADOW_PAD) * self._scale))
         self.setFixedSize(max(1, w), max(1, h))
 
+    def launch_screen_rect(self) -> Optional[Tuple[int, int, int, int]]:
+        """Work area the splash was centered on, in virtual-desktop coordinates."""
+
+        return self._launch_screen_rect
+
     def _center_on_screen(self) -> None:
         screen = self._target_screen()
         if screen is None:
             return
         avail = screen.availableGeometry()
+        self._launch_screen_rect = (
+            int(avail.x()),
+            int(avail.y()),
+            int(avail.width()),
+            int(avail.height()),
+        )
         frame = self.frameGeometry()
         frame.moveCenter(avail.center())
         self.move(frame.topLeft())

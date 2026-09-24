@@ -683,6 +683,39 @@ def test_finish_enqueue_does_not_sendall_under_caller_lock(monkeypatch, force_sp
     feedback.close()
 
 
+def test_painted_message_remembers_the_splash_screen():
+    from mf4_analyzer.qt_app_support import parse_screen_rect, window_origin_on_screen
+
+    assert parse_screen_rect(None) is None
+    assert parse_screen_rect({"screen": [0, 0, 0, 10]}) is None
+    assert parse_screen_rect({"screen": [-1920, 0, 1920, 1080]}) == (
+        -1920,
+        0,
+        1920,
+        1080,
+    )
+    # Primary screen keeps the historical 100px inset.
+    assert window_origin_on_screen((0, 0, 1920, 1080), 1450, 850) == (100, 100)
+    # A monitor to the left of the primary is not forced back to (100, 100).
+    assert window_origin_on_screen((-1920, 0, 1920, 1080), 1450, 850) == (-1820, 100)
+    # A window larger than the work area starts at that screen's origin.
+    assert window_origin_on_screen((1920, 100, 1280, 720), 1450, 850) == (1920, 100)
+
+    feedback = StartupFeedback()
+    feedback._hello_ok = True
+    feedback._handle_message(
+        {
+            "type": "painted",
+            "session": feedback.session,
+            "stage": None,
+            "slow": None,
+            "detail": {"screen": [-1920, 0, 1920, 1080]},
+        }
+    )
+    assert feedback.launch_screen == (-1920, 0, 1920, 1080)
+    feedback.close()
+
+
 def _reap(feedback: StartupFeedback) -> None:
     proc = feedback.process
     if proc is None:

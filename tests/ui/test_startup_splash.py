@@ -322,6 +322,19 @@ def test_close_stops_timer_and_blocks_callbacks(splash_host, qtbot):
     assert splash.tip_index == tip_before
 
 
+def test_splash_remembers_the_screen_it_was_centered_on(splash_host):
+    splash, _host = splash_host
+    screen = splash._target_screen()
+    assert screen is not None
+    avail = screen.availableGeometry()
+    assert splash.launch_screen_rect() == (
+        avail.x(),
+        avail.y(),
+        avail.width(),
+        avail.height(),
+    )
+
+
 def test_panel_scale_follows_the_work_area_without_changing_ratio(splash_host):
     splash, _host = splash_host
     card = splash.card_rect_logical()
