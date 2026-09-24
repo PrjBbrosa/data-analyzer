@@ -16,13 +16,15 @@ from mf4_analyzer.app_meta import APP_CREDIT, APP_NAME, APP_VERSION
 from mf4_analyzer.ui.startup_splash import (
     CARD_HEIGHT,
     CARD_WIDTH,
-    DISPLAY_SCALE,
+    DISPLAY_SCALE_COMPACT,
+    DISPLAY_SCALE_LARGE,
     SHADOW_PAD,
     STAGE_LOADING_COMPONENTS,
     STAGE_PREPARING,
     STAGE_PREPARING_WORKSPACE,
     TIPS,
     StartupSplash,
+    display_scale_for_work_area,
     spectrum_reference_bounds,
 )
 
@@ -260,21 +262,36 @@ def test_close_stops_timer_and_blocks_callbacks(splash_host, qtbot):
     assert splash.tip_index == tip_before
 
 
-def test_panel_draws_larger_than_the_html_card_without_changing_ratio(splash_host):
+def test_panel_scale_follows_the_work_area_without_changing_ratio(splash_host):
     splash, _host = splash_host
     card = splash.card_rect_logical()
     assert abs(card.width() / card.height() - CARD_WIDTH / CARD_HEIGHT) < 0.02
     screen = splash._target_screen()
     assert screen is not None
     avail = screen.availableGeometry()
-    natural_w = (CARD_WIDTH + 2 * SHADOW_PAD) * DISPLAY_SCALE
-    natural_h = (CARD_HEIGHT + 2 * SHADOW_PAD) * DISPLAY_SCALE
-    if natural_w <= avail.width() - 24 and natural_h <= avail.height() - 24:
-        assert abs(splash._scale - DISPLAY_SCALE) < 0.02
-    else:
-        assert splash._scale < DISPLAY_SCALE
+    expected = display_scale_for_work_area(avail.width(), avail.height())
+    assert abs(splash._scale - expected) < 0.02
     assert splash.width() <= avail.width()
     assert splash.height() <= avail.height()
+
+
+def test_large_logical_desktop_uses_one_and_a_half_and_1080p_uses_one():
+    """5K Mac default points stay at 1.5; a 1080p work area stays at 1.0."""
+    # Full 2560×1440 and the same desktop after a menu bar + dock.
+    assert display_scale_for_work_area(2560, 1440) == DISPLAY_SCALE_LARGE
+    assert display_scale_for_work_area(2560, 1320) == DISPLAY_SCALE_LARGE
+    # 1080p at 100% and at 150% (logical 1280×720), with and without a taskbar.
+    assert display_scale_for_work_area(1920, 1080) == DISPLAY_SCALE_COMPACT
+    assert display_scale_for_work_area(1920, 1032) == DISPLAY_SCALE_COMPACT
+    assert display_scale_for_work_area(1280, 720) == DISPLAY_SCALE_COMPACT
+    assert display_scale_for_work_area(1280, 672) == DISPLAY_SCALE_COMPACT
+
+
+def test_compact_card_shrinks_only_when_the_work_area_cannot_hold_it():
+    scale = display_scale_for_work_area(700, 480)
+    assert scale < DISPLAY_SCALE_COMPACT
+    assert (CARD_WIDTH + 2 * SHADOW_PAD) * scale <= 700 - 24
+    assert (CARD_HEIGHT + 2 * SHADOW_PAD) * scale <= 480 - 24
 
 
 def test_card_logical_width_and_frameless(splash_host):

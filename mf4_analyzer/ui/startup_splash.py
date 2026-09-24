@@ -102,10 +102,17 @@ _SPECTRUM_STOPS = tuple(
 
 CARD_WIDTH = 640
 CARD_HEIGHT = 470
-# The HTML demo card is 640 CSS px. On a Windows desktop that size reads as a
-# small dialog, so the product panel uses the same layout at 1.5× and only
-# shrinks when the work area cannot hold it.
-DISPLAY_SCALE = 1.5
+# Product scale in Qt logical pixels. OS DPI is applied by Qt afterwards, so
+# these factors must not be multiplied by devicePixelRatio.
+# 1.5 matches a large logical desktop (5K Mac default, 2560×1440 points).
+# 1.0 is the 640×470 card used on 1080p-class desktops, where 1.5 fills the
+# screen. Below 1.0 only when even the compact card does not fit.
+DISPLAY_SCALE_LARGE = 1.5
+DISPLAY_SCALE_COMPACT = 1.0
+# Available-height gate, after menu bar / dock / taskbar. 1440p-class work
+# areas stay above this; 1080p work areas (≤1080) do not.
+_LARGE_SCALE_MIN_AVAILABLE_HEIGHT = 1200
+_WORK_AREA_MARGIN = 24
 CORNER_RADIUS = 13.0
 CONTENT_PAD_X = 32.0
 # Former shadow gutter; outer drop-shadow layers are gone, keep 0 pad so the
@@ -266,7 +273,7 @@ class StartupSplash(QWidget):
         self._breathe_phase = 0.0
         self._rail_phase = 0.0
         self._spinner_phase = 0.0
-        self._scale = DISPLAY_SCALE
+        self._scale = DISPLAY_SCALE_COMPACT
         self._path_build_count = 0
         self._cached_paths: list[QPainterPath] = []
         self._cached_path_key: Optional[Tuple[float, float, float, float, float]] = None
@@ -412,17 +419,12 @@ class StartupSplash(QWidget):
         return screen
 
     def _apply_preferred_size(self) -> None:
-        self._scale = DISPLAY_SCALE
         screen = self._target_screen()
-        if screen is not None:
+        if screen is None:
+            self._scale = DISPLAY_SCALE_COMPACT
+        else:
             avail = screen.availableGeometry()
-            # Leave a little breathing room so shadow corners stay on-screen.
-            max_w = max(160, avail.width() - 24)
-            max_h = max(160, avail.height() - 24)
-            natural_w = (CARD_WIDTH + 2 * SHADOW_PAD) * DISPLAY_SCALE
-            natural_h = (CARD_HEIGHT + 2 * SHADOW_PAD) * DISPLAY_SCALE
-            if natural_w > max_w or natural_h > max_h:
-                self._scale = DISPLAY_SCALE * min(max_w / natural_w, max_h / natural_h)
+            self._scale = display_scale_for_work_area(avail.width(), avail.height())
         w = int(round((CARD_WIDTH + 2 * SHADOW_PAD) * self._scale))
         h = int(round((CARD_HEIGHT + 2 * SHADOW_PAD) * self._scale))
         self.setFixedSize(max(1, w), max(1, h))
@@ -846,17 +848,46 @@ class StartupSplash(QWidget):
         )
 
 
+def display_scale_for_work_area(avail_width: float, avail_height: float) -> float:
+    """Choose 1.5 or 1.0 from the logical work area, then shrink to fit.
+
+    ``avail_*`` is ``QScreen.availableGeometry()`` in Qt logical pixels
+    (menu bar, dock, and taskbar already removed). A 5K Mac at the default
+    2560×1440 point desktop stays on 1.5. A 1080p desktop, including one
+    whose Windows scale has reduced the logical size to 1280×720, stays on
+    the 640×470 card. The compact card shrinks only when it cannot fit.
+    """
+    max_w = max(160.0, float(avail_width) - _WORK_AREA_MARGIN)
+    max_h = max(160.0, float(avail_height) - _WORK_AREA_MARGIN)
+    card_w = float(CARD_WIDTH + 2 * SHADOW_PAD)
+    card_h = float(CARD_HEIGHT + 2 * SHADOW_PAD)
+    if (
+        float(avail_height) >= _LARGE_SCALE_MIN_AVAILABLE_HEIGHT
+        and card_w * DISPLAY_SCALE_LARGE <= max_w
+        and card_h * DISPLAY_SCALE_LARGE <= max_h
+    ):
+        return DISPLAY_SCALE_LARGE
+    need_w = card_w * DISPLAY_SCALE_COMPACT
+    need_h = card_h * DISPLAY_SCALE_COMPACT
+    if need_w <= max_w and need_h <= max_h:
+        return DISPLAY_SCALE_COMPACT
+    return DISPLAY_SCALE_COMPACT * min(max_w / need_w, max_h / need_h)
+
+
 __all__ = [
     "APP_CREDIT",
     "APP_NAME",
     "APP_VERSION",
     "CARD_HEIGHT",
     "CARD_WIDTH",
+    "DISPLAY_SCALE_COMPACT",
+    "DISPLAY_SCALE_LARGE",
     "STAGE_LOADING_COMPONENTS",
     "STAGE_PREPARING",
     "STAGE_PREPARING_WORKSPACE",
     "StartupSplash",
     "TIPS",
     "detect_system_reduced_motion",
+    "display_scale_for_work_area",
     "spectrum_reference_bounds",
 ]
