@@ -17,13 +17,15 @@ from mf4_analyzer.ui import startup_splash as splash_module
 from mf4_analyzer.ui.startup_splash import (
     CARD_HEIGHT,
     CARD_WIDTH,
-    DISPLAY_SCALE,
+    DISPLAY_SCALE_COMPACT,
+    DISPLAY_SCALE_LARGE,
     SHADOW_PAD,
     STAGE_LOADING_COMPONENTS,
     STAGE_PREPARING,
     STAGE_PREPARING_WORKSPACE,
     TIPS,
     StartupSplash,
+    display_scale_for_work_area,
     spectrum_reference_bounds,
 )
 
@@ -114,14 +116,72 @@ def test_stage_copy_and_right_label(splash_host):
     assert "已就绪" not in splash.status_text()
 
 
+def test_opening_tip_is_chosen_at_random(qtbot, monkeypatch):
+    """Each splash picks one tip up front instead of always starting at 0."""
+    monkeypatch.setattr(
+        "mf4_analyzer.ui.startup_splash.random.randrange",
+        lambda stop: 3 if stop == len(TIPS) else 0,
+    )
+    host = QWidget()
+    host.setObjectName("startupSplashRandomTipHost")
+    qtbot.addWidget(host)
+    splash = StartupSplash(host)
+    qtbot.addWidget(splash)
+    assert splash.tip_index == 3
+
+
 def test_meta_and_tips_match_contract():
     assert APP_NAME == "TraceLab"
     assert APP_VERSION.startswith("v")
     assert APP_CREDIT
-    assert len(TIPS) == 5
+    assert len(TIPS) >= 20
     assert TIPS[0][0] == "找回全局视野"
     assert "Home" in TIPS[0][1]
-    assert TIPS[4][0] == "让频率变化可见"
+    titles = {title for title, _body in TIPS}
+    assert {"操作速查", "阶次看转速", "一次处理多文件", "固定读数"} <= titles
+    assert any("电机转速" in body for _title, body in TIPS)
+
+
+def test_every_tip_fits_the_compact_card(qapp):
+    """Bodies stay inside the 1× tip band, including on a 1080p desktop."""
+    del qapp
+    from PyQt5.QtCore import Qt
+
+    from mf4_analyzer.qt_panel_style import (
+        FONT_ROLE_BODY,
+        FONT_ROLE_TITLE,
+        panel_font_metrics,
+    )
+
+    scale = 1.0
+
+    def _s(value: float) -> float:
+        return value * scale
+
+    content_w = (CARD_WIDTH - 64) * scale
+    dots_w = 0.0
+    for index in range(len(TIPS)):
+        dots_w += _s(12.0 if index == 0 else 4.0)
+        if index:
+            dots_w += _s(4.0)
+    title_budget = content_w - _s(18.0) - dots_w - _s(10.0)
+    heading_px = max(8, int(round(_s(10.0))))
+    body_px = max(9, int(round(_s(12.0))))
+    heading = panel_font_metrics(FONT_ROLE_TITLE, pixel_size=heading_px, bold=True)
+    body_metrics = panel_font_metrics(FONT_ROLE_BODY, pixel_size=body_px)
+    body_h = _s(92.0) - _s(17.0 + 8.0 + 14.0) - _s(10.0)
+    assert title_budget > 80
+    for title, body in TIPS:
+        assert heading.horizontalAdvance(title) <= title_budget + 1, title
+        rect = body_metrics.boundingRect(
+            0,
+            0,
+            int(content_w),
+            4000,
+            int(Qt.TextWordWrap | Qt.AlignLeft | Qt.AlignTop),
+            body,
+        )
+        assert rect.height() <= body_h + 1, (title, rect.height(), body_h)
 
 
 def test_spectrum_reference_y_in_svg_band():
@@ -193,9 +253,11 @@ def test_all_tips_fit_in_tip_band(splash_host, qtbot):
         tip_right = int(card.right() - 32 * splash._scale)
         assert tip_top >= int(card.top())
         # Non-transparent ink must exist inside the tip band (title/body).
+        # Stride is in widget pixels. A step of 8 was tuned for the enlarged
+        # card and misses the compact 1.0 glyphs.
         ink = 0
-        for y in range(tip_top + 4, tip_bottom - 4, 3):
-            for x in range(tip_left, tip_right, 8):
+        for y in range(tip_top + 4, tip_bottom - 4, 2):
+            for x in range(tip_left, tip_right, 2):
                 c = image.pixelColor(x, y)
                 if c.alpha() < 30:
                     continue
@@ -261,21 +323,49 @@ def test_close_stops_timer_and_blocks_callbacks(splash_host, qtbot):
     assert splash.tip_index == tip_before
 
 
-def test_panel_draws_larger_than_the_html_card_without_changing_ratio(splash_host):
+def test_splash_remembers_the_screen_it_was_centered_on(splash_host):
+    splash, _host = splash_host
+    screen = splash._target_screen()
+    assert screen is not None
+    avail = screen.availableGeometry()
+    assert splash.launch_screen_rect() == (
+        avail.x(),
+        avail.y(),
+        avail.width(),
+        avail.height(),
+    )
+
+
+def test_panel_scale_follows_the_work_area_without_changing_ratio(splash_host):
     splash, _host = splash_host
     card = splash.card_rect_logical()
     assert abs(card.width() / card.height() - CARD_WIDTH / CARD_HEIGHT) < 0.02
     screen = splash._target_screen()
     assert screen is not None
     avail = screen.availableGeometry()
-    natural_w = (CARD_WIDTH + 2 * SHADOW_PAD) * DISPLAY_SCALE
-    natural_h = (CARD_HEIGHT + 2 * SHADOW_PAD) * DISPLAY_SCALE
-    if natural_w <= avail.width() - 24 and natural_h <= avail.height() - 24:
-        assert abs(splash._scale - DISPLAY_SCALE) < 0.02
-    else:
-        assert splash._scale < DISPLAY_SCALE
+    expected = display_scale_for_work_area(avail.width(), avail.height())
+    assert abs(splash._scale - expected) < 0.02
     assert splash.width() <= avail.width()
     assert splash.height() <= avail.height()
+
+
+def test_large_logical_desktop_uses_one_and_a_half_and_1080p_uses_one():
+    """5K Mac default points stay at 1.5; a 1080p work area stays at 1.0."""
+    # Full 2560×1440 and the same desktop after a menu bar + dock.
+    assert display_scale_for_work_area(2560, 1440) == DISPLAY_SCALE_LARGE
+    assert display_scale_for_work_area(2560, 1320) == DISPLAY_SCALE_LARGE
+    # 1080p at 100% and at 150% (logical 1280×720), with and without a taskbar.
+    assert display_scale_for_work_area(1920, 1080) == DISPLAY_SCALE_COMPACT
+    assert display_scale_for_work_area(1920, 1032) == DISPLAY_SCALE_COMPACT
+    assert display_scale_for_work_area(1280, 720) == DISPLAY_SCALE_COMPACT
+    assert display_scale_for_work_area(1280, 672) == DISPLAY_SCALE_COMPACT
+
+
+def test_compact_card_shrinks_only_when_the_work_area_cannot_hold_it():
+    scale = display_scale_for_work_area(700, 480)
+    assert scale < DISPLAY_SCALE_COMPACT
+    assert (CARD_WIDTH + 2 * SHADOW_PAD) * scale <= 700 - 24
+    assert (CARD_HEIGHT + 2 * SHADOW_PAD) * scale <= 480 - 24
 
 
 def test_card_logical_width_and_frameless(splash_host):

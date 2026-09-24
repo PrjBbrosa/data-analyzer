@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 import platform
+import random
 import subprocess
 from dataclasses import dataclass
 from typing import Optional, Sequence, Tuple
@@ -69,13 +70,36 @@ _RIGHT_LABEL = "工程数据分析工作台"
 _CREDIT_LEFT = f"{APP_NAME} · 工程信号与数据分析"
 _MODE_CAPTIONS = ("时域", "频谱", "时频", "阶次", "频响")
 
-# Demo tips (static; do not import ui.quickref).
+# Usage tips shown while TraceLab starts. Wording follows ui/quickref.py.
+# Kept inline: importing quickref or hints would pull the main UI into the
+# splash child. Each body must stay inside the compact (1×) tip band.
 TIPS: Tuple[Tuple[str, str], ...] = (
-    ("找回全局视野", "点击图表的 Home，可查看全部已绘通道范围。"),
-    ("把读数留在图上", "单游标下按 P 固定读数，再点图底 Pn 展开面板。"),
-    ("保存你的分析现场", "保存为 .tlproj 项目，下次继续当前分析。"),
-    ("忘记操作了？", "点击底栏「?」，可查看和搜索操作速查。"),
-    ("让频率变化可见", "用「时频」查看频率成分随时间的变化。"),
+    ("找回全局视野", "点 Home 或按 Ctrl+R，查看已绘通道的全部范围。"),
+    ("缩放与平移", "Ctrl+滚轮缩放时间，Shift+滚轮缩放幅值，拖动平移。"),
+    ("框选放大", "在图上拖出矩形，时间和幅值一起放大。"),
+    ("勾选即绘图", "左侧通道树勾选通道，就会画到当前 View。"),
+    ("拖进来绘图", "把通道拖进绘图区松手，即加入当前 View。"),
+    ("搜索通道", "通道树和通道下拉框都可以输入关键词查找。"),
+    ("固定读数", "单游标按 P 固定读数，再点图底 Pn 展开。"),
+    ("比较两点", "按 Ctrl+5 开双游标，看两点的时间差或幅值差。"),
+    ("五个工作区", "时域波形、频谱成分、时频变化、阶次转速、频响输入输出。"),
+    ("阶次看转速", "阶次以电机转速为基准，看频率怎样跟着转速走。"),
+    ("谱图取切片", "在时频或阶次谱图上点一下，取出该时刻的切片。"),
+    ("保存现场", "存成 .tlproj 项目，下次接着当前的通道和 View。"),
+    ("最近的文件", "点「打开」旁的箭头，搜索最近的项目和文件。"),
+    ("加入当前 View", "点文件卡片右下的 ＋，把已打开文件加入当前 View。"),
+    ("操作速查", "点底栏「?」搜索操作；悬停顶部按钮可看快捷键。"),
+    ("图表右键", "右键图面：查看全部、轴范围、网格。"),
+    ("分屏或叠加", "Ctrl+1 分屏，Ctrl+2 叠加，顺序跟左侧通道树一致。"),
+    ("多个 View", "时域最多 24 个 View；窄窗口显示编号，悬停看全名。"),
+    ("运算出新通道", "点通道树下「编辑通道」，可做微分、积分或两通道运算。"),
+    ("复制带读数", "复制按钮导出的图片会带上游标和读数。"),
+    ("一次处理多文件", "工具栏「批处理」用同一分析处理多个文件并导出。"),
+    ("在图上做标记", "打开标注后，左键添加，右键删除最近一个标记。"),
+    ("换一条横轴", "把通道拖到图最底部的 X 带，换成这路信号做横轴。"),
+    ("预设分析参数", "预设保存分析参数；切换时可以保留手动调过的坐标。"),
+    ("视角可回退", "Alt+左退回上一视角，Alt+右前进。Ctrl+Z 仍是撤销编辑。"),
+    ("看软件说明", "状态栏右侧书本图标打开软件说明书。"),
 )
 
 # --- Colors (晴空蓝白) ------------------------------------------------------
@@ -101,10 +125,17 @@ _SPECTRUM_STOPS = tuple(
 
 CARD_WIDTH = 640
 CARD_HEIGHT = 470
-# The HTML demo card is 640 CSS px. On a Windows desktop that size reads as a
-# small dialog, so the product panel uses the same layout at 1.5× and only
-# shrinks when the work area cannot hold it.
-DISPLAY_SCALE = 1.5
+# Product scale in Qt logical pixels. OS DPI is applied by Qt afterwards, so
+# these factors must not be multiplied by devicePixelRatio.
+# 1.5 matches a large logical desktop (5K Mac default, 2560×1440 points).
+# 1.0 is the 640×470 card used on 1080p-class desktops, where 1.5 fills the
+# screen. Below 1.0 only when even the compact card does not fit.
+DISPLAY_SCALE_LARGE = 1.5
+DISPLAY_SCALE_COMPACT = 1.0
+# Available-height gate, after menu bar / dock / taskbar. 1440p-class work
+# areas stay above this; 1080p work areas (≤1080) do not.
+_LARGE_SCALE_MIN_AVAILABLE_HEIGHT = 1200
+_WORK_AREA_MARGIN = 24
 CORNER_RADIUS = 13.0
 CONTENT_PAD_X = 32.0
 # Former shadow gutter; outer drop-shadow layers are gone, keep 0 pad so the
@@ -260,12 +291,13 @@ class StartupSplash(QWidget):
         self._slow = False
         self._reduced_motion = detect_system_reduced_motion()
         self._closed = False
-        self._tip_index = 0
+        self._tip_index = random.randrange(len(TIPS)) if TIPS else 0
         self._last_tip_ms = 0.0
         self._breathe_phase = 0.0
         self._rail_phase = 0.0
         self._spinner_phase = 0.0
-        self._scale = DISPLAY_SCALE
+        self._scale = DISPLAY_SCALE_COMPACT
+        self._launch_screen_rect: Optional[Tuple[int, int, int, int]] = None
         self._path_build_count = 0
         self._cached_paths: list[QPainterPath] = []
         self._cached_path_key: Optional[Tuple[float, float, float, float, float]] = None
@@ -411,26 +443,32 @@ class StartupSplash(QWidget):
         return screen
 
     def _apply_preferred_size(self) -> None:
-        self._scale = DISPLAY_SCALE
         screen = self._target_screen()
-        if screen is not None:
+        if screen is None:
+            self._scale = DISPLAY_SCALE_COMPACT
+        else:
             avail = screen.availableGeometry()
-            # Leave a little breathing room around the panel on-screen.
-            max_w = max(160, avail.width() - 24)
-            max_h = max(160, avail.height() - 24)
-            natural_w = (CARD_WIDTH + 2 * SHADOW_PAD) * DISPLAY_SCALE
-            natural_h = (CARD_HEIGHT + 2 * SHADOW_PAD) * DISPLAY_SCALE
-            if natural_w > max_w or natural_h > max_h:
-                self._scale = DISPLAY_SCALE * min(max_w / natural_w, max_h / natural_h)
+            self._scale = display_scale_for_work_area(avail.width(), avail.height())
         w = int(round((CARD_WIDTH + 2 * SHADOW_PAD) * self._scale))
         h = int(round((CARD_HEIGHT + 2 * SHADOW_PAD) * self._scale))
         self.setFixedSize(max(1, w), max(1, h))
+
+    def launch_screen_rect(self) -> Optional[Tuple[int, int, int, int]]:
+        """Work area the splash was centered on, in virtual-desktop coordinates."""
+
+        return self._launch_screen_rect
 
     def _center_on_screen(self) -> None:
         screen = self._target_screen()
         if screen is None:
             return
         avail = screen.availableGeometry()
+        self._launch_screen_rect = (
+            int(avail.x()),
+            int(avail.y()),
+            int(avail.width()),
+            int(avail.height()),
+        )
         frame = self.frameGeometry()
         frame.moveCenter(avail.center())
         self.move(frame.topLeft())
@@ -521,7 +559,8 @@ class StartupSplash(QWidget):
             self._rail_phase = (self._rail_phase + delta / _RAIL_PERIOD_MS) % 1.0
             self._spinner_phase = (self._spinner_phase + delta / 1000.0) % 1.0
 
-        # Tip rotation from real elapsed time; first tip already visible at 0.
+        # Rotate from the randomly chosen opening tip; the first change waits
+        # one full interval so the opening tip is actually readable.
         if now - self._last_tip_ms >= _TIP_INTERVAL_MS:
             steps = int((now - self._last_tip_ms) // _TIP_INTERVAL_MS)
             if steps > 0:
@@ -886,17 +925,46 @@ class StartupSplash(QWidget):
         )
 
 
+def display_scale_for_work_area(avail_width: float, avail_height: float) -> float:
+    """Choose 1.5 or 1.0 from the logical work area, then shrink to fit.
+
+    ``avail_*`` is ``QScreen.availableGeometry()`` in Qt logical pixels
+    (menu bar, dock, and taskbar already removed). A 5K Mac at the default
+    2560×1440 point desktop stays on 1.5. A 1080p desktop, including one
+    whose Windows scale has reduced the logical size to 1280×720, stays on
+    the 640×470 card. The compact card shrinks only when it cannot fit.
+    """
+    max_w = max(160.0, float(avail_width) - _WORK_AREA_MARGIN)
+    max_h = max(160.0, float(avail_height) - _WORK_AREA_MARGIN)
+    card_w = float(CARD_WIDTH + 2 * SHADOW_PAD)
+    card_h = float(CARD_HEIGHT + 2 * SHADOW_PAD)
+    if (
+        float(avail_height) >= _LARGE_SCALE_MIN_AVAILABLE_HEIGHT
+        and card_w * DISPLAY_SCALE_LARGE <= max_w
+        and card_h * DISPLAY_SCALE_LARGE <= max_h
+    ):
+        return DISPLAY_SCALE_LARGE
+    need_w = card_w * DISPLAY_SCALE_COMPACT
+    need_h = card_h * DISPLAY_SCALE_COMPACT
+    if need_w <= max_w and need_h <= max_h:
+        return DISPLAY_SCALE_COMPACT
+    return DISPLAY_SCALE_COMPACT * min(max_w / need_w, max_h / need_h)
+
+
 __all__ = [
     "APP_CREDIT",
     "APP_NAME",
     "APP_VERSION",
     "CARD_HEIGHT",
     "CARD_WIDTH",
+    "DISPLAY_SCALE_COMPACT",
+    "DISPLAY_SCALE_LARGE",
     "STAGE_LOADING_COMPONENTS",
     "STAGE_PREPARING",
     "STAGE_PREPARING_WORKSPACE",
     "StartupSplash",
     "TIPS",
     "detect_system_reduced_motion",
+    "display_scale_for_work_area",
     "spectrum_reference_bounds",
 ]
