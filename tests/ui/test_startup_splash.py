@@ -194,9 +194,11 @@ def test_all_tips_fit_in_tip_band(splash_host, qtbot):
         tip_right = int(card.right() - 32 * splash._scale)
         assert tip_top >= int(card.top())
         # Non-transparent ink must exist inside the tip band (title/body).
+        # Stride is in widget pixels. A step of 8 was tuned for the enlarged
+        # card and misses the compact 1.0 glyphs.
         ink = 0
-        for y in range(tip_top + 4, tip_bottom - 4, 3):
-            for x in range(tip_left, tip_right, 8):
+        for y in range(tip_top + 4, tip_bottom - 4, 2):
+            for x in range(tip_left, tip_right, 2):
                 c = image.pixelColor(x, y)
                 if c.alpha() < 30:
                     continue
