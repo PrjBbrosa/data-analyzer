@@ -50,11 +50,77 @@ FEEDBACK_ROLE = "feedback"
 FEEDBACK_ACK_ROLE = "feedback_ack"
 INTERACTIVE_CMD = "interactive_probe"
 
+# Probe pushes the tool may accept. New native events belong here; an unknown
+# name stays ok=False instead of being treated as success.
+ALLOWED_FEEDBACK_EVENTS = frozenset(
+    {
+        "splash_painted",
+        "splash_closed",
+        "splash_hidden",
+        "native_first_present",
+        "native_second_frame",
+        "runtime_spawned",
+        "python_entry",
+        "main_first_frame",
+    }
+)
+_EARLY_PANEL_EVENTS = frozenset({"splash_painted", "native_first_present"})
+
 
 def _truthy(value: str | None) -> bool:
     if value is None:
         return False
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def feedback_event_ok(body: Any, expected_run_id: str) -> bool:
+    """True when a probe push is a known feedback event for this run."""
+
+    return (
+        isinstance(body, dict)
+        and body.get("role") == FEEDBACK_ROLE
+        and str(body.get("run_id") or "") == str(expected_run_id)
+        and str(body.get("event") or "") in ALLOWED_FEEDBACK_EVENTS
+    )
+
+
+def timeline_row(
+    event: str,
+    *,
+    tool_mono_ns: int,
+    fields: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """One tool-timeline row. The timeline event name wins over payload keys.
+
+    Feedback dicts carry their own ``event`` (for example ``splash_painted``).
+    Unpacking them into ``note(event, **feedback)`` used to raise, or to replace
+    ``splash_feedback_received`` when the names were merged afterwards.
+    """
+
+    payload = dict(fields or {})
+    feedback_event = payload.pop("event", None)
+    row = dict(payload)
+    row["event"] = str(event)
+    row["tool_mono_ns"] = int(tool_mono_ns)
+    if feedback_event is not None:
+        row["feedback_event"] = feedback_event
+    return row
+
+
+def _early_panel_seen(splash_events: list[dict[str, Any]] | None) -> bool:
+    for row in splash_events or []:
+        if (
+            row.get("ok")
+            and row.get("role") == FEEDBACK_ROLE
+            and str(row.get("event") or "") in _EARLY_PANEL_EVENTS
+        ):
+            return True
+    return False
+
+
+def _main_window_ready(marks: list[dict[str, Any]], interactive_received: bool) -> bool:
+    present = {str(row.get("stage")) for row in marks}
+    return "first_frame" in present and bool(interactive_received)
 
 
 def evaluate_run_outcome(
@@ -67,7 +133,23 @@ def evaluate_run_outcome(
     marks_run_id: str | None,
     splash_required: bool = False,
     splash_events: list[dict[str, Any]] | None = None,
+    measurement_error: str | None = None,
 ) -> dict[str, Any]:
+    if measurement_error:
+        return {
+            "ok": False,
+            "error": f"measurement tool failed: {measurement_error}",
+        }
+    # A killed-on-timeout process can report a non-zero code. That is still a
+    # tool timeout unless the panel arrived and the main window never did.
+    panel_seen = _early_panel_seen(splash_events)
+    main_ready = _main_window_ready(marks, interactive_received)
+    process_crashed = exit_code not in (None, 0) and not timed_out
+    if panel_seen and not main_ready and not process_crashed:
+        return {
+            "ok": False,
+            "error": "splash feedback received but main window was not ready",
+        }
     if timed_out:
         return {"ok": False, "error": "startup measurement timed out"}
     if exit_code is None:
@@ -389,13 +471,7 @@ class _ProbeServer:
             body = json.loads(raw.splitlines()[0]) if raw else {}
         except json.JSONDecodeError:
             body = {}
-        ok = (
-            isinstance(body, dict)
-            and body.get("role") == FEEDBACK_ROLE
-            and str(body.get("run_id") or "") == self.expected_run_id
-            and str(body.get("event") or "")
-            in {"splash_painted", "splash_closed"}
-        )
+        ok = feedback_event_ok(body, self.expected_run_id)
         # Never derive launch-to-splash from parent_mono_ns vs tool clocks.
         parent_mono = body.get("parent_mono_ns") if isinstance(body, dict) else None
         event_row = {
@@ -494,12 +570,7 @@ def stamp_feedback_message(
 
     accepted = int(accepted_ns if accepted_ns is not None else time.perf_counter_ns())
     received = int(received_ns if received_ns is not None else time.perf_counter_ns())
-    ok = (
-        isinstance(body, dict)
-        and body.get("role") == FEEDBACK_ROLE
-        and str(body.get("run_id") or "") == str(expected_run_id)
-        and str(body.get("event") or "") in {"splash_painted", "splash_closed"}
-    )
+    ok = feedback_event_ok(body, expected_run_id)
     return {
         "ok": ok,
         "role": FEEDBACK_ROLE,
@@ -553,7 +624,17 @@ def run_once(
     splash_events: list[dict[str, Any]] = []
 
     def note(event: str, **extra: Any) -> None:
-        row = {"event": event, "tool_mono_ns": time.perf_counter_ns(), **extra}
+        row = timeline_row(event, tool_mono_ns=time.perf_counter_ns(), fields=extra)
+        timeline.append(row)
+        with tool_timeline_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+    def note_feedback(feedback: dict[str, Any]) -> None:
+        row = timeline_row(
+            "splash_feedback_received",
+            tool_mono_ns=time.perf_counter_ns(),
+            fields=feedback,
+        )
         timeline.append(row)
         with tool_timeline_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
@@ -607,6 +688,7 @@ def run_once(
     spawn_ns = time.perf_counter_ns()
     timed_out = False
     exit_code: int | None = None
+    measurement_error: str | None = None
     proc: subprocess.Popen[str] | None = None
     interactive: dict[str, Any] | None = None
     wait_idle: dict[str, Any] | None = None
@@ -632,7 +714,7 @@ def run_once(
             probe_server.poll()
             for feedback in probe_server.drain_feedback():
                 splash_events.append(feedback)
-                note("splash_feedback_received", **feedback)
+                note_feedback(feedback)
             marks = _read_marks(marks_path)
             stages = {str(row.get("stage")) for row in marks}
             if "first_frame" in stages and not saw_first_frame:
@@ -652,7 +734,8 @@ def run_once(
         stdout, stderr = proc.communicate(timeout=max(1.0, timeout_s))
         exit_code = proc.returncode
     except Exception as exc:
-        note("measurement_exception", error=str(exc))
+        measurement_error = f"{type(exc).__name__}: {exc}"
+        note("measurement_exception", error=measurement_error)
         if proc is not None and proc.poll() is None:
             proc.kill()
             try:
@@ -661,14 +744,12 @@ def run_once(
                 stdout, stderr = "", str(exc)
             exit_code = proc.returncode
         else:
-            stderr = str(exc)
-            if exit_code is None:
-                exit_code = -1
+            stderr = measurement_error or str(exc)
     finally:
         probe_server.poll()
         for feedback in probe_server.drain_feedback():
             splash_events.append(feedback)
-            note("splash_feedback_received", **feedback)
+            note_feedback(feedback)
         probe_server.close()
 
     marks = _read_marks(marks_path)
@@ -684,6 +765,7 @@ def run_once(
         marks_run_id=marks_id,
         splash_required=splash_required,
         splash_events=splash_events,
+        measurement_error=measurement_error,
     )
 
     def _delta_from_spawn(tool_ns: Any) -> int | None:

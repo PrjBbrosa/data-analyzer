@@ -3,7 +3,8 @@ param(
     [string]$AppName = "",
     [switch]$Console,
     [switch]$SkipInstall,
-    [switch]$KeepPrevious
+    [switch]$KeepPrevious,
+    [switch]$NativeStartupLauncher
 )
 
 if (-not $AppName) {
@@ -408,6 +409,12 @@ if (Test-Path $PackagedSmokeJson) {
 }
 if (-not $smokeOk) {
     throw "Packaged Vector/XCP runtime smoke failed (exe exit=$($smoke.ExitCode); see $PackagedSmokeJson)"
+}
+
+if ($NativeStartupLauncher) {
+    . (Join-Path $PSScriptRoot "startup_launcher_package.ps1")
+    Install-TraceLabStartupLauncher -AppName $AppName -OutputDir $OutputDir -RepoRoot $RepoRoot -Python $VenvPython
+    $ExePath = Join-Path $OutputDir "$AppName.exe"
 }
 
 Write-Step "Build output"

@@ -40,6 +40,15 @@ FONT_ROLE_BODY = "body"
 FONT_ROLE_CAPTION = "caption"
 FONT_ROLE_CREDIT = "credit"
 FONT_ROLE_WORDMARK = "wordmark"
+WORDMARK_FAMILY = "Trebuchet MS"
+# Windows panel text uses one family for every role. Do not stitch a second
+# face in to cover a missing glyph.
+WINDOWS_FONT_CANDIDATES: Tuple[str, ...] = (
+    "Microsoft YaHei UI",
+    "Microsoft YaHei",
+    "微软雅黑",
+    "Segoe UI",
+)
 
 _CJK_PROBE = "启动面板操作速查"
 _ASCII_PROBE = "Home Pn 12"
@@ -175,12 +184,7 @@ def _font_supports_text(font, text: str) -> bool:
 
 def _candidate_families() -> Tuple[str, ...]:
     if sys.platform == "win32":
-        return (
-            "Microsoft YaHei UI",
-            "Microsoft YaHei",
-            "微软雅黑",
-            "Segoe UI",
-        )
+        return WINDOWS_FONT_CANDIDATES
     if sys.platform == "darwin":
         return (
             "PingFang SC",
@@ -254,7 +258,7 @@ def panel_font(
     size = max(1, int(pixel_size))
     if role == FONT_ROLE_WORDMARK:
         # Latin wordmark prefers a geometric display face; falls back to panel.
-        font = QFont("Trebuchet MS")
+        font = QFont(WORDMARK_FAMILY)
         if not font.exactMatch():
             font = QFont(resolve_panel_font_family())
         font.setPixelSize(size)
@@ -556,6 +560,8 @@ __all__ = [
     "FONT_ROLE_EMPHASIS",
     "FONT_ROLE_TITLE",
     "FONT_ROLE_WORDMARK",
+    "WORDMARK_FAMILY",
+    "WINDOWS_FONT_CANDIDATES",
     "FROST_REFERENCE_PX",
     "GLASS_ALPHA",
     "GLOW_BL",

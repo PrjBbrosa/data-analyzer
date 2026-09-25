@@ -387,6 +387,30 @@ def test_lite_build_keeps_qtnetwork_conservatively():
     assert "PyQt5.QtNetwork" not in text
 
 
+def test_windows_builders_keep_qt_splash_unless_native_launcher_is_opted_in():
+    """The public EXE stays the PyInstaller runtime until -NativeStartupLauncher."""
+
+    for filename in (
+        "build_windows_folder.ps1",
+        "build_windows_folder_lite.ps1",
+        "build_windows_folder_lite_modular.ps1",
+    ):
+        text = (ROOT / "tools" / filename).read_text(encoding="utf-8")
+        assert "[switch]$NativeStartupLauncher" in text
+        assert 'if ($NativeStartupLauncher)' in text
+        assert "Install-TraceLabStartupLauncher" in text
+        assert '"--name", $AppName' in text
+        assert text.index('"--name", $AppName') < text.index("if ($NativeStartupLauncher)")
+    package = (ROOT / "tools" / "startup_launcher_package.ps1").read_text(encoding="utf-8")
+    launcher = (ROOT / "tools" / "build_startup_launcher.ps1").read_text(encoding="utf-8")
+    assert "$AppName-runtime.exe" in package
+    assert "_internal" in package
+    assert "vswhere.exe" in launcher
+    assert "no early splash" in launcher
+    assert "0xAA64" in launcher
+    assert "0x8664" in launcher
+
+
 def test_windows_builders_do_not_exclude_startup_splash_modules():
     """Splash is statically imported from the shared launcher; do not exclude it."""
 

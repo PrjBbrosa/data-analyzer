@@ -341,7 +341,7 @@ def main():
     from mf4_analyzer.startup_feedback import (
         STAGE_LOADING_COMPONENTS,
         STAGE_PREPARING_WORKSPACE,
-        StartupFeedback,
+        create_startup_feedback,
     )
     from mf4_analyzer.startup_timing import (
         STAGE_GUI_MODULES_IMPORTED,
@@ -354,7 +354,7 @@ def main():
     startup_mark(STAGE_PYTHON_ENTRY)
     setup_logging()
 
-    feedback = StartupFeedback()
+    feedback = create_startup_feedback()
     qapp_ready = False
     try:
         # QT_QPA_PLATFORM is consulted inside splash_enabled via environ;

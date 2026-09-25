@@ -7,7 +7,8 @@ param(
     [string]$RepositoryConfig = "",
     [switch]$Console,
     [switch]$SkipInstall,
-    [switch]$KeepPrevious
+    [switch]$KeepPrevious,
+    [switch]$NativeStartupLauncher
 )
 
 # Experimental analyzer-only ("lite") + modular Windows build.
@@ -642,6 +643,12 @@ Invoke-IndependentPostCheck -Name "extension-combinations" -Executable $VenvPyth
 Write-PostCheckSummary
 if (-not (Test-AllPostChecksPassed)) {
     throw "Post-build checks failed; EXE generated; see evidence under $BuildEvidenceDir"
+}
+
+if ($NativeStartupLauncher) {
+    . (Join-Path $PSScriptRoot "startup_launcher_package.ps1")
+    Install-TraceLabStartupLauncher -AppName $AppName -OutputDir $OutputDir -RepoRoot $RepoRoot -Python $VenvPython
+    $ExePath = Join-Path $OutputDir "$AppName.exe"
 }
 
 Write-Step "Build output"

@@ -3,7 +3,8 @@ param(
     [string]$AppName = "",
     [switch]$Console,
     [switch]$SkipInstall,
-    [switch]$KeepPrevious
+    [switch]$KeepPrevious,
+    [switch]$NativeStartupLauncher
 )
 
 # Analyzer-only ("lite") Windows build.
@@ -492,6 +493,12 @@ Invoke-IndependentPostCheck -Name "importer" -Executable $VenvPython -Arguments 
 Write-PostCheckSummary
 if (-not (Test-AllPostChecksPassed)) {
     throw "Post-build checks failed; EXE generated; see evidence under $BuildEvidenceDir"
+}
+
+if ($NativeStartupLauncher) {
+    . (Join-Path $PSScriptRoot "startup_launcher_package.ps1")
+    Install-TraceLabStartupLauncher -AppName $AppName -OutputDir $OutputDir -RepoRoot $RepoRoot -Python $VenvPython
+    $ExePath = Join-Path $OutputDir "$AppName.exe"
 }
 
 Write-Step "Build output"

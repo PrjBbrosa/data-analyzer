@@ -393,3 +393,102 @@ def test_feedback_and_interactive_roles_are_validated_separately():
     )
     assert missing_splash["ok"] is False
     assert "splash_painted" in missing_splash["error"]
+
+
+def test_timeline_row_keeps_tool_event_when_feedback_carries_event():
+    """Regression: note('splash_feedback_received', **feedback) collided on event."""
+    from tools import measure_windows_startup as measure
+
+    feedback = {
+        "ok": True,
+        "role": "feedback",
+        "event": "splash_painted",
+        "run_id": "r-collide",
+        "session": "s",
+    }
+    row = measure.timeline_row(
+        "splash_feedback_received",
+        tool_mono_ns=42,
+        fields=feedback,
+    )
+    assert row["event"] == "splash_feedback_received"
+    assert row["feedback_event"] == "splash_painted"
+    assert row["tool_mono_ns"] == 42
+    assert row["run_id"] == "r-collide"
+
+
+def test_native_probe_events_are_accepted_and_unknown_events_are_not():
+    from tools import measure_windows_startup as measure
+
+    native = measure.stamp_feedback_message(
+        {
+            "role": "feedback",
+            "event": "native_first_present",
+            "run_id": "r-native",
+            "session": "s",
+        },
+        expected_run_id="r-native",
+        accepted_ns=10,
+        received_ns=12,
+    )
+    assert native["ok"] is True
+    assert native["event"] == "native_first_present"
+
+    second = measure.stamp_feedback_message(
+        {
+            "role": "feedback",
+            "event": "native_second_frame",
+            "run_id": "r-native",
+        },
+        expected_run_id="r-native",
+        accepted_ns=1,
+        received_ns=2,
+    )
+    assert second["ok"] is True
+
+    unknown = measure.stamp_feedback_message(
+        {
+            "role": "feedback",
+            "event": "not_a_startup_event",
+            "run_id": "r-native",
+        },
+        expected_run_id="r-native",
+        accepted_ns=1,
+        received_ns=2,
+    )
+    assert unknown["ok"] is False
+
+
+def test_splash_without_main_window_is_a_failed_measurement():
+    from tools import measure_windows_startup as measure
+
+    outcome = measure.evaluate_run_outcome(
+        exit_code=0,
+        timed_out=True,
+        marks=[{"stage": "python_entry", "run_id": "r-splash"}],
+        interactive_received=False,
+        run_id="r-splash",
+        marks_run_id="r-splash",
+        splash_events=[
+            {"ok": True, "role": "feedback", "event": "splash_painted"}
+        ],
+    )
+    assert outcome["ok"] is False
+    assert "main window" in outcome["error"]
+
+
+def test_measurement_tool_exception_is_not_reported_as_an_application_crash():
+    from tools import measure_windows_startup as measure
+
+    outcome = measure.evaluate_run_outcome(
+        exit_code=-1,
+        timed_out=False,
+        marks=[],
+        interactive_received=False,
+        run_id="r-tool",
+        marks_run_id=None,
+        measurement_error="TypeError: note() got multiple values for argument 'event'",
+    )
+    assert outcome["ok"] is False
+    assert outcome["error"].startswith("measurement tool failed:")
+    assert "exited" not in outcome["error"]
