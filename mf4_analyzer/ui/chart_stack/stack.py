@@ -1472,7 +1472,18 @@ class ChartStack(QWidget):
         if target is not None and target.section != mode:
             self.cancel_page_transition("target-section-replaced")
             target = None
-        self.stack.setCurrentIndex(idx)
+        # QStackedLayout raises the incoming page above our sibling cover.
+        # Keep the backing store unchanged until both the page and cover are
+        # in place; deferred pin reflow is too late to prevent a white frame.
+        hold_updates = target is not None and self.stack.updatesEnabled()
+        if hold_updates:
+            self.stack.setUpdatesEnabled(False)
+        try:
+            self.stack.setCurrentIndex(idx)
+            self._page_transition.raise_overlay()
+        finally:
+            if hold_updates:
+                self.stack.setUpdatesEnabled(True)
         self.stats_strip.setVisible(_STATS_STRIP_ENABLED and mode == 'time')
         bar = getattr(self, '_view_tabbar', None)
         if bar is not None:

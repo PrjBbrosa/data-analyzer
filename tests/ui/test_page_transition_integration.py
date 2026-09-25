@@ -8,6 +8,8 @@ fade. It never captures the incoming endpoint inside its paint callback.
 """
 from __future__ import annotations
 
+import pytest
+
 from PyQt5.QtCore import QEvent, QObject, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QPainter, QPixmap
 from PyQt5.QtWidgets import QApplication, QWidget
@@ -153,18 +155,31 @@ def test_measured_policy_does_not_enable_an_unadmitted_section(qtbot, monkeypatc
     assert chart_stack.page_transition().image_bytes() == 0
 
 
-def test_section_switch_keeps_outgoing_cover_above_new_stacked_page(qtbot, monkeypatch):
+@pytest.mark.parametrize("source,target", [("time", "fft"), ("fft_time", "order"), ("order", "fft_time")])
+def test_section_switch_keeps_outgoing_cover_above_new_stacked_page(qtbot, monkeypatch, source, target):
     chart_stack = _stack(qtbot)
-    token, _calls = _begin_light_transition(chart_stack, monkeypatch)
-    controller = chart_stack.page_transition()
-    chart_stack.set_mode("fft")
+    chart_stack.set_mode(source)
     QApplication.processEvents()
+    chart_stack.set_page_transition_motion_policy(POLICY_LIGHT)
+    chart_stack.set_page_transition_enabled_sections((source, target))
+    _install_endpoint_spy(monkeypatch, chart_stack)
+    token = chart_stack.begin_page_transition(
+        source_section=source, source_view_id="view-A",
+        target_section=target, target_view_id="view-B",
+    )
+    assert token is not None
+    controller = chart_stack.page_transition()
+    chart_stack.set_mode(target)
     # QStackedLayout raises the incoming page. It must not expose B before
-    # the target paint fence/capture have admitted the A -> B animation.
-    center = controller._overlay.geometry().center()
-    visible = chart_stack.stack.grab().toImage()
-    dpr = visible.devicePixelRatio()
-    assert visible.pixelColor(round(center.x() * dpr), round(center.y() * dpr)) == QColor("#204080")
+    # the target paint fence/capture have admitted the A -> B animation. Check
+    # BEFORE pumping events: deferred pin reflow used to conceal this defect.
+    for process_events in (False, True):
+        if process_events:
+            QApplication.processEvents()
+        center = controller._overlay.geometry().center()
+        visible = chart_stack.stack.grab().toImage()
+        dpr = visible.devicePixelRatio()
+        assert visible.pixelColor(round(center.x() * dpr), round(center.y() * dpr)) == QColor("#204080")
     assert not controller.is_active()
     assert token == chart_stack._page_transition_target
     controller.cancel("stacking-probe-complete")
