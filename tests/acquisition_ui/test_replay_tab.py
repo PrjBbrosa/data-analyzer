@@ -150,3 +150,73 @@ def test_replay_stop_returns_to_stopped_without_capture_state_change(qapp, tmp_p
         assert not (tmp_path / "manifest.json").exists()
     finally:
         tab.close()
+
+
+def _late_replay_mf4(tmp_path: Path) -> Path:
+    from tests._helpers.mf4_factory import write_signal_groups_mf4
+
+    ref = [0.0, 1.0, 2.0, 3.0, 4.0]
+    return write_signal_groups_mf4(tmp_path / "late.mf4", [
+        [("ref", [0.0, 1.0, 2.0, 3.0, 4.0], ref, "V")],
+        [("late", [10.0, 20.0, 30.0], [2.0, 2.5, 3.0], "Nm")],
+    ])
+
+
+def test_replay_warning_is_visible_before_play_and_follows_the_source(
+    qapp, qtbot, tmp_path: Path,
+):
+    warning_path = _late_replay_mf4(tmp_path)
+    clean_path = _write_replay_mf4(tmp_path / "clean.mf4")
+    tab = ReplayTab()
+    qtbot.addWidget(tab)
+    tab.resize(960, 600)
+    tab.show()
+    qapp.processEvents()
+    enabled_with_text = []
+    real_enable = tab._set_transport_enabled
+
+    def _record_enable(enabled):
+        if enabled:
+            enabled_with_text.append(tab._alignment_warning.text())
+        real_enable(enabled)
+
+    tab._set_transport_enabled = _record_enable
+    try:
+        tab.load_file(warning_path)
+        qapp.processEvents()
+        warning = tab._alignment_warning
+        assert warning.isVisible()
+        assert "已按公共时间轴对齐，可能包含非原始测量值" in warning.text()
+        assert "端点填充" in warning.text()
+        assert enabled_with_text and "端点填充" in enabled_with_text[-1]
+        assert tab._play_btn.isEnabled()
+        assert warning.wordWrap()
+        assert warning.height() > warning.fontMetrics().lineSpacing() + 2
+        assert tab._play_btn.geometry().bottom() <= warning.geometry().top()
+        assert tab._play_btn.geometry().right() <= tab.width()
+
+        tab.play()
+        tab.pause()
+        assert warning.text() == enabled_with_text[-1]
+        tab.stop()
+        assert "端点填充" in warning.text()
+        assert tab.state == "stopped"
+
+        tab.load_file(clean_path)
+        qapp.processEvents()
+        assert not warning.isVisible()
+        assert warning.text() == ""
+        assert tab._play_btn.isEnabled()
+        assert tab.state == "idle"
+
+        tab.load_file(warning_path)
+        old_text = warning.text()
+        with pytest.raises(Exception):
+            tab.load_file(tmp_path / "missing.mf4")
+        assert tab._source is not None
+        assert tab._source.path == warning_path
+        assert warning.text() == old_text
+        assert warning.isVisible()
+        assert tab._play_btn.isEnabled()
+    finally:
+        tab.close()

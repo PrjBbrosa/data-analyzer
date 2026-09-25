@@ -41,6 +41,7 @@ from .loader import (
     AUDIO_VIDEO_EXTS,
     DataLoader,
     _is_mdf_time_master,
+    assign_mf4_public_signal_names,
     unique_mdf_channel_locations,
 )
 
@@ -274,12 +275,31 @@ def _float_token(value) -> str:
     return "none" if number is None else number.hex()
 
 
+def _explicit_frame_time_column(data):
+    attrs = getattr(data, "attrs", None)
+    if not isinstance(attrs, Mapping):
+        return None
+    extra = attrs.get("source_metadata")
+    if not isinstance(extra, Mapping) or "time_column" not in extra:
+        return None
+    column = extra.get("time_column")
+    if not isinstance(column, str) or column not in frame_column_names(data):
+        return False
+    return column
+
+
 def _axis_facts(data) -> tuple[int, float | None, float | None]:
     n = frame_row_count(data)
-    time_column = next(
-        (name for name in frame_column_names(data) if str(name).lower() in _TIME_NAMES),
-        None,
-    )
+    explicit = _explicit_frame_time_column(data)
+    if explicit is False:
+        return n, None, None
+    if isinstance(explicit, str):
+        time_column = explicit
+    else:
+        time_column = next(
+            (name for name in frame_column_names(data) if str(name).lower() in _TIME_NAMES),
+            None,
+        )
     if time_column is None or n == 0:
         return n, None, None
     values = np.asarray(frame_get_column(data, time_column), dtype=float)
@@ -372,7 +392,7 @@ def _descriptor_from_loaded(
     probe_cost: str,
 ) -> SourceDescriptor:
     fd = loaded.file_data
-    channels = _signal_channels(fd.channels)
+    channels = tuple(str(name) for name in fd.get_signal_channels())
     units = {name: str(fd.channel_units.get(name, "") or "") for name in channels}
     metadata = _safe_metadata(dict(loaded.metadata))
     metadata.update({"adapter_key": adapter_key, "probe_cost": probe_cost})
@@ -397,11 +417,9 @@ def _descriptor_from_loaded(
     )
 
 
-def _mdf_channel_facts(mdf) -> tuple[tuple[str, ...], dict, dict]:
+def _mdf_channel_facts(mdf) -> tuple[tuple[str, ...], dict, dict, list]:
     locations = unique_mdf_channel_locations(mdf)
-    channels = []
-    units = {}
-    channel_metadata = {}
+    rows = []
     for display_name, (group_index, channel_index) in locations.items():
         name = str(display_name)
         try:
@@ -426,14 +444,28 @@ def _mdf_channel_facts(mdf) -> tuple[tuple[str, ...], dict, dict]:
             # distinguishable from a failed channel lookup (None).
             unit = "" if raw_unit in (None, "") else str(raw_unit)
             source = getattr(channel, "source", None)
-        channels.append(name)
-        units[name] = unit
-        channel_metadata[name] = {
-            "physical_occurrence": (int(group_index), int(channel_index)),
+        rows.append((
+            name,
+            (int(group_index), int(channel_index)),
+            unit,
+            str(getattr(source, "path", "") or ""),
+        ))
+    public_names, renamed = assign_mf4_public_signal_names(
+        (name, occurrence) for name, occurrence, _unit, _path in rows
+    )
+    channels = []
+    units = {}
+    channel_metadata = {}
+    for name, occurrence, unit, source_path in rows:
+        public_name = public_names[occurrence]
+        channels.append(public_name)
+        units[public_name] = unit
+        channel_metadata[public_name] = {
+            "physical_occurrence": occurrence,
             "unit": unit,
-            "source_path": str(getattr(source, "path", "") or ""),
+            "source_path": source_path,
         }
-    return tuple(channels), units, channel_metadata
+    return tuple(channels), units, channel_metadata, renamed
 
 
 def _frame_source_metadata(data) -> dict:
@@ -460,7 +492,7 @@ def _probe_mdf(path: str, adapter: "SourceAdapter") -> tuple[SourceDescriptor, .
     io_errors = _mdf_probe_io_errors()
     try:
         mdf = MDF(path)
-        channels, units, channel_metadata = _mdf_channel_facts(mdf)
+        channels, units, channel_metadata, renamed = _mdf_channel_facts(mdf)
     except io_errors as exc:
         raise SourceUnavailableError(
             f'MDF metadata unavailable for "{path}": {exc}'
@@ -488,6 +520,7 @@ def _probe_mdf(path: str, adapter: "SourceAdapter") -> tuple[SourceDescriptor, .
             "channel_metadata": channel_metadata,
             "channel_metadata_capability": "unit_and_physical_occurrence",
             "quantity_reference_metadata": False,
+            "renamed_channels": renamed,
         },
     ),)
 
@@ -688,7 +721,14 @@ class SourceAdapter:
         })
         canonical = canonical_source_path(path)
         group_id = "root"
-        channel_metadata = {}
+        raw_channel_metadata = source_metadata.get("channel_metadata")
+        if isinstance(raw_channel_metadata, Mapping):
+            channel_metadata = {
+                str(key): dict(value) if isinstance(value, Mapping) else value
+                for key, value in raw_channel_metadata.items()
+            }
+        else:
+            channel_metadata = {}
         if self.key == "mdf":
             # Preserve the current loader's honest boundary.  Units and
             # physical occurrences are available from metadata; richer

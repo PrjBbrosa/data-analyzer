@@ -115,3 +115,21 @@ def test_load_mf4_alignment_warnings_stay_bounded(
     ]
     assert len(alignment) <= 3
     assert len(alignment) == len(set(alignment))
+
+
+def test_load_mf4_time_named_signal_is_selectable(qapp, qtbot, tmp_path):
+    path = write_signal_groups_mf4(tmp_path / "time-sig.mf4", [[
+        ("Time", [10.0, 20.0, 30.0, 40.0], [0.0, 0.1, 0.2, 0.3], "Nm"),
+        ("sig", [1.0, 2.0, 3.0, 4.0], [0.0, 0.1, 0.2, 0.3], "V"),
+    ]])
+    window = _window(qtbot)
+    window._load_one(str(path))
+    fid, fd = next(iter(window.files.items()))
+    assert fd.time_array.tolist() == [0.0, 0.1, 0.2, 0.3]
+    assert fd.fs == pytest.approx(10.0)
+    assert fd.get_signal_channels() == ["Time [0:1]", "sig"]
+    window.navigator.set_checked_channels([(fid, "Time [0:1]"), (fid, "sig")])
+    checked = {
+        (item[0], item[1]) for item in window.navigator.get_checked_channels()
+    }
+    assert checked == {(fid, "Time [0:1]"), (fid, "sig")}

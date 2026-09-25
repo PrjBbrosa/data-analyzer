@@ -729,3 +729,274 @@ def _reap(feedback: StartupFeedback) -> None:
             proc.wait(timeout=2)
         except Exception:
             pass
+
+
+class _IdleProc:
+    """Child stand-in that is still alive so finish() waits for hidden."""
+
+    def poll(self):
+        return None
+
+    def terminate(self):
+        return None
+
+    def kill(self):
+        return None
+
+    def wait(self, timeout=None):
+        return 0
+
+
+def _hidden_message(feedback: StartupFeedback, *, session: str | None = None, seq: int = 2):
+    return {
+        "type": MSG_HIDDEN,
+        "session": feedback.session if session is None else session,
+        "seq": seq,
+        "stage": None,
+        "slow": None,
+        "detail": HIDDEN_FINISH_CLOSE,
+    }
+
+
+def _painted_message(feedback: StartupFeedback) -> dict:
+    return {
+        "type": MSG_PAINTED,
+        "session": feedback.session,
+        "seq": 1,
+        "stage": "preparing",
+        "slow": False,
+        "detail": None,
+    }
+
+
+def _record_reveals(bucket: list[dict]):
+    def _callback(payload):
+        if isinstance(payload, dict) and payload.get("event") == "can_reveal":
+            bucket.append(dict(payload))
+
+    return _callback
+
+
+def _arm_quiet_finish(monkeypatch, feedback: StartupFeedback) -> None:
+    """Keep finish() from arming the fallback watchdog in in-process order tests."""
+
+    monkeypatch.setattr(StartupFeedback, "_ensure_watchdog_locked", lambda self: None)
+    feedback._started = True
+    feedback._hello_ok = True
+    feedback._proc = _IdleProc()  # type: ignore[assignment]
+
+
+def test_listener_then_finish_then_hidden_reveals_once(monkeypatch):
+    feedback = StartupFeedback()
+    _arm_quiet_finish(monkeypatch, feedback)
+    reveals: list[dict] = []
+    feedback.add_listener(_record_reveals(reveals))
+    feedback.finish()
+    assert reveals == []
+    feedback._handle_message(_hidden_message(feedback))
+    assert len(reveals) == 1
+    assert reveals[0]["hidden"] is True
+    assert reveals[0]["reason"] == "hidden"
+    assert reveals[0]["session"] == feedback.session
+    feedback._handle_message(_hidden_message(feedback, seq=3))
+    feedback._notify_reveal(reason="child_eof")
+    assert len(reveals) == 1
+    feedback.close()
+
+
+def test_hidden_then_listener_then_finish_then_eof_replays_once(monkeypatch):
+    feedback = StartupFeedback()
+    feedback._hello_ok = True
+    feedback._handle_message(_painted_message(feedback))
+    feedback._handle_message(_hidden_message(feedback))
+    assert feedback.hidden is True
+    events: list[dict] = []
+    feedback.add_listener(events.append)
+    assert [item["event"] for item in events] == ["can_reveal"]
+    assert events[0]["reason"] == "hidden"
+    _arm_quiet_finish(monkeypatch, feedback)
+    feedback.finish()
+    feedback._notify_reveal(reason="child_eof")
+    assert [item["event"] for item in events] == ["can_reveal"]
+    feedback.close()
+
+
+def test_hidden_then_eof_then_listener_replays_once():
+    feedback = StartupFeedback()
+    feedback._hello_ok = True
+    feedback._started = True
+    feedback._handle_message(_hidden_message(feedback))
+    feedback._finished = True
+    feedback._finish_requested = True
+    feedback._child_exited = True
+    feedback._child_exit_code = 0
+    feedback._notify_reveal(reason="child_eof")
+    reveals: list[dict] = []
+    feedback.add_listener(_record_reveals(reveals))
+    assert len(reveals) == 1
+    assert reveals[0]["hidden"] is True
+    assert reveals[0]["reason"] == "hidden"
+    assert feedback.child_exit_code == 0
+    feedback.close()
+
+
+def test_register_overlaps_hidden_delivery_without_a_drop():
+    """Listener registration during an in-flight can_reveal still observes it."""
+
+    feedback = StartupFeedback()
+    feedback._hello_ok = True
+    entered = threading.Event()
+    release = threading.Event()
+    first: list[dict] = []
+    late: list[dict] = []
+
+    def first_listener(payload):
+        if not isinstance(payload, dict) or payload.get("event") != "can_reveal":
+            return
+        first.append(dict(payload))
+        entered.set()
+        assert release.wait(2.0)
+
+    feedback.add_listener(first_listener)
+    worker = threading.Thread(
+        target=lambda: feedback._handle_message(_hidden_message(feedback)),
+        name="startup-hidden-overlap",
+    )
+    try:
+        worker.start()
+        assert entered.wait(2.0)
+        late_thread = threading.Thread(
+            target=lambda: feedback.add_listener(_record_reveals(late)),
+            name="startup-late-listener",
+        )
+        late_thread.start()
+        late_thread.join(2.0)
+        assert not late_thread.is_alive()
+        assert len(late) == 1
+        assert late[0]["event"] == "can_reveal"
+    finally:
+        release.set()
+        worker.join(2.0)
+    assert not worker.is_alive()
+    assert len(first) == 1
+    assert len(late) == 1
+
+    barrier = threading.Barrier(2)
+    overlapped: list[dict] = []
+
+    def hidden_side():
+        barrier.wait(2.0)
+        feedback._notify_reveal(reason="hidden")
+
+    def listen_side():
+        barrier.wait(2.0)
+        feedback.add_listener(_record_reveals(overlapped))
+
+    # Reveal already completed above, so a second notify is a no-op and the
+    # overlapping register must replay exactly once.
+    sides = [
+        threading.Thread(target=hidden_side),
+        threading.Thread(target=listen_side),
+    ]
+    for side in sides:
+        side.start()
+    for side in sides:
+        side.join(2.0)
+        assert not side.is_alive()
+    assert len(overlapped) == 1
+    feedback.close()
+
+
+def test_repeat_subscribe_different_session_and_remove_listener():
+    feedback = StartupFeedback()
+    feedback._hello_ok = True
+    feedback._handle_message(_hidden_message(feedback, session="other-session"))
+    assert feedback.hidden is False
+    missed: list[dict] = []
+    feedback.add_listener(_record_reveals(missed))
+    assert missed == []
+
+    reveals: list[dict] = []
+    callback = _record_reveals(reveals)
+    feedback._handle_message(_hidden_message(feedback))
+    feedback.add_listener(callback)
+    feedback.add_listener(callback)
+    assert len(reveals) == 1
+    assert reveals[0]["session"] == feedback.session
+    feedback._handle_message(_hidden_message(feedback, session="other-session", seq=9))
+    assert len(reveals) == 1
+
+    feedback.remove_listener(callback)
+    feedback._notify_reveal(reason="child_eof")
+    assert len(reveals) == 1
+    feedback.add_listener(callback)
+    assert len(reveals) == 2
+    feedback.close()
+
+
+def test_register_after_close_and_late_hidden_or_eof_do_not_replay():
+    feedback = StartupFeedback()
+    feedback._hello_ok = True
+    feedback.close()
+    late: list[dict] = []
+    feedback.add_listener(_record_reveals(late))
+    feedback._handle_message(_hidden_message(feedback))
+    feedback._notify_reveal(reason="child_eof")
+    assert late == []
+    assert feedback._listeners == []
+    assert feedback._reveal_payload is None
+
+
+def test_disabled_spawn_failure_and_timeout_replay_with_observable_reason(
+    monkeypatch, force_splash_env
+):
+    import mf4_analyzer.startup_feedback as feedback_mod
+
+    monkeypatch.setenv(ENV_SPLASH, "0")
+    disabled = StartupFeedback()
+    disabled.start(allow_offscreen=True)
+    assert disabled.fail_reason == "disabled"
+    disabled.finish()
+    disabled_events: list[dict] = []
+    disabled.add_listener(_record_reveals(disabled_events))
+    assert len(disabled_events) == 1
+    assert disabled_events[0]["reason"] == "immediate"
+    assert disabled.fail_reason == "disabled"
+    disabled.close()
+    after_close: list[dict] = []
+    disabled.add_listener(_record_reveals(after_close))
+    assert after_close == []
+
+    monkeypatch.setenv(ENV_SPLASH, "1")
+
+    def boom(self):
+        raise OSError("spawn denied")
+
+    monkeypatch.setattr(StartupFeedback, "_spawn_child", boom)
+    spawned = StartupFeedback()
+    spawned.start(allow_offscreen=True)
+    assert spawned.degraded is True
+    assert spawned.fail_reason is not None and spawned.fail_reason.startswith("start:")
+    spawned.finish()
+    spawn_events: list[dict] = []
+    spawned.add_listener(_record_reveals(spawn_events))
+    assert len(spawn_events) == 1
+    assert spawned.fail_reason.startswith("start:")
+    spawned.close()
+
+    monkeypatch.setattr(StartupFeedback, "_spawn_child", lambda self: None)
+    monkeypatch.setattr(feedback_mod, "HANDSHAKE_TIMEOUT_S", 0.05)
+    timed_out = StartupFeedback()
+    timed_out.start(allow_offscreen=True)
+    try:
+        assert _wait_until(
+            lambda: timed_out._reveal_payload is not None,
+            timeout_s=3.0,
+        )
+        timeout_events: list[dict] = []
+        timed_out.add_listener(_record_reveals(timeout_events))
+        assert len(timeout_events) == 1
+        assert timeout_events[0]["reason"] == "handshake_timeout"
+        assert timed_out.fail_reason == "handshake_timeout"
+    finally:
+        timed_out.close()

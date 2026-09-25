@@ -378,6 +378,14 @@ def test_manifest_accepts_additive_time_axis_effective_facts(tmp_path):
     assert facts["estimated_fs"] == pytest.approx(498.0)
 
 
+def test_old_manifest_without_source_diagnostics_is_unknown():
+    from mf4_analyzer.batch import known_source_diagnostics
+
+    assert known_source_diagnostics({"filter": {"enabled": False}}) is None
+    assert known_source_diagnostics({"source_diagnostics": {}}) == {}
+    assert known_source_diagnostics(None) is None
+
+
 def test_manifest_finish_on_cancel_keeps_completed_and_cancelled_facts(tmp_path):
     recorder = BatchManifestRecorder(
         tmp_path,

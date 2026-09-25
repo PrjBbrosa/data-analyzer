@@ -8,6 +8,8 @@ from __future__ import annotations
 import logging
 import os
 import runpy
+import socket
+import subprocess
 import sys
 import threading
 import time
@@ -604,3 +606,235 @@ def _wait(predicate, timeout_s: float = 5.0) -> bool:
             return True
         time.sleep(0.02)
     return False
+
+
+_EARLY_HIDDEN_PEER = r"""
+import json
+import socket
+import sys
+import time
+
+argv = sys.argv[1:]
+flags = {}
+index = 0
+while index < len(argv):
+    key = argv[index]
+    if key == "--startup-splash-child":
+        index += 1
+        continue
+    if key.startswith("--") and index + 1 < len(argv):
+        flags[key] = argv[index + 1]
+        index += 2
+    else:
+        index += 1
+session = flags["--startup-splash-session"]
+token = flags["--startup-splash-token"]
+host, port_text = flags["--startup-splash-endpoint"].split(":", 1)
+conn = socket.create_connection((host, int(port_text)), timeout=5.0)
+conn.settimeout(0.2)
+
+def send(payload):
+    conn.sendall(json.dumps(payload, separators=(",", ":")).encode("utf-8") + b"\n")
+
+send({
+    "type": "hello",
+    "session": session,
+    "seq": 1,
+    "stage": None,
+    "slow": None,
+    "detail": token,
+})
+send({
+    "type": "hidden",
+    "session": session,
+    "seq": 2,
+    "stage": None,
+    "slow": None,
+    "detail": "user_close",
+})
+buf = bytearray()
+deadline = time.monotonic() + 5.0
+while time.monotonic() < deadline:
+    try:
+        chunk = conn.recv(1024)
+    except socket.timeout:
+        continue
+    if not chunk:
+        sys.exit(0)
+    buf.extend(chunk)
+    while True:
+        newline = buf.find(b"\n")
+        if newline < 0:
+            break
+        line = bytes(buf[:newline])
+        del buf[: newline + 1]
+        if not line.strip():
+            continue
+        message = json.loads(line.decode("utf-8"))
+        if message.get("session") == session and message.get("type") == "finish":
+            sys.exit(0)
+sys.exit(1)
+"""
+
+
+def test_hidden_before_listener_shows_once_on_gui_thread_and_exits_zero(
+    qtbot, monkeypatch, caplog
+):
+    """Problem sequence: hidden ACK, then handover listener, then finish, then EOF.
+
+    Success is a natural child exit 0. Cleanup must not be what makes the child die.
+    """
+
+    from PyQt5.QtCore import QThread
+    from PyQt5.QtWidgets import QApplication, QWidget
+
+    from mf4_analyzer.startup_feedback import StartupFeedback, child_environment
+    from mf4_analyzer.startup_handover import StartupHandover
+    from mf4_analyzer import startup_timing as st
+
+    monkeypatch.setattr(st, "record_splash_event", lambda *_a, **_k: None)
+    monkeypatch.setenv("TRACELAB_STARTUP_SPLASH", "1")
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    monkeypatch.delenv("TRACELAB_LAYOUT_PROBE", raising=False)
+
+    def fake_spawn(self):
+        assert self._endpoint is not None
+        command = [
+            sys.executable,
+            "-c",
+            _EARLY_HIDDEN_PEER,
+            "--startup-splash-child",
+            "--startup-splash-session",
+            self._session,
+            "--startup-splash-endpoint",
+            self._endpoint,
+            "--startup-splash-token",
+            self._token,
+        ]
+        self._proc = subprocess.Popen(
+            command,
+            env=child_environment(),
+            shell=False,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+        )
+
+    monkeypatch.setattr(StartupFeedback, "_spawn_child", fake_spawn)
+    feedback = StartupFeedback()
+    handover = None
+    try:
+        with caplog.at_level(logging.WARNING):
+            feedback.start(allow_offscreen=True)
+            # Barrier: hidden is cached before any handover listener exists.
+            assert _wait(lambda: feedback.hidden, timeout_s=5.0)
+            assert feedback.hidden_reason == "user_close"
+            app = QApplication.instance() or QApplication([])
+            window = QWidget()
+            qtbot.addWidget(window)
+            shows: list[QThread] = []
+
+            def counting_show():
+                shows.append(QThread.currentThread())
+                QWidget.show(window)
+
+            window.show = counting_show  # type: ignore[method-assign]
+            handover = StartupHandover(app, window, feedback)
+            assert shows == []
+            handover.begin()
+            qtbot.waitUntil(lambda: len(shows) == 1, timeout=2000)
+            assert shows[0] is app.thread()
+            assert handover.show_called is True
+            assert window.isVisible()
+            proc = feedback.process
+            assert proc is not None
+            assert _wait(lambda: proc.poll() == 0, timeout_s=5.0)
+            code = feedback.child_exit_code
+            if code is None:
+                code = proc.poll()
+            assert code == 0
+            assert feedback.force_terminated is False
+            assert feedback.handover_failed is False
+            assert "still alive after finish; terminating" not in caplog.text
+            assert "still alive after hidden ack; terminating" not in caplog.text
+            qtbot.wait(30)
+            assert len(shows) == 1
+    finally:
+        if handover is not None:
+            handover.close()
+        proc = feedback.process
+        feedback.close()
+        # Failure-only reap. The assertions above already required a natural exit 0.
+        if proc is not None and proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=2)
+
+
+def test_closed_handover_and_deleted_window_ignore_late_reveal(qtbot, monkeypatch):
+    from PyQt5 import sip
+    from PyQt5.QtWidgets import QApplication, QWidget
+
+    from mf4_analyzer.startup_feedback import (
+        HIDDEN_FINISH_CLOSE,
+        MSG_HIDDEN,
+        StartupFeedback,
+    )
+    from mf4_analyzer.startup_handover import StartupHandover
+    from mf4_analyzer import startup_timing as st
+
+    monkeypatch.setattr(st, "record_splash_event", lambda *_a, **_k: None)
+    monkeypatch.setattr(StartupFeedback, "_ensure_watchdog_locked", lambda self: None)
+
+    class _Alive:
+        def poll(self):
+            return None
+
+        def terminate(self):
+            return None
+
+    feedback = StartupFeedback()
+    feedback._started = True
+    feedback._hello_ok = True
+    feedback._proc = _Alive()  # type: ignore[assignment]
+    app = QApplication.instance() or QApplication([])
+    # Not registered with qtbot: this test deletes the C++ object on purpose.
+    window = QWidget()
+    shows = {"n": 0}
+
+    def counting_show():
+        shows["n"] += 1
+
+    window.show = counting_show  # type: ignore[method-assign]
+    handover = StartupHandover(app, window, feedback)
+    try:
+        handover.begin()
+        assert shows["n"] == 0
+        handover.close()
+        window.deleteLater()
+        qtbot.waitUntil(lambda: sip.isdeleted(window), timeout=2000)
+        feedback._handle_message(
+            {
+                "type": MSG_HIDDEN,
+                "session": feedback.session,
+                "seq": 4,
+                "stage": None,
+                "slow": None,
+                "detail": HIDDEN_FINISH_CLOSE,
+            }
+        )
+        feedback._notify_reveal(reason="child_eof")
+        handover._on_feedback_event(
+            {
+                "event": "can_reveal",
+                "session": feedback.session,
+                "reason": "hidden",
+            }
+        )
+        assert shows["n"] == 0
+        assert handover.show_called is False
+    finally:
+        feedback.close()
+        if not sip.isdeleted(window):
+            window.close()
+            window.deleteLater()

@@ -19,6 +19,7 @@ from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Mapping, Sequence
 import logging
+import math
 import re
 import threading
 from types import SimpleNamespace
@@ -252,6 +253,84 @@ def _default_loader(path):
     return file_data[0] if len(file_data) == 1 else file_data
 
 
+_LOAD_ALIGNMENT_NOTICE = (
+    "数据可能已按公共时间轴对齐，series=original 只表示未经用户滤波，不等于原始测量值"
+)
+
+
+def known_source_diagnostics(facts):
+    """Return source diagnostics, or ``None`` when the field was never recorded.
+
+    A missing key is unknown. An explicit empty mapping is known and empty.
+    """
+    if not isinstance(facts, Mapping) or "source_diagnostics" not in facts:
+        return None
+    value = facts["source_diagnostics"]
+    if not isinstance(value, Mapping):
+        return None
+    return value
+
+
+def _plain_diagnostic(value):
+    if isinstance(value, Mapping):
+        return {str(key): _plain_diagnostic(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_plain_diagnostic(item) for item in value]
+    if isinstance(value, bool) or value is None or isinstance(value, (str, int)):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, np.generic):
+        return _plain_diagnostic(value.item())
+    return str(value)
+
+
+def _loader_source_diagnostic(fd):
+    """Copy loader warnings and alignment. ``None`` means the source was not loaded."""
+    if fd is None or isinstance(fd, _LoadFailure):
+        return None
+    meta = getattr(fd, "source_metadata", None)
+    if not isinstance(meta, Mapping):
+        return None
+    if "warnings" not in meta and "mf4_alignment" not in meta:
+        return None
+    warnings = []
+    for raw in meta.get("warnings") or ():
+        text = str(raw).strip()
+        if text and text not in warnings:
+            warnings.append(text)
+    alignment = meta.get("mf4_alignment") if "mf4_alignment" in meta else None
+    if isinstance(alignment, Mapping) and _LOAD_ALIGNMENT_NOTICE not in warnings:
+        warnings.append(_LOAD_ALIGNMENT_NOTICE)
+    payload = {"warnings": warnings}
+    if isinstance(alignment, Mapping):
+        payload["mf4_alignment"] = _plain_diagnostic(alignment)
+    return payload
+
+
+def _merge_source_diagnostic(item, source_key, fd, *, source_identity=""):
+    payload = _loader_source_diagnostic(fd)
+    if payload is None:
+        return
+    facts = item.effective_params
+    if not isinstance(facts, dict):
+        facts = dict(facts or {})
+        item.effective_params = facts
+    diagnostics = facts.get("source_diagnostics")
+    if not isinstance(diagnostics, dict):
+        diagnostics = {}
+    record = dict(payload)
+    if source_identity:
+        record["source_identity"] = str(source_identity)
+    diagnostics[str(source_key)] = record
+    facts["source_diagnostics"] = diagnostics
+    existing = [str(text) for text in item.warnings]
+    for text in payload["warnings"]:
+        if text not in existing:
+            item.warnings.append(text)
+            existing.append(text)
+
+
 class _RunReporter:
     """Single funnel for one ``BatchRunner.run`` call's progress and records.
 
@@ -376,6 +455,23 @@ class _RunReporter:
             'group_identity': item.group_identity or 'default',
             'display_name': item.file_name,
         })
+        _merge_source_diagnostic(
+            item, source_key, fd, source_identity=str(source_identity or ""),
+        )
+        rpm_signal = getattr(preset, "rpm_signal", None)
+        if (
+            preset.method == "order_time"
+            and isinstance(rpm_signal, (tuple, list))
+            and len(rpm_signal) >= 1
+            and rpm_signal[0] != source_key
+        ):
+            rpm_fd = self._runner._known_file_data(rpm_signal[0])
+            _merge_source_diagnostic(
+                item,
+                rpm_signal[0],
+                rpm_fd,
+                source_identity=self._source_path(rpm_signal[0], rpm_fd) or "",
+            )
         artifacts = dict(item.artifact_facts or {})
         if item.status == 'done':
             if item.data_path:
@@ -486,6 +582,7 @@ class BatchRunner:
         self._disk_cache: dict[str, object] = {}
         self._source_cache: dict[object, _ResolvedSource] = {}
         self._source_channel_cache: dict[object, frozenset[str]] = {}
+        self._source_rename_map: dict[object, tuple] = {}
         self._source_locators: dict[object, str] = {}
         self._source_group_identity_hints: dict[object, str] = {}
         self._descriptor_probe_cache: set[str] = set()
@@ -1083,6 +1180,7 @@ class BatchRunner:
             if data_extension is not None
             and (output_dir / f'{task.identity.stem}.{data_extension}').exists()
         }
+        output_settings = self._requested_output_settings(preset.outputs)
         groups = (
             group_render_tasks(
                 render_tasks,
@@ -2222,6 +2320,11 @@ class BatchRunner:
             try:
                 if isinstance(fd_or_fail, _LoadFailure):
                     raise IOError(fd_or_fail.error)
+                explicit_time = (getattr(fd_or_fail, "source_metadata", {}) or {}).get(
+                    "time_column"
+                )
+                if explicit_time and signal_name == explicit_time:
+                    raise ValueError(f'missing signal: {signal_name}')
                 if signal_name not in fd_or_fail.data.columns:
                     raise ValueError(f'missing signal: {signal_name}')
                 computed = self._compute_group_task(
@@ -3712,6 +3815,11 @@ class BatchRunner:
             try:
                 if isinstance(fd_or_fail, _LoadFailure):
                     raise IOError(fd_or_fail.error)
+                explicit_time = (getattr(fd_or_fail, "source_metadata", {}) or {}).get(
+                    "time_column"
+                )
+                if explicit_time and signal_name == explicit_time:
+                    raise ValueError(f"missing signal: {signal_name}")
                 if signal_name not in fd_or_fail.data.columns:
                     raise ValueError(f"missing signal: {signal_name}")
                 item = self._run_one(preset, fid, fd_or_fail,
@@ -4366,6 +4474,9 @@ class BatchRunner:
             self._source_channel_cache[source_id] = frozenset(
                 str(name) for name in descriptor.channel_names
             )
+            self._remember_renames(
+                source_id, getattr(descriptor, "metadata", None),
+            )
             self._source_group_identity_hints[source_id] = str(
                 descriptor.group_id or 'default'
             )
@@ -4552,6 +4663,7 @@ class BatchRunner:
             self._source_channel_cache[source_id] = frozenset(
                 str(name) for name in fd.get_signal_channels()
             )
+            self._remember_renames(source_id, getattr(fd, "source_metadata", None))
             resolved.append(_ResolvedSource(
                 source_id=source_id,
                 physical_path=physical_key,
@@ -4694,6 +4806,10 @@ class BatchRunner:
                                     str(name)
                                     for name in descriptor.channel_names
                                 )
+                                self._remember_renames(
+                                    descriptor.source_id,
+                                    getattr(descriptor, "metadata", None),
+                                )
                         else:
                             # Compatibility fallback for injected registries
                             # without the descriptor API: load one physical
@@ -4761,6 +4877,66 @@ class BatchRunner:
             fid, fd = self._resolve_task_file(source_key)
             yield fid, fd
 
+    @staticmethod
+    def _rename_entries(metadata):
+        if not isinstance(metadata, Mapping):
+            return ()
+        entries = metadata.get("renamed_channels") or ()
+        if isinstance(entries, (str, bytes)):
+            return ()
+        return tuple(entry for entry in entries if isinstance(entry, Mapping))
+
+    def _remember_renames(self, source_id, metadata) -> None:
+        self._source_rename_map[source_id] = self._rename_entries(metadata)
+
+    def _bound_signal_name(self, source_key, channel, *, available=None, fd=None):
+        """Public signal column for a saved name, or ``None`` when it is not a signal.
+
+        An explicit MF4 time column is never returned as a signal. A unique
+        renamed-channel map may bind the old name; ambiguous maps do not.
+        Sources without that metadata keep the historical column lookup.
+        """
+        from mf4_analyzer.io.file_data import resolve_saved_signal_name
+
+        channel = str(channel)
+        if fd is None and source_key is not None:
+            fd = self._known_file_data(source_key)
+        if available is None and fd is not None:
+            available = set(fd.get_signal_channels())
+        elif available is None and source_key is not None:
+            cached = self._source_channel_cache.get(source_key)
+            if cached is not None:
+                available = set(cached)
+        if available is not None and channel in available:
+            return channel
+        resolved = None
+        if fd is not None:
+            resolved = resolve_saved_signal_name(fd, channel)
+        elif source_key is not None:
+            matches = []
+            for entry in self._source_rename_map.get(source_key) or ():
+                if str(entry.get("original")) != channel:
+                    continue
+                renamed = str(entry.get("renamed") or "")
+                if renamed and (available is None or renamed in available):
+                    matches.append(renamed)
+            matches = list(dict.fromkeys(matches))
+            if len(matches) == 1:
+                resolved = matches[0]
+        if resolved and (available is None or resolved in available):
+            return resolved
+        meta = getattr(fd, "source_metadata", None) or {}
+        if isinstance(meta, Mapping) and (
+            "time_column" in meta or meta.get("renamed_channels")
+        ):
+            return None
+        columns = getattr(getattr(fd, "data", None), "columns", ())
+        if fd is not None and channel in columns:
+            return channel
+        if available is None:
+            return channel
+        return None
+
     def _expand_tasks(self, preset, *, allow_source_load=False):
         if preset.method not in self.SUPPORTED_METHODS:
             return
@@ -4770,10 +4946,14 @@ class BatchRunner:
                 return
             fid, ch = preset.signal
             fd = self._known_file_data(fid)
-            if fd is not None and ch in fd.data.columns:
-                yield fid, ch
+            if fd is not None:
+                bound = self._bound_signal_name(fid, ch, fd=fd)
+                if bound is not None:
+                    yield fid, bound
             elif fid in self._source_locators:
-                yield fid, ch
+                bound = self._bound_signal_name(fid, ch)
+                if bound is not None:
+                    yield fid, bound
             return
         if preset.target_pairs:
             # Runtime-exact scope takes precedence over the legacy cartesian
@@ -4783,7 +4963,9 @@ class BatchRunner:
             for pair in preset.target_pairs:
                 if not isinstance(pair, (tuple, list)) or len(pair) != 2:
                     continue
-                yield pair[0], str(pair[1])
+                source_key, channel = pair[0], str(pair[1])
+                bound = self._bound_signal_name(source_key, channel)
+                yield source_key, bound if bound is not None else channel
             return
         if preset.target_signals:
             source_keys = self._scope_source_keys(
@@ -4807,8 +4989,10 @@ class BatchRunner:
                 and bool(x_channel)
             )
             channels_by_source = {}
+            file_data_by_source = {}
             for source_key in source_keys:
                 fd = self._known_file_data(source_key)
+                file_data_by_source[source_key] = fd
                 if fd is not None:
                     available = set(fd.get_signal_channels())
                 else:
@@ -4819,32 +5003,46 @@ class BatchRunner:
                     )
                 channels_by_source[source_key] = available
 
+            def bound_name(source_key, channel):
+                return self._bound_signal_name(
+                    source_key,
+                    channel,
+                    available=channels_by_source[source_key],
+                    fd=file_data_by_source[source_key],
+                )
+
             if policy == 'common':
-                known_sets = [
-                    channels for channels in channels_by_source.values()
+                known_keys = [
+                    key for key, channels in channels_by_source.items()
                     if channels is not None
                 ]
                 common = tuple(
                     channel for channel in selected
-                    if all(channel in channels for channels in known_sets)
+                    if all(bound_name(key, channel) is not None for key in known_keys)
                 )
                 for source_key in source_keys:
                     for channel in common:
-                        yield source_key, channel
+                        if channels_by_source[source_key] is None:
+                            yield source_key, channel
+                        else:
+                            yield source_key, bound_name(source_key, channel)
                 return
 
             for source_key in source_keys:
                 available = channels_by_source[source_key]
                 for channel in selected:
-                    if available is not None and channel not in available:
+                    resolved = (
+                        channel if available is None else bound_name(source_key, channel)
+                    )
+                    if available is not None and resolved is None:
                         continue
                     if (
                         needs_custom_x
                         and available is not None
-                        and x_channel not in available
+                        and bound_name(source_key, x_channel) is None
                     ):
                         continue
-                    yield source_key, channel
+                    yield source_key, resolved
             return
         # Pattern fallback (legacy / test path): the pre-probe planning pass may
         # enumerate already-resident sources only.  Lazy sources are expanded
@@ -4940,9 +5138,10 @@ class BatchRunner:
             x_values = None
             if str(params.get('x_source', 'time') or 'time').lower() == 'channel':
                 x_channel = str(params.get('x_channel', '') or '').strip()
-                if x_channel not in fd.data.columns:
+                x_column = self._bound_signal_name(None, x_channel, fd=fd)
+                if not x_column or x_column not in fd.data.columns:
                     raise ValueError(f'missing X channel: {x_channel}')
-                x_values = fd.data[x_channel].to_numpy(dtype=float, copy=False)
+                x_values = fd.data[x_column].to_numpy(dtype=float, copy=False)
             preprocessed = preprocess_batch_signal(
                 signal, time, fs, params, x_values=x_values,
             )
@@ -5316,6 +5515,8 @@ class BatchRunner:
         effective_facts: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         members = []
+        diagnostics = {}
+        member_warnings = []
         for member in group.members:
             source_key = member.source_key
             fd = self._known_file_data(source_key)
@@ -5331,6 +5532,23 @@ class BatchRunner:
                     source_identity=member.identity.source_identity,
                 ),
             })
+            payload = _loader_source_diagnostic(fd)
+            if payload is None:
+                continue
+            record = dict(payload)
+            record["source_identity"] = member.identity.source_identity
+            record["group_identity"] = member.identity.group_identity
+            diagnostics[str(source_key)] = record
+            prefix = member.identity.source_identity or str(source_key)
+            for text in payload["warnings"]:
+                line = f"{prefix}：{text}"
+                if line not in member_warnings:
+                    member_warnings.append(line)
+        facts = dict(effective_facts or {})
+        if diagnostics:
+            merged = dict(facts.get("source_diagnostics") or {})
+            merged.update(diagnostics)
+            facts["source_diagnostics"] = merged
         return {
             'group_id': group.identity.group_id,
             'stem': group.identity.stem,
@@ -5344,11 +5562,13 @@ class BatchRunner:
             'message': str(message),
             'warnings': list(dict.fromkeys(
                 str(item)
-                for item in (*effective.migration_warnings, *warnings)
+                for item in (
+                    *effective.migration_warnings, *warnings, *member_warnings,
+                )
                 if item
             )),
             'artifact': dict(artifact) if artifact is not None else None,
-            'effective_facts': dict(effective_facts or {}),
+            'effective_facts': facts,
         }
 
     def _run_one(self, preset, fid, fd, signal_name, output_dir, *,
@@ -5458,9 +5678,10 @@ class BatchRunner:
                 x_channel = str(
                     requested_params.get('x_channel', '') or ''
                 ).strip()
-                if x_channel not in fd.data.columns:
+                x_column = self._bound_signal_name(None, x_channel, fd=fd)
+                if not x_column or x_column not in fd.data.columns:
                     raise ValueError(f"missing X channel: {x_channel}")
-                x_values = fd.data[x_channel].to_numpy(
+                x_values = fd.data[x_column].to_numpy(
                     dtype=float, copy=False,
                 )
 
@@ -6000,12 +6221,13 @@ class BatchRunner:
         x_source = str(params.get('x_source', 'time') or 'time').strip().lower()
         if x_source == 'channel':
             x_channel = str(params.get('x_channel', '') or '').strip()
-            if x_channel not in fd.data.columns:
+            x_column = self._bound_signal_name(None, x_channel, fd=fd) or x_channel
+            if x_column not in fd.data.columns:
                 raise ValueError(f"missing X channel: {x_channel}")
             if preprocessed.x_values is None:
                 raise ValueError(f"X channel was not aligned: {x_channel}")
             x = preprocessed.x_values
-            x_unit = self._channel_unit(fd, x_channel)
+            x_unit = self._channel_unit(fd, x_column)
         else:
             x = preprocessed.time
             x_unit = 's'
@@ -6374,6 +6596,8 @@ class BatchRunner:
                 warnings_out.append(
                     f"未指定转速通道，已按名称匹配使用 {rpm_channel} —— 请确认"
                 )
+        else:
+            rpm_channel = self._bound_signal_name(None, rpm_channel, fd=fd) or ""
         if not rpm_channel or rpm_channel not in fd.data.columns:
             raise ValueError("rpm channel is required for order batch analysis")
         factor = float(preset.params.get('rpm_factor', 1.0))

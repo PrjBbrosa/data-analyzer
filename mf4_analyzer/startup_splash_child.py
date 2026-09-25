@@ -80,28 +80,6 @@ def reject_abbreviated_splash_flags(argv: list[str]) -> None:
             raise SystemExit(2)
 
 
-def _system_reduced_motion() -> bool:
-    if sys.platform != "win32":
-        return False
-    try:
-        import ctypes
-
-        enabled = ctypes.c_int(1)
-        # SPI_GETCLIENTAREAANIMATION — False means the user wants less motion.
-        SPI_GETCLIENTAREAANIMATION = 0x1042
-        ok = ctypes.windll.user32.SystemParametersInfoW(
-            SPI_GETCLIENTAREAANIMATION,
-            0,
-            ctypes.byref(enabled),
-            0,
-        )
-        if not ok:
-            return False
-        return int(enabled.value) == 0
-    except (AttributeError, OSError, ValueError, TypeError):
-        return False
-
-
 class _SplashSession:
     """Owns the child socket, inbound dispatch, and view lifetime."""
 
@@ -591,7 +569,8 @@ def child_main(argv: list[str] | None = None) -> int:
         return 0
 
     splash = StartupSplash()
-    splash.set_reduced_motion(_system_reduced_motion())
+    # The widget already read the single cross-platform detector. A second
+    # Windows-only probe returned False elsewhere and cleared macOS reduceMotion.
     session.attach_splash(splash)
     session._paint_watcher = _install_paint_watcher(splash, session)
 

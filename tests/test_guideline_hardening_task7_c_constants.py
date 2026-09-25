@@ -84,20 +84,46 @@ def test_c3_builder_imports_auto_span_constants_from_shared():
     assert "_auto_db_window" in source
 
 
-def test_c4_builder_uses_shared_slice_max_span_not_local_dead_span():
-    """C4: dead-span display floor must reuse ``_SLICE_MAX_SPAN_DB``."""
-    source = BUILDER.read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    assigned = {
-        target.id
-        for node in tree.body
-        if isinstance(node, ast.Assign)
-        for target in node.targets
-        if isinstance(target, ast.Name)
-    }
-    assert "_DISPLAY_DEAD_SPAN_DB" not in assigned
-    assert "_DISPLAY_DEAD_SPAN_DB" not in source
-    assert "_SLICE_MAX_SPAN_DB" in source
+def test_c4_auto_db_line_limits_delegate_to_display_ranges(monkeypatch):
+    """C4: batch line dB limits delegate; they do not keep a local span floor.
+
+    Absolute pad, empty/all-non-finite ``None``, and a valid mask stay in
+    ``tests/signal/test_display_ranges.py``.
+    """
+    import numpy as np
+
+    from mf4_analyzer.batch_render_qt import _builder
+    from mf4_analyzer.signal.display_ranges import line_amplitude_limits
+
+    calls = []
+    real = line_amplitude_limits
+
+    def _spy(values, *, amplitude_mode, valid_mask=None):
+        calls.append((amplitude_mode, valid_mask))
+        return real(values, amplitude_mode=amplitude_mode, valid_mask=valid_mask)
+
+    monkeypatch.setattr(_builder, "line_amplitude_limits", _spy)
+    values = [-6000.0, -300.0, 0.0]
+    mask = [False, True, True]
+    assert _builder._auto_db_line_limits(values, valid_mask=mask) == real(
+        values, amplitude_mode="amplitude_db", valid_mask=mask,
+    )
+    assert calls[-1][0] == "amplitude_db"
+    assert np.array_equal(np.asarray(calls[-1][1], dtype=bool), mask)
+
+    fallback = (
+        _builder._EMPTY_DB_LEVEL - _builder._AUTO_SPAN_DB,
+        _builder._EMPTY_DB_LEVEL,
+    )
+    assert _builder._auto_db_line_limits([]) == fallback
+    assert calls[-1] == ("amplitude_db", None)
+    assert _builder._auto_db_line_limits([np.nan, np.inf]) == fallback
+    assert calls[-1][0] == "amplitude_db"
+    assert calls[-1][1] is None
+    rejected = [False, False, False]
+    assert _builder._auto_db_line_limits(values, valid_mask=rejected) == fallback
+    assert calls[-1][0] == "amplitude_db"
+    assert np.array_equal(np.asarray(calls[-1][1], dtype=bool), rejected)
 
 
 def test_c5_batch_output_scale_delegates_to_contract_render_in_db():

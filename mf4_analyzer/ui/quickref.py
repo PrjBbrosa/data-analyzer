@@ -117,6 +117,10 @@ QUICKREF: Tuple[QuickGroup, ...] = (
                 sub="多采样率合成一条时间轴并重采样。重复时间保留最后值；时间回退则跳过。未保留的时间范围和端点填充会提示，填充不是原始测量。",
             ),
             QuickRow(
+                "回放对齐提示",
+                sub="已按公共时间轴对齐的 MF4 会在 Play 前显示只读说明，可能包含非原始测量值。换无警告文件会清除；加载失败时保留上一份文件的说明。",
+            ),
+            QuickRow(
                 "WWT WinWert 视图",
                 sub="按 WinWert 窗口创建时域 View 并绘图，不会自动加入 UltraView 或改变 Board；之后可正常使用 TraceLab Canvas。需要总览时手动把 View 加入 UltraView，再用智能排版；选择「仅加载数据」则不创建 View。",
             ),
@@ -623,7 +627,7 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             ),
             QuickRow(
                 "运行警告",
-                sub="结果区汇总本次运行警告；查看详情里该行自己的警告单独列出",
+                sub="结果区汇总本次运行警告；查看详情里该行自己的警告单独列出。加载对齐留在该行，series=original 仍只表示未经用户滤波。",
             ),
             QuickRow(
                 "查看详情",

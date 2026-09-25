@@ -169,6 +169,7 @@ class _HistoryHandle:
 
     def set_ylim(self, lo, hi):
         self._plot.setYRange(float(lo), float(hi), padding=0)
+        self._canvas._emit_visible_range_changed()
 
 
 class PgFrfCanvas(QWidget):
@@ -179,6 +180,9 @@ class PgFrfCanvas(QWidget):
     context_menu_requested = pyqtSignal()
     layout_geometry_changed = pyqtSignal()
     manual_zoom_changed = pyqtSignal(bool)
+    # UltraView reads this, not manual_zoom_changed: the zoom bool stays True
+    # across later pans, Y zooms, Home, and axis edits.
+    visible_range_changed = pyqtSignal()
     markup_revision_changed = pyqtSignal()
     # Emitting this (plus quality_status() below) is what makes
     # chart_stack.cards attach the reader-facing quality dot to an FRF card,
@@ -1140,6 +1144,9 @@ class PgFrfCanvas(QWidget):
         """Treat native ViewBox wheel/pan updates like modifier-wheel zoom."""
         self.disable_interactive_quality()
         self.schedule_idle_quality()
+        # sigRangeChangedManually is the pan / plain-wheel path. Modifier
+        # wheel uses setXRange/setYRange and does not emit it.
+        self._emit_visible_range_changed()
 
     def _reposition_empty_hint(self, *_args):
         self._empty_hint.reposition()
@@ -1423,12 +1430,17 @@ class PgFrfCanvas(QWidget):
         self._plot_magnitude.setXRange(
             self._hz_to_view_x(lo), self._hz_to_view_x(hi), padding=0
         )
+        self._emit_visible_range_changed()
 
     def get_xlim(self):
         if self._result is None:
             return None
         view_range = self._plot_magnitude.vb.viewRange()[0]
         return tuple(self._view_x_to_hz(value) for value in view_range)
+
+    def get_visible_xlim(self):
+        """Physical Hz window used by UltraView. Empty results stay None."""
+        return self.get_xlim()
 
     def get_data_x_union(self):
         """Return ``(lo, hi)`` of the plotted analysis time window, or None.
@@ -1477,6 +1489,7 @@ class PgFrfCanvas(QWidget):
             lo, hi = 0.0, 1.0
         plot.vb.enableAutoRange(axis="y", enable=False)
         plot.setYRange(lo, hi, padding=0)
+        self._emit_visible_range_changed()
 
     def get_ylim(self, panel):
         plot = self._plot_for_panel(panel)
@@ -1484,6 +1497,17 @@ class PgFrfCanvas(QWidget):
 
     def get_ylims(self):
         return {name: self.get_ylim(name) for name in ("magnitude", "phase", "coherence")}
+
+    def get_visible_ylims(self):
+        """Stable magnitude/phase/coherence windows, or None with no result."""
+        if self._result is None:
+            return None
+        return self.get_ylims()
+
+    def _emit_visible_range_changed(self) -> None:
+        if self._result is None:
+            return
+        self.visible_range_changed.emit()
 
     def _plot_for_panel(self, panel):
         try:
@@ -1723,10 +1747,12 @@ class PgFrfCanvas(QWidget):
         self._plot_coherence.setYRange(0.0, 1.0, padding=0)
         self._plot_coherence.vb.enableAutoRange(axis="y", enable=False)
         self._plot_host.schedule_alignment()
+        self._emit_visible_range_changed()
 
     def _fit_y_to_visible_x(self, plot) -> None:
         if plot is self._plot_coherence:
             self._plot_coherence.setYRange(0.0, 1.0, padding=0)
+            self._emit_visible_range_changed()
             return
         values = (
             self._draw_magnitude if plot is self._plot_magnitude
@@ -1749,6 +1775,7 @@ class PgFrfCanvas(QWidget):
         plot.vb.enableAutoRange(axis="y", enable=False)
         plot.setYRange(y_lo, y_hi, padding=0)
         self._plot_host.schedule_alignment()
+        self._emit_visible_range_changed()
 
     def _redesign_context_menu_for_viewbox(self, view_box, menu) -> None:
         plot = next((item for item in self.plots if item.vb is view_box), None)
@@ -1797,6 +1824,7 @@ class PgFrfCanvas(QWidget):
         self.disable_interactive_quality()
         self.schedule_idle_quality()
         self.layout_geometry_changed.emit()
+        self._emit_visible_range_changed()
         self._plot_host.schedule_alignment()
         return True
 

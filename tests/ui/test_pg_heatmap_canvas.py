@@ -4555,3 +4555,51 @@ def test_collapsed_slice_is_not_an_extra_presentation_waiter(qtbot):
         assert canvas.request_presentation_paint_ack("collapsed") is True
     assert received == ["collapsed"]
     assert canvas._presentation_paint_ack_request_id is None
+
+
+def test_heatmap_slice_direction_high_ink_then_cheap_requalifies(qapp, monkeypatch):
+    from tests.ui.test_slice_panel import (
+        test_slice_direction_from_high_ink_to_cheap_settles_the_new_curve as case,
+    )
+
+    case(qapp, monkeypatch)
+
+
+def test_heatmap_slice_direction_cheap_then_high_ink_drops_aa_first(qapp, monkeypatch):
+    from tests.ui.test_slice_panel import (
+        test_slice_direction_from_cheap_to_high_ink_drops_aa_before_deciding as case,
+    )
+
+    case(qapp, monkeypatch)
+
+
+def test_heatmap_slice_same_direction_is_a_quality_noop(qapp, monkeypatch):
+    from tests.ui.test_slice_panel import (
+        test_same_slice_direction_does_not_rebuild_quality as case,
+    )
+
+    case(qapp, monkeypatch)
+
+
+def test_heatmap_slice_direction_hide_clear_and_destroy_are_safe(qapp, monkeypatch):
+    from tests.ui.test_slice_panel import (
+        test_slice_direction_clear_hide_and_destroy_drop_the_pending_settle as case,
+    )
+
+    case(qapp, monkeypatch)
+
+
+def test_heatmap_slice_direction_hold_cancel_uses_the_new_curve(qapp, monkeypatch):
+    from tests.ui.test_slice_panel import (
+        test_slice_direction_hold_cancel_settles_only_the_matching_token as case,
+    )
+
+    case(qapp, monkeypatch)
+
+
+def test_heatmap_slice_direction_backstop_stays_per_signature(qapp, monkeypatch):
+    from tests.ui.test_slice_panel import (
+        test_slice_direction_backstop_does_not_poison_the_other_signature as case,
+    )
+
+    case(qapp, monkeypatch)

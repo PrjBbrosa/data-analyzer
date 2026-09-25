@@ -697,3 +697,144 @@ def test_protocol_error_exits(monkeypatch):
     widget = holder.get("widget")
     if widget is not None:
         assert widget.shown is False or widget.closed is True
+
+
+@pytest.mark.parametrize("reduced", [True, False])
+def test_child_init_keeps_detected_motion_through_stage_and_hidden(
+    reduced, monkeypatch, qtbot
+):
+    """Real StartupSplash survives child init; a non-Windows False must not overwrite it."""
+
+    from PyQt5.QtWidgets import QApplication
+
+    from mf4_analyzer.startup_visual_contract import FRAME_INTERVAL_MS, STAGE_LABELS
+    from mf4_analyzer.ui import startup_splash as splash_mod
+    from mf4_analyzer.ui.startup_splash import StartupSplash as RealSplash
+
+    assert QApplication.instance() is not None
+    del qtbot
+    monkeypatch.setattr(splash_mod, "detect_system_reduced_motion", lambda: reduced)
+    observed: dict = {
+        "shown": threading.Event(),
+        "stage": threading.Event(),
+    }
+
+    class CapturingSplash(RealSplash):
+        def show(self) -> None:  # noqa: N802 - Qt API
+            super().show()
+            observed["reduced"] = self._reduced_motion
+            observed["timer_active"] = self._timer.isActive()
+            observed["timer_interval"] = self._timer.interval()
+            self._last_tick_ms = 0.0
+            self._elapsed_ms = lambda: 200.0
+            before = self._spinner_phase
+            self._on_tick()
+            observed["spinner"] = self._spinner_phase
+            observed["breathe"] = self._breathe_phase
+            observed["phase_moved"] = self._spinner_phase != before or self._breathe_phase != 0.0
+            observed["splash"] = self
+            observed["shown"].set()
+
+        def set_stage(self, stage: str) -> None:
+            super().set_stage(stage)
+            observed["status"] = self.status_text()
+            observed["reduced_after_stage"] = self._reduced_motion
+            observed["stage"].set()
+
+    monkeypatch.setattr(splash_mod, "StartupSplash", CapturingSplash)
+
+    listen = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listen.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listen.bind(("127.0.0.1", 0))
+    listen.listen(1)
+    listen.settimeout(5.0)
+    host, port = listen.getsockname()[:2]
+    session = f"sess-motion-{int(reduced)}"
+    token = "tok-motion"
+    hidden_detail: list[str] = []
+    hidden_seen = threading.Event()
+
+    def parent():
+        try:
+            conn, _addr = listen.accept()
+        except socket.timeout:
+            return
+        buf = bytearray()
+        conn.settimeout(0.2)
+        sent_finish = False
+        deadline = time.monotonic() + 5.0
+        try:
+            while time.monotonic() < deadline and not hidden_seen.is_set():
+                try:
+                    chunk = conn.recv(1024)
+                except socket.timeout:
+                    chunk = b""
+                if chunk:
+                    buf.extend(chunk)
+                for message in decode_frames(buf):
+                    if message.get("type") == MSG_HELLO and not sent_finish:
+                        if not observed["shown"].wait(2.0):
+                            return
+                        conn.sendall(
+                            encode_frame(
+                                {
+                                    "type": MSG_STAGE,
+                                    "session": session,
+                                    "seq": 1,
+                                    "stage": "loading_components",
+                                    "slow": False,
+                                    "detail": None,
+                                }
+                            )
+                        )
+                        if not observed["stage"].wait(2.0):
+                            return
+                        conn.sendall(
+                            encode_frame(
+                                {
+                                    "type": MSG_FINISH,
+                                    "session": session,
+                                    "seq": 2,
+                                    "stage": "loading_components",
+                                    "slow": False,
+                                    "detail": None,
+                                }
+                            )
+                        )
+                        sent_finish = True
+                    if message.get("type") == MSG_HIDDEN:
+                        hidden_detail.append(str(message.get("detail")))
+                        hidden_seen.set()
+        finally:
+            conn.close()
+            listen.close()
+
+    threading.Thread(target=parent, daemon=True).start()
+    code = child_main(
+        [
+            "--startup-splash-child",
+            "--startup-splash-session",
+            session,
+            "--startup-splash-endpoint",
+            f"{host}:{port}",
+            "--startup-splash-token",
+            token,
+        ]
+    )
+    assert hidden_seen.wait(5.0)
+    assert code == 0
+    assert hidden_detail == [HIDDEN_FINISH_CLOSE]
+    assert observed["reduced"] is reduced
+    assert observed["reduced_after_stage"] is reduced
+    assert observed["timer_active"] is True
+    assert observed["timer_interval"] == FRAME_INTERVAL_MS
+    assert observed["status"] == STAGE_LABELS["loading_components"]
+    assert observed["phase_moved"] is (not reduced)
+    if reduced:
+        assert observed["spinner"] == 0.0
+        assert observed["breathe"] == 0.0
+    else:
+        assert observed["spinner"] > 0.0
+    splash = observed["splash"]
+    assert splash.is_splash_closed is True
+    assert splash.isVisible() is False

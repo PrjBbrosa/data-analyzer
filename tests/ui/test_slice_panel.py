@@ -369,3 +369,244 @@ def test_full_reset_clears_the_curve_and_hides_the_marker(sliced):
 
     assert sliced._slice_curve.getData() == (None, None)
     assert sliced._slice_marker.isVisible() is False
+
+
+def _direction_matrix():
+    column = np.where(np.arange(20_000) % 2 == 0, 0.0, 1.0)
+    return np.tile(column[:, None], (1, 4))
+
+
+def _show_direction_canvas(qapp, monkeypatch):
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtWidgets import QApplication
+
+    monkeypatch.setattr(
+        QApplication, "mouseButtons", staticmethod(lambda: Qt.NoButton),
+    )
+    canvas = PgHeatmapCanvas(with_slice=True)
+    canvas.resize(900, 700)
+    canvas.show()
+    qapp.processEvents()
+    canvas.plot_or_update_heatmap(
+        matrix=_direction_matrix(),
+        x_extent=(0.0, 3.0),
+        y_extent=(0.0, 1.0),
+        x_label="Time (s)",
+        y_label="Frequency (Hz)",
+        amplitude_mode="amplitude",
+        z_auto=True,
+    )
+    canvas._seed_slice()
+    qapp.processEvents()
+    return canvas
+
+
+def _slice_point_count(canvas) -> int:
+    _x, values = canvas._slice_curve.getData()
+    if values is None:
+        return 0
+    return int(len(values))
+
+
+def _assert_idle_interval(canvas) -> None:
+    assert canvas._slice_aa_idle_timer.interval() == 150
+
+
+def test_slice_direction_from_high_ink_to_cheap_settles_the_new_curve(
+    qapp, monkeypatch,
+):
+    canvas = _show_direction_canvas(qapp, monkeypatch)
+    try:
+        assert _slice_point_count(canvas) == 20_000
+        assert canvas._slice_aa_on is False
+        assert canvas._slice.slice_quality_status()["block_reason"] == "high-ink"
+        _assert_idle_interval(canvas)
+
+        canvas.set_slice_direction("y")
+
+        assert _slice_point_count(canvas) == 4
+        assert canvas._slice_aa_on is False
+        assert canvas._slice_curve.opts.get("antialias") is False
+        assert canvas._slice_curve.curve.opts.get("antialias") is False
+        discrete = canvas._slice._slice_discrete_aa_timer
+        assert discrete.isActive()
+        assert discrete.interval() == 0
+        assert canvas._slice._slice_discrete_settle_pending is True
+        assert canvas._slice_aa_idle_timer.isActive() is False
+        _assert_idle_interval(canvas)
+        assert canvas._slice._slice_ink_seeded is False
+        assert canvas._slice.slice_quality_status()["state"] == "yellow"
+
+        qapp.processEvents()
+
+        assert canvas._slice_aa_on is True
+        assert canvas._slice_curve.opts.get("antialias") is True
+        assert canvas._slice_curve.curve.opts.get("antialias") is True
+        assert canvas._slice._slice_ink_dev_px == pytest.approx(0.0, abs=1.0)
+        assert canvas._slice.slice_quality_status()["state"] == "green"
+        assert discrete.isActive() is False
+        _assert_idle_interval(canvas)
+    finally:
+        canvas.deleteLater()
+
+
+def test_slice_direction_from_cheap_to_high_ink_drops_aa_before_deciding(
+    qapp, monkeypatch,
+):
+    canvas = _show_direction_canvas(qapp, monkeypatch)
+    try:
+        canvas.set_slice_direction("y")
+        qapp.processEvents()
+        assert canvas._slice_aa_on is True
+        assert _slice_point_count(canvas) == 4
+
+        canvas.set_slice_direction("x")
+
+        assert _slice_point_count(canvas) == 20_000
+        assert canvas._slice_aa_on is False
+        assert canvas._slice_curve.opts.get("antialias") is False
+        assert canvas._slice_curve.curve.opts.get("antialias") is False
+        assert canvas._slice._slice_discrete_aa_timer.isActive()
+        assert canvas._slice._slice_ink_seeded is False
+        _assert_idle_interval(canvas)
+
+        qapp.processEvents()
+
+        assert canvas._slice_aa_on is False
+        assert canvas._slice_curve.curve.opts.get("antialias") is False
+        assert canvas._slice.slice_quality_status()["block_reason"] == "high-ink"
+        assert canvas._slice._slice_discrete_aa_timer.isActive() is False
+        assert canvas._slice_aa_idle_timer.isActive() is False
+        _assert_idle_interval(canvas)
+    finally:
+        canvas.deleteLater()
+
+
+def test_same_slice_direction_does_not_rebuild_quality(qapp, monkeypatch):
+    canvas = _show_direction_canvas(qapp, monkeypatch)
+    try:
+        canvas.set_slice_direction("y")
+        qapp.processEvents()
+        assert canvas._slice_aa_on is True
+        ink = canvas._slice._slice_ink_dev_px
+        points = _slice_point_count(canvas)
+
+        canvas.set_slice_direction("y")
+
+        assert canvas._slice_aa_on is True
+        assert canvas._slice._slice_discrete_aa_timer.isActive() is False
+        assert canvas._slice._slice_ink_dev_px == ink
+        assert _slice_point_count(canvas) == points
+        _assert_idle_interval(canvas)
+    finally:
+        canvas.deleteLater()
+
+
+def test_slice_direction_clear_hide_and_destroy_drop_the_pending_settle(
+    qapp, monkeypatch,
+):
+    canvas = _show_direction_canvas(qapp, monkeypatch)
+    try:
+        canvas.set_slice_direction("y")
+        assert canvas._slice._slice_discrete_aa_timer.isActive()
+        canvas.hide()
+        canvas.full_reset()
+        qapp.processEvents()
+        assert canvas._slice_aa_on is False
+        assert canvas._slice._slice_discrete_aa_timer.isActive() is False
+        assert canvas._slice._slice_discrete_settle_pending is False
+        assert canvas._slice_curve.getData() == (None, None)
+        _assert_idle_interval(canvas)
+    finally:
+        canvas.deleteLater()
+        qapp.processEvents()
+
+    destroyed = _show_direction_canvas(qapp, monkeypatch)
+    destroyed.set_slice_direction("y")
+    assert destroyed._slice._slice_discrete_aa_timer.isActive()
+    destroyed.deleteLater()
+    qapp.processEvents()
+
+
+def test_slice_direction_hold_cancel_settles_only_the_matching_token(
+    qapp, monkeypatch,
+):
+    canvas = _show_direction_canvas(qapp, monkeypatch)
+    try:
+        canvas.set_slice_direction("y")
+        qapp.processEvents()
+        assert canvas._slice_aa_on is True
+        token = object()
+        canvas.hold_discrete_quality(token)
+        assert canvas._slice_aa_on is False
+        canvas.set_slice_direction("x")
+        qapp.processEvents()
+        assert canvas._slice_aa_on is False
+        assert canvas._slice._slice_discrete_aa_timer.isActive() is False
+        assert canvas._slice._slice_discrete_quality_deferred is True
+        _assert_idle_interval(canvas)
+
+        canvas.release_discrete_quality(object())
+        qapp.processEvents()
+        assert canvas._slice_aa_on is False
+        assert canvas._slice._slice_discrete_quality_hold is token
+
+        canvas.release_discrete_quality(token)
+        assert canvas._slice._slice_discrete_aa_timer.isActive()
+        qapp.processEvents()
+        assert canvas._slice_aa_on is False
+        assert canvas._slice.slice_quality_status()["block_reason"] == "high-ink"
+        _assert_idle_interval(canvas)
+    finally:
+        canvas.deleteLater()
+
+
+def test_slice_direction_backstop_does_not_poison_the_other_signature(
+    qapp, monkeypatch,
+):
+    canvas = PgHeatmapCanvas(with_slice=True)
+    try:
+        from PyQt5.QtCore import Qt
+        from PyQt5.QtWidgets import QApplication
+
+        monkeypatch.setattr(
+            QApplication, "mouseButtons", staticmethod(lambda: Qt.NoButton),
+        )
+        canvas.resize(900, 700)
+        canvas.show()
+        qapp.processEvents()
+        canvas.plot_or_update_heatmap(
+            matrix=_matrix(),
+            x_extent=X_EXTENT,
+            y_extent=Y_EXTENT,
+            x_label="Time (s)",
+            y_label="Frequency (Hz)",
+            amplitude_mode="amplitude",
+            z_auto=True,
+        )
+        canvas._seed_slice()
+        qapp.processEvents()
+        assert canvas._slice_aa_on is True
+        signature_x = canvas._slice._slice_view_signature()
+        canvas._note_aa_frame(5_000.0)
+        qapp.processEvents()
+        assert signature_x in canvas._slice._slice_aa_latch.blacklist
+        assert canvas._slice_aa_on is False
+
+        canvas.set_slice_direction("y")
+        qapp.processEvents()
+        signature_y = canvas._slice._slice_view_signature()
+        assert signature_y != signature_x
+        assert canvas._slice_aa_on is True
+        assert signature_x in canvas._slice._slice_aa_latch.blacklist
+        assert signature_y not in canvas._slice._slice_aa_latch.blacklist
+
+        canvas.set_slice_direction("x")
+        qapp.processEvents()
+        assert canvas._slice_aa_on is False
+        assert canvas._slice.slice_quality_status()["block_reason"] == "aa-backstop"
+        assert signature_x in canvas._slice._slice_aa_latch.blacklist
+        assert signature_y not in canvas._slice._slice_aa_latch.blacklist
+        _assert_idle_interval(canvas)
+    finally:
+        canvas.deleteLater()

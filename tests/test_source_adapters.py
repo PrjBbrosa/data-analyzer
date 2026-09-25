@@ -334,7 +334,7 @@ def test_mdf_channel_facts_lookup_failure_unit_is_none(monkeypatch):
             raise IndexError("channel missing")
 
     mdf = SimpleNamespace(groups=[SimpleNamespace(channels=_Channels())])
-    _names, units, channel_metadata = sa._mdf_channel_facts(mdf)
+    _names, units, channel_metadata = sa._mdf_channel_facts(mdf)[:3]
     assert units["sig"] is None
     assert channel_metadata["sig"]["unit"] is None
 
@@ -581,7 +581,7 @@ def test_mdf_channel_facts_use_channel_type_not_display_name():
         _Channel("Zeit", 1),
         _Channel("time", 0),
     ])
-    names, _units, _meta = sa._mdf_channel_facts(v3)
+    names, _units, _meta = sa._mdf_channel_facts(v3)[:3]
     assert names == ("time",)
 
     v4 = _Fake("4.10", [
@@ -590,7 +590,7 @@ def test_mdf_channel_facts_use_channel_type_not_display_name():
         _Channel("virt", 3, 1),
         _Channel("t", 0, 0),
     ])
-    names, _units, meta = sa._mdf_channel_facts(v4)
+    names, _units, meta = sa._mdf_channel_facts(v4)[:3]
     assert set(names) == {"angle", "t"}
     assert meta["t"]["physical_occurrence"] == (0, 3)
 
@@ -620,3 +620,25 @@ def test_mdf_probe_does_not_read_samples(tmp_path, monkeypatch):
     adapter = SourceAdapterRegistry.default().adapter_for(str(path))
     descriptor = adapter.probe_sources(str(path))[0]
     assert "sig" in descriptor.channel_names
+
+
+def test_mdf_probe_and_load_share_time_collision_names(tmp_path):
+    axis = [0.0, 0.1, 0.2, 0.3]
+    path = write_signal_groups_mf4(tmp_path / "time-sig.mf4", [[
+        ("Time", [10.0, 20.0, 30.0, 40.0], axis, "Nm"),
+        ("sig", [1.0, 2.0, 3.0, 4.0], axis, "V"),
+        ("t", [4.0, 3.0, 2.0, 1.0], axis),
+    ]])
+    adapter = SourceAdapterRegistry.default().adapter_for(str(path))
+    probed = adapter.probe_sources(str(path))[0]
+    loaded = adapter.load_sources(str(path))[0]
+    fd = loaded.file_data
+    assert probed.channel_names == tuple(fd.get_signal_channels())
+    assert set(probed.channel_names) == {"Time [0:1]", "sig", "t"}
+    assert probed.metadata["renamed_channels"] == fd.source_metadata["renamed_channels"]
+    assert fd.source_metadata["time_column"] == "Time"
+    assert fd.time_array.tolist() == pytest.approx(axis)
+    assert fd.fs == pytest.approx(10.0)
+    assert probed.units["Time [0:1]"] == "Nm"
+    assert fd.channel_units["Time [0:1]"] == "Nm"
+    assert fd.channel_metadata["t"]["physical_occurrence"] == (0, 3)

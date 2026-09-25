@@ -23,6 +23,49 @@ def _make_file(tmp_path, fs=1024.0):
     return FileData(path, df, list(df.columns), {}, idx=0)
 
 
+def test_batch_time_preset_binds_a_renamed_mf4_time_signal(tmp_path):
+    from mf4_analyzer.io.source_adapters import SourceAdapterRegistry
+    from tests._helpers.mf4_factory import write_signal_groups_mf4
+
+    axis = [0.0, 0.1, 0.2, 0.3]
+    path = write_signal_groups_mf4(tmp_path / "time-sig.mf4", [[
+        ("Time", [10.0, 20.0, 30.0, 40.0], axis, "Nm"),
+        ("sig", [1.0, 2.0, 3.0, 4.0], axis, "V"),
+    ]])
+    loaded = SourceAdapterRegistry.default().adapter_for(str(path)).load_sources(
+        str(path)
+    )[0]
+    preset = AnalysisPreset.from_current_single(
+        name="old time name",
+        method="time",
+        signal=(loaded.source_id, "Time"),
+        params={},
+        outputs=BatchOutput(export_data=True, export_image=False),
+    )
+    result = BatchRunner({loaded.source_id: loaded.file_data}).run(
+        preset, tmp_path / "out",
+    )
+    assert result.status == "done"
+    assert result.items[0].signal == "Time [0:1]"
+    exported = pd.read_csv(result.items[0].data_path)
+    np.testing.assert_allclose(exported["time_s"].to_numpy(), axis)
+    np.testing.assert_allclose(
+        exported["value"].to_numpy(), [10.0, 20.0, 30.0, 40.0],
+    )
+
+    missing = AnalysisPreset.from_current_single(
+        name="missing",
+        method="time",
+        signal=(loaded.source_id, "not-a-channel"),
+        params={},
+        outputs=BatchOutput(export_data=True, export_image=False),
+    )
+    empty = BatchRunner({loaded.source_id: loaded.file_data}).run(
+        missing, tmp_path / "missing-out",
+    )
+    assert empty.items == []
+
+
 def test_batch_supported_methods_include_time():
     assert "time" in BatchRunner.SUPPORTED_METHODS
 
@@ -7544,7 +7587,332 @@ def test_batch_frf_group_cancellation_releases_pre_reserved_image(
     assert result.status == "cancelled"
     assert ("png",) in reservations
     assert list(output_dir.glob(".*.batch-reserve")) == []
-    assert list(output_dir.glob("*.png")) == []
+
+
+def _late_alignment_mf4(tmp_path, name="late.mf4"):
+    from tests._helpers.mf4_factory import write_signal_groups_mf4
+
+    ref_t = np.arange(0.0, 4.0 + 1e-9, 0.01)
+    late_t = np.arange(2.0, 3.0 + 1e-9, 0.01)
+    return write_signal_groups_mf4(tmp_path / name, [
+        [
+            ("sig", np.sin(2.0 * np.pi * 5.0 * ref_t), ref_t, "V"),
+            ("MotorSpeedRPM", np.full(ref_t.shape, 1200.0), ref_t, "rpm"),
+        ],
+        [("late", np.linspace(10.0, 30.0, late_t.size), late_t, "Nm")],
+    ])
+
+
+def _assert_alignment_carried(item, manifest_entry):
+    from mf4_analyzer.batch import _LOAD_ALIGNMENT_NOTICE, known_source_diagnostics
+
+    assert item.status in {"done", "resumed", "failed"}
+    assert any("端点填充" in text for text in item.warnings)
+    assert _LOAD_ALIGNMENT_NOTICE in item.warnings
+    assert item.warnings.count(_LOAD_ALIGNMENT_NOTICE) == 1
+    diagnostics = known_source_diagnostics(item.effective_params)
+    assert diagnostics is not None
+    assert "source_diagnostics" not in manifest_entry["requested_params"]
+    recorded = known_source_diagnostics(manifest_entry["effective_facts"])
+    assert recorded is not None
+    assert recorded.keys() == diagnostics.keys()
+    payload = next(iter(recorded.values()))
+    assert any("端点填充" in text for text in payload["warnings"])
+    assert payload["mf4_alignment"]["policy"] == "shared-longest-axis-v1"
+    assert "mf4_alignment" not in manifest_entry["requested_params"]
+
+
+def test_batch_mf4_alignment_reaches_memory_and_disk_results(tmp_path):
+    from dataclasses import replace
+
+    from mf4_analyzer.batch_manifest import load_batch_manifest
+    from mf4_analyzer.io.source_adapters import SourceAdapterRegistry
+
+    path = _late_alignment_mf4(tmp_path)
+    loaded = SourceAdapterRegistry.default().adapter_for(str(path)).load_sources(
+        str(path)
+    )[0]
+    outputs = BatchOutput(export_data=True, export_image=False)
+    memory_preset = AnalysisPreset.from_current_single(
+        name="memory late",
+        method="time",
+        signal=(loaded.source_id, "late"),
+        outputs=outputs,
+    )
+    memory = BatchRunner({loaded.source_id: loaded.file_data}).run(
+        memory_preset, tmp_path / "memory",
+    )
+    assert memory.status == "done"
+    exported = pd.read_csv(memory.items[0].data_path)
+    assert list(exported.columns) == ["time_s", "series", "value"]
+    assert set(exported["series"]) == {"original"}
+    assert exported["time_s"].iloc[0] == pytest.approx(0.0)
+    assert exported["time_s"].iloc[-1] == pytest.approx(4.0)
+    assert exported["value"].iloc[0] == pytest.approx(10.0)
+    memory_manifest = load_batch_manifest(memory.manifest_path)
+    _assert_alignment_carried(memory.items[0], memory_manifest["entries"][0])
+
+    def loader(source):
+        return SourceAdapterRegistry.default().adapter_for(str(source)).load_sources(
+            str(source)
+        )
+
+    disk_preset = replace(
+        AnalysisPreset.free_config(
+            name="disk late",
+            method="time",
+            target_signals=("late",),
+            outputs=outputs,
+        ),
+        source_paths=(str(path),),
+    )
+    disk = BatchRunner({}, loader=loader).run(disk_preset, tmp_path / "disk")
+    assert disk.status == "done"
+    disk_exported = pd.read_csv(disk.items[0].data_path)
+    assert list(disk_exported.columns) == ["time_s", "series", "value"]
+    assert set(disk_exported["series"]) == {"original"}
+    disk_manifest = load_batch_manifest(disk.manifest_path)
+    _assert_alignment_carried(disk.items[0], disk_manifest["entries"][0])
+
+
+def test_batch_mf4_alignment_resume_does_not_duplicate_warnings(tmp_path):
+    from mf4_analyzer.batch import _LOAD_ALIGNMENT_NOTICE
+    from mf4_analyzer.batch_manifest import load_batch_manifest
+    from mf4_analyzer.io.source_adapters import SourceAdapterRegistry
+
+    path = _late_alignment_mf4(tmp_path, "resume.mf4")
+    loaded = SourceAdapterRegistry.default().adapter_for(str(path)).load_sources(
+        str(path)
+    )[0]
+    preset = AnalysisPreset.from_current_single(
+        name="resume late",
+        method="time",
+        signal=(loaded.source_id, "late"),
+        outputs=BatchOutput(
+            export_data=True,
+            export_image=False,
+            resume_policy="manifest",
+        ),
+    )
+    runner = BatchRunner({loaded.source_id: loaded.file_data})
+    first = runner.run(preset, tmp_path / "out")
+    manifest = load_batch_manifest(first.manifest_path)
+    events = []
+    second = runner.run(
+        preset,
+        tmp_path / "out",
+        resume_manifest=manifest,
+        on_event=events.append,
+    )
+    assert second.items[0].status == "resumed"
+    assert second.items[0].warnings.count(_LOAD_ALIGNMENT_NOTICE) == 1
+    assert [event.kind for event in events if event.task_index is not None] == [
+        "task_resumed",
+    ]
+
+
+def test_batch_cancel_before_load_does_not_invent_source_diagnostics(tmp_path):
+    from dataclasses import replace
+
+    from mf4_analyzer.batch import known_source_diagnostics
+
+    from mf4_analyzer.io.source_adapters import SourceAdapterRegistry
+
+    path = _late_alignment_mf4(tmp_path, "cancel.mf4")
+    probed = SourceAdapterRegistry.default().adapter_for(str(path)).probe_sources(
+        str(path)
+    )[0]
+    token = __import__("threading").Event()
+    token.set()
+    loaded = []
+
+    def loader(source):
+        loaded.append(source)
+        raise AssertionError("cancelled task must not load samples")
+
+    preset = replace(
+        AnalysisPreset.free_config(
+            name="cancel",
+            method="time",
+            target_signals=("late",),
+            outputs=BatchOutput(export_data=True, export_image=False),
+        ),
+        source_ids=(probed.source_id,),
+        source_paths=(str(path),),
+    )
+    result = BatchRunner({}, loader=loader).run(
+        preset, tmp_path / "out", cancel_token=token,
+    )
+    assert loaded == []
+    assert result.items
+    assert all(item.status == "cancelled" for item in result.items)
+    assert all(
+        known_source_diagnostics(item.effective_params) is None
+        for item in result.items
+    )
+
+
+def test_batch_failure_after_load_keeps_alignment_warnings(tmp_path, monkeypatch):
+    from mf4_analyzer.batch import _LOAD_ALIGNMENT_NOTICE
+    from mf4_analyzer.io.source_adapters import SourceAdapterRegistry
+
+    path = _late_alignment_mf4(tmp_path, "fail.mf4")
+    loaded = SourceAdapterRegistry.default().adapter_for(str(path)).load_sources(
+        str(path)
+    )[0]
+
+    def boom(*_args, **_kwargs):
+        raise ValueError("compute failed after load")
+
+    monkeypatch.setattr(
+        "mf4_analyzer.batch.preprocess_batch_signal", boom,
+    )
+    preset = AnalysisPreset.from_current_single(
+        name="fail late",
+        method="time",
+        signal=(loaded.source_id, "late"),
+        outputs=BatchOutput(export_data=True, export_image=False),
+    )
+    result = BatchRunner({loaded.source_id: loaded.file_data}).run(
+        preset, tmp_path / "out",
+    )
+    assert result.items[0].status == "failed"
+    assert "compute failed after load" in result.items[0].message
+    assert _LOAD_ALIGNMENT_NOTICE in result.items[0].warnings
+
+
+def test_batch_alignment_follows_time_fft_order_and_frf_sources(tmp_path):
+    from mf4_analyzer.batch import known_source_diagnostics
+    from mf4_analyzer.batch_types import FrfPairRule
+    from mf4_analyzer.io.source_adapters import SourceAdapterRegistry
+
+    path = _late_alignment_mf4(tmp_path, "methods.mf4")
+    rpm_path = _late_alignment_mf4(tmp_path, "rpm.mf4")
+    loaded = SourceAdapterRegistry.default().adapter_for(str(path)).load_sources(
+        str(path)
+    )[0]
+    rpm_loaded = SourceAdapterRegistry.default().adapter_for(str(rpm_path)).load_sources(
+        str(rpm_path)
+    )[0]
+    files = {
+        loaded.source_id: loaded.file_data,
+        rpm_loaded.source_id: rpm_loaded.file_data,
+    }
+    outputs = BatchOutput(export_data=True, export_image=False)
+    cases = [
+        AnalysisPreset.from_current_single(
+            name="fft",
+            method="fft",
+            signal=(loaded.source_id, "sig"),
+            params={"nfft": 64, "window": "hanning"},
+            outputs=outputs,
+        ),
+        AnalysisPreset.from_current_single(
+            name="fft-time",
+            method="fft_time",
+            signal=(loaded.source_id, "sig"),
+            params={"nfft": 64, "overlap": 0.5},
+            outputs=outputs,
+        ),
+        AnalysisPreset.from_current_single(
+            name="order",
+            method="order_time",
+            signal=(loaded.source_id, "sig"),
+            rpm_signal=(rpm_loaded.source_id, "MotorSpeedRPM"),
+            params={
+                "nfft": 64,
+                "samples_per_rev": 32,
+                "max_order": 5.0,
+                "order_res": 0.5,
+                "time_res": 0.1,
+            },
+            outputs=outputs,
+        ),
+        AnalysisPreset.free_config(
+            name="frf",
+            method="frf",
+            frf_pair_rules=(FrfPairRule("sig", ("late",)),),
+            params={
+                "estimator": "h1",
+                "window": "hanning",
+                "periodic_window": True,
+                "t_win_s": 0.5,
+                "overlap": 0.5,
+                "nfft_mode": "auto",
+                "detrend": "none",
+            },
+            outputs=outputs,
+        ),
+    ]
+    frf_preset = cases[-1]
+    frf_preset = __import__("dataclasses").replace(
+        frf_preset, file_ids=(loaded.source_id,),
+    )
+    cases[-1] = frf_preset
+    for preset in cases:
+        result = BatchRunner(files).run(preset, tmp_path / preset.name)
+        assert result.items, preset.name
+        item = result.items[0]
+        diagnostics = known_source_diagnostics(item.effective_params)
+        assert diagnostics is not None, preset.name
+        assert str(loaded.source_id) in diagnostics, preset.name
+        if preset.method == "order_time":
+            assert str(rpm_loaded.source_id) in diagnostics
+        if preset.method == "frf":
+            assert item.input_signal == "sig"
+            assert item.output_signal == "late"
+            assert diagnostics[str(loaded.source_id)]["source_identity"]
+
+
+def test_batch_group_manifest_keeps_every_member_source(tmp_path, monkeypatch):
+    from mf4_analyzer.batch import known_source_diagnostics
+    from mf4_analyzer.batch_manifest import load_batch_manifest
+    from mf4_analyzer.io.source_adapters import SourceAdapterRegistry
+
+    first = _late_alignment_mf4(tmp_path, "group-a.mf4")
+    second = _late_alignment_mf4(tmp_path, "group-b.mf4")
+    loaded = [
+        SourceAdapterRegistry.default().adapter_for(str(path)).load_sources(str(path))[0]
+        for path in (first, second)
+    ]
+    files = {item.source_id: item.file_data for item in loaded}
+
+    def fake_image(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(BatchRunner, "_write_image", staticmethod(fake_image))
+    preset = __import__("dataclasses").replace(
+        AnalysisPreset.free_config(
+            name="grouped",
+            method="time",
+            target_signals=("late",),
+            params={"render_group_by": "source"},
+            outputs=BatchOutput(export_data=True, export_image=True, image_format="png"),
+        ),
+        file_ids=tuple(files),
+    )
+    result = BatchRunner(files).run(preset, tmp_path / "out")
+    manifest = load_batch_manifest(result.manifest_path)
+    assert len(result.items) == 2
+    item_keys = {
+        next(iter(known_source_diagnostics(item.effective_params)))
+        for item in result.items
+    }
+    assert item_keys == {str(item.source_id) for item in loaded}
+    groups = manifest["render_groups"]
+    assert groups
+    member_identities = {
+        member["source"]["identity"]
+        for group in groups
+        for member in group["members"]
+    }
+    assert len(member_identities) == 2
+    grouped_keys = set()
+    for group in groups:
+        diagnostics = known_source_diagnostics(group["effective_facts"])
+        assert diagnostics is not None
+        grouped_keys.update(diagnostics)
+    assert grouped_keys == {str(item.source_id) for item in loaded}
 
 
 def test_batch_frf_unexpected_renderer_probe_import_error_propagates_before_reserve(

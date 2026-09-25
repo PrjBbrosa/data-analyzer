@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 
 from .._palette import FILE_PALETTES
-from .channel_frame import frame_get_column, frame_row_count
+from .channel_frame import frame_column_names, frame_get_column, frame_row_count
 
 
 # Authoritative set of channel names treated as the time master.
@@ -261,18 +261,22 @@ class FileData:
             self.time_array = np.arange(frame_row_count(df), dtype=float) / self.fs
             self._time_source = 'audio'
         else:
-            # 尝试从列名识别时间列
-            for ch in chs:
-                if ch.lower() in _TIME_NAMES:
-                    self.time_array = np.asarray(
-                        frame_get_column(df, ch), dtype=float,
-                    )
-                    if len(self.time_array) > 1:
-                        dt = np.median(np.diff(self.time_array))
-                        if dt > 0:
-                            self.fs = 1.0 / dt
-                            self._time_source = 'column'
-                    break
+            if "time_column" in self.source_metadata:
+                # Exact column identity. Never scan other names or invent 1 kHz.
+                self._bind_explicit_time_column(df)
+            else:
+                # 尝试从列名识别时间列
+                for ch in chs:
+                    if ch.lower() in _TIME_NAMES:
+                        self.time_array = np.asarray(
+                            frame_get_column(df, ch), dtype=float,
+                        )
+                        if len(self.time_array) > 1:
+                            dt = np.median(np.diff(self.time_array))
+                            if dt > 0:
+                                self.fs = 1.0 / dt
+                                self._time_source = 'column'
+                        break
 
             apply_verified_zfd_sampling(self)
 
@@ -280,6 +284,22 @@ class FileData:
             if self.time_array is None:
                 self.time_array = np.arange(frame_row_count(df), dtype=float) / self.fs
                 self._time_source = 'generated'
+
+    def _bind_explicit_time_column(self, df):
+        column_name = self.source_metadata.get("time_column")
+        names = frame_column_names(df)
+        if not isinstance(column_name, str) or column_name not in names:
+            shown = column_name if isinstance(column_name, str) else repr(column_name)
+            raise ValueError(f"时间列 {shown} 不存在，无法建立时间轴")
+        values = np.asarray(frame_get_column(df, column_name), dtype=float)
+        if values.ndim != 1:
+            raise ValueError(f"时间列 {column_name} 不是一维数据，无法建立时间轴")
+        self.time_array = values
+        if values.size > 1:
+            dt = float(np.median(np.diff(values)))
+            if dt > 0:
+                self.fs = 1.0 / dt
+                self._time_source = "column"
 
     @property
     def time_array(self):
@@ -416,6 +436,9 @@ class FileData:
         return 1.0 / median_dt
 
     def get_signal_channels(self):
+        if "time_column" in self.source_metadata:
+            explicit = self.source_metadata.get("time_column")
+            return [c for c in self.channels if c != explicit]
         return [c for c in self.channels if c.lower() not in _TIME_NAMES]
 
     def get_prefixed_channel(self, ch):
@@ -423,3 +446,73 @@ class FileData:
 
     def get_color_palette(self):
         return FILE_PALETTES[self.file_index % len(FILE_PALETTES)]
+
+
+def _occurrence_key(value):
+    if isinstance(value, (list, tuple)) and len(value) == 2:
+        try:
+            return (int(value[0]), int(value[1]))
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def resolve_saved_signal_name(file_data, name, occurrence=None):
+    """Match a saved signal name without guessing.
+
+    A current signal name wins. Otherwise a same-source physical occurrence
+    or a unique ``renamed_channels`` original→renamed entry may match. Two
+    candidates, a disagreement, or no candidate returns ``None`` so the
+    caller keeps its existing missing-channel path.
+    """
+    signals = [str(channel) for channel in file_data.get_signal_channels()]
+    signal_set = set(signals)
+    wanted = str(name)
+    metadata = getattr(file_data, "source_metadata", {}) or {}
+    channel_metadata = getattr(file_data, "channel_metadata", {}) or {}
+    renamed = metadata.get("renamed_channels") or []
+    occ = _occurrence_key(occurrence)
+
+    by_occ = []
+    if occ is not None:
+        if isinstance(channel_metadata, Mapping):
+            for channel, facts in channel_metadata.items():
+                if str(channel) not in signal_set or not isinstance(facts, Mapping):
+                    continue
+                if _occurrence_key(facts.get("physical_occurrence")) == occ:
+                    by_occ.append(str(channel))
+        for entry in renamed:
+            if not isinstance(entry, Mapping):
+                continue
+            renamed_name = str(entry.get("renamed") or "")
+            if renamed_name not in signal_set:
+                continue
+            if _occurrence_key(entry.get("physical_occurrence")) == occ:
+                by_occ.append(renamed_name)
+        by_occ = list(dict.fromkeys(by_occ))
+
+    old_hits = []
+    for entry in renamed:
+        if not isinstance(entry, Mapping):
+            continue
+        if str(entry.get("original")) != wanted:
+            continue
+        renamed_name = str(entry.get("renamed") or "")
+        if renamed_name in signal_set:
+            old_hits.append(renamed_name)
+    old_hits = list(dict.fromkeys(old_hits))
+
+    if occ is not None:
+        if len(by_occ) != 1:
+            return None
+        chosen = by_occ[0]
+        if wanted in signal_set and chosen != wanted:
+            return None
+        if old_hits and chosen not in old_hits:
+            return None
+        return chosen
+    if wanted in signal_set:
+        return wanted
+    if len(old_hits) == 1:
+        return old_hits[0]
+    return None

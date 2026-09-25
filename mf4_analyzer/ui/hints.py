@@ -300,6 +300,12 @@ _HINTS = (
         priority=41,
     ),
     Hint(
+        id="replay.mf4_alignment",
+        text="回放对齐可能含非原始值",
+        surface="discovery",
+        priority=40,
+    ),
+    Hint(
         id="time.custom_x_paths",
         text="显示设置：极值点/差值；数值/完整；X↑/X↓",
         surface="discovery",

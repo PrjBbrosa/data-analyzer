@@ -225,6 +225,32 @@ class TestProjectResultRows:
         assert "image backend unavailable" in degraded.warnings
 
 
+def test_panel_shows_full_load_alignment_warning_on_done_item(qtbot):
+    warning = (
+        "late 使用了端点填充，填充部分不是原始测量；"
+        "数据可能已按公共时间轴对齐，series=original 只表示未经用户滤波，不等于原始测量值"
+    )
+    panel = BatchResultDetailsPanel()
+    qtbot.addWidget(panel)
+    panel.resize(640, 480)
+    panel.show()
+    panel.set_result(_result(items=[
+        _item(
+            task_id="aligned",
+            status="done",
+            file_name="late.mf4",
+            signal="late",
+            source_identity="/data/late.mf4",
+            message="完成",
+            warnings=[warning],
+        ),
+    ]), generation=1)
+    assert "已完成（警告）" in panel._list.item(0).text()
+    assert panel._warnings.text() == "警告: " + warning
+    assert panel._warnings.isVisible()
+    assert panel._warnings.wordWrap()
+
+
 def test_panel_default_selects_first_failed_then_skipped(qtbot):
     panel = BatchResultDetailsPanel()
     qtbot.addWidget(panel)

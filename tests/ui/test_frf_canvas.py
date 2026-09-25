@@ -1152,3 +1152,126 @@ def test_frf_quality_status_changed_emits_once_per_transition(
     canvas._emit_quality_status()
     canvas._emit_quality_status()
     assert len(seen) == before, "unchanged status must not re-emit"
+
+
+def test_frf_visible_range_adapters_report_hz_and_stable_y_keys(qtbot):
+    """UltraView reads get_visible_*; public get_xlim/get_ylims stay in place."""
+    from mf4_analyzer.ui.pg_canvas.frf_canvas import PgFrfCanvas
+
+    canvas = PgFrfCanvas()
+    qtbot.addWidget(canvas)
+    assert canvas.get_xlim() is None
+    assert canvas.get_visible_xlim() is None
+    assert canvas.get_visible_ylims() is None
+    assert set(canvas.get_ylims()) == {"magnitude", "phase", "coherence"}
+
+    canvas.set_result(_result(), {"frequency_scale": "linear"}, {})
+    canvas.set_xlim(0.5, 3.5)
+    assert canvas.get_visible_xlim() == pytest.approx((0.5, 3.5))
+    assert canvas.get_xlim() == pytest.approx(canvas.get_visible_xlim())
+    visible = canvas.get_visible_ylims()
+    assert list(visible) == ["magnitude", "phase", "coherence"]
+    assert visible["coherence"] == pytest.approx((0.0, 1.0))
+    canvas.set_ylim("magnitude", -12.0, 6.0)
+    canvas.set_ylim("phase", -180.0, 180.0)
+    visible = canvas.get_visible_ylims()
+    assert visible["magnitude"] == pytest.approx((-12.0, 6.0))
+    assert visible["phase"] == pytest.approx((-180.0, 180.0))
+    assert visible["coherence"] == pytest.approx((0.0, 1.0))
+    assert canvas.get_ylims()["magnitude"] == pytest.approx(visible["magnitude"])
+
+    logged = _result()
+    logged.frequencies = np.array([0.0, 1.0, 10.0, 100.0, 1000.0])
+    canvas.set_result(logged, {"frequency_scale": "log"}, {})
+    canvas.set_xlim(1.0, 100.0)
+    assert canvas.get_visible_xlim() == pytest.approx((1.0, 100.0))
+    assert canvas.get_xlim() == pytest.approx((1.0, 100.0))
+    view_x = canvas._plot_magnitude.vb.viewRange()[0]
+    assert view_x[0] == pytest.approx(0.0)
+    assert view_x[1] == pytest.approx(2.0)
+    assert set(canvas.get_visible_ylims()) == {"magnitude", "phase", "coherence"}
+
+    canvas.clear()
+    assert canvas.get_visible_xlim() is None
+    assert canvas.get_visible_ylims() is None
+    assert canvas.get_xlim() is None
+
+
+def test_frf_range_gestures_emit_visible_range_changed(qtbot):
+    """Ctrl/Shift wheel, pan, Home, and axis edit share one range signal."""
+    from mf4_analyzer.ui.pg_canvas.frf_canvas import PgFrfCanvas
+
+    canvas = PgFrfCanvas()
+    qtbot.addWidget(canvas)
+    canvas.resize(800, 600)
+    canvas.show()
+    seen = []
+
+    def _note_range(*_args):
+        seen.append(True)
+
+    canvas.visible_range_changed.connect(_note_range)
+    canvas.set_result(_result(), {"frequency_scale": "linear"}, {})
+    seen.clear()
+
+    assert canvas._handle_wheel_dispatch(
+        delta=120, modifiers=Qt.ControlModifier, x_pos=2.0, y_pos=0.0,
+        view_box=canvas._plot_magnitude.vb,
+    ) is True
+    assert seen, "Ctrl+wheel must reach the presentation range signal"
+    first = canvas.get_visible_xlim()
+    seen.clear()
+    assert canvas._handle_wheel_dispatch(
+        delta=120, modifiers=Qt.ControlModifier, x_pos=2.0, y_pos=0.0,
+        view_box=canvas._plot_magnitude.vb,
+    ) is True
+    assert seen
+    assert canvas.get_visible_xlim()[1] - canvas.get_visible_xlim()[0] < (
+        first[1] - first[0]
+    )
+    seen.clear()
+
+    y_before = canvas.get_visible_ylims()["magnitude"]
+    assert canvas._handle_wheel_dispatch(
+        delta=120, modifiers=Qt.ShiftModifier, x_pos=2.0, y_pos=0.0,
+        view_box=canvas._plot_magnitude.vb,
+    ) is True
+    assert seen, "Shift+wheel changes Y and must not stop at manual_zoom"
+    assert canvas.get_visible_ylims()["magnitude"] != pytest.approx(y_before)
+    seen.clear()
+
+    x_before = canvas.get_visible_xlim()
+    view_box = canvas._plot_magnitude.vb
+    view_box.translateBy(x=0.35)
+    view_box.sigRangeChangedManually.emit(view_box.state["mouseEnabled"])
+    assert canvas.get_visible_xlim()[0] != pytest.approx(x_before[0])
+    assert seen, "a real pan emits sigRangeChangedManually, not a zoom bool"
+    seen.clear()
+
+    canvas.reset_view_to_data_extents()
+    assert seen, "Home must announce the restored window"
+    seen.clear()
+
+    canvas.set_xlim(0.4, 2.2)
+    assert canvas.get_visible_xlim() == pytest.approx((0.4, 2.2))
+    assert seen
+    seen.clear()
+    canvas.set_ylim("phase", -40.0, 40.0)
+    assert canvas.get_visible_ylims()["phase"] == pytest.approx((-40.0, 40.0))
+    assert seen
+    seen.clear()
+
+    # Toolbar history and chart-option handles are the axis-edit writers.
+    handle, _marker = canvas._channel_lines["magnitude"]
+    handle.set_xlim(0.2, 1.6)
+    assert canvas.get_visible_xlim() == pytest.approx((0.2, 1.6))
+    assert seen
+    seen.clear()
+    handle.set_ylim(-6.0, 9.0)
+    assert canvas.get_ylim("magnitude") == pytest.approx((-6.0, 9.0))
+    assert seen
+    seen.clear()
+
+    canvas.repaint()
+    QCoreApplication.processEvents()
+    assert seen == []

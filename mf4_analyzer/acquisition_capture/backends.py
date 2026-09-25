@@ -34,7 +34,7 @@ import threading
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -55,6 +55,18 @@ class BackendStatus:
     last_error: str | None = None
 
 
+def _plain_replay_value(value):
+    if isinstance(value, Mapping):
+        return {str(key): _plain_replay_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_plain_replay_value(item) for item in value]
+    if isinstance(value, bool) or value is None or isinstance(value, (str, int)):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    return str(value)
+
+
 @dataclass(frozen=True)
 class ReplaySource:
     """MF4-derived replay payload for :class:`ReplayRecorderBackend`."""
@@ -63,6 +75,8 @@ class ReplaySource:
     selected: tuple[SelectedMeasurement, ...]
     source_samples: list[tuple[str, float, float]]
     duration_s: float
+    warnings: tuple[str, ...] = ()
+    source_metadata: dict = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -353,15 +367,17 @@ class ReplayRecorderBackend(RecorderBackend):
 
         source_path = Path(path)
         df, channels, units = DataLoader.load_mf4(str(source_path))
-        if "Time" in df.columns:
-            time_values = [float(v) for v in df["Time"].tolist()]
-        else:
-            first_column = df.columns[0]
-            time_values = [float(v) for v in df[first_column].tolist()]
+        attrs = getattr(df, "attrs", None)
+        extra = attrs.get("source_metadata") if isinstance(attrs, Mapping) else None
+        metadata = dict(extra) if isinstance(extra, Mapping) else {}
+        time_column = metadata.get("time_column")
+        if not isinstance(time_column, str) or time_column not in df.columns:
+            raise ValueError(f"MF4 缺少显式时间列，无法回放: {source_path}")
+        time_values = [float(v) for v in df[time_column].tolist()]
         channel_names = [
             ch
             for ch in channels
-            if ch not in {"Time", "time"} and ch in df.columns
+            if ch != time_column and ch in df.columns
         ]
         if not channel_names:
             raise ValueError(f"no replayable numeric channels in {source_path}")
@@ -384,11 +400,31 @@ class ReplayRecorderBackend(RecorderBackend):
             for ch in channel_names
         )
         duration_s = max(ts for _ch, ts, _value in source_samples)
+        warnings = tuple(
+            text for text in (
+                str(item).strip() for item in (metadata.get("warnings") or ())
+            )
+            if text
+        )
+        copied = {
+            "time_column": time_column,
+            "warnings": list(warnings),
+        }
+        if "mf4_alignment" in metadata and isinstance(
+            metadata.get("mf4_alignment"), Mapping,
+        ):
+            copied["mf4_alignment"] = _plain_replay_value(metadata["mf4_alignment"])
+        if metadata.get("renamed_channels"):
+            copied["renamed_channels"] = _plain_replay_value(
+                metadata["renamed_channels"],
+            )
         return ReplaySource(
             path=source_path,
             selected=selected,
             source_samples=source_samples,
             duration_s=float(duration_s),
+            warnings=warnings,
+            source_metadata=copied,
         )
 
     # -- synthetic source ----------------------------------------------

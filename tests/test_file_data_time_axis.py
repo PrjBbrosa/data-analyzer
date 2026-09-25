@@ -4,7 +4,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from mf4_analyzer.io.file_data import FileData, TimeAxisProvenance
+from mf4_analyzer.io.file_data import (
+    FileData,
+    TimeAxisProvenance,
+    resolve_saved_signal_name,
+)
 from mf4_analyzer.signal.spectrogram import DEFAULT_TIME_JITTER_TOLERANCE
 
 
@@ -144,3 +148,96 @@ def test_verified_zfd_fs_applies_to_one_point_time_column():
     assert fd.fs == pytest.approx(250.0)
     assert fd.time_array[0] == pytest.approx(3.0)
     assert fd._time_source == "column"
+
+
+def test_explicit_time_column_keeps_time_like_signals_and_rejects_a_missing_column():
+    axis = [0.0, 0.1, 0.2, 0.3]
+    frame = pd.DataFrame({
+        "Time": axis,
+        "time": [10.0, 20.0, 30.0, 40.0],
+        "t": [1.0, 2.0, 3.0, 4.0],
+        "zeit": [5.0, 6.0, 7.0, 8.0],
+        "sig": [9.0, 8.0, 7.0, 6.0],
+    })
+    explicit = FileData(
+        "explicit.mf4",
+        frame,
+        list(frame.columns),
+        {},
+        source_metadata={"time_column": "Time"},
+    )
+    assert explicit.time_array.tolist() == pytest.approx(axis)
+    assert explicit.fs == pytest.approx(10.0)
+    assert explicit._time_source == "column"
+    assert explicit.get_signal_channels() == ["time", "t", "zeit", "sig"]
+
+    legacy = FileData("legacy.csv", frame, list(frame.columns), {})
+    assert legacy.get_signal_channels() == ["sig"]
+    assert legacy.time_array.tolist() == pytest.approx(axis)
+    assert legacy.fs == pytest.approx(10.0)
+
+    missing = pd.DataFrame({"sig": [1.0, 2.0, 3.0], "other": [4.0, 5.0, 6.0]})
+    with pytest.raises(ValueError, match="时间列 Time 不存在"):
+        FileData(
+            "missing.csv",
+            missing,
+            list(missing.columns),
+            {},
+            source_metadata={"time_column": "Time"},
+        )
+
+
+def test_saved_signal_name_uses_only_a_unique_old_name_or_occurrence():
+    frame = pd.DataFrame({
+        "Time": [0.0, 0.1, 0.2],
+        "Time [0:1]": [10.0, 20.0, 30.0],
+        "sig": [1.0, 2.0, 3.0],
+    })
+    renamed = [{
+        "original": "Time",
+        "renamed": "Time [0:1]",
+        "physical_occurrence": [0, 1],
+    }]
+    metadata = {
+        "time_column": "Time",
+        "renamed_channels": renamed,
+    }
+    channel_metadata = {
+        "Time [0:1]": {"physical_occurrence": (0, 1), "unit": "Nm"},
+        "sig": {"physical_occurrence": (0, 2), "unit": ""},
+    }
+    fd = FileData(
+        "named.mf4",
+        frame,
+        list(frame.columns),
+        {"Time [0:1]": "Nm", "sig": ""},
+        source_metadata=metadata,
+        channel_metadata=channel_metadata,
+    )
+    assert resolve_saved_signal_name(fd, "sig") == "sig"
+    assert resolve_saved_signal_name(fd, "Time [0:1]") == "Time [0:1]"
+    assert resolve_saved_signal_name(fd, "Time") == "Time [0:1]"
+    assert resolve_saved_signal_name(fd, "Time", occurrence=(0, 1)) == "Time [0:1]"
+    assert resolve_saved_signal_name(fd, "absent") is None
+    assert resolve_saved_signal_name(fd, "Time", occurrence=(9, 9)) is None
+    assert resolve_saved_signal_name(fd, "sig", occurrence=(0, 1)) is None
+
+    ambiguous = FileData(
+        "ambiguous.mf4",
+        pd.DataFrame({
+            "Time": [0.0, 1.0],
+            "Time [0:1]": [10.0, 20.0],
+            "Time [1:1]": [30.0, 40.0],
+        }),
+        ["Time", "Time [0:1]", "Time [1:1]"],
+        {},
+        source_metadata={
+            "time_column": "Time",
+            "renamed_channels": [
+                {"original": "Time", "renamed": "Time [0:1]", "physical_occurrence": [0, 1]},
+                {"original": "Time", "renamed": "Time [1:1]", "physical_occurrence": [1, 1]},
+            ],
+        },
+    )
+    assert resolve_saved_signal_name(ambiguous, "Time") is None
+    assert resolve_saved_signal_name(ambiguous, "Time [1:1]") == "Time [1:1]"

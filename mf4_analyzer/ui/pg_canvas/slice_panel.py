@@ -642,19 +642,33 @@ class _SliceStrip(_CanvasBackref):
         # otherwise settle the previous (or empty) curve.
         self._arm_slice_discrete_aa()
 
+    def _rebuild_slice_after_direction_change(self) -> None:
+        """Drop the previous curve's quality decision, then settle the new one.
+
+        AA stays off while the new samples and axis geometry are installed.
+        The independent 0 ms timer is armed only after that, so it measures
+        the new curve. The 150 ms idle timer is stopped, not restarted at 0.
+        """
+        self._reset_slice_quality_for_rebuild()
+        self._apply_slice()
+        self._arm_slice_discrete_aa()
+
     def set_slice_direction(self, direction: str) -> None:
         """Switch the slice between 'x' (fix time → amp vs Y) and 'y' (fix
         frequency/order → amp vs time). Re-renders the slice + flips the marker."""
         direction = 'y' if direction == 'y' else 'x'
+        changed = direction != self._slice_dir
         self._slice_dir = direction
         if self._slice_toggle is not None:
             self._slice_toggle.set_direction(direction, emit=False)
+        if not changed:
+            return
         if self._matrix_disp is None:
             if not self.isVisible():
                 return
             self._apply_default_axis_labels()
             return
-        self._apply_slice()
+        self._rebuild_slice_after_direction_change()
 
     def select_time_index(self, idx: int) -> None:
         """Back-compat entry point: place an X slice (fixed time) at frame
@@ -662,10 +676,14 @@ class _SliceStrip(_CanvasBackref):
         if self._matrix_disp is None or self._slice_curve is None:
             return
         ncols = self._matrix_disp.shape[1]
+        changed = self._slice_dir != 'x'
         self._slice_dir = 'x'
         self._slice_x_idx = int(np.clip(idx, 0, max(0, ncols - 1)))
         if self._slice_toggle is not None:
             self._slice_toggle.set_direction('x', emit=False)
+        if changed:
+            self._rebuild_slice_after_direction_change()
+            return
         self._apply_slice()
 
     @staticmethod

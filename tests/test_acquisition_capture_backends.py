@@ -26,7 +26,10 @@ from mf4_analyzer.acquisition_capture.backends import (
 from mf4_analyzer.acquisition_capture.session import SelectedMeasurement
 from mf4_analyzer.acquisition_capture.writer import Mf4Writer
 from tests._helpers.acq_owned_objects import isolated_user_env
-from tests._helpers.mf4_factory import write_source_path_mf4
+from tests._helpers.mf4_factory import (
+    write_signal_groups_mf4,
+    write_source_path_mf4,
+)
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -355,6 +358,65 @@ def test_replay_backend_deduplicates_source_path_aliases(tmp_path: Path):
     assert {sample[0] for sample in replay_source.source_samples} == {
         "Rte_ActRet_mActiveReturnMotorTorq4Check_xds16"
     }
+
+
+def test_replay_backend_uses_explicit_mf4_time_not_a_time_named_signal(tmp_path: Path):
+    axis = [0.0, 0.1, 0.2, 0.3]
+    mf4_path = write_signal_groups_mf4(tmp_path / "time-sig.mf4", [[
+        ("Time", [10.0, 20.0, 30.0, 40.0], axis, "Nm"),
+        ("sig", [1.0, 2.0, 3.0, 4.0], axis, "V"),
+        ("t", [8.0, 7.0, 6.0, 5.0], axis, "A"),
+    ]])
+
+    replay_source = ReplayRecorderBackend.source_from_mf4(mf4_path)
+
+    names = [item.name for item in replay_source.selected]
+    assert names == ["Time [0:1]", "sig", "t"]
+    assert [item.unit for item in replay_source.selected] == ["Nm", "V", "A"]
+    assert replay_source.duration_s == pytest.approx(0.3)
+    by_name = {}
+    for channel, timestamp, value in replay_source.source_samples:
+        by_name.setdefault(channel, []).append((timestamp, value))
+    assert by_name["Time [0:1]"] == [
+        (0.0, 10.0), (0.1, 20.0), (0.2, 30.0), (0.3, 40.0),
+    ]
+    assert [timestamp for timestamp, _value in by_name["sig"]] == axis
+    assert [value for _timestamp, value in by_name["t"]] == [8.0, 7.0, 6.0, 5.0]
+
+
+def test_replay_source_defaults_and_copies_loader_diagnostics(tmp_path: Path):
+    from mf4_analyzer.acquisition_capture.backends import ReplaySource
+
+    first = ReplaySource(
+        path=tmp_path / "a.mf4",
+        selected=(),
+        source_samples=[],
+        duration_s=0.0,
+    )
+    second = ReplaySource(
+        path=tmp_path / "b.mf4",
+        selected=(),
+        source_samples=[],
+        duration_s=0.0,
+    )
+    assert first.warnings == ()
+    assert first.source_metadata == {}
+    first.source_metadata["kept"] = 1
+    assert second.source_metadata == {}
+
+    axis = [0.0, 1.0, 2.0, 3.0, 4.0]
+    path = write_signal_groups_mf4(tmp_path / "late.mf4", [
+        [("ref", [0.0, 1.0, 2.0, 3.0, 4.0], axis)],
+        [("late", [10.0, 20.0, 30.0], [2.0, 2.5, 3.0])],
+    ])
+    source = ReplayRecorderBackend.source_from_mf4(path)
+    assert any("端点填充" in text for text in source.warnings)
+    assert source.source_metadata["time_column"] == "Time"
+    assert source.source_metadata["mf4_alignment"]["policy"] == "shared-longest-axis-v1"
+    assert all(
+        not hasattr(value, "columns")
+        for value in source.source_metadata.values()
+    )
 
 
 def test_replay_backend_status_and_stop():

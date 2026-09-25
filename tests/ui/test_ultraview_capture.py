@@ -5,6 +5,7 @@ import ast
 import gc
 import json
 import logging
+import pytest
 from collections import OrderedDict
 from contextlib import nullcontext
 from dataclasses import replace
@@ -13,7 +14,7 @@ from types import SimpleNamespace
 
 import numpy as np
 from PyQt5 import sip
-from PyQt5.QtCore import QCoreApplication, QObject, QPoint, pyqtSignal
+from PyQt5.QtCore import QCoreApplication, QObject, QPoint, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QImage, QPixmap
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QWidget
@@ -4054,3 +4055,283 @@ def test_chart_stack_auto_preview_scope_wraps_only_that_grab(qapp, monkeypatch):
     assert explicit.isNull() is False
     assert flags == []
     assert host.calls == [(target, 1.0, True, [])]
+
+
+def _frf_plot_result():
+    return SimpleNamespace(
+        frequencies=np.array([0.0, 1.0, 2.0, 3.0, 4.0]),
+        transfer=np.array([1.0 + 0j, 2.0 + 0j, 1.0 + 1j, -1j, -2.0 + 0j]),
+        coherence=np.array([1.0, 0.9, 0.8, 0.7, 0.6]),
+        effective=SimpleNamespace(fs=100.0, df=1.0, segments=4),
+        warnings=(),
+    )
+
+
+def _shown_frf_window(qtbot):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.resize(1100, 800)
+    window.show()
+    qtbot.waitExposed(window)
+    window.toolbar._set_mode("frf")
+    QCoreApplication.processEvents()
+    page = window._analysis_page("frf")
+    canvas = page.pane_canvas(0)
+    canvas.set_result(_frf_plot_result(), {"frequency_scale": "linear"}, {})
+    QCoreApplication.processEvents()
+    qtbot.wait(40)
+    manager = window.analysis_managers["frf"]
+    state = manager.get(manager.active)
+    state.attached_file_ids = ["src-rack"]
+    window.files["src-rack"] = SimpleNamespace(
+        short_name="rack.csv", filename="rack.csv",
+    )
+    ref = UltraViewRef("frf", state.view_id)
+    capture = window._ultraview._capture
+    capture.bind_canvas(page, ref)
+    return window, page, canvas, capture, ref, state
+
+
+def _image_bytes(image) -> bytes:
+    converted = image.convertToFormat(QImage.Format_ARGB32).copy()
+    pointer = converted.bits()
+    pointer.setsize(converted.byteCount())
+    return bytes(pointer)
+
+
+def _wait_frf_interaction_idle(canvas, qtbot) -> None:
+    timer = canvas._aa_idle_timer
+    if timer.isActive():
+        qtbot.wait(timer.interval() + 80)
+    QCoreApplication.processEvents()
+
+
+def test_frf_successive_xy_zooms_publish_new_preview_pixels(qapp, qtbot):
+    """Ctrl then Shift zooms must retire the previous FRF preview pixels."""
+    _window, page, canvas, capture, ref, state = _shown_frf_window(qtbot)
+    assert capture.current_digest_for(ref) is not None
+    grabs = []
+    real_grab = capture._grab_image
+
+    def _grab(*args, **kwargs):
+        image = real_grab(*args, **kwargs)
+        grabs.append(0 if image is None else 1)
+        return image
+
+    capture._grab_image = _grab
+
+    def _publish(reason: str):
+        _wait_frf_interaction_idle(canvas, qtbot)
+        assert capture._try_publish_now(ref, page, reason)
+        QCoreApplication.processEvents()
+        record = capture.store.get(ref)
+        assert record is not None and PreviewStore.image_valid(record.image)
+        assert record.ref == ref
+        assert record.ref.section == "frf"
+        assert record.ref.view_id == state.view_id
+        assert record.x_unit == "Hz"
+        assert record.source_summary == "rack.csv"
+        assert capture.bound_ref_for(page) == ref
+        assert record.captured_revision == capture.presentation_revision_for(ref)
+        assert capture._has_current_preview(ref, capture.current_digest_for(ref))
+        return record, _image_bytes(record.image)
+
+    before = capture.presentation_revision_for(ref)
+    x_before = canvas.get_visible_xlim()
+    assert canvas._handle_wheel_dispatch(
+        delta=120, modifiers=Qt.ControlModifier, x_pos=2.0, y_pos=0.0,
+        view_box=canvas._plot_magnitude.vb,
+    ) is True
+    assert canvas.get_visible_xlim() != pytest.approx(x_before)
+    assert capture.presentation_revision_for(ref) > before
+    first, first_bytes = _publish("user-sync")
+    assert grabs == [1]
+    assert len(first_bytes) > 0
+
+    x_mid = canvas.get_visible_xlim()
+    assert canvas._handle_wheel_dispatch(
+        delta=120, modifiers=Qt.ControlModifier, x_pos=2.0, y_pos=0.0,
+        view_box=canvas._plot_magnitude.vb,
+    ) is True
+    assert canvas.get_visible_xlim() != pytest.approx(x_mid)
+    _wait_frf_interaction_idle(canvas, qtbot)
+    assert capture._has_current_preview(ref, capture.current_digest_for(ref)) is False
+    assert capture.store.get(ref) is first
+    capture.request_capture(ref, page, "focus-inspect")
+    qtbot.wait(50)
+    QCoreApplication.processEvents()
+    second = capture.store.get(ref)
+    assert second is not first
+    assert second.captured_revision == capture.presentation_revision_for(ref)
+    assert second.ref == ref and second.source_summary == "rack.csv"
+    second_bytes = _image_bytes(second.image)
+    assert second_bytes != first_bytes
+    assert grabs == [1, 1]
+
+    y_before = canvas.get_visible_ylims()["magnitude"]
+    assert canvas._handle_wheel_dispatch(
+        delta=120, modifiers=Qt.ShiftModifier, x_pos=2.0, y_pos=0.0,
+        view_box=canvas._plot_magnitude.vb,
+    ) is True
+    assert canvas.get_visible_ylims()["magnitude"] != pytest.approx(y_before)
+    _wait_frf_interaction_idle(canvas, qtbot)
+    assert capture._has_current_preview(ref, capture.current_digest_for(ref)) is False
+    capture.request_capture(ref, page, "focus-inspect")
+    qtbot.wait(50)
+    QCoreApplication.processEvents()
+    third = capture.store.get(ref)
+    assert third.ref == ref
+    assert third.captured_revision == capture.presentation_revision_for(ref)
+    third_bytes = _image_bytes(third.image)
+    assert third_bytes != second_bytes
+    assert grabs == [1, 1, 1]
+
+    held = capture.presentation_revision_for(ref)
+    canvas.visible_range_changed.emit()
+    canvas.repaint()
+    QCoreApplication.processEvents()
+    assert capture.presentation_revision_for(ref) == held
+    capture.request_capture(ref, page, "focus-inspect")
+    qtbot.wait(50)
+    QCoreApplication.processEvents()
+    assert grabs == [1, 1, 1]
+    assert capture.store.get(ref) is third
+    assert _image_bytes(capture.store.get(ref).image) == third_bytes
+    assert capture.store.get(UltraViewRef("frf", "other-view")) is None
+
+
+def test_frf_range_paths_bump_revision_without_same_range_or_restore_grabs(
+    qapp, qtbot,
+):
+    """Pan, Y zoom, Home, axis edit, paint, cross-view restore, hidden source."""
+    window, page, canvas, capture, ref, state = _shown_frf_window(qtbot)
+
+    def revision():
+        return capture.presentation_revision_for(ref)
+
+    # Hidden Board: a real X edit is deferred and does not grab.
+    grabs = []
+    real_grab = capture._grab_image
+
+    def _grab(*args, **kwargs):
+        image = real_grab(*args, **kwargs)
+        grabs.append(image)
+        return image
+
+    capture._grab_image = _grab
+    assert capture._sheet_visible() is False
+    rev = revision()
+    canvas.set_xlim(0.4, 3.2)
+    assert canvas.get_visible_xlim() == pytest.approx((0.4, 3.2))
+    assert revision() == rev + 1
+    assert ref in capture._deferred_preview_refs
+    assert capture.store.get(ref) is None
+    assert grabs == []
+    canvas.visible_range_changed.emit()
+    canvas.repaint()
+    QCoreApplication.processEvents()
+    assert revision() == rev + 1
+    assert grabs == []
+
+    _wait_frf_interaction_idle(canvas, qtbot)
+    capture.capture_before_section_hidden("frf")
+    assert grabs and PreviewStore.image_valid(capture.store.get(ref).image)
+    assert ref not in capture._deferred_preview_refs
+    hidden_bytes = _image_bytes(capture.store.get(ref).image)
+    assert capture.store.get(ref).source_summary == "rack.csv"
+    assert capture.store.get(ref).ref.view_id == state.view_id
+
+    page.hide()
+    QCoreApplication.processEvents()
+    rev = revision()
+    canvas.set_xlim(0.8, 2.4)
+    assert revision() == rev + 1
+    assert ref in capture._deferred_preview_refs
+    assert _image_bytes(capture.store.get(ref).image) == hidden_bytes
+    capture.capture_before_section_hidden("frf")
+    assert len(grabs) == 1
+    assert capture._has_current_preview(ref, capture.current_digest_for(ref)) is False
+    page.show()
+    QCoreApplication.processEvents()
+    qtbot.wait(40)
+    capture.capture_before_section_hidden("frf")
+    QCoreApplication.processEvents()
+    assert len(grabs) == 2
+    shown = capture.store.get(ref)
+    assert _image_bytes(shown.image) != hidden_bytes
+    assert shown.ref == ref
+    assert capture._has_current_preview(ref, capture.current_digest_for(ref))
+
+    # Further gestures on the visible source.
+    rev = revision()
+    x_before = canvas.get_visible_xlim()
+    view_box = canvas._plot_magnitude.vb
+    view_box.translateBy(x=0.25)
+    view_box.sigRangeChangedManually.emit(view_box.state["mouseEnabled"])
+    assert canvas.get_visible_xlim()[0] != pytest.approx(x_before[0])
+    assert revision() == rev + 1
+    rev = revision()
+    view_box.translateBy(x=0.2)
+    view_box.sigRangeChangedManually.emit(view_box.state["mouseEnabled"])
+    assert revision() == rev + 1
+
+    rev = revision()
+    y_before = canvas.get_visible_ylims()["phase"]
+    assert canvas._handle_wheel_dispatch(
+        delta=-120, modifiers=Qt.ShiftModifier, x_pos=1.5, y_pos=0.0,
+        view_box=canvas._plot_phase.vb,
+    ) is True
+    assert canvas.get_visible_ylims()["phase"] != pytest.approx(y_before)
+    assert revision() == rev + 1
+    rev = revision()
+    assert canvas._handle_wheel_dispatch(
+        delta=-120, modifiers=Qt.ShiftModifier, x_pos=1.5, y_pos=0.0,
+        view_box=canvas._plot_phase.vb,
+    ) is True
+    assert revision() == rev + 1
+
+    rev = revision()
+    zoomed = canvas.get_visible_xlim()
+    canvas.reset_view_to_data_extents()
+    assert canvas.get_visible_xlim() != pytest.approx(zoomed)
+    assert revision() == rev + 1
+    rev = revision()
+    canvas.reset_view_to_data_extents()
+    assert revision() == rev
+
+    rev = revision()
+    canvas.set_xlim(1.0, 3.0)
+    assert revision() == rev + 1
+    rev = revision()
+    canvas.set_xlim(1.0, 3.0)
+    assert revision() == rev
+    rev = revision()
+    canvas.set_ylim("magnitude", -8.0, 8.0)
+    assert canvas.get_visible_ylims()["magnitude"] == pytest.approx((-8.0, 8.0))
+    assert revision() == rev + 1
+    canvas.set_display_params({"frequency_scale": "log"})
+    canvas.set_xlim(1.0, 3.0)
+    assert canvas.get_visible_xlim() == pytest.approx((1.0, 3.0))
+    assert canvas._plot_magnitude.vb.viewRange()[0] == pytest.approx(
+        (np.log10(1.0), np.log10(3.0))
+    )
+
+    rev = revision()
+    canvas.repaint()
+    QCoreApplication.processEvents()
+    assert revision() == rev
+
+    # A signal while another analysis View is active belongs to that restore.
+    x_live = canvas.get_visible_xlim()
+    other = window.analysis_managers["frf"].new_view(activate=False)
+    window.analysis_managers["frf"].active = other
+    rev = revision()
+    canvas.set_xlim(1.2, 2.5)
+    assert canvas.get_visible_xlim() == pytest.approx((1.2, 2.5))
+    assert revision() == rev
+    window.analysis_managers["frf"].active = 0
+    canvas.visible_range_changed.emit()
+    assert revision() == rev + 1
+    assert canvas.get_visible_xlim() != pytest.approx(x_live)

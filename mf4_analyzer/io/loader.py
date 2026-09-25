@@ -9,6 +9,10 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+# Public shared-axis column. A signal may also be named this; that collision
+# is renamed and is never itself the time identity.
+MF4_PUBLIC_TIME_COLUMN = "Time"
+
 # Discoverability only — find_spec does not prove a native library is usable.
 # Real format paths call ensure_* / import the engine and keep missing vs
 # broken vs data-error outcomes distinct.
@@ -315,13 +319,30 @@ def _raise_unusable_mf4(skipped):
 
 def _load_mf4_channels(mdf, channel_locations):
     version = getattr(mdf, "version", "")
-    skipped = []
-    pending = []
+    signal_names = []
     for ch_name, occurrence in channel_locations.items():
         group_idx, ch_idx = occurrence
         block = _mdf_channel_block(mdf, group_idx, ch_idx)
         if _is_mdf_time_master(block, version):
             continue
+        signal_names.append((str(ch_name), (int(group_idx), int(ch_idx))))
+    public_names, renamed = assign_mf4_public_signal_names(signal_names)
+    skipped = []
+    pending = []
+    channel_metadata = {}
+    for ch_name, occurrence in channel_locations.items():
+        group_idx, ch_idx = occurrence
+        block = _mdf_channel_block(mdf, group_idx, ch_idx)
+        if _is_mdf_time_master(block, version):
+            continue
+        occurrence_key = (int(group_idx), int(ch_idx))
+        ch_name = public_names[occurrence_key]
+        source = getattr(block, "source", None) if block is not None else None
+        channel_metadata[ch_name] = {
+            "physical_occurrence": occurrence_key,
+            "unit": None,
+            "source_path": str(getattr(source, "path", "") or ""),
+        }
         sig = _read_mdf_signal(mdf, ch_name, group_idx, ch_idx)
         if sig is None:
             _skip_mdf_channel(skipped, ch_name, "unreadable")
@@ -377,7 +398,7 @@ def _load_mf4_channels(mdf, channel_locations):
 
     ref_t = reference["prepared"][0]
     ref_range = (float(ref_t[0]), float(ref_t[-1]))
-    data = {"Time": ref_t}
+    data = {MF4_PUBLIC_TIME_COLUMN: ref_t}
     loaded_units = {}
     alignment_items = []
     for record in pending:
@@ -427,6 +448,7 @@ def _load_mf4_channels(mdf, channel_locations):
             how = "linear"
         data[record["name"]] = aligned
         loaded_units[record["name"]] = record["unit"]
+        channel_metadata[record["name"]]["unit"] = record["unit"]
         alignment_items.append(_alignment_channel(
             record["name"],
             record["occurrence"],
@@ -444,8 +466,11 @@ def _load_mf4_channels(mdf, channel_locations):
     frame = pd.DataFrame(data)
     frame.attrs["source_metadata"] = {
         "source_kind": "mdf",
+        "time_column": MF4_PUBLIC_TIME_COLUMN,
         "skipped_channels": skipped,
         "warnings": _mf4_alignment_warnings(alignment_items),
+        "renamed_channels": renamed,
+        "channel_metadata": channel_metadata,
         "mf4_alignment": {
             "policy": "shared-longest-axis-v1",
             "reference_occurrence": [
@@ -502,6 +527,51 @@ def unique_mdf_channel_locations(mdf):
             display_name = f"{display_name} [{loc[0]}:{loc[1]}]"
         channel_locations[display_name] = loc
     return channel_locations
+
+
+def assign_mf4_public_signal_names(named_occurrences):
+    """Return ``(public_by_occurrence, renamed_channels)`` for MF4 signals.
+
+    Only a display name that is exactly :data:`MF4_PUBLIC_TIME_COLUMN` is
+    renamed. Every original signal name and that axis name are reserved
+    first; a taken ``Time [group:channel]`` gains a stable `` [n]`` suffix.
+    Input order does not change the result, and the map does not depend on
+    which samples later load. Time masters are not entries.
+    """
+    entries = []
+    for name, occurrence in named_occurrences:
+        group, channel = occurrence
+        entries.append((str(name), (int(group), int(channel))))
+    reserved = {name for name, _occurrence in entries}
+    reserved.add(MF4_PUBLIC_TIME_COLUMN)
+    public = {}
+    renamed = []
+    for name, occurrence in sorted(entries, key=lambda item: (item[1], item[0])):
+        if name != MF4_PUBLIC_TIME_COLUMN:
+            public[occurrence] = name
+            continue
+        candidate = f"Time [{occurrence[0]}:{occurrence[1]}]"
+        if candidate in reserved or candidate in public.values():
+            suffix = 2
+            while True:
+                suffixed = f"{candidate} [{suffix}]"
+                if suffixed not in reserved and suffixed not in public.values():
+                    candidate = suffixed
+                    break
+                suffix += 1
+        public[occurrence] = candidate
+        reserved.add(candidate)
+        renamed.append({
+            "original": name,
+            "renamed": candidate,
+            "physical_occurrence": [occurrence[0], occurrence[1]],
+        })
+    renamed.sort(key=lambda item: (
+        item["physical_occurrence"][0],
+        item["physical_occurrence"][1],
+        item["renamed"],
+    ))
+    return public, renamed
 
 
 def format_dropped_channels_notice(dropped):
@@ -792,8 +862,9 @@ class DataLoader:
         timestamps keep the last sample. A backward step, a single sample on
         a longer axis, and a channel with no time overlap are skipped and
         recorded. Diagnostics live on
-        ``DataFrame.attrs['source_metadata']``. Time masters are the X axis
-        and are not signal columns.
+        ``DataFrame.attrs['source_metadata']``, including ``time_column``
+        (exact axis identity) and ``renamed_channels`` when a signal occupied
+        that name. Time masters are the X axis and are not signal columns.
         """
         mdf = ensure_mdf()(fp)
         try:

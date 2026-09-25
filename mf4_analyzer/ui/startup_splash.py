@@ -10,8 +10,7 @@ import math
 import platform
 import random
 import subprocess
-from dataclasses import dataclass
-from typing import Optional, Sequence, Tuple
+from typing import Callable, Optional, Sequence, Tuple
 
 from PyQt5.QtCore import (
     QElapsedTimer,
@@ -34,6 +33,47 @@ from PyQt5.QtGui import (
 from PyQt5.QtWidgets import QWidget
 
 from mf4_analyzer.app_meta import APP_CREDIT, APP_NAME, APP_VERSION, asset_path
+from mf4_analyzer.startup_visual_contract import (
+    BREATHE_PERIOD_MS as _BREATHE_PERIOD_MS,
+    CARD_HEIGHT,
+    CARD_WIDTH,
+    CONTENT_PAD_X,
+    CORNER_RADIUS,
+    CREDIT_BG_RGBA,
+    CREDIT_FG_HEX,
+    CREDIT_LEFT as _CREDIT_LEFT,
+    DISPLAY_SCALE_COMPACT,
+    DISPLAY_SCALE_LARGE,
+    FRAME_INTERVAL_MS as _FPS_INTERVAL_MS,
+    MAX_STROKE_REF as _MAX_STROKE_REF,
+    MODE_CAPTIONS as _MODE_CAPTIONS,
+    RAIL_FRACTION as _RAIL_FRACTION,
+    RAIL_PERIOD_MS as _RAIL_PERIOD_MS,
+    RAIL_TRACK_RGBA,
+    RIGHT_LABEL as _RIGHT_LABEL,
+    SHADOW_PAD,
+    SLOW_AFTER_MS as _SLOW_AFTER_MS,
+    SLOW_STATUS as _SLOW_STATUS,
+    SPECTRUM_LAYERS as _SPECTRUM_LAYERS,
+    SPECTRUM_REF_H,
+    SPECTRUM_REF_W,
+    SPINNER_TRACK_RGBA,
+    STAGE_LABELS as _STAGE_LABELS,
+    STAGE_LOADING_COMPONENTS,
+    STAGE_PREPARING,
+    STAGE_PREPARING_WORKSPACE,
+    TIP_BORDER_RGBA,
+    TIP_INTERVAL_MS as _TIP_INTERVAL_MS,
+    TIP_WASH_RGBA,
+    TIPS,
+    CAPTION_DOT_HEX,
+    choose_opening_index,
+    display_scale_for_work_area,
+    spectrum_reference_bounds,
+    status_label,
+    tip_by_id,
+    tip_index_for_elapsed,
+)
 from mf4_analyzer.qt_panel_style import (
     FONT_ROLE_BODY,
     FONT_ROLE_CAPTION,
@@ -51,173 +91,29 @@ from mf4_analyzer.qt_panel_style import (
     uses_opaque_fallback,
 )
 
-# --- Stage / copy -----------------------------------------------------------
+# Stage copy, geometry, tips, and spectrum points live in
+# startup_visual_contract. Names below stay as the splash's public aliases.
 
-STAGE_PREPARING = "preparing"
-STAGE_LOADING_COMPONENTS = "loading_components"
-STAGE_PREPARING_WORKSPACE = "preparing_workspace"
 _VALID_STAGES = frozenset(
     {STAGE_PREPARING, STAGE_LOADING_COMPONENTS, STAGE_PREPARING_WORKSPACE}
 )
-
-_STAGE_LABELS = {
-    STAGE_PREPARING: "正在启动 TraceLab…",
-    STAGE_LOADING_COMPONENTS: "正在加载分析组件…",
-    STAGE_PREPARING_WORKSPACE: "正在准备工作区…",
-}
-_SLOW_STATUS = "启动比平时久一些，请稍候…"
-_RIGHT_LABEL = "工程数据分析工作台"
-_CREDIT_LEFT = f"{APP_NAME} · 工程信号与数据分析"
-_MODE_CAPTIONS = ("时域", "频谱", "时频", "阶次", "频响")
-
-# Usage tips shown while TraceLab starts. Wording follows ui/quickref.py.
-# Kept inline: importing quickref or hints would pull the main UI into the
-# splash child. Each body must stay inside the compact (1×) tip band.
-TIPS: Tuple[Tuple[str, str], ...] = (
-    ("找回全局视野", "点 Home 或按 Ctrl+R，查看已绘通道的全部范围。"),
-    ("缩放与平移", "Ctrl+滚轮缩放时间，Shift+滚轮缩放幅值，拖动平移。"),
-    ("框选放大", "在图上拖出矩形，时间和幅值一起放大。"),
-    ("勾选即绘图", "左侧通道树勾选通道，就会画到当前 View。"),
-    ("拖进来绘图", "把通道拖进绘图区松手，即加入当前 View。"),
-    ("搜索通道", "通道树和通道下拉框都可以输入关键词查找。"),
-    ("固定读数", "单游标按 P 固定读数，再点图底 Pn 展开。"),
-    ("比较两点", "按 Ctrl+5 开双游标，看两点的时间差或幅值差。"),
-    ("五个工作区", "时域波形、频谱成分、时频变化、阶次转速、频响输入输出。"),
-    ("阶次看转速", "阶次以电机转速为基准，看频率怎样跟着转速走。"),
-    ("谱图取切片", "在时频或阶次谱图上点一下，取出该时刻的切片。"),
-    ("保存现场", "存成 .tlproj 项目，下次接着当前的通道和 View。"),
-    ("最近的文件", "点「打开」旁的箭头，搜索最近的项目和文件。"),
-    ("加入当前 View", "点文件卡片右下的 ＋，把已打开文件加入当前 View。"),
-    ("操作速查", "点底栏「?」搜索操作；悬停顶部按钮可看快捷键。"),
-    ("图表右键", "右键图面：查看全部、轴范围、网格。"),
-    ("分屏或叠加", "Ctrl+1 分屏，Ctrl+2 叠加，顺序跟左侧通道树一致。"),
-    ("多个 View", "时域最多 24 个 View；窄窗口显示编号，悬停看全名。"),
-    ("运算出新通道", "点通道树下「编辑通道」，可做微分、积分或两通道运算。"),
-    ("复制带读数", "复制按钮导出的图片会带上游标和读数。"),
-    ("一次处理多文件", "工具栏「批处理」用同一分析处理多个文件并导出。"),
-    ("在图上做标记", "打开标注后，左键添加，右键删除最近一个标记。"),
-    ("换一条横轴", "把通道拖到图最底部的 X 带，换成这路信号做横轴。"),
-    ("预设分析参数", "预设保存分析参数；切换时可以保留手动调过的坐标。"),
-    ("视角可回退", "Alt+左退回上一视角，Alt+右前进。Ctrl+Z 仍是撤销编辑。"),
-    ("看软件说明", "状态栏右侧书本图标打开软件说明书。"),
-)
-
-# --- Colors (晴空蓝白) ------------------------------------------------------
-
 _INK = panel_color("ink")
 _SECONDARY = panel_color("secondary")
 _ACCENT = panel_color("accent")
-_TIP_BG = QColor(24, 193, 229, 18)  # light cyan wash
-_TIP_BORDER = QColor(255, 255, 255, 184)
 _TIP_TITLE = panel_color("tip_title")
 _TIP_BODY = panel_color("tip_body")
-_CREDIT_BG = QColor(255, 255, 255, 36)
-_CREDIT_FG = QColor("#617e98")
-_RAIL_TRACK = QColor(73, 142, 252, 38)
 _CAPTION_FG = panel_color("secondary")
-_CAPTION_DOT = QColor("#17b6df")
+_TIP_BG = QColor(*TIP_WASH_RGBA)
+_TIP_BORDER = QColor(*TIP_BORDER_RGBA)
+_CREDIT_BG = QColor(*CREDIT_BG_RGBA)
+_CREDIT_FG = QColor(CREDIT_FG_HEX)
+_RAIL_TRACK = QColor(*RAIL_TRACK_RGBA)
+_CAPTION_DOT = QColor(CAPTION_DOT_HEX)
+_SPINNER_TRACK = QColor(*SPINNER_TRACK_RGBA)
 _SPECTRUM_STOPS = tuple(
     (stop, color)
     for stop, color in zip((0.0, 0.4, 0.67, 1.0), spectrum_stop_colors())
 )
-
-# --- Layout (logical px of the card) ----------------------------------------
-
-CARD_WIDTH = 640
-CARD_HEIGHT = 470
-# Product scale in Qt logical pixels. OS DPI is applied by Qt afterwards, so
-# these factors must not be multiplied by devicePixelRatio.
-# 1.5 matches a large logical desktop (5K Mac default, 2560×1440 points).
-# 1.0 is the 640×470 card used on 1080p-class desktops, where 1.5 fills the
-# screen. Below 1.0 only when even the compact card does not fit.
-DISPLAY_SCALE_LARGE = 1.5
-DISPLAY_SCALE_COMPACT = 1.0
-# Available-height gate, after menu bar / dock / taskbar. 1440p-class work
-# areas stay above this; 1080p work areas (≤1080) do not.
-_LARGE_SCALE_MIN_AVAILABLE_HEIGHT = 1200
-_WORK_AREA_MARGIN = 24
-CORNER_RADIUS = 13.0
-CONTENT_PAD_X = 32.0
-# Former shadow gutter; outer drop-shadow layers are gone, keep 0 pad so the
-# card owns the window while AA rounded corners stay transparent.
-SHADOW_PAD = 0.0
-SPECTRUM_REF_W = 640.0
-SPECTRUM_REF_H = 184.0
-SPECTRUM_Y_TOP = 15.0
-SPECTRUM_Y_SPAN = 132.0
-SPECTRUM_ROWS = 16
-SPECTRUM_SAMPLES = 461  # sample 0..460
-_TIP_INTERVAL_MS = 5000.0
-_SLOW_AFTER_MS = 12000.0
-_BREATHE_PERIOD_MS = 5000.0
-_RAIL_PERIOD_MS = 2300.0
-_RAIL_FRACTION = 0.32
-_FPS_INTERVAL_MS = 33  # ≤30 FPS
-_MAX_STROKE_REF = 1.65
-
-
-@dataclass(frozen=True)
-class _SpectrumLayer:
-    """One spectrum polyline in reference SVG coordinates (640×184)."""
-
-    points: Tuple[Tuple[float, float], ...]
-    stroke_width: float
-    base_opacity: float
-
-
-def _compute_spectrum_layers() -> Tuple[_SpectrumLayer, ...]:
-    """Build 16 layers × 461 samples using the demo formula (script 131–145)."""
-    rows: list[list[Tuple[float, float]]] = []
-    for row in range(SPECTRUM_ROWS):
-        points: list[Tuple[float, float]] = []
-        for sample in range(SPECTRUM_SAMPLES):
-            i = sample / 4.0
-            x = 40.0 + i * 4.3 + row * 5.7
-            peaks = (
-                56.0 * math.exp(-(((i - 34.0 - row * 0.4) / 7.0) ** 2))
-                + 90.0 * math.exp(-(((i - 67.0 + row * 0.55) / 8.0) ** 2))
-                + 23.0 * math.exp(-(((i - 91.0) / 6.0) ** 2))
-            )
-            y = (
-                150.0
-                - row * 4.0
-                - peaks * (0.50 + row * 0.035)
-                + math.sin(i * 0.35 + row * 0.6) * 2.0
-            )
-            points.append((x, y))
-        rows.append(points)
-
-    ys = [p[1] for row in rows for p in row]
-    y_min = min(ys)
-    y_max = max(ys)
-    span = y_max - y_min if y_max > y_min else 1.0
-
-    layers: list[_SpectrumLayer] = []
-    for row, points in enumerate(rows):
-        mapped = tuple(
-            (x, SPECTRUM_Y_TOP + (y - y_min) / span * SPECTRUM_Y_SPAN)
-            for x, y in points
-        )
-        layers.append(
-            _SpectrumLayer(
-                points=mapped,
-                stroke_width=_MAX_STROKE_REF if row == SPECTRUM_ROWS - 1 else 1.05,
-                base_opacity=0.29 + row * 0.044,
-            )
-        )
-    return tuple(layers)
-
-
-# Module-level raw geometry (immutable). Paths in widget space are rebuilt
-# only when the card/spectrum rect or device pixel ratio changes.
-_SPECTRUM_LAYERS = _compute_spectrum_layers()
-
-
-def spectrum_reference_bounds() -> Tuple[float, float, float, float]:
-    """Return (min_x, min_y, max_x, max_y) of all mapped reference points."""
-    xs = [p[0] for layer in _SPECTRUM_LAYERS for p in layer.points]
-    ys = [p[1] for layer in _SPECTRUM_LAYERS for p in layer.points]
-    return min(xs), min(ys), max(xs), max(ys)
 
 
 def detect_system_reduced_motion() -> bool:
@@ -273,7 +169,19 @@ def _load_brand_pixmap(logical_size: int, dpr: float) -> QPixmap:
 class StartupSplash(QWidget):
     """Frameless B-view splash: brand, spectrum, status, tips, credit."""
 
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
+    def __init__(
+        self,
+        parent: Optional[QWidget] = None,
+        *,
+        initial_tip_id: Optional[str] = None,
+        elapsed_ms: Optional[Callable[[], float]] = None,
+    ) -> None:
+        if initial_tip_id is not None:
+            opening_index = tip_by_id(initial_tip_id).index
+        elif TIPS:
+            opening_index = choose_opening_index(random.randrange)
+        else:
+            opening_index = 0
         super().__init__(parent)
         self.setObjectName("startupSplash")
         self.setWindowFlags(
@@ -291,8 +199,9 @@ class StartupSplash(QWidget):
         self._slow = False
         self._reduced_motion = detect_system_reduced_motion()
         self._closed = False
-        self._tip_index = random.randrange(len(TIPS)) if TIPS else 0
-        self._last_tip_ms = 0.0
+        self._opening_index = opening_index
+        self._tip_index = opening_index
+        self._elapsed_ms = elapsed_ms
         self._breathe_phase = 0.0
         self._rail_phase = 0.0
         self._spinner_phase = 0.0
@@ -369,13 +278,13 @@ class StartupSplash(QWidget):
         self.setProperty("panelCornerRadius", self._s(CORNER_RADIUS))
         self._apply_panel_surface()
         if not self._timer.isActive() and not self._reduced_motion:
-            self._last_tick_ms = float(self._clock.elapsed())
+            self._last_tick_ms = self._now_ms()
             self._timer.start()
         elif self._reduced_motion and self._timer.isActive():
             self._timer.stop()
         # Tip rotation still needs a slow timer even in reduced motion.
         if self._reduced_motion and not self._timer.isActive():
-            self._last_tick_ms = float(self._clock.elapsed())
+            self._last_tick_ms = self._now_ms()
             self._timer.start()
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt override
@@ -396,11 +305,13 @@ class StartupSplash(QWidget):
     def is_splash_closed(self) -> bool:
         return self._closed
 
+    def _now_ms(self) -> float:
+        if self._elapsed_ms is not None:
+            return float(self._elapsed_ms())
+        return float(self._clock.elapsed())
+
     def status_text(self) -> str:
-        elapsed = float(self._clock.elapsed())
-        if self._slow or elapsed >= _SLOW_AFTER_MS:
-            return _SLOW_STATUS
-        return _STAGE_LABELS[self._stage]
+        return status_label(self._stage, self._now_ms(), slow=self._slow)
 
     def card_rect_logical(self) -> QRectF:
         return self._card_rect()
@@ -550,7 +461,7 @@ class StartupSplash(QWidget):
     def _on_tick(self) -> None:
         if self._closed:
             return
-        now = float(self._clock.elapsed())
+        now = self._now_ms()
         delta = max(0.0, now - self._last_tick_ms)
         self._last_tick_ms = now
 
@@ -559,13 +470,10 @@ class StartupSplash(QWidget):
             self._rail_phase = (self._rail_phase + delta / _RAIL_PERIOD_MS) % 1.0
             self._spinner_phase = (self._spinner_phase + delta / 1000.0) % 1.0
 
-        # Rotate from the randomly chosen opening tip; the first change waits
-        # one full interval so the opening tip is actually readable.
-        if now - self._last_tip_ms >= _TIP_INTERVAL_MS:
-            steps = int((now - self._last_tip_ms) // _TIP_INTERVAL_MS)
-            if steps > 0:
-                self._tip_index = (self._tip_index + steps) % len(TIPS)
-                self._last_tip_ms += steps * _TIP_INTERVAL_MS
+        # floor(elapsed / interval) from the opening tip. A paused UI jumps to
+        # the current tip instead of replaying the missed ones.
+        if TIPS:
+            self._tip_index = tip_index_for_elapsed(self._opening_index, now)
 
         self.update()
 
@@ -758,7 +666,7 @@ class StartupSplash(QWidget):
         spin_r = self._s(6.5)
         cx = left + spin_r
         cy = row_top + self._s(11.0)
-        track = QPen(QColor(73, 142, 252, 61), max(1.0, self._s(1.5)))
+        track = QPen(_SPINNER_TRACK, max(1.0, self._s(1.5)))
         painter.setPen(track)
         painter.setBrush(Qt.NoBrush)
         painter.drawEllipse(QPointF(cx, cy), spin_r, spin_r)
@@ -786,7 +694,7 @@ class StartupSplash(QWidget):
         status_font = panel_font(FONT_ROLE_EMPHASIS, pixel_size=status_px, bold=True)
         painter.setFont(status_font)
         painter.setPen(
-            _ACCENT if (self._slow or self._clock.elapsed() >= _SLOW_AFTER_MS) else _INK
+            _ACCENT if (self._slow or self._now_ms() >= _SLOW_AFTER_MS) else _INK
         )
         status = self.status_text()
         sm = panel_font_metrics(FONT_ROLE_EMPHASIS, pixel_size=status_px, bold=True)
@@ -923,32 +831,6 @@ class StartupSplash(QWidget):
             QPointF(self._content_right() - metrics.horizontalAdvance(APP_CREDIT), y),
             APP_CREDIT,
         )
-
-
-def display_scale_for_work_area(avail_width: float, avail_height: float) -> float:
-    """Choose 1.5 or 1.0 from the logical work area, then shrink to fit.
-
-    ``avail_*`` is ``QScreen.availableGeometry()`` in Qt logical pixels
-    (menu bar, dock, and taskbar already removed). A 5K Mac at the default
-    2560×1440 point desktop stays on 1.5. A 1080p desktop, including one
-    whose Windows scale has reduced the logical size to 1280×720, stays on
-    the 640×470 card. The compact card shrinks only when it cannot fit.
-    """
-    max_w = max(160.0, float(avail_width) - _WORK_AREA_MARGIN)
-    max_h = max(160.0, float(avail_height) - _WORK_AREA_MARGIN)
-    card_w = float(CARD_WIDTH + 2 * SHADOW_PAD)
-    card_h = float(CARD_HEIGHT + 2 * SHADOW_PAD)
-    if (
-        float(avail_height) >= _LARGE_SCALE_MIN_AVAILABLE_HEIGHT
-        and card_w * DISPLAY_SCALE_LARGE <= max_w
-        and card_h * DISPLAY_SCALE_LARGE <= max_h
-    ):
-        return DISPLAY_SCALE_LARGE
-    need_w = card_w * DISPLAY_SCALE_COMPACT
-    need_h = card_h * DISPLAY_SCALE_COMPACT
-    if need_w <= max_w and need_h <= max_h:
-        return DISPLAY_SCALE_COMPACT
-    return DISPLAY_SCALE_COMPACT * min(max_w / need_w, max_h / need_h)
 
 
 __all__ = [

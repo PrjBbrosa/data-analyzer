@@ -2422,3 +2422,59 @@ def test_bound_empty_close_project_clears_board_and_binding(
     assert mw._project_dirty.saved_digest is None
     assert uv.board.name != "空项目Board"
     assert UltraViewRef("time", view_id) not in membership_set(uv.board)
+
+
+def test_mf4_time_signal_reopen_keeps_axis_names_and_manual_fs(
+    qapp, qtbot, tmp_path,
+):
+    """A Time-named MF4 signal stays selectable across save/reopen.
+
+    The reloaded axis is the file clock. A manual sampling-rate override is
+    still applied on top of that reload and is not rewritten back to the
+    file rate.
+    """
+    from mf4_analyzer.ui.main_window import MainWindow
+    from tests._helpers.mf4_factory import write_signal_groups_mf4
+
+    axis = [0.0, 0.1, 0.2, 0.3]
+    path = write_signal_groups_mf4(tmp_path / "time-sig.mf4", [[
+        ("Time", [10.0, 20.0, 30.0, 40.0], axis, "Nm"),
+        ("sig", [1.0, 2.0, 3.0, 4.0], axis, "V"),
+    ]])
+    project = tmp_path / "time-sig.tlproj"
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window._load_one(str(path))
+    fid, fd = next(iter(window.files.items()))
+    assert fd.get_signal_channels() == ["Time [0:1]", "sig"]
+    assert fd.fs == pytest.approx(10.0)
+    window.navigator.set_checked_channels([(fid, "Time [0:1]"), (fid, "sig")])
+    window.plot_time()
+    qapp.processEvents()
+    assert window.save_project(project) is True
+
+    restored = MainWindow()
+    qtbot.addWidget(restored)
+    restored.open_project(project)
+    restored_fd = next(iter(restored.files.values()))
+    assert restored_fd.time_array.tolist() == pytest.approx(axis)
+    assert restored_fd.fs == pytest.approx(10.0)
+    assert restored_fd._time_source == "column"
+    checked = {channel for _fid, channel in restored.view_manager.views[0].checked}
+    assert checked == {"Time [0:1]", "sig"}
+
+    fd.rebuild_time_axis(50.0, reason="manual")
+    assert window.save_project(project) is True
+    manual = MainWindow()
+    qtbot.addWidget(manual)
+    manual.open_project(project)
+    manual_fd = next(iter(manual.files.values()))
+    assert manual_fd._time_source == "manual"
+    assert manual_fd.fs == pytest.approx(50.0)
+    assert manual_fd.time_array.tolist() == pytest.approx(
+        [index / 50.0 for index in range(4)]
+    )
+    manual_checked = {
+        channel for _fid, channel in manual.view_manager.views[0].checked
+    }
+    assert manual_checked == {"Time [0:1]", "sig"}

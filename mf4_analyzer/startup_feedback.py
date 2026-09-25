@@ -28,6 +28,7 @@ from mf4_analyzer.qt_app_support import parse_screen_rect
 logger = logging.getLogger(__name__)
 
 ENV_SPLASH = "TRACELAB_STARTUP_SPLASH"
+ENV_BACKEND = "TRACELAB_STARTUP_BACKEND"
 
 STAGE_PREPARING = "preparing"
 STAGE_LOADING_COMPONENTS = "loading_components"
@@ -92,6 +93,53 @@ _FALSEY = frozenset({"0", "false", "off", "no"})
 _LAUNCHER_NAME = "MF4 Data Analyzer V1.py"
 
 NotifyCallback = Callable[[dict[str, Any]], None]
+
+
+def resolve_startup_backend(env: dict[str, str] | None = None) -> str:
+    """Return ``native``, ``qt``, ``none``, or ``native_unverified``.
+
+    ``TRACELAB_STARTUP_SPLASH=0`` wins. ``native`` is returned only when the
+    launcher left a verified inherited session. An explicit native request
+    without that session does not fall through to a Qt child.
+    """
+
+    source = os.environ if env is None else env
+    raw_splash = source.get(ENV_SPLASH)
+    if raw_splash is not None and str(raw_splash).strip().lower() in _FALSEY:
+        return "none"
+    backend = str(source.get(ENV_BACKEND, "auto")).strip().lower() or "auto"
+    from mf4_analyzer.startup_native_feedback import native_session_verified
+
+    verified = native_session_verified(source)
+    if backend == "none":
+        return "none"
+    if backend == "qt":
+        return "qt"
+    if backend == "native":
+        return "native" if verified else "native_unverified"
+    if backend != "auto":
+        return "qt"
+    return "native" if verified else "qt"
+
+
+def create_startup_feedback():
+    """Pick the splash controller for this process. Does not spawn anything."""
+
+    from mf4_analyzer.startup_native_feedback import (
+        NativeStartupFeedback,
+        scrub_native_bootstrap,
+    )
+
+    kind = resolve_startup_backend()
+    if kind == "native":
+        return NativeStartupFeedback()
+    scrub_native_bootstrap(close_handles=True)
+    feedback = StartupFeedback()
+    if kind in {"none", "native_unverified"}:
+        suppress = getattr(feedback, "suppress", None)
+        if callable(suppress):
+            suppress("disabled" if kind == "none" else "native_unverified")
+    return feedback
 
 
 def splash_enabled(
@@ -242,7 +290,11 @@ class StartupFeedback:
         self._child_exit_code: int | None = None
         self._child_exited = False
         self._reveal_notified = False
+        # Finished can_reveal for this session. Late listeners replay this
+        # payload only; raw stage history is not retained.
+        self._reveal_payload: dict[str, Any] | None = None
         self._cancel_spawn = False
+        self._suppress_reason: str | None = None
         # Screen the splash actually used, so the main window can open there.
         self._launch_screen: tuple[int, int, int, int] | None = None
 
@@ -306,11 +358,28 @@ class StartupFeedback:
         return self._proc
 
     def add_listener(self, callback: NotifyCallback) -> None:
-        """Register a notify callback. Invoked from the I/O / watchdog threads."""
+        """Register a notify callback. Invoked from the I/O / watchdog threads.
 
+        A finished ``can_reveal`` is replayed to a new listener. Registering
+        the same callback again is a no-op. Callbacks run outside the lock.
+        """
+
+        replay: dict[str, Any] | None = None
         with self._lock:
-            if callback not in self._listeners:
-                self._listeners.append(callback)
+            if self._closed:
+                return
+            if callback in self._listeners:
+                return
+            self._listeners.append(callback)
+            cached = self._reveal_payload
+            if cached is not None:
+                replay = dict(cached)
+        if replay is None:
+            return
+        try:
+            callback(replay)
+        except Exception:
+            logger.exception("startup splash reveal listener failed")
 
     def remove_listener(self, callback: NotifyCallback) -> None:
         with self._lock:
@@ -338,6 +407,12 @@ class StartupFeedback:
                 "closed": self._closed,
             }
 
+    def suppress(self, reason: str) -> None:
+        """Force the next start() to skip the Qt child without pretending it ran."""
+
+        with self._lock:
+            self._suppress_reason = str(reason)
+
     def start(
         self,
         *,
@@ -352,6 +427,14 @@ class StartupFeedback:
             if self._started or self._closed or self._finished:
                 return
             self._started = True
+            if self._suppress_reason:
+                self._degraded = True
+                self._fail_reason = (
+                    "disabled"
+                    if self._suppress_reason == "disabled"
+                    else self._suppress_reason
+                )
+                return
             if not splash_enabled(
                 hidden=hidden,
                 layout_probe=layout_probe,
@@ -460,6 +543,8 @@ class StartupFeedback:
             self._closed = True
             self._finished = True
             self._cancel_spawn = True
+            self._listeners.clear()
+            self._reveal_payload = None
             self._stop.set()
             self._cleanup_locked(kill_child=True)
         self._wake()
@@ -756,10 +841,11 @@ class StartupFeedback:
                 "child_exit_code": self._child_exit_code,
                 "force_terminated": self._force_terminated,
             }
+            self._reveal_payload = payload
             listeners = list(self._listeners)
         for callback in listeners:
             try:
-                callback(payload)
+                callback(dict(payload))
             except Exception:
                 logger.exception("startup splash reveal listener failed")
 

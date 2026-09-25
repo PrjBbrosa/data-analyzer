@@ -130,6 +130,13 @@ class ReplayTab(QWidget):
 
         outer.addWidget(transport)
 
+        self._alignment_warning = QLabel("", self)
+        self._alignment_warning.setObjectName("replayAlignmentWarning")
+        self._alignment_warning.setWordWrap(True)
+        self._alignment_warning.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self._alignment_warning.setVisible(False)
+        outer.addWidget(self._alignment_warning)
+
         progress_row = QHBoxLayout()
         self._position_label = QLabel("00:00.000", self)
         self._position_label.setObjectName("replayPositionLabel")
@@ -167,10 +174,22 @@ class ReplayTab(QWidget):
         if file_name:
             self.load_file(file_name)
 
+    def _apply_source_warning(self, source: ReplaySource) -> None:
+        """Show loader alignment text before transport is enabled."""
+        details = tuple(source.warnings or ())
+        if not details:
+            self._alignment_warning.clear()
+            self._alignment_warning.setVisible(False)
+            return
+        lines = ["已按公共时间轴对齐，可能包含非原始测量值", *details]
+        self._alignment_warning.setText("\n".join(lines))
+        self._alignment_warning.setVisible(True)
+
     def load_file(self, path: str | Path) -> None:
         source = ReplayRecorderBackend.source_from_mf4(path)
         self.stop()
         self._source = source
+        self._apply_source_warning(source)
         self._right_panel.setVisible(True)
         self._path_label.setText(str(source.path))
         self._last_position_s = 0.0
