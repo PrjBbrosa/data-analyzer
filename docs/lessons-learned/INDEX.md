@@ -282,6 +282,7 @@ lesson by default.
 | [Windows DWM Backdrop Can Fill Rounded Splash Corners](windows-dwm-backdrop-can-fill-rounded-splash-corners.md) | Adding a Windows system backdrop to a translucent, frameless Qt panel whose visible card is painted with rounded corners. | See lesson |
 | [Empty Target Must Complete Its Page Transition](page-transition-empty-target-completion.md) | A chart transition holds the outgoing image while the destination may skip rendering because its selection is empty. | See lesson |
 | [View Marker Must Follow The Child Strip Layout](view-marker-follows-child-layout.md) | A cached selection marker uses QTabBar tabRect while labels, tab count, or visible widths change. | See lesson |
+| [Release Pytest Item Pin Records After The Filter Check](pytest-item-pin-records-release-after-check.md) | Editing UI teardown or pin-filter bookkeeping when deleted Qt wrappers survive the next item. | See lesson |
 
 ## Selection Rules
 

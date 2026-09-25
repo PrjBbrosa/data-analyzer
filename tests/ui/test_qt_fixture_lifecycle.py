@@ -25,6 +25,12 @@ _CHILD_ENV = "MF4_QT_FIXTURE_LIFECYCLE_CHILD"
 # distinguish an undelivered DeferredDelete event from ordinary Python GC.
 _CHILD_CHART_STACK = None
 
+# Weak refs only. A strong module global would hide the item-list leak.
+_PIN_OWNER_REFS = []
+# Intentionally session-scoped. Releasing one item's records must not delete it.
+_SESSION_ROUTER = None
+_SESSION_PARENT = None
+
 
 def _child_env() -> dict[str, str]:
     env = os.environ.copy()
@@ -91,11 +97,76 @@ def test_fixture_lifecycle_child_observes_prior_item_after_full_teardown(qapp):
     )
 
 
+@pytest.mark.skipif(
+    os.environ.get(_CHILD_ENV) != "1",
+    reason="executed only by the outer bounded child-process regression",
+)
+def test_fixture_lifecycle_child_records_pin_owner_weakrefs(qapp, qtbot, request):
+    """Record owners that the item lists would otherwise keep alive."""
+    import weakref
+
+    from PyQt5 import sip
+    from PyQt5.QtCore import QObject
+
+    from mf4_analyzer.ui.chart_stack import ChartStack
+    from mf4_analyzer.ui.chart_stack.pinning.key_router import PinKeyRouter
+
+    global _SESSION_PARENT, _SESSION_ROUTER
+    if _SESSION_ROUTER is None:
+        _SESSION_PARENT = QObject()
+        _SESSION_ROUTER = PinKeyRouter(_SESSION_PARENT, object())
+    owned = request.node._pin_owned_routers
+    if _SESSION_ROUTER in owned:
+        owned.remove(_SESSION_ROUTER)
+    assert not sip.isdeleted(_SESSION_ROUTER)
+
+    stack = ChartStack()
+    qtbot.addWidget(stack)
+    controller = stack._pinned_cursors
+    router = controller._router
+    assert router in request.node._pin_owned_routers
+    assert controller in request.node._pin_owned_controllers
+    _PIN_OWNER_REFS[:] = [
+        weakref.ref(stack),
+        weakref.ref(controller),
+        weakref.ref(router),
+    ]
+    assert all(ref() is not None for ref in _PIN_OWNER_REFS)
+    assert router is not _SESSION_ROUTER
+
+
+@pytest.mark.skipif(
+    os.environ.get(_CHILD_ENV) != "1",
+    reason="executed only by the outer bounded child-process regression",
+)
+def test_fixture_lifecycle_child_reclaims_pin_owners_after_full_teardown(qapp):
+    """Previous item teardown must make pin owners collectable.
+
+    ``QApplication`` and the explicitly retained session router stay. This
+    body runs only after the previous item's fixture finalizers and teardown
+    hook have both finished.
+    """
+    import gc
+
+    from PyQt5 import sip
+    from PyQt5.QtWidgets import QApplication
+
+    gc.collect()
+    assert _PIN_OWNER_REFS, "previous item did not record pin owners"
+    alive = [ref() for ref in _PIN_OWNER_REFS if ref() is not None]
+    assert alive == [], (
+        "pin owners were still reachable after the previous item's full "
+        "teardown; release the item's owner lists before the trailing collect"
+    )
+    assert QApplication.instance() is qapp
+    assert _SESSION_ROUTER is not None and not sip.isdeleted(_SESSION_ROUTER)
+
+
 def test_fixture_teardown_drains_owned_deferred_deletes_in_bounded_child():
-    """A tracked ChartStack must be deleted before a following item starts."""
+    """ChartStack deletion and pin-owner collection share one child process."""
     result = _run_child()
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "2 passed" in result.stdout, result.stdout
+    assert "4 passed" in result.stdout, result.stdout
 
 
 def test_static_source_ratchets_do_not_construct_qapplication(tmp_path):
@@ -161,6 +232,71 @@ def test_pin_filter_registry_matches_heap_scan_after_chart_stack_item(qapp):
         stack.deleteLater()
         QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
         qapp.processEvents()
+
+
+def test_failed_pin_filter_check_releases_records_and_still_fails(request, qapp):
+    """A real installed filter still fails, and the item lists are cleared."""
+    from PyQt5.QtCore import QObject
+
+    from mf4_analyzer.ui.chart_stack.pinning.key_router import PinKeyRouter
+    from tests.ui import conftest as ui_conftest
+
+    ui_conftest._ensure_pin_filter_registry()
+    parent = QObject()
+    router = PinKeyRouter(parent, object())
+    owned = request.node._pin_owned_routers
+    if router in owned:
+        owned.remove(router)
+    router.install_application_filter()
+    synthetic = type("Item", (), {})()
+    synthetic.nodeid = "tests/ui/test_qt_fixture_lifecycle.py::synthetic_leak"
+    synthetic._pin_owned_routers = [router]
+    synthetic._pin_owned_controllers = []
+    synthetic._pin_filter_baseline_routers = []
+    try:
+        with pytest.raises(pytest.fail.Exception, match="item-owned pin filters still installed"):
+            ui_conftest._finish_item_pin_check(synthetic)
+        assert synthetic._pin_owned_routers == []
+        assert synthetic._pin_owned_controllers == []
+        assert synthetic._pin_filter_baseline_routers == []
+        assert router.application_filter_installed
+        assert router in ui_conftest._ALL_PIN_ROUTERS
+    finally:
+        router.remove_application_filter()
+        parent.deleteLater()
+        qapp.processEvents()
+
+
+def test_clean_pin_check_releases_records_so_owner_can_be_collected(request, qapp):
+    """Passing check clears the item lists; nothing else retains the owner."""
+    import gc
+    import weakref
+
+    from PyQt5.QtCore import QObject
+
+    from mf4_analyzer.ui.chart_stack.pinning.key_router import PinKeyRouter
+    from tests.ui import conftest as ui_conftest
+
+    ui_conftest._ensure_pin_filter_registry()
+    parent = QObject()
+    router = PinKeyRouter(parent, object())
+    owned = request.node._pin_owned_routers
+    if router in owned:
+        owned.remove(router)
+    parent_ref = weakref.ref(parent)
+    router_ref = weakref.ref(router)
+    synthetic = type("Item", (), {})()
+    synthetic.nodeid = "tests/ui/test_qt_fixture_lifecycle.py::synthetic_clean"
+    synthetic._pin_owned_routers = [router]
+    synthetic._pin_owned_controllers = []
+    synthetic._pin_filter_baseline_routers = []
+    ui_conftest._finish_item_pin_check(synthetic)
+    assert synthetic._pin_owned_routers == []
+    del parent, router, synthetic
+    gc.collect()
+    assert parent_ref() is None
+    assert router_ref() is None
+    assert qapp is not None
 
 
 def test_pinned_cursor_filter_guard_surfaces_unexpected_import_failure(request):

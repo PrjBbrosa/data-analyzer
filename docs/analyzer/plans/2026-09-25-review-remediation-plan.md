@@ -1,7 +1,7 @@
 # 最近两天提交复审修复执行计划
 
 - 日期：2026-09-25。
-- 状态：**T1–T8 已有实现与聚焦证据；全量中断；新增 T10–T14（测试效率与失败治理）待实施；Windows 包和 native 绘制未验收**。历史实施记录见第 13 节，新增计划见第 14 节。配套 [spec](../specs/2026-09-25-review-remediation-spec.md)。
+- 状态：**T1–T8 已有实现与聚焦证据；T10 台账已建；T11 fixture 引用已修并通过聚焦/边界；T12 旧 50 条仍为 UNKNOWN；T13 只确认单用例 owner 从 3 降到 0，全量倍数 UNKNOWN，未分组；T14 与全量 NOT RUN；Windows 包和 native 绘制未验收**。历史实施记录见第 13 节，新增计划见第 14 节，本轮执行见第 15 节。配套 [spec](../specs/2026-09-25-review-remediation-spec.md)。
 - 对应问题：F1–F7、V1/V2，以及尚未归因的全量失败；验收编号 A1–A12 以 spec 为准。
 - Review 终点与编写时 HEAD：`f83eee615963c721b5c4b5d48a5702d4ec731cfb`。历史 review 使用隔离快照，不代表当前 dirty tree 已验收。
 
@@ -320,3 +320,44 @@ Cocoa 这 12 条是 `QT_QPA_PLATFORM=cocoa`、一块屏幕上的自动化手势�
 ### 14.6 本次文档修订的验证边界
 
 本轮修改 plan/spec，核对现有日志、cache 时间戳、runner 接口和已有小探针；不运行新测试，不执行 T10–T14，不修改源码或 fixture。检查完整文档的编号、依赖、门禁命令、路径和 `git diff --check`；文档本身无需 runtime suite。
+
+## 15. D9 执行记录（2026-09-25）
+
+本节不改写第 13 节。执行时 HEAD 为 `3d8f746305941dd57ecb276c14897ae80512fdfe`。没有 commit / push / release。没有跑全量，也没有用 `.pytest_cache` 的 248 条记录代替中断名单。
+
+### 15.1 T10
+
+中断日志、启动脚本、摘要和当时的 lastfailed 已复制到 `.state/review-remediation-d9/`，哈希在 `manifest.json`。主日志 sha256 `04441564b03d7f6b0e8c350dad556d40ff8399ac13982bac77af681b10d547f4`，11124 字节，mtime 13:30:42。全文只有进度点：F=50、s=64、E=0，停在 76% 标记之后，没有 nodeid，没有堆栈。
+
+lastfailed 248 条，mtime 10:41:39，早于主集 10:42:22，台账里标明排除，不当作这 50 条的身份。
+
+`.state/review-remediation-failures.jsonl` 保留一条 `UNKNOWN / identities unavailable` 批次记录。`scripts/run_test_gate.py:capture_repo_snapshot` 已对每个 untracked 文件做内容 sha256，并进入 `dirty_fingerprint`。现有 `tests/test_run_test_gate.py::test_snapshot_ignores_tmp_pytest_scratch` 用未跟踪 `src.py` 的内容变化证明指纹会变。这次没有改 runner。
+
+### 15.2 T11
+
+`tests/ui/conftest.py` 在泄漏判断之后、`gc.collect()` 之前清掉 item 上的 `_pin_owned_routers`、`_pin_owned_controllers` 和 baseline 弱引用列表。判断失败仍抛出；session 注册表和 `QApplication` 不删。
+
+旧 hook 上，子进程在完整 teardown 之后仍能拿到 ChartStack、controller、router 共 3 个对象。新 hook 上这 3 个弱引用都死了，显式留下的 session router 和 `QApplication` 还在。已安装的 app filter 仍会失败，并且失败后列表被清空。
+
+Focused：`tests/ui/test_qt_fixture_lifecycle.py`，6 passed，4 skipped（子进程用例在父进程跳过，子进程内 4 passed），5.09s。
+
+Boundary nodeid：
+
+- `tests/ui/test_qsettings_isolation.py`
+- `tests/ui/test_app_style_isolation.py`
+- `tests/ui/test_pg_timedomain_canvas.py::TestInkBudget::test_high_ink_holds_aa_off`
+- `tests/ui/test_pg_timedomain_canvas.py::TestInkBudget::test_oscillating_fit_y_holds_aa_off_spec_1_3_reversal`
+- `tests/ui/test_pg_timedomain_canvas.py::TestAaBackstopLatch::test_frame_paint_backstop_is_installed_on_real_canvas`
+- `tests/test_conftest_autouse_scope.py`
+
+以上 17 passed，5.21s。`git diff --check` 对这两个测试文件通过。
+
+### 15.3 T12–T14
+
+T12：没有可恢复的 nodeid，所以没有把这 50 条改成绿灯，也没有从点号位置猜名字。已定位并修复的测试设施问题只有 T11 这一条，它不是那 50 条的逐条映射。产品缺陷、过期断言、顺序污染的其余项保持 UNKNOWN。
+
+T13：同一子进程、仅 conftest 不同。修复前 teardown 后存活 owner = 3；修复后 = 0。没有测量 setup/call/teardown 分项、GC 时间或 RSS 趋势，因此全量提速倍数是 UNKNOWN。没有证据表明还要改 heap 全扫描频率或做顺序分组，所以 runner 分组没有改。
+
+T14：未跑。前置不满足：50 条身份仍缺，工作区还有无关的 launcher / collapsible 改动，小规模测量也没有给出新的全量预算。按第 11.2 节，不提高超时、不把局部通过写成全量通过。Windows frozen 与 native 绘制仍是 NOT RUN。
+
+Lesson：`docs/lessons-learned/pytest-item-pin-records-release-after-check.md`。`scripts/lessons/check.py --status` 为 `lesson_required: False`。没有清掉其他任务的 requirement。

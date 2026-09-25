@@ -110,12 +110,14 @@ def pytest_runtest_teardown(item):
     ``_own_chartstacks``, which pumps ``processEvents()`` of its own. Releasing
     any earlier would reopen the window this guard exists to close.
 
-    *Why collect here.* A single ``gc.collect()`` after DeferredDelete
-    restores the original lifetime — one test's widgets are gone before the
-    next one starts — while keeping them alive for the whole danger window.
-    Collecting earlier, while the pin is still held, cannot reap the test's
-    widgets and left ``TimeDomainCanvasPG`` instances counted against the
-    dense-raster memory caps, so the next canvas was refused admission.
+    *Why collect here.* One ``gc.collect()`` after DeferredDelete and after
+    the pin-filter check releases this item's owner lists. The lists have to
+    stay intact for the check, then go away before collect: the pytest item
+    outlives the test, and a leftover strong ref keeps deleted
+    router/controller wrappers alive for the rest of the session. Collecting
+    while ``_PINNED_TOPLEVELS`` is still held cannot reap the test's widgets
+    and left ``TimeDomainCanvasPG`` instances counted against the dense-raster
+    memory caps, so the next canvas was refused admission.
     """
     if _is_static_source(item):
         return (yield)
@@ -132,10 +134,17 @@ def pytest_runtest_teardown(item):
             # objects that this item never owned.
             QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
             app.processEvents()
-        gc.collect()
-        _restore_item_app_style(item)
-        _restore_qsettings_default_format(item)
-        _assert_pinned_cursor_filters_not_accumulated(item)
+        try:
+            # The leak check still needs this item's owner lists. Release
+            # them on both pass and fail, then collect so the next item does
+            # not inherit deleted Python wrappers. Style/QSettings restore
+            # stays outside that check so a pin failure is not replaced by a
+            # later cleanup error, and collect still runs.
+            _finish_item_pin_check(item)
+        finally:
+            _restore_item_app_style(item)
+            _restore_qsettings_default_format(item)
+            gc.collect()
 
 
 def _qt_wrapper_alive(obj) -> bool:
@@ -241,6 +250,40 @@ def _should_cross_check_pin_heap(item) -> bool:
     ):
         return True
     return False
+
+
+_ITEM_PIN_RECORD_NAMES = (
+    "_pin_owned_routers",
+    "_pin_owned_controllers",
+    "_pin_filter_baseline_routers",
+)
+
+
+def _release_item_pin_records(item) -> None:
+    """Drop this item's pin records without touching the session registry.
+
+    The pytest item object lives for the whole session. The owner lists are
+    strong references used only to judge this item's filter delta. Leaving
+    them in place keeps deleted router/controller wrappers reachable, so a
+    later ``gc.collect()`` cannot reclaim them. Baseline entries are weak
+    refs; clearing those lists does not delete a session-owned QObject.
+    """
+    for name in _ITEM_PIN_RECORD_NAMES:
+        records = getattr(item, name, None)
+        if isinstance(records, list):
+            records.clear()
+
+
+def _finish_item_pin_check(item) -> None:
+    """Judge installed pin filters, then always release the item records.
+
+    ``pytest.fail`` must still propagate. The ``finally`` only clears the
+    lists that made the judgment possible.
+    """
+    try:
+        _assert_pinned_cursor_filters_not_accumulated(item)
+    finally:
+        _release_item_pin_records(item)
 
 
 def _assert_pinned_cursor_filters_not_accumulated(item):
