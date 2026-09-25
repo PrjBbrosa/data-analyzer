@@ -68,14 +68,12 @@ def test_no_self_painted_outer_shadow_on_shell(panel, qtbot, qapp):
     assert not pix.isNull()
     image = pix.toImage().convertToFormat(QImage.Format_ARGB32)
     # Outer shell pixels at the very corner must not carry an offset gray pedestal.
-    for x, y in ((0, 0), (1, 1), (2, 0), (0, 2)):
+    for x, y in (
+        (0, 0), (image.width() - 1, 0),
+        (0, image.height() - 1), (image.width() - 1, image.height() - 1),
+    ):
         color = image.pixelColor(x, y)
-        # Either fully transparent (outside rounded card) or the bright glass fill —
-        # never a dark translucent shadow blob.
-        if color.alpha() >= 40:
-            assert color.value() >= 200, (x, y, color.name(), color.alpha())
-        else:
-            assert color.alpha() < 40
+        assert color.alpha() == 0, (x, y, color.name(), color.alpha())
 
     # Drain deferred deletes owned by this panel path.
     panel.hide()
@@ -232,12 +230,39 @@ def test_card_carries_white_qss_not_translucent(panel):
     assert panel._card.testAttribute(Qt.WA_StyledBackground)
 
 
-def test_group_cards_use_transparent_surface_not_opaque_white(panel):
-    sheet = panel.styleSheet()
-    group_block = sheet.split("QFrame#quickrefGroup {", 1)[1].split("}", 1)[0]
-    assert "background-color: transparent;" in group_block
-    assert "background-color: #ffffff;" not in group_block
-    assert "background-color: #fafbfc;" not in group_block
+def test_group_cards_restore_opaque_surface(panel, qtbot):
+    panel.show()
+    qtbot.waitExposed(panel)
+    group = panel._group_cards[0]
+    image = group.grab().toImage()
+    dpr = image.devicePixelRatio()
+    # Blank inset inside the group, away from its border and text.
+    assert image.pixelColor(int(6 * dpr), int(20 * dpr)).getRgb() == (
+        255, 255, 255, 255,
+    )
+
+
+def test_show_and_pin_do_not_install_native_backdrop(qtbot, monkeypatch):
+    from mf4_analyzer import qt_panel_style
+
+    calls = []
+
+    def record_surface(*args, **kwargs):
+        calls.append((args, kwargs))
+
+    monkeypatch.setattr(qt_panel_style, "apply_native_panel_surface", record_surface)
+    monkeypatch.setattr(
+        quickref_panel_module, "apply_native_panel_surface", record_surface,
+        raising=False,
+    )
+    p = QuickRefPanel()
+    qtbot.addWidget(p)
+    p.show()
+    p.set_pinned(True)
+    p.set_pinned(False)
+    p.hide()
+    p.show()
+    assert calls == []
 
 
 def test_coaxis_row_renders_without_soon_badge(panel):

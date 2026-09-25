@@ -14,12 +14,12 @@ Behavior contract (★ from the spec):
 * Draggable by the header (frameless reposition).
 * Live search filters rows (and hides now-empty groups).
 
-Rounded corners WITHOUT ``WA_TranslucentBackground`` on the panel itself
-(that breaks the widget's own QSS background → gray box on macOS, per
+Rounded corners WITHOUT ``WA_TranslucentBackground`` on the panel
+itself (that breaks the widget's own QSS background → gray box on macOS, per
 CLAUDE.md). Instead the translucency lives on the OUTER frameless window and the
-sky-glass card surface rides on an inner ``QFrame#quickrefCard`` child whose QSS
+white card surface rides on an inner ``QFrame#quickrefCard`` child whose QSS
 background therefore stays intact — the same split used by ``glass_tooltip``.
-No hand-painted outer drop shadow.
+No native backdrop or outer drop shadow: both can leak past the card corners.
 """
 from __future__ import annotations
 
@@ -43,77 +43,63 @@ from PyQt5.QtWidgets import (
 from . import quickref
 from .command_registry import CommandId, bindings_for
 from ..ui_kit.widgets import SearchField
-from mf4_analyzer.qt_panel_style import (
-    ACCENT_HEX,
-    INK_HEX,
-    SECONDARY_HEX,
-    apply_native_panel_surface,
-    glass_fill_css,
-    panel_font_family_css,
-    release_native_panel_surface,
-    uses_opaque_fallback,
-)
 
 
-# --- 晴空蓝白 tokens (scoped to this panel; not a global theme). ---
-_TRAY = "#f4faff"          # search field rest
-_DIVIDER = "#d4e4f5"       # card edge / strong seam
-_HAIRLINE = "#e4eef8"      # within-card soft separators
-_INK = INK_HEX             # body / title
-_INK2 = SECONDARY_HEX      # secondary text
-_INK3 = "#617e98"          # caption / meta
-_ICON = "#5b7a9a"          # line-icon gray
-_ACCENT = ACCENT_HEX       # chrome accent (selection / primary)
-_ACCENT_WASH = "#e8f2ff"   # accent wash
+# --- Precision Light tokens (read from ui_kit/style.qss; do NOT hardcode the
+# mockup's approximate hexes). ---
+_TRAY = "#f7faff"          # search field rest (blue-white, not tray gray)
+_CARD = "#ffffff"          # floating card
+_SUB = "#ffffff"           # group sub-card; keep panel off the old gray fill
+_DIVIDER = "#dbe5f2"       # card edge / strong seam
+_HAIRLINE = "#e9eff7"      # within-card soft separators
+_INK = "#111827"           # body / title
+_INK2 = "#475569"          # secondary text
+_INK3 = "#64748b"          # caption / meta
+_ICON = "#5b6472"          # line-icon gray
+_ACCENT = "#1769e0"        # chrome accent (selection / primary)
+_ACCENT_WASH = "#e8efff"   # accent wash
 _SOON_BG = "#eef1ff"
 _SOON_FG = "#5b6bd6"
-_CHIP_BORDER = "#d4e1ef"
+_CHIP_BORDER = "#dfe5ee"
+
+# The card fills the transparent shell; no outer shadow gutter.
 _CARD_RADIUS = 14
-_SHELL_MARGIN = 0  # no self-painted outer shadow gutter
+_SHELL_MARGIN = 0
 
 
-def _qss(*, fallback_glass: bool = True):
+def _qss():
     """Stylesheet scoped to the panel's object names.
 
     Scoped so it cannot leak into the global cascade and so the inner
-    ``#quickrefCard`` (not the translucent outer window) carries the glass fill.
-    Inner groups stay transparent so they do not punch opaque rectangles through
-    the rounded card corners.
+    ``#quickrefCard`` (not the translucent outer window) carries the white fill.
     """
-    family = panel_font_family_css()
-    glass = glass_fill_css(fallback=fallback_glass)
     return f"""
     QFrame#quickrefCard {{
-        background-color: {glass};
+        background-color: {_CARD};
         border: 1px solid {_DIVIDER};
         border-radius: {_CARD_RADIUS}px;
-        font-family: {family};
     }}
     QWidget#quickrefHeader {{ background-color: transparent; }}
     QLabel#quickrefTitle {{
         color: {_INK}; font-size: 18px; font-weight: 700;
-        font-family: {family};
         background: transparent;
     }}
     QLabel#quickrefSubtitle {{
-        color: {_INK3}; font-size: 12px;
-        font-family: {family};
-        background: transparent;
+        color: {_INK3}; font-size: 12px; background: transparent;
     }}
     QLineEdit#quickrefSearch {{
         min-height: 22px;
         padding: 4px 10px;
-        border: 1px solid #d8e6f5;
+        border: 1px solid #e2eaf5;
         border-radius: 9px;
         background-color: {_TRAY};
         color: {_INK};
-        font-family: {family};
         selection-background-color: {_ACCENT};
         selection-color: #ffffff;
     }}
     QLineEdit#quickrefSearch:focus {{
         border-color: {_ACCENT};
-        background-color: rgba(255, 255, 255, 230);
+        background-color: #ffffff;
     }}
     QToolButton#quickrefPin, QToolButton#quickrefClose {{
         min-width: 28px; max-width: 28px; min-height: 28px; max-height: 28px;
@@ -135,11 +121,10 @@ def _qss(*, fallback_glass: bool = True):
         padding: 0 9px;
         border: 1px solid {_CHIP_BORDER};
         border-radius: 7px;
-        background-color: rgba(255, 255, 255, 210);
+        background-color: #ffffff;
         color: {_INK3};
         font-size: 11px;
         font-weight: 600;
-        font-family: {family};
     }}
     QToolButton#quickrefBottomHintsToggle:hover {{
         background-color: {_HAIRLINE};
@@ -159,45 +144,37 @@ def _qss(*, fallback_glass: bool = True):
     QWidget#quickrefBody {{ background-color: transparent; }}
 
     QFrame#quickrefGroup {{
-        background-color: transparent;
-        border: 1px solid #d8e6f5;
+        background-color: {_SUB};
+        border: 1px solid #e2eaf5;
         border-radius: 11px;
     }}
     QLabel#quickrefGroupTitle {{
-        color: {_INK}; font-size: 13px; font-weight: 700;
-        font-family: {family};
+        color: #3a3f47; font-size: 13px; font-weight: 700;
         background: transparent;
     }}
     QLabel#quickrefGroupNote {{
-        color: {_INK3}; font-size: 11px;
-        font-family: {family};
-        background: transparent;
+        color: {_INK3}; font-size: 11px; background: transparent;
     }}
     QLabel#quickrefGroupDot {{
         min-width: 8px; max-width: 8px; min-height: 8px; max-height: 8px;
         border-radius: 3px; background-color: {_ACCENT};
     }}
     QLabel#quickrefDesc {{
-        color: {_INK2}; font-size: 13px;
-        font-family: {family};
-        background: transparent;
+        color: {_INK2}; font-size: 13px; background: transparent;
     }}
     QLabel#quickrefDesc[mode="true"] {{
         color: {_INK}; font-weight: 700;
     }}
     QLabel#quickrefSub {{
-        color: {_INK3}; font-size: 11px;
-        font-family: {family};
-        background: transparent;
+        color: {_INK3}; font-size: 11px; background: transparent;
     }}
     QLabel#quickrefKbd {{
-        background-color: rgba(255, 255, 255, 220);
+        background-color: #ffffff;
         border: 1px solid {_CHIP_BORDER};
         border-radius: 6px;
         padding: 1px 7px;
         color: {_INK2};
         font-size: 12px;
-        font-family: {family};
     }}
     QLabel#quickrefGesture {{
         background-color: {_ACCENT_WASH};
@@ -206,7 +183,6 @@ def _qss(*, fallback_glass: bool = True):
         padding: 1px 8px;
         font-size: 12px;
         font-weight: 600;
-        font-family: {family};
     }}
     QLabel#quickrefSoon {{
         background-color: {_SOON_BG};
@@ -215,7 +191,6 @@ def _qss(*, fallback_glass: bool = True):
         padding: 0px 6px;
         font-size: 10px;
         font-weight: 700;
-        font-family: {family};
     }}
     QLabel#quickrefPlus {{
         color: {_INK3}; font-size: 11px; background: transparent;
@@ -229,16 +204,14 @@ def _qss(*, fallback_glass: bool = True):
         min-width: 3px; max-width: 3px;
     }}
     QFrame#quickrefFoot {{
-        background-color: rgba(244, 250, 255, 120);
+        background-color: #f8fbff;
         border: none;
         border-top: 1px solid {_HAIRLINE};
         border-bottom-left-radius: {_CARD_RADIUS}px;
         border-bottom-right-radius: {_CARD_RADIUS}px;
     }}
     QLabel#quickrefFootText {{
-        color: {_INK3}; font-size: 12px;
-        font-family: {family};
-        background: transparent;
+        color: {_INK3}; font-size: 12px; background: transparent;
     }}
     """
 
@@ -450,25 +423,13 @@ class QuickRefPanel(QWidget):
         # on FocusOut (a child-owned focus would make clearFocus a no-op — see
         # lesson 2026-04-27-popup-clearfocus-needs-strongfocus-on-popup-itself).
         self.setFocusPolicy(Qt.StrongFocus)
-        self._refresh_panel_style()
+        self.setStyleSheet(_qss())
 
         self._build()
         self._install_view_cycle_shortcuts()
         self.resize(940, 660)
         self._apply_window_flags()
         self._geometry_fitted = False
-
-    def _refresh_panel_style(self) -> None:
-        """Re-apply scoped QSS for the current glass fallback state."""
-        self._updating_panel_style = True
-        try:
-            self.setStyleSheet(_qss(fallback_glass=uses_opaque_fallback(self)))
-        finally:
-            self._updating_panel_style = False
-
-    def _reapply_native_surface(self, *, force: bool = False) -> None:
-        apply_native_panel_surface(self, force=force)
-        self._refresh_panel_style()
 
     def _install_view_cycle_shortcuts(self) -> None:
         """Own View-cycle bindings while this ``Qt.Tool`` window is active."""
@@ -514,7 +475,7 @@ class QuickRefPanel(QWidget):
     # -- construction ------------------------------------------------------
     def _build(self):
         shell = QVBoxLayout(self)
-        # No outer shadow gutter — the card fills the translucent shell.
+        # The card fills the transparent shell without an outer shadow.
         shell.setContentsMargins(
             _SHELL_MARGIN, _SHELL_MARGIN, _SHELL_MARGIN, _SHELL_MARGIN
         )
@@ -729,14 +690,12 @@ class QuickRefPanel(QWidget):
             "已钉住（再次点击取消）" if pinned else "钉住（常驻置顶）"
         )
         self._refresh_header_icons()
-        # Re-applying window flags re-creates the native window → must re-show
-        # and re-apply the optional backdrop on the new HWND.
+        # Re-applying window flags re-creates the native window → must re-show.
         was_visible = self.isVisible()
         self._apply_window_flags()
         if was_visible:
             self.show()
             self.raise_()
-            self._reapply_native_surface(force=True)
 
     def _apply_window_flags(self):
         flags = Qt.Tool | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint
@@ -770,7 +729,6 @@ class QuickRefPanel(QWidget):
         super().showEvent(event)
         self._set_host_view_cycle_shortcuts_enabled(False)
         self._apply_work_area_cap(self._opener)
-        self._reapply_native_surface(force=True)
 
     def _apply_work_area_cap(self, anchor_widget=None):
         """Frameless Tool windows can expand to sizeHint on show; recap after."""
@@ -790,7 +748,6 @@ class QuickRefPanel(QWidget):
         self.setMaximumSize(max(1, budget.width), max(1, budget.height))
 
     def hideEvent(self, event):  # noqa: N802
-        release_native_panel_surface(self)
         self._set_host_view_cycle_shortcuts_enabled(True)
         super().hideEvent(event)
 
@@ -927,17 +884,3 @@ class QuickRefPanel(QWidget):
         if fw is not None and self.isAncestorOf(fw):
             return
         self.hide()
-
-    def changeEvent(self, event):  # noqa: N802
-        super().changeEvent(event)
-        if getattr(self, "_updating_panel_style", False):
-            return
-        from PyQt5.QtCore import QEvent
-
-        # Do not react to StyleChange from our own setStyleSheet.
-        watched = {QEvent.FontChange}
-        screen_change = getattr(QEvent, "ScreenChangeInternal", None)
-        if screen_change is not None:
-            watched.add(screen_change)
-        if event.type() in watched and self.isVisible():
-            self._reapply_native_surface(force=True)

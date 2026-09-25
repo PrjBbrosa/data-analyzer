@@ -26,7 +26,7 @@ def test_deck_data_valid_and_version_bumped():
     d = _deck_data()
     assert d["meta"]["version"] == "v8.4.1"
     assert d["meta"]["updated"] == "2026-09-25"
-    assert d["meta"]["docVersion"] == "3.0"
+    assert d["meta"]["docVersion"] == "3.1"
     assert [c["v"] for c in d["changelog"]][:11] == [
         "v8.4.1", "v8.4", "v8.3.2", "v8.3.1", "v8.3.0", "v8.2.5", "v8.2.4", "v8.2.3", "v8.2.2", "v8.2.1", "v8.2.0",
     ]
@@ -291,26 +291,15 @@ def test_changelog_omits_mechanical_version_and_package_sync_items():
             )
 
 
-def test_changelog_keeps_recent_front_and_packs_history_at_end():
-    html = MANUAL.read_text(encoding="utf-8")
-    assert "function arrangeChangelogSlides" in html
-    assert "function packChangelogHistory" in html
-    assert "changelog-page" in html
-    assert "changelog-history-page" in html
-    assert "mainSlides.concat(historySlides)" in html
-    assert "data-release-indices" in html
-    safe_area = re.search(
-        r"\.slide\.changelog-page \.body\{bottom:(\d+)px;", html
-    )
-    assert safe_area, "changelog slide bottom safe area is missing"
-    assert int(safe_area.group(1)) >= 200
-
-
-def test_changelog_renders_v798_and_v797_as_separate_recent_pages():
-    html = MANUAL.read_text(encoding="utf-8")
-    assert "const RECENT_CHANGELOG_COUNT=2;" in html
-    assert "recent.forEach((index,pageIndex)=>{" in html
-    assert "indices.filter(index=>index>=RECENT_CHANGELOG_COUNT)" in html
+def test_changelog_is_one_complete_page_at_the_end():
+    data = _deck_data()
+    pages = [s for s in data["slides"]
+             if any(b["type"] == "changelog" for b in s.get("blocks", []))]
+    assert len(pages) == 1
+    assert data["slides"][-1] is pages[0]
+    block = next(b for b in pages[0]["blocks"] if b["type"] == "changelog")
+    assert block["start"] == 0
+    assert "end" not in block  # New releases remain visible without a second edit.
 
 
 def test_manual_has_filter_slide():
@@ -335,17 +324,33 @@ def test_manual_zfd_copy_fails_closed_instead_of_estimating_fs():
 
 
 def test_manual_uses_current_real_ui_assets():
+    from PyQt5.QtGui import QImage
+
     html = MANUAL.read_text(encoding="utf-8")
-    for name in ("time-panel.png", "imports-panel.png"):
+    for name in ("time-panel.webp", "imports-panel.webp"):
         asset = HELP / "assets" / name
-        assert asset.exists() and asset.stat().st_size > 100_000
+        image = QImage(str(asset))
+        assert not image.isNull(), name
+        assert image.width() >= 1640 and image.height() >= 1010
         assert f"assets/{name}" in html
+
+
+def test_local_help_image_references_decode():
+    from PyQt5.QtGui import QImage
+
+    for page in (*HELP.glob("*.html"), PUBLISHED_GUIDE):
+        for reference in re.findall(r'<img\b[^>]*\bsrc=[\"\']([^\"\']+)', page.read_text()):
+            if reference.startswith(("https://", "http://", "data:")):
+                continue
+            asset = page.parent / reference
+            assert asset.is_file(), (page.name, reference)
+            assert not QImage(str(asset)).isNull(), (page.name, reference)
 
 
 def test_published_guide_tracks_v821_and_real_ui_assets():
     html = PUBLISHED_GUIDE.read_text(encoding="utf-8")
     assert "TraceLab v8.4.1" in html
-    for name in ("WWT", "ZFD", "MAT", "time-panel.png", "imports-panel.png"):
+    for name in ("WWT", "ZFD", "MAT", "time-panel.webp", "imports-panel.webp"):
         assert name in html
     assert "matplotlib" not in html
     assert "关闭项目" in html
@@ -544,7 +549,6 @@ def test_cheat_sheet_matches_runtime_desktop_shortcuts():
         "Alt+Right",
         "视角后退",
         "Ctrl/Cmd+Z 保留给编辑撤销",
-        "视角后退已改为 Alt+Left",
         "Esc 先清空搜索",
         "有未保存更改时可保存、不保存或取消",
         "Enter / Space",
@@ -554,7 +558,8 @@ def test_cheat_sheet_matches_runtime_desktop_shortcuts():
         assert phrase in blob, f"cheat sheet missing {phrase!r}"
     assert "固定当前读数" in blob
     assert "Board 与标注里仍是画笔" in blob
-    project = next(slide for slide in _deck_data()["slides"] if slide.get("id") == "project")
+    project = [slide for slide in _deck_data()["slides"]
+               if slide.get("id") in {"project", "project-close"}]
     project_blob = json.dumps(project, ensure_ascii=False)
     assert "有未保存更改时可保存、不保存或取消" in project_blob
     assert "关闭项目" in project_blob

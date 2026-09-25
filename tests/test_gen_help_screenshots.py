@@ -1,14 +1,31 @@
 from pathlib import Path
 
 
+def test_screenshot_webp_keeps_pixels_and_reports_save_failure(qapp, tmp_path):
+    import pytest
+    from PyQt5.QtGui import QColor, QImage, QPixmap
+    from tools.gen_help_screenshots import save_screenshot
+
+    original = QImage(31, 19, QImage.Format_RGB32)
+    for y in range(original.height()):
+        for x in range(original.width()):
+            original.setPixelColor(x, y, QColor(x * 7, y * 13, (x * y) % 256))
+    target = tmp_path / "shot.webp"
+    save_screenshot(QPixmap.fromImage(original), target)
+    assert target.read_bytes().startswith(b"RIFF")
+    assert QImage(str(target)).convertToFormat(original.format()) == original
+    with pytest.raises(OSError, match="screenshot"):
+        save_screenshot(QPixmap.fromImage(original), tmp_path / "missing" / "shot.webp")
+
+
 def test_panel_modes_and_files_align():
     from tools.gen_help_screenshots import PANEL_MODES, PANEL_FILES
     assert PANEL_MODES == ("time", "fft", "fft_time", "order", "ultraview")
-    # 每个 mode 都有对应的目标 *-panel.png 文件名
+    # 每个 mode 都有对应的目标 *-panel.webp 文件名
     assert set(PANEL_FILES) == set(PANEL_MODES)
-    assert PANEL_FILES["time"] == "time-panel.png"
-    assert PANEL_FILES["fft_time"] == "ffttime-panel.png"
-    assert PANEL_FILES["ultraview"] == "ultraview-panel.png"
+    assert PANEL_FILES["time"] == "time-panel.webp"
+    assert PANEL_FILES["fft_time"] == "ffttime-panel.webp"
+    assert PANEL_FILES["ultraview"] == "ultraview-panel.webp"
 
 
 def test_synthetic_csv_has_eps_channels():
@@ -33,7 +50,7 @@ def test_import_screenshot_builds_clean_checkout_parser_samples(tmp_path):
         EXTRA_FILES, IMPORT_SAMPLE_SUFFIXES, build_import_samples,
     )
 
-    assert EXTRA_FILES == {"imports": "imports-panel.png"}
+    assert EXTRA_FILES == {"imports": "imports-panel.webp"}
     samples = build_import_samples(tmp_path)
     assert tuple(path.suffix for path in samples) == IMPORT_SAMPLE_SUFFIXES
     assert all(path.exists() for path in samples)

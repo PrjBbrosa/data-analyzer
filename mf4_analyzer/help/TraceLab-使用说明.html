@@ -34,7 +34,7 @@ html,body{width:100%;height:100%;margin:0;overflow:hidden;background:#cfc8bc;}
 .slide{position:absolute;inset:0;width:1920px;height:1080px;overflow:hidden;display:block;visibility:hidden;opacity:0;pointer-events:none;background:var(--paper-grad);color:var(--ink);font-family:var(--font-body);}
 .slide.active,.slide.visible{visibility:visible;opacity:1;pointer-events:auto;z-index:1;}
 img,video,canvas,svg{max-width:100%;max-height:100%;}
-.deck-controls{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);z-index:1000;}
+.deck-controls{position:fixed;left:50%;bottom:auto;width:max-content;white-space:nowrap;transform-origin:50% 0;z-index:1000;}
 @media print{
   html,body{width:1920px;height:auto;overflow:visible;background:#fff;}
   .deck-viewport{position:static;overflow:visible;background:#fff;}
@@ -51,9 +51,9 @@ img,video,canvas,svg{max-width:100%;max-height:100%;}
 .chrome{position:absolute;left:120px;right:120px;top:64px;display:flex;justify-content:space-between;align-items:center;font-family:var(--font-mono);font-size:21px;letter-spacing:.04em;color:var(--mut);}
 .chrome .sec{color:var(--coral);}
 .chrome .sec b{display:inline-block;width:11px;height:11px;border-radius:50%;background:var(--coral);margin-right:11px;vertical-align:middle;}
-.foot{position:absolute;left:120px;right:120px;bottom:50px;display:flex;justify-content:space-between;align-items:center;font-family:var(--font-mono);font-size:18px;color:var(--mut);letter-spacing:.04em;}
+.foot{position:absolute;left:120px;right:120px;bottom:92px;display:flex;justify-content:space-between;align-items:center;font-family:var(--font-mono);font-size:18px;color:var(--mut);letter-spacing:.04em;}
 .foot .pg b{color:var(--ink);}
-.body{position:absolute;left:120px;right:120px;top:150px;bottom:110px;}
+.body{position:absolute;left:120px;right:120px;top:150px;bottom:160px;}
 
 /* 标题块 */
 .h-kick{font-family:var(--font-mono);font-size:22px;letter-spacing:.28em;text-transform:uppercase;color:var(--teal);margin-bottom:14px;}
@@ -135,13 +135,21 @@ img,video,canvas,svg{max-width:100%;max-height:100%;}
 .cl .e ul{list-style:none;display:flex;flex-direction:column;gap:9px;}
 .cl .e li{font-size:25px;color:var(--ink);line-height:1.45;padding-left:26px;position:relative;}
 .cl .e li::before{content:"›";position:absolute;left:4px;color:var(--coral);font-weight:700;}
-.slide.changelog-page .body{bottom:220px;}
-.slide.changelog-history-page .h2{font-size:58px;}
-.slide.changelog-history-page .cl .e{gap:28px;padding:16px 0;}
-.slide.changelog-history-page .cl .e .ver{font-size:25px;flex-basis:190px;}
-.slide.changelog-history-page .cl .e .ver small{font-size:16px;margin-top:4px;}
-.slide.changelog-history-page .cl .e ul{gap:6px;}
-.slide.changelog-history-page .cl .e li{font-size:21px;line-height:1.35;padding-left:22px;}
+.slide.changelog-page .body{display:flex;flex-direction:column;}
+.slide.changelog-page .h2{font-size:58px;}
+.history-hint{font-size:23px;line-height:1.5;color:var(--ink2);margin-top:18px;}
+.slide.changelog-page .cl{flex:1;min-height:0;max-width:none;overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable;scrollbar-color:var(--mut) transparent;margin-top:24px;padding:0 24px;border:1px solid var(--panel-bd);border-radius:6px;background:var(--panel);}
+.slide.changelog-page .cl:focus-visible{outline:3px solid var(--teal);outline-offset:4px;}
+.slide.changelog-page .cl .e:first-child{border-top:0;}
+.slide.changelog-page .cl .e:last-child{border-bottom:0;}
+@media print{
+  .slide.changelog-page{height:auto;overflow:visible;padding:150px 120px 60px;}
+  .slide.changelog-page .body{position:static;display:block;}
+  .slide.changelog-page .cl{overflow:visible;display:block;}
+  .slide.changelog-page .cl .e{break-inside:avoid;}
+  .slide.changelog-page .foot{position:static;margin-top:40px;}
+}
+
 
 /* 界面示意 */
 .apptb{position:absolute;left:0;right:0;top:300px;height:66px;display:flex;gap:10px;align-items:center;background:var(--ink);border-radius:8px;padding:0 16px;}
@@ -161,7 +169,7 @@ img,video,canvas,svg{max-width:100%;max-height:100%;}
 .mock .mini{height:170px;border:1px solid var(--panel-bd);border-radius:6px;background:#fff;margin-bottom:14px;position:relative;overflow:hidden;}
 .mock .mini svg{position:absolute;inset:0;width:100%;height:100%;}
 .mock .pbar{height:30px;background:#fff;border:1px solid var(--panel-bd);border-radius:4px;margin-bottom:10px;}
-.realshot{display:block;width:100%;height:auto;max-height:630px;object-fit:contain;border:1.5px solid var(--panel-bd);border-radius:10px;background:#fff;box-shadow:0 22px 54px rgba(40,30,25,.18);}
+.realshot{display:block;width:100%;height:auto;max-height:550px;object-fit:contain;border:1.5px solid var(--panel-bd);border-radius:10px;background:#fff;box-shadow:0 22px 54px rgba(40,30,25,.18);}
 .shotcap{margin-top:14px;font-family:var(--font-mono);font-size:18px;color:var(--mut);text-align:center;letter-spacing:.03em;}
 
 /* 信息密集页：收紧版心，不改变其余讲解页的阅读节奏。 */
@@ -222,10 +230,10 @@ img,video,canvas,svg{max-width:100%;max-height:100%;}
 @keyframes bar{0%,100%{transform:scaleY(.12);}50%{transform:scaleY(1);}}
 
 /* 演示控件 */
-.deck-controls{display:flex;align-items:center;gap:14px;font-family:var(--font-mono);background:rgba(44,37,32,.78);color:#f6efe5;padding:8px 16px;border-radius:30px;backdrop-filter:blur(6px);}
-.deck-controls button{background:none;border:none;color:#f6efe5;font-size:20px;cursor:pointer;padding:2px 8px;}
-.deck-controls .pgind{font-size:17px;letter-spacing:.06em;min-width:64px;text-align:center;}
-.deck-controls .bar{width:160px;height:4px;background:rgba(255,255,255,.2);border-radius:2px;overflow:hidden;}
+.deck-controls{display:flex;align-items:center;gap:21px;font-family:var(--font-mono);background:rgba(44,37,32,.78);color:#f6efe5;padding:12px 24px;border-radius:30px;backdrop-filter:blur(6px);}
+.deck-controls button{background:none;border:none;color:#f6efe5;font-size:30px;cursor:pointer;padding:3px 12px;}
+.deck-controls .pgind{font-size:25px;letter-spacing:.06em;min-width:96px;text-align:center;}
+.deck-controls .bar{width:240px;height:6px;background:rgba(255,255,255,.2);border-radius:2px;overflow:hidden;}
 .deck-controls .bar i{display:block;height:100%;background:var(--coral);width:0;transition:width .3s var(--ease);}
 
 /* 编辑模式 */
@@ -258,31 +266,68 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
     "version": "v8.4.1",
     "versionLabel": "使用说明 · V8.4.1",
     "subtitle": "从导入数据到分析与导出，一份可直接照做的操作指南",
-    "docVersion": "3.0",
+    "docVersion": "3.1",
     "updated": "2026-09-25",
     "credit": "GC02689"
   },
   "slides": [
     { "type": "cover" },
 
-    { "id": "changelog", "sec": "更新", "kicker": "CHANGELOG · RECENT", "title": "最近<c>更新</c>", "foot": "本说明会随软件持续更新", "density": "compact",
-      "blocks": [ { "type": "changelog", "start": 0 } ] },
-
-    { "id": "overview", "sec": "开始之前", "kicker": "OVERVIEW", "title": "它能帮你做<c>什么</c>", "foot": "TraceLab",
+    {
+      "id": "overview",
+      "sec": "开始之前",
+      "kicker": "OVERVIEW",
+      "title": "它能帮你做<c>什么</c>",
+      "foot": "TraceLab",
       "blocks": [
-        { "type": "lead", "html": "TraceLab 把「导入测量数据 → 查看与分析 → 导出结果」串成完整工作流，也支持连接采集设备，边采边看。以下六项覆盖最常用的工作。" },
-        { "type": "cards", "cols": 3, "items": [
-          { "no": "01", "h": "导入工程数据", "p": "支持 MF4、MDF、WWT、ZFD、MAT、ASCII、TDMS、表格、BLF、HEAD .hdf 和音视频等；选择文件或直接拖入即可。" },
-          { "no": "02", "h": "看波形随时间变化", "p": "多条通道的时域曲线一起看；最多新建 24 个 View，随手拖动、放大查看细节。" },
-          { "no": "03", "h": "看信号里的频率", "p": "一键 FFT，找出振动或噪声里主要是哪些频率。" },
-          { "no": "04", "h": "看转速相关的振动", "p": "阶次分析，专为发动机、电机这类会转的设备准备。", "accent": "teal" },
-          { "no": "05", "h": "一批文件批量处理", "p": "一次给很多文件做同样的分析，自动出图、出表。", "accent": "teal" },
-          { "no": "06", "h": "实时采集数据", "p": "连接设备边录边看，录完直接就能分析。", "accent": "teal" }
-        ] }
-      ] },
+        {
+          "type": "lead",
+          "html": "从导入测量数据，到查看、分析与导出；也可连接采集设备，边采边看。"
+        },
+        {
+          "type": "cards",
+          "cols": 3,
+          "items": [
+            {
+              "no": "01",
+              "h": "导入工程数据",
+              "p": "支持 MF4、WWT、ZFD、MAT、表格、TDMS、BLF、HEAD .hdf 和音视频等；选择文件或直接拖入。"
+            },
+            {
+              "no": "02",
+              "h": "看波形随时间变化",
+              "p": "多条通道的时域曲线一起看；最多新建 24 个 View，随手拖动、放大查看细节。"
+            },
+            {
+              "no": "03",
+              "h": "看信号里的频率",
+              "p": "一键 FFT，找出振动或噪声里主要是哪些频率。"
+            },
+            {
+              "no": "04",
+              "h": "看转速相关的振动",
+              "p": "阶次分析，专为发动机、电机这类会转的设备准备。",
+              "accent": "teal"
+            },
+            {
+              "no": "05",
+              "h": "一批文件批量处理",
+              "p": "一次给很多文件做同样的分析，自动出图、出表。",
+              "accent": "teal"
+            },
+            {
+              "no": "06",
+              "h": "实时采集数据",
+              "p": "连接设备边录边看，录完直接就能分析。",
+              "accent": "teal"
+            }
+          ]
+        }
+      ]
+    },
 
     { "id": "interface", "sec": "界面导览", "kicker": "THE WINDOW", "title": "界面分三块，<c>各管一件事</c>", "foot": "顶部工具栏：左边管文件与项目，中间切视图，右上是品牌与更新",
-      "blocks": [ { "type": "raw", "html": "<img class='realshot reveal' src='assets/time-panel.png' alt='TraceLab v8.2.1 时域主界面的真机截图'><div class='shotcap reveal'>v8.2.1 真机界面：左侧管理文件与通道，中间查看与操作图表，右侧集中设置当前图表。</div>" } ] },
+      "blocks": [ { "type": "raw", "html": "<img class='realshot reveal' src='assets/time-panel.webp' alt='TraceLab v8.2.1 时域主界面的真机截图'><div class='shotcap reveal'>v8.2.1 真机界面：左侧管理文件与通道，中间查看与操作图表，右侧集中设置当前图表。</div>" } ] },
 
     { "id": "load", "sec": "第一步", "kicker": "STEP 1 · LOAD", "title": "第一步 · 打开你的<c>数据</c>", "foot": "TraceLab", "density": "compact",
       "blocks": [
@@ -319,25 +364,94 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
 
     { "id": "imports", "sec": "真实导入", "kicker": "REAL FILES", "title": "三种格式，已经用<c>真文件验证</c>", "foot": "真实 Cocoa 界面 · WWT / ZFD / MAT",
       "blocks": [
-        { "type": "raw", "html": "<img class='realshot reveal' src='assets/imports-panel.png' alt='TraceLab v8.2.1 同时载入 WWT、ZFD 和 MAT 的真机界面'><div class='shotcap reveal'>v8.2.1 真机界面：三个文件卡片分别由可解析的 WWT、ZFD、MAT 示例生成；中间显示 WWT 的 Steering torque 曲线。</div>" }
+        { "type": "raw", "html": "<img class='realshot reveal' src='assets/imports-panel.webp' alt='TraceLab v8.2.1 同时载入 WWT、ZFD 和 MAT 的真机界面'><div class='shotcap reveal'>v8.2.1 真机界面：三个文件卡片分别由可解析的 WWT、ZFD、MAT 示例生成；中间显示 WWT 的 Steering torque 曲线。</div>" }
       ] },
 
-    { "id": "project", "sec": "存工程", "kicker": "PROJECT · .tlproj", "title": "把整个分析存成<c>工程</c>", "foot": "保存 / 关闭项目 → 下次一键还原",
+    {
+      "id": "project",
+      "sec": "存工程",
+      "kicker": "PROJECT · .tlproj",
+      "title": "把整个分析存成<c>工程</c>",
+      "foot": "保存分析设置 · 重开工程继续工作",
       "blocks": [
-        { "type": "when", "html": "分析做到一半想下次接着做，或者想把「这一整套分析」原样发给同事时用它。" },
-        { "type": "cols", "align": "start",
-          "left": [ { "type": "steps", "items": [
-            "把文件、通道、视图、参数都调到你满意的样子。",
-            "点工具栏 <span class='mono'>保存</span>，存成一个 <b>.tlproj</b> 工程文件；旁边箭头是 <span class='mono'>项目操作</span>，可<b>另存为…</b>或<b>关闭项目…</b>。",
-            "下次点 <span class='mono'>打开</span> 选这个工程，画面<b>原样还原</b>，接着分析。"
-          ] } ],
-          "right": [ { "type": "card", "accent": "teal", "no": "工程里存了什么", "h": "连「怎么看」一起记住",
-            "paras": [ "打开了哪些文件、勾了哪些通道、分了几个视图、每个分析的参数，还有图上的点标注、双游标落点和固定读数 —— 全都随 View 记在工程里。关闭游标只是不显示，重新打开仍在。活动单游标读数和标注工具开关不会进工程。", "工程只记文件的<b>位置</b>、不复制数据，所以体积很小，方便存档和分享。" ] } ] },
-        { "type": "tip", "label": "提示", "html": "<b>打开</b> 会自动识别：选<b>数据文件</b>是追加到当前；选 <b>.tlproj 工程</b>则整体还原。原文件找不到时会自动跳过并提示你。" },
-        { "type": "tip", "label": "关闭项目", "html": "<b>关闭项目</b>会先保护未保存内容，再清空会话并<b>解除保存路径</b>。之后点保存必须另存为，不会覆盖刚才关掉的工程。已绑定的工程名显示在工具栏保存区旁。" },
-        { "type": "tip", "label": "未保存", "html": "有未保存更改时可保存、不保存或取消。撤销只作用于当前编辑区域，空历史不会去走图表视角。" },
-        { "type": "tip", "label": "最后一个文件", "html": "移除会使工程变空的一组文件时，可选择<b>关闭项目</b>或<b>仅移除文件，保留项目</b>。保留后保存仍写当前工程；关掉最后一个文件并不等于开始了新任务。" }
-      ] },
+        {
+          "type": "when",
+          "html": "保存当前分析，下次继续；与同事共享时，还需一并提供原始数据文件。"
+        },
+        {
+          "type": "cols",
+          "align": "start",
+          "left": [
+            {
+              "type": "steps",
+              "items": [
+                "调整好文件、通道、View 和分析参数。",
+                "点工具栏 <span class=\"mono\">保存</span>，存为 <b>.tlproj</b>；旁边「项目操作」可<b>另存为…</b>或<b>关闭项目…</b>。",
+                "下次用 <span class=\"mono\">打开</span> 选择工程，恢复分析设置。"
+              ]
+            }
+          ],
+          "right": [
+            {
+              "type": "card",
+              "accent": "teal",
+              "no": "工程里存了什么",
+              "h": "连「怎么看」一起记住",
+              "paras": [
+                "记录文件位置、通道选择、视图布局和分析参数；点标注、双游标落点与<b>固定读数</b>也随 View 保存。",
+                "双游标关闭后再打开，落点仍在；活动单游标读数和标注工具开关不保存。",
+                "工程<b>不复制原始数据</b>。分享工程时请同时提供数据文件，并保证路径可访问。"
+              ]
+            }
+          ]
+        },
+        {
+          "type": "tip",
+          "label": "提示",
+          "html": "打开<b>数据文件</b>会追加到当前会话；打开 <b>.tlproj</b> 会整体恢复工程。缺失的原文件会跳过并提示。"
+        }
+      ]
+    },
+    {
+      "id": "project-close",
+      "sec": "存工程",
+      "kicker": "PROJECT · CLOSE & SAVE",
+      "title": "离开工程前，<c>确认保存去向</c>",
+      "foot": "关闭项目会解除路径 · 仅移除文件仍保留当前工程",
+      "blocks": [
+        {
+          "type": "when",
+          "html": "准备开始新任务，或移除最后一组文件时，先确认是否继续使用当前工程。"
+        },
+        {
+          "type": "cards",
+          "cols": 2,
+          "items": [
+            {
+              "no": "关闭项目",
+              "h": "结束这份工程",
+              "p": "从「项目操作」选择<b>关闭项目</b>。处理未保存更改后，清空会话并<b>解除保存路径</b>；之后保存必须另存为，不会覆盖刚关闭的工程。"
+            },
+            {
+              "no": "移除最后一组文件",
+              "h": "可保留空项目",
+              "accent": "teal",
+              "p": "可选<b>关闭项目</b>，或<b>仅移除文件，保留项目</b>。后者保留原保存路径，再保存仍写入当前工程。"
+            }
+          ]
+        },
+        {
+          "type": "tip",
+          "label": "未保存",
+          "html": "有未保存更改时可保存、不保存或取消。已绑定的工程名显示在工具栏保存区旁，保存前可先核对。"
+        },
+        {
+          "type": "tip",
+          "label": "撤销",
+          "html": "撤销只作用于当前编辑区域；空历史不会转去操作图表视角。"
+        }
+      ]
+    },
 
     { "id": "channels", "sec": "第二步", "kicker": "STEP 2 · CHANNELS", "title": "第二步 · 选择要查看的<c>通道</c>", "foot": "勾选 → 立即出图",
       "blocks": [
@@ -410,23 +524,92 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
         ] }
       ] },
 
-    { "id": "fft", "sec": "看频率", "kicker": "FREQUENCY · FFT", "title": "看频率成分 · <c>FFT</c> 分析", "foot": "峰值 = 主要频率",
+    {
+      "id": "fft",
+      "sec": "看频率",
+      "kicker": "FREQUENCY · FFT",
+      "title": "看频率成分 · <c>FFT</c> 分析",
+      "foot": "峰值 = 主要频率",
       "blocks": [
-        { "type": "when", "html": "想知道「信号里主要有哪些频率」——找振动、噪声、共振的来源时用它。" },
-        { "type": "cols", "align": "start",
-          "left": [ { "type": "steps", "items": [
-            "顶部切到 <span class='mono'>FFT</span> 视图。",
-            "右侧面板选好通道，设置几个参数（见右）。",
-            "看图上的<b>峰值</b>：峰值对应的横轴位置，就是主要频率。用单/双游标读频率与幅值；图上按 P 可固定当前读数。"
-          ] } ],
-          "right": [ { "type": "card", "no": "参数怎么调", "h": "不用记原理，照着选", "paras": [
-            "<b>窗函数</b> — 让频谱更干净，一般保持默认即可。",
-            "<b>FFT 点数（自动）</b> — 普通采样率下优先 4096 点；低 Fs 按目标窗长适配，不会用零填充冒充更细分辨率。计算后看「有效事实」里的实际点数、Δf、窗长和段数。",
-            "<b>频率分辨率</b> — 调得越细，频率分得越清楚，算得稍慢。Δf 是 bin 间隔，不是窗函数后的绝对可分辨频率。",
-            "<b>频率加权</b> — 默认「无」；分析声音时可切到 <b>A 计权</b>，按人耳听感对各频段加权（IEC 61672），更贴近主观响度。",
-            "<b>平均 / 峰值保持</b> — 信号有波动时，用「平均」让谱更稳，或用「峰值」抓住最大值。"
-          ], "tip": { "label": "选段", "html": "FFT 图上方的<b>时间预览</b>可以拖动、缩放来<b>查看</b>，不会改计算范围。要截取分析时间，选<b>指定范围</b>并填写开始、结束，点计算才执行。选<b>全时段</b>用完整数据。切换选项不重算、不 Home。" } } ] }
-      ] },
+        {
+          "type": "when",
+          "html": "想知道「信号里主要有哪些频率」——找振动、噪声、共振的来源时用它。"
+        },
+        {
+          "type": "cols",
+          "align": "start",
+          "left": [
+            {
+              "type": "steps",
+              "items": [
+                "顶部切到 <span class='mono'>FFT</span> 视图。",
+                "右侧面板选好通道，设置几个参数（见右）。",
+                "看图上的<b>峰值</b>：峰值对应的横轴位置，就是主要频率。用单/双游标读频率与幅值；图上按 P 可固定当前读数。"
+              ]
+            }
+          ],
+          "right": [
+            {
+              "type": "card",
+              "no": "常用设置",
+              "h": "先用默认值，再按目的调整",
+              "paras": [
+                "<b>窗函数</b>：通常先保持默认；它影响频谱泄漏和峰形。",
+                "<b>平均 / 峰值保持</b>：平均让波动的谱更稳；峰值保持用于查看最大值。",
+                "<b>频率加权</b>：默认「无」。分析声音可选 <b>A 计权</b>（IEC 61672），按人耳敏感度调整各频段权重。"
+              ]
+            }
+          ]
+        },
+        {
+          "type": "tip",
+          "label": "下一页",
+          "html": "需要截取分析时间或调整 FFT 点数时，继续看「选段与分辨率」。"
+        }
+      ]
+    },
+    {
+      "id": "fft-range",
+      "sec": "看频率",
+      "kicker": "FFT · RANGE & RESOLUTION",
+      "title": "FFT 的<c>选段与分辨率</c>",
+      "foot": "图上缩放只查看 · 点计算后才按设置执行",
+      "blocks": [
+        {
+          "type": "cards",
+          "cols": 2,
+          "items": [
+            {
+              "no": "分析时间",
+              "h": "全时段，或指定范围",
+              "p": "选<b>全时段</b>使用完整数据；选<b>指定范围</b>后填写开始、结束秒数，<b>点计算</b>才执行。切换选项不重算、不 Home。"
+            },
+            {
+              "no": "时间预览",
+              "h": "查看范围 ≠ 计算范围",
+              "accent": "teal",
+              "p": "FFT 上方的时间预览可拖动、缩放，但这些操作<b>只查看</b>，不会改计算范围。需要分析局部时，请填写指定范围。"
+            },
+            {
+              "no": "FFT 点数",
+              "h": "自动设置的依据",
+              "p": "普通采样率下优先 4096 点；低采样率按目标窗长适配，不会用零填充冒充更细分辨率。"
+            },
+            {
+              "no": "结果核对",
+              "h": "看实际值，不只看设置值",
+              "accent": "teal",
+              "p": "计算后在「有效事实」查看实际点数、Δf、窗长和段数。Δf 是 bin 间隔，不等于窗函数后的绝对可分辨频率。"
+            }
+          ]
+        },
+        {
+          "type": "tip",
+          "label": "取舍",
+          "html": "更细的频率间隔通常需要更长的数据窗。按分析目的选择分辨率，并结合计算后的实际值判断。"
+        }
+      ]
+    },
 
     { "id": "preset", "sec": "智能预设", "kicker": "SMART PRESET", "title": "参数不用愁 · <c>智能预设</c>", "foot": "选信号类型 → 参数自动配好",
       "blocks": [
@@ -473,20 +656,50 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
             "tip": { "label": "注意", "html": "这张图计算量较大，软件会在后台算，期间你可以随时<b>取消</b>。" } } ] }
       ] },
 
-    { "id": "frf", "sec": "系统辨识", "kicker": "FREQUENCY RESPONSE · FRF", "title": "看输入如何传到输出 · <c>频响</c>", "foot": "输入 → 输出 · H1/H2 · coherence",
+    {
+      "id": "frf",
+      "sec": "系统辨识",
+      "kicker": "FREQUENCY RESPONSE · FRF",
+      "title": "看输入如何传到输出 · <c>频响</c>",
+      "foot": "输入 → 输出 · H1/H2 · coherence",
       "blocks": [
-        { "type": "when", "html": "想确认一个系统在不同频率下如何把<b>输入</b>传到<b>输出</b>时，用「频响（FRF / 系统辨识）」；它不是单通道频谱。" },
-        { "type": "cols", "align": "start",
-          "left": [ { "type": "steps", "items": [
-            "顶部切到 <span class='mono'>频响</span>，在同一来源内选择输入和输出。",
-            "确认两端使用严格一致的物理时间轴；选全时段用完整数据。如需截取，选指定范围并填写开始、结束秒数，点计算才执行。切换选项不重算、不 Home。图上缩放只查看。",
-            "选择 H1（默认）或 H2，设置窗长与重叠，点 <span class='mono'>计算频响</span>。",
-            "用工具栏的游标关、单游标或双游标读幅值、相位和 coherence；双游标还能比较 fA、fB 和 Δf。任一图按 P 固定同一频率，关游标不隐藏已固定。"
-          ] } ],
-          "right": [ { "type": "card", "accent": "teal", "no": "先看 coherence", "h": "低相干先查测量条件",
-            "paras": [ "coherence 接近 1 时该频点的线性关联更可信；阈值只会淡化显示，不会删除导出数据。", "频响 dB 是输出/输入的传递比，不是绝对声学 reference。" ],
-            "tip": { "label": "范围", "html": "选“<b>指定范围</b>”后填写分析时间的开始、结束秒数，点计算才截取；选<b>全时段</b>用完整数据。切换选项不重算、不 Home。图上缩放只查看。自定义横轴不是秒；FRF 的分析时间仍应使用真实时间轴的秒数。" } } ] }
-      ] },
+        {
+          "type": "when",
+          "html": "想确认一个系统在不同频率下如何把<b>输入</b>传到<b>输出</b>时，用「频响（FRF / 系统辨识）」；它不是单通道频谱。"
+        },
+        {
+          "type": "cols",
+          "align": "start",
+          "left": [
+            {
+              "type": "steps",
+              "items": [
+                "顶部切到 <span class='mono'>频响</span>，在同一来源内选择输入和输出。",
+                "确认输入、输出使用严格一致的<b>物理时间轴</b>；按需要选择全时段或指定范围。",
+                "选择 H1（默认）或 H2，设置窗长与重叠，点 <span class='mono'>计算频响</span>。",
+                "用单/双游标读幅值、相位和 coherence；双游标比较 fA、fB、Δf。图上按 <b>P</b> 固定同一频率，关游标不隐藏已固定读数。"
+              ]
+            }
+          ],
+          "right": [
+            {
+              "type": "card",
+              "accent": "teal",
+              "no": "先看 coherence",
+              "h": "低相干先查测量条件",
+              "paras": [
+                "coherence 接近 1 时该频点的线性关联更可信；阈值只会淡化显示，不会删除导出数据。",
+                "频响 dB 是输出/输入的传递比，不是绝对声学 reference。"
+              ],
+              "tip": {
+                "label": "范围",
+                "html": "指定范围按真实时间轴填写开始、结束秒数，点计算才截取；全时段使用完整数据。切换选项不重算、不 Home；图上缩放只查看，自定义横轴也不会改变分析时间的单位。"
+              }
+            }
+          ]
+        }
+      ]
+    },
 
     { "id": "batch", "sec": "批量", "kicker": "BATCH", "title": "一批文件批量分析 · <c>批处理</c>", "foot": "存预设 → 选文件 → 自动出图出表",
       "blocks": [
@@ -527,39 +740,145 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
         { "type": "tip", "label": "技巧", "html": "想只导出某一段？先在<b>右侧设好时间范围</b>，再勾「仅导出范围」即可。" }
       ] },
 
-    { "id": "cheat", "sec": "速查", "kicker": "CHEAT SHEET", "title": "常用操作<c>速查</c>", "foot": "记不住没关系，回来翻这页", "density": "compact",
+    {
+      "id": "cheat",
+      "sec": "速查",
+      "kicker": "CHEAT SHEET",
+      "title": "常用操作<c>速查</c>",
+      "foot": "记不住没关系，回来翻这页",
+      "density": "compact",
       "blocks": [
-        { "type": "cols", "align": "start",
-          "left": [ { "type": "kv", "items": [
-            { "k": "按住拖动", "v": "左右平移时间" },
-            { "k": "鼠标滚轮", "v": "放大 / 缩小" },
-            { "k": "移动光标", "v": "读当前时刻各通道的值" },
-            { "k": "Ctrl + 1..5", "v": "分屏 / 叠加，以及关闭 / 单 / 双游标" },
-            { "k": "P", "v": "时域 / 频谱 / 频响图上固定当前读数；Board 与标注里仍是画笔" },
-            { "k": "FFT 预览拖选", "v": "时间预览上拖动只查看，不改计算范围" },
-            { "k": "右键通道", "v": "设为左轴（叠加显示时固定到左侧刻度）" },
-            { "k": "双击图上文字", "v": "添加 / 编辑标注" },
-            { "k": "Alt+Left / Alt+Right", "v": "视角后退 / 前进；Ctrl/Cmd+Z 保留给编辑撤销。视角后退已改为 Alt+Left" },
-            { "k": "搜索框", "v": "快速过滤；Esc 先清空搜索，再按一次关闭" },
-            { "k": "Enter / Space · F2 · Alt+Up/Down", "v": "激活列表行、重命名、调整文件顺序（鼠标入口仍可用）" },
-            { "k": "未保存更改", "v": "有未保存更改时可保存、不保存或取消；关闭项目会解除保存路径" }
-          ] } ],
-          "right": [ { "type": "card", "accent": "teal", "no": "三个省事小技巧", "h": "看得更清、更快", "paras": [
-            "· 通道太多看不清 → 分批勾选，或切「分开显示」。",
-            "· 想对比两个文件 → 同时勾不同文件里的同名通道。",
-            "· 分析前先用时间范围裁一段 → 算得更快、结论更准。"
-          ] } ] }
-      ] },
+        {
+          "type": "cols",
+          "align": "start",
+          "left": [
+            {
+              "type": "kv",
+              "items": [
+                {
+                  "k": "按住拖动",
+                  "v": "左右平移时间"
+                },
+                {
+                  "k": "鼠标滚轮",
+                  "v": "放大 / 缩小"
+                },
+                {
+                  "k": "移动光标",
+                  "v": "读当前时刻各通道的值"
+                },
+                {
+                  "k": "Ctrl + 1..5",
+                  "v": "分屏 / 叠加，以及关闭 / 单 / 双游标"
+                },
+                {
+                  "k": "P",
+                  "v": "时域 / 频谱 / 频响图上固定当前读数；Board 与标注里仍是画笔"
+                },
+                {
+                  "k": "FFT 预览拖选",
+                  "v": "时间预览上拖动只查看，不改计算范围"
+                }
+              ]
+            }
+          ],
+          "right": [
+            {
+              "type": "kv",
+              "items": [
+                {
+                  "k": "右键通道",
+                  "v": "设为左轴（叠加显示时固定到左侧刻度）"
+                },
+                {
+                  "k": "双击图上文字",
+                  "v": "添加 / 编辑标注"
+                },
+                {
+                  "k": "Alt+Left / Alt+Right",
+                  "v": "视角后退 / 前进；Ctrl/Cmd+Z 保留给编辑撤销。"
+                },
+                {
+                  "k": "搜索框",
+                  "v": "快速过滤；Esc 先清空搜索，再按一次关闭"
+                },
+                {
+                  "k": "Enter / Space · F2 · Alt+Up/Down",
+                  "v": "激活列表行、重命名、调整文件顺序（鼠标入口仍可用）"
+                },
+                {
+                  "k": "未保存更改",
+                  "v": "有未保存更改时可保存、不保存或取消；关闭项目会解除保存路径"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "tip",
+          "label": "技巧",
+          "html": "通道太多时分开显示；对比文件时勾选各自通道；只分析局部时，填写指定时间范围。"
+        }
+      ]
+    },
 
-    { "id": "playbook", "sec": "照着做", "kicker": "PLAYBOOK", "title": "三个常见场景，<c>照着做就行</c>", "foot": "TraceLab v8.4.1 · 使用说明", "density": "compact",
+    {
+      "id": "playbook",
+      "sec": "照着做",
+      "kicker": "PLAYBOOK",
+      "title": "三个常见场景，<c>照着做就行</c>",
+      "foot": "TraceLab v8.4.1 · 使用说明",
+      "density": "compact",
       "blocks": [
-        { "type": "flow", "height": 550, "cols": [
-          { "title": "场景一", "key": "快速看一个文件", "items": [ "添加文件", "勾选要看的通道", "时域看波形、拖动放大", "需要就切 FFT / 阶次", "导出 Excel 或图片" ] },
-          { "title": "场景二", "key": "批量分析一批文件", "accent": "teal", "items": [ "先分析好一个代表文件", "存成预设", "选中一批文件", "跑批处理", "自动出图、出表" ] },
-          { "title": "场景三", "key": "边录边看", "items": [ "打开 Cockpit", "配置要采集的信号", "开始采集、看实时卡片", "停止，自动存档", "用 Replay 回放分析" ] }
-        ] },
-        { "type": "lead", "center": true, "html": "从数据到结论，按场景完成查看、分析与导出。 —— TraceLab v8.4.1" }
-      ] }
+        {
+          "type": "flow",
+          "height": 500,
+          "cols": [
+            {
+              "title": "场景一",
+              "key": "快速看一个文件",
+              "items": [
+                "添加文件",
+                "勾选要看的通道",
+                "时域看波形、拖动放大",
+                "需要就切 FFT / 阶次",
+                "导出 Excel 或图片"
+              ]
+            },
+            {
+              "title": "场景二",
+              "key": "批量分析一批文件",
+              "accent": "teal",
+              "items": [
+                "先分析好一个代表文件",
+                "存成预设",
+                "选中一批文件",
+                "跑批处理",
+                "自动出图、出表"
+              ]
+            },
+            {
+              "title": "场景三",
+              "key": "边录边看",
+              "items": [
+                "打开 Cockpit",
+                "配置要采集的信号",
+                "开始采集、看实时卡片",
+                "停止，自动存档",
+                "用 Replay 回放分析"
+              ]
+            }
+          ]
+        },
+        {
+          "type": "lead",
+          "center": true,
+          "html": "从数据到结论，按场景完成查看、分析与导出。 —— TraceLab v8.4.1"
+        }
+      ]
+    },
+    { "id": "changelog", "sec": "更新历史", "kicker": "CHANGELOG · ALL VERSIONS", "title": "全部<c>更新历史</c>", "foot": "从新到旧 · ← 返回使用说明 · ↑ ↓ / Page Up / Page Down 滚动",
+      "blocks": [ { "type": "changelog", "start": 0 } ] }
   ],
 
   "changelog": [
@@ -813,7 +1132,7 @@ function renderBlock(b, p, nested){
       const paras=(b.paras||[]).map((x,n)=>ed(p.concat('paras',n),x,'p')).join('');
       const wave=b.wavemark?`<div class="wavemark"><svg viewBox="0 0 520 34" preserveAspectRatio="none"><path d="M0,17 C40,2 70,32 110,17 S180,2 220,17 290,32 330,17 400,2 440,17 480,26 520,17"/></svg></div>`:'';
       const tip=b.tip?`<div class="tip" style="margin-top:24px"><span class="ic">${b.tip.label}</span>${ed(p.concat('tip','html'),b.tip.html,'p')}</div>`:'';
-      const st='height:100%'+(b.mt?`;margin-top:${b.mt}px`:'');
+      const st=b.mt?`margin-top:${b.mt}px`:'';
       return `<div class="card${b.accent==='teal'?' teal':''}${nested?'':' reveal blk'}" style="${st}"><div class="no">${b.no}</div>${ed(p.concat('h'),b.h,'h3')}${pills}${paras}${wave}${tip}</div>`;
     }
     case 'cols': {
@@ -839,7 +1158,7 @@ function renderBlock(b, p, nested){
         if(!e)return '';
         return `<div class="e" data-release-index="${releaseIndex}"><div class="ver">${e.v}<small>${e.date}</small></div><ul>${e.items.map(x=>`<li>${x}</li>`).join('')}</ul></div>`;
       }).join('');
-      return `<div class="cl reveal${blk}">${es}</div>`;
+      return `<p class="history-hint reveal">全部 ${indices.length} 个版本 · 在下方区域纵向滚动查看；翻页请用底部按钮或 ← →。</p><div class="cl reveal${blk}" tabindex="0" role="region" aria-label="更新历史">${es}</div>`;
     }
     case 'raw': return b.html;
     default: return '';
@@ -870,95 +1189,13 @@ function renderCover(m){
   </section>`;
 }
 
-function changelogSlide(template,sourceIndex,blockIndex,releaseIndices,history,pageIndex){
-  const blocks=template.blocks.map((item,index)=>index===blockIndex
-    ? {...item,indices:releaseIndices}
-    : item);
-  return {
-    ...template,
-    _sourceIndex:sourceIndex,
-    id:history?`changelog-history-${pageIndex}`:`${template.id}-recent-${pageIndex}`,
-    kicker:history?'CHANGELOG · HISTORY':'CHANGELOG · RECENT',
-    title:history?'历史<c>版本</c>':'最近<c>更新</c>',
-    foot:history?'历史版本 · 只保留用户可见变化':template.foot,
-    changelogPage:true,
-    historyPage:history,
-    releaseIndices,
-    blocks,
-  };
-}
-
-function arrangeChangelogSlides(slides,packedHistoryGroups=null){
-  const RECENT_CHANGELOG_COUNT=2;
-  const mainSlides=[];
-  const historyIndices=[];
-  let templateInfo=null;
-  slides.forEach((slide,sourceIndex)=>{
-    const blockIndex=(slide.blocks||[]).findIndex(b=>b.type==='changelog');
-    if(blockIndex<0){mainSlides.push({...slide,_sourceIndex:sourceIndex});return;}
-    const block=slide.blocks[blockIndex];
-    const start=block.start||0;
-    const end=block.end==null?DECK.changelog.length:block.end;
-    const indices=Array.from({length:Math.max(0,end-start)},(_,index)=>start+index)
-      .filter(index=>DECK.changelog[index]);
-    const recent=indices.filter(index=>index<RECENT_CHANGELOG_COUNT);
-    recent.forEach((index,pageIndex)=>{
-      mainSlides.push(changelogSlide(slide,sourceIndex,blockIndex,[index],false,pageIndex));
-    });
-    historyIndices.push(...indices.filter(index=>index>=RECENT_CHANGELOG_COUNT));
-    templateInfo={slide,sourceIndex,blockIndex};
-  });
-  if(!templateInfo)return mainSlides;
-  const groups=packedHistoryGroups||historyIndices.map(index=>[index]);
-  const historySlides=groups.map((indices,pageIndex)=>changelogSlide(
-    templateInfo.slide,
-    templateInfo.sourceIndex,
-    templateInfo.blockIndex,
-    indices,
-    true,
-    pageIndex,
-  ));
-  return mainSlides.concat(historySlides);
-}
-
-function packChangelogHistory(){
-  const pages=[...document.querySelectorAll('.changelog-history-page')];
-  if(!pages.length)return [];
-  const heights=new Map();
-  const orderedIndices=[];
-  pages.forEach(page=>page.querySelectorAll('.cl .e').forEach(entry=>{
-    const index=Number(entry.dataset.releaseIndex);
-    if(!Number.isFinite(index))return;
-    heights.set(index,entry.offsetHeight);
-    orderedIndices.push(index);
-  }));
-  const sample=pages[0];
-  const body=sample.querySelector('.body');
-  const changelog=sample.querySelector('.cl');
-  const bottomWhitespace=64;
-  const maxHeight=Math.max(1,body.clientHeight-changelog.offsetTop-bottomWhitespace);
-  const groups=[];
-  let current=[];
-  let used=0;
-  orderedIndices.forEach(index=>{
-    const height=heights.get(index)||maxHeight;
-    if(current.length&&used+height>maxHeight){groups.push(current);current=[];used=0;}
-    current.push(index);
-    used+=height;
-  });
-  if(current.length)groups.push(current);
-  return groups;
-}
-
 function renderContentSlide(s, idx, total, m){
   const verLabel = `${m.title} ${m.version} 使用说明`;
-  const sourceIndex=s._sourceIndex==null?idx:s._sourceIndex;
+  const sourceIndex=idx;
+  const changelogPage=(s.blocks||[]).some(b=>b.type==='changelog');
   const blocks = (s.blocks||[]).map((b,bi)=>renderBlock(b,['slides',sourceIndex,'blocks',bi],false)).join('');
-  const title=s.changelogPage
-    ? `<h2 class="h2 reveal">${cmark(s.title)}</h2>`
-    : ed(['slides',sourceIndex,'title'],cmark(s.title),'h2','h2 reveal');
-  const releaseAttr=s.changelogPage?` data-release-indices="${s.releaseIndices.join(',')}"`:'';
-  return `<section class="slide${s.density ? ` ${s.density}` : ''}${s.changelogPage?' changelog-page':''}${s.historyPage?' changelog-history-page':''}"${releaseAttr}>
+  const title=ed(['slides',sourceIndex,'title'],cmark(s.title),'h2','h2 reveal');
+  return `<section data-slide-id="${s.id}" class="slide${s.density ? ` ${s.density}` : ''}${changelogPage?' changelog-page':''}">
     <div class="grat"></div><div class="toprule"></div>
     <div class="chrome"><span class="sec"><b></b>${s.sec||''}</span><span>${verLabel}</span></div>
     <div class="body">
@@ -977,9 +1214,7 @@ function render(){
     const html=slides.map((s,i)=>s.type==='cover'?renderCover(m):renderContentSlide(s,i,total,m)).join('');
     document.getElementById('deckStage').innerHTML=html;
   };
-  renderSlides(arrangeChangelogSlides(DECK.slides));
-  const historyGroups=packChangelogHistory();
-  renderSlides(arrangeChangelogSlides(DECK.slides,historyGroups));
+  renderSlides(DECK.slides);
   // 封面 FFT 频谱条（确定性，不用随机数）
   const fft=document.getElementById('coverFft');
   if(fft){for(let i=0;i<64;i++){const b=document.createElement('i');
@@ -996,6 +1231,7 @@ class Deck{
     this.slides=[...document.querySelectorAll('.slide')];this.i=0;
     this.stage=document.getElementById('deckStage');
     this.ind=document.getElementById('pageInd');this.prog=document.getElementById('progFill');
+    this.controls=document.querySelector('.deck-controls');
     this.scale=this.scale.bind(this);this.scale();window.addEventListener('resize',this.scale);
     this.bindKeys();this.bindWheel();this.bindTouch();
     document.getElementById('prevBtn').onclick=()=>this.prev();
@@ -1004,19 +1240,37 @@ class Deck{
     this.show(Number.isFinite(h)&&h>0?h-1:0);
     window.addEventListener('hashchange',()=>{const n=parseInt(location.hash.replace('#',''),10);if(Number.isFinite(n))this.show(n-1);});
   }
-  scale(){const f=Math.min(innerWidth/1920,innerHeight/1080);this.stage.style.transform=`translate(${(innerWidth-1920*f)/2}px,${(innerHeight-1080*f)/2}px) scale(${f})`;}
+  scale(){
+    const f=Math.min(innerWidth/1920,innerHeight/1080);
+    const y=(innerHeight-1080*f)/2;
+    this.stage.style.transform=`translate(${(innerWidth-1920*f)/2}px,${y}px) scale(${f})`;
+    this.controls.style.top=`${y+(1080-20-this.controls.offsetHeight)*f}px`;
+    this.controls.style.transform=`translateX(-50%) scale(${f})`;
+  }
   show(n){this.i=Math.max(0,Math.min(n,this.slides.length-1));
     this.slides.forEach((s,k)=>{const on=k===this.i;s.classList.toggle('active',on);s.classList.toggle('visible',on);});
     this.ind.textContent=`${String(this.i+1).padStart(2,'0')} / ${this.slides.length}`;
     this.prog.style.width=(this.i/(this.slides.length-1)*100)+'%';}
   next(){this.show(this.i+1);} prev(){this.show(this.i-1);}
   bindKeys(){document.addEventListener('keydown',e=>{if(e.target.isContentEditable)return;
+    const history=this.slides[this.i].querySelector('.cl');
+    if(history&&['ArrowUp','ArrowDown','PageUp','PageDown',' ','Home','End'].includes(e.key)){
+      e.preventDefault();
+      if(e.key==='Home')history.scrollTop=0;
+      else if(e.key==='End')history.scrollTop=history.scrollHeight;
+      else{
+        const up=e.key==='ArrowUp'||e.key==='PageUp'||(e.key===' '&&e.shiftKey);
+        const step=e.key.startsWith('Arrow')?80:history.clientHeight*.85;
+        history.scrollTop+=(up?-1:1)*step;
+      }
+      return;
+    }
     if(['ArrowRight','PageDown',' '].includes(e.key)){e.preventDefault();this.next();}
     else if(['ArrowLeft','PageUp'].includes(e.key)){e.preventDefault();this.prev();}
     else if(e.key==='Home')this.show(0);else if(e.key==='End')this.show(this.slides.length-1);});}
-  bindWheel(){let lock=false;window.addEventListener('wheel',e=>{if(document.body.classList.contains('editing'))return;
+  bindWheel(){let lock=false;window.addEventListener('wheel',e=>{if(document.body.classList.contains('editing')||this.slides[this.i].querySelector('.cl'))return;
     if(lock||Math.abs(e.deltaY)<24)return;lock=true;setTimeout(()=>lock=false,650);e.deltaY>0?this.next():this.prev();},{passive:true});}
-  bindTouch(){let x0=null,y0=null;window.addEventListener('touchstart',e=>{x0=e.touches[0].clientX;y0=e.touches[0].clientY;},{passive:true});
+  bindTouch(){let x0=null,y0=null;window.addEventListener('touchstart',e=>{if(e.target.closest('.cl')){x0=y0=null;return;}x0=e.touches[0].clientX;y0=e.touches[0].clientY;},{passive:true});
     window.addEventListener('touchend',e=>{if(x0===null)return;const dx=e.changedTouches[0].clientX-x0,dy=e.changedTouches[0].clientY-y0;
       if(Math.abs(dx)>60&&Math.abs(dx)>Math.abs(dy))dx<0?this.next():this.prev();x0=y0=null;},{passive:true});}
 }

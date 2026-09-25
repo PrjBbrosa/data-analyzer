@@ -2,7 +2,7 @@
 order / ultraview) by booting the real MainWindow, loading synthetic data,
 driving each mode to a populated state, and grabbing the whole window at 2x.
 
-Outputs to a STAGING dir (output/help-shots/) by default — review the PNGs,
+Outputs lossless WebP to a STAGING dir (output/help-shots/) by default — review the images,
 then re-run with --promote to copy them over mf4_analyzer/help/assets/. The
 guides' numbered pins are tied to UI element positions, so after promoting
 NEW screenshots you must re-check the pin left/top% in each *-guide.html.
@@ -18,7 +18,7 @@ fallback for layout/draft ONLY (offscreen != real render; do not treat an
 offscreen image as visually verified).
 
 Window geometry is FIXED at 1640x1010 to MATCH the shipped assets' framing
-(the original *-panel.png are 1640x1010, EPS-domain data: 方向盘扭矩 / 电机转速).
+(the original screenshots are 1640x1010, EPS-domain data: 方向盘扭矩 / 电机转速).
 Matching the original logical layout keeps the guides' numbered pins valid —
 they point at chrome (mode tabs / toolbar / channel list / View tabs) whose
 positions don't move. Still give the rendered guide a browser eyeball after
@@ -48,14 +48,14 @@ sys.path.insert(0, str(REPO_ROOT))
 
 PANEL_MODES = ("time", "fft", "fft_time", "order", "ultraview")
 PANEL_FILES = {
-    "time": "time-panel.png",
-    "fft": "fft-panel.png",
-    "fft_time": "ffttime-panel.png",
-    "order": "order-panel.png",
-    "ultraview": "ultraview-panel.png",
+    "time": "time-panel.webp",
+    "fft": "fft-panel.webp",
+    "fft_time": "ffttime-panel.webp",
+    "order": "order-panel.webp",
+    "ultraview": "ultraview-panel.webp",
 }
 EXTRA_SHOTS = ("imports",)
-EXTRA_FILES = {"imports": "imports-panel.png"}
+EXTRA_FILES = {"imports": "imports-panel.webp"}
 STAGING_DIR = REPO_ROOT / "output" / "help-shots"
 ASSETS_DIR = REPO_ROOT / "mf4_analyzer" / "help" / "assets"
 # Match the shipped assets exactly (1640x1010): scale grab to logical size so
@@ -63,13 +63,19 @@ ASSETS_DIR = REPO_ROOT / "mf4_analyzer" / "help" / "assets"
 WIN_W, WIN_H = 1640, 1010
 GRAB_SCALE = 1
 
-# EPS-domain channel names (matches how the shipped *-panel.png were made and
+# EPS-domain channel names (matches how the shipped *-panel.webp were made and
 # the project's EPS convention: order base = 电机转速). 信号 = 方向盘扭矩.
 CH_RPM = "电机转速"
 CH_SIGNAL = "方向盘扭矩"
 CH_TORQUE = "电机扭矩"
 
 IMPORT_SAMPLE_SUFFIXES = (".wwt", ".zfd", ".mat")
+
+
+def save_screenshot(pixmap, path: Path) -> None:
+    """Qt's WebP writer uses lossless encoding at quality 100."""
+    if not pixmap.save(str(path), "WEBP", 100):
+        raise OSError(f"Could not write lossless help screenshot: {path}")
 
 
 def _wwt_record(tag: str, n: int, *, name: str, unit: str = "",
@@ -391,7 +397,7 @@ def main() -> int:
         if pix.isNull() or pix.width() < 10:
             print(f"FAIL: degenerate pixmap for {mode}", file=sys.stderr)
             return 2
-        pix.save(str(out))
+        save_screenshot(pix, out)
         saved.append(out)
         print(f"saved staging: {out} ({pix.width()}x{pix.height()})")
 
