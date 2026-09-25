@@ -101,6 +101,17 @@ class _GlassTooltipPopup(QWidget):
         self._hide_timer = QTimer(self)
         self._hide_timer.setSingleShot(True)
         self._hide_timer.timeout.connect(self.hide)
+        self._closing = False
+        QApplication.instance().aboutToQuit.connect(self._shutdown)
+
+    def _shutdown(self):
+        # This app-wide popup has no widget parent. Dispose it while the Qt
+        # event loop still handles DeferredDelete, before SIP's atexit visitor:
+        # destroyed clears the singleton and may release the last wrapper ref.
+        self._closing = True
+        self._hide_timer.stop()
+        self.hide()
+        self.deleteLater()
 
     @classmethod
     def _clear_instance(cls, _object=None):
@@ -125,6 +136,8 @@ class _GlassTooltipPopup(QWidget):
 
     def show_for(self, text, anchor):
         """Show tooltip with *text* anchored just below *anchor* (global coords)."""
+        if self._closing:
+            return
         available = resolve_available_rect(anchor_global=anchor, widget=self)
         budget = client_budget(available, FrameInsets(), SCREEN_MARGIN)
         max_frame_w = min(_PREFERRED_WIDTH, max(1, budget.width))
@@ -163,7 +176,7 @@ class _GlassTooltipPopup(QWidget):
         self._hide_timer.stop()
 
     def schedule_hide(self, delay_ms=120):
-        if not self._hide_timer.isActive():
+        if not self._closing and not self._hide_timer.isActive():
             self._hide_timer.start(delay_ms)
 
     def paintEvent(self, event):  # noqa: N802

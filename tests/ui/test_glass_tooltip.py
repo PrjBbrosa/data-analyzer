@@ -1,6 +1,6 @@
 import pytest
 from PyQt5 import sip
-from PyQt5.QtCore import QEvent, QPoint
+from PyQt5.QtCore import QCoreApplication, QEvent, QPoint
 from PyQt5.QtWidgets import QStyle, QWidget
 
 from mf4_analyzer.ui_kit.dialog_geometry import IntRect, SCREEN_MARGIN, as_rect
@@ -46,6 +46,23 @@ def test_hide_event_ignores_deleted_popup_without_recreating(qapp):
 
     assert event_filter.eventFilter(watched, QEvent(QEvent.Hide)) is False
     assert _GlassTooltipPopup._instance is None
+
+
+def test_shutdown_stops_hide_timer_and_rejects_late_show(qapp):
+    popup = _GlassTooltipPopup.instance()
+    popup.show_for("提示", QPoint(100, 100))
+    popup.schedule_hide()
+    assert popup._hide_timer.isActive()
+
+    popup._shutdown()
+    popup.show_for("退出期间的迟到提示", QPoint(100, 100))
+    popup.schedule_hide()
+    assert not popup.isVisible()
+    assert not popup._hide_timer.isActive()
+
+    QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+    assert sip.isdeleted(popup)
+    assert _GlassTooltipPopup.existing() is None
 
 
 def test_tooltip_wake_policy_is_shared_and_preserves_fall_asleep_delay(qapp):

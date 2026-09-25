@@ -16,6 +16,20 @@ from mf4_analyzer.ui.inspector_sections.preset_state import (
 from mf4_analyzer.ui.inspector_sections.presets import PresetBar
 
 
+def test_hover_card_is_destroyed_with_preset_bar(qapp):
+    bar = PresetBar("test", lambda: {}, lambda _params: None)
+    card = bar._hover_card
+    try:
+        assert card.isWindow()  # Qt ownership must preserve tooltip geometry.
+        sip.delete(bar)
+        assert sip.isdeleted(card)
+    finally:
+        if not sip.isdeleted(bar):
+            sip.delete(bar)
+        if not sip.isdeleted(card):
+            sip.delete(card)
+
+
 def test_preset_bar_ignores_a_late_button_event_after_teardown_state_is_gone(qtbot):
     """A queued Leave must not call a torn-down bar through an event filter."""
     bar = PresetBar("test", lambda: {}, lambda _params: None)

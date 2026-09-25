@@ -98,9 +98,9 @@ class _PresetHoverCard(QFrame):
 
     WIDTH = 380
 
-    def __init__(self):
+    def __init__(self, parent=None):
         super().__init__(
-            None,
+            parent,
             Qt.ToolTip | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint
             | Qt.WindowTransparentForInput,
         )
@@ -585,7 +585,10 @@ class PresetBar(QWidget):
         self._default_params = (
             dict(default_params) if isinstance(default_params, dict) else None
         )
-        self._hover_card = _PresetHoverCard()
+        # Keep the tooltip a window, but let Qt destroy it with this bar.
+        # A parentless card can otherwise lose its last Python reference in
+        # destroyed while SIP is still traversing that wrapper at process exit.
+        self._hover_card = _PresetHoverCard(self)
         self._hover_card.destroyed.connect(self._on_hover_card_destroyed)
         self._hover_slot = None
         self._hover_pending_slot = None
