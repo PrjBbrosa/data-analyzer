@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 from functools import partial
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 from PyQt5.QtCore import QObject, pyqtSignal
@@ -231,6 +232,91 @@ def test_chart_stack_uses_the_canvas_public_cursor_x_mode(qapp, qtbot):
     qtbot.addWidget(cs)
 
     assert cs._cursor_x_mode(_PublicCursorModeSource(), ()) == "custom"
+
+
+def _frf_result():
+    return SimpleNamespace(
+        frequencies=np.array([1.0, 10.0, 100.0]),
+        transfer=np.array([1 + 0j, 2 + 0j, 4 + 0j]),
+        coherence=np.array([1.0, 0.95, 0.5]),
+        effective=SimpleNamespace(fs=1000.0, df=1.0, segments=4),
+        warnings=(),
+    )
+
+
+def _arm_frf(cs, qapp):
+    cs.resize(1048, 700)
+    cs.show()
+    cs.set_mode("frf")
+    canvas = cs.canvas_frf
+    canvas.set_result(
+        _frf_result(),
+        {"frequency_scale": "linear", "magnitude_scale": "linear"},
+        {},
+    )
+    qapp.processEvents()
+    return canvas
+
+
+def test_frf_single_projects_once_without_legacy_detail(qapp, qtbot):
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    canvas = _arm_frf(cs, qapp)
+    cs.set_cursor_mode_for_canvas(canvas, "single")
+    qapp.processEvents()
+
+    counts = _count_pill_writes(cs._pill)
+    canvas.set_cursor_frequency(10.0)
+    qapp.processEvents()
+
+    assert counts["projection"] == 1
+    assert counts["single_detail"] == 0
+    assert counts["detail"] == 0
+    assert cs._pill.has_detail()
+    assert "f=10 Hz" in cs._pill.primary_text()
+    assert "coherence=" not in cs._pill.primary_text()
+    assert canvas in cs._cursor_rows_by_canvas
+    assert cs._cursor_rows_by_canvas[canvas][1] == "frf"
+
+
+def test_frf_dual_projects_once_without_legacy_detail(qapp, qtbot):
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    canvas = _arm_frf(cs, qapp)
+    cs.set_cursor_mode_for_canvas(canvas, "dual")
+    qapp.processEvents()
+
+    counts = _count_pill_writes(cs._pill)
+    canvas.set_dual_cursor_frequencies(1.0, 100.0)
+    qapp.processEvents()
+
+    assert counts["projection"] == 1
+    assert counts["detail"] == 0
+    assert counts["single_detail"] == 0
+    assert "Δf=" in cs._pill.primary_text()
+    assert cs._pill.has_detail()
+    assert cs._cursor_rows_by_canvas[canvas][0] == "dual"
+
+
+def test_frf_legacy_string_does_not_paint_the_managed_pill(qapp, qtbot):
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    canvas = _arm_frf(cs, qapp)
+    cs.set_cursor_mode_for_canvas(canvas, "single")
+    canvas.set_cursor_frequency(10.0)
+    qapp.processEvents()
+    before = cs._pill.detail_text()
+
+    counts = _count_pill_writes(cs._pill)
+    canvas.cursor_info.emit("f=10 Hz | coherence=should-not-apply")
+    canvas.dual_cursor_info.emit("<b>legacy-frf</b>")
+    qapp.processEvents()
+
+    assert counts["projection"] == 0
+    assert counts["detail"] == 0
+    assert counts["single_detail"] == 0
+    assert cs._pill.detail_text() == before
+    assert "legacy-frf" not in cs._pill.detail_text()
 
 
 def test_pg_canvas_cursor_imports_neutral_model_not_chart_stack():

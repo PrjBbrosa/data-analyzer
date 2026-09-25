@@ -199,7 +199,7 @@ def test_frf_hints_cover_cursor_display_and_time_domain_limits():
     }
     joined = " ".join(frf_hints.values())
     for phrase in (
-        "工具栏", "游标", "三图", "读数", "阈值", "显示", "自定义 X", "不是秒",
+        "游标", "短标签", "双看", "仅A待B", "阈值", "显示", "自定义 X", "不是秒",
         "时域查看", "新建或复用",
     ):
         assert phrase in joined

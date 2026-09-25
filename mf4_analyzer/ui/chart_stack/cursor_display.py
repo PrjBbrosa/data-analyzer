@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from html import escape
 import json
+import math
 from typing import Iterable
 import weakref
 
@@ -30,6 +31,7 @@ from ..cursor_display_model import (
     CursorPresentation,
     FrequencyCursorChannel,
     FrfCursorSample,
+    FrfLiveCursorFacts,
     _OPTION_NAMES,
     enabled_value_fields,
 )
@@ -494,7 +496,7 @@ def _render_shared_table(projection, plan, shown_blocks, header_overrides, heade
 
     for index, block in enumerate(shown_blocks):
         color = escape(block.color or _TABLE_FALLBACK_COLOR, quote=True)
-        if projection.mini:
+        if projection.mini and not projection.retain_mini_labels:
             name = ""
         elif header_lines is not None and index < len(header_lines):
             name = '<br>'.join(escape(line) for line in header_lines[index])
@@ -571,7 +573,7 @@ def render_cursor_presentation(
         if omitted:
             parts.append(
                 '<div style="color:#64748b;padding-top:4px;">'
-                f'+{omitted} channels</div>'
+                f'{_omitted_summary(projection, omitted)}</div>'
             )
         return "".join(parts)
     gap = "4px" if constrained else "6px"
@@ -597,10 +599,18 @@ def render_cursor_presentation(
     if omitted:
         parts.append(
             '<div style="color:#64748b;padding-top:4px;">'
-            f'+{omitted} channels</div>'
+            f'{_omitted_summary(projection, omitted)}</div>'
         )
     parts.append('</div>')
     return "".join(parts)
+
+
+def _omitted_summary(projection: CursorPresentation, omitted: int) -> str:
+    """Whole-block overflow line. The noun is a display property, not a parse."""
+    noun = str(getattr(projection, "overflow_noun", "") or "channels")
+    if noun == "channels":
+        return f"+{omitted} channels"
+    return f"+{omitted} {noun}"
 
 
 def _tooltip(blocks: Iterable[CursorDisplayBlock]) -> str:
@@ -921,75 +931,206 @@ def pin_format_number(domain, value, unit) -> str:
     return f"{value:g}{suffix}"
 
 
+# Live FRF keeps the historical readout precision. Do not route these
+# through ``_formatted`` (.4g) or the FFT mini "dot only" name policy.
+_FRF_VALUE_SPEC = {
+    "magnitude": ".5g",
+    "phase": ".5g",
+    "coherence": ".4g",
+}
+_FRF_DELTA_SPEC = {
+    "magnitude": "+.5g",
+    "phase": "+.5g",
+    "coherence": "+.4g",
+}
+_FRF_METRICS = (
+    ("magnitude", "幅值 |H|", "|H|", "magnitude", "magnitude"),
+    ("phase", "相位 φ", "φ", "phase_deg", "phase_deg"),
+    ("coherence", "相干度 γ²", "γ²", "coherence", "coherence"),
+)
+_FRF_DELTA_ATTR = {
+    "magnitude": "delta_magnitude",
+    "phase": "delta_phase_deg",
+    "coherence": "delta_coherence",
+}
+_FRF_TITLE_SEP = '<span style="color:#cbd5e1;">  &nbsp;│&nbsp;  </span>'
+_FRF_DELTA_STYLE = "color:#0b7af3; background-color:#e8f1ff; font-weight:700;"
+
+
+def _format_frf_number(value, spec: str) -> str:
+    if isinstance(value, bool) or value is None:
+        return "—"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "—"
+    if not math.isfinite(number):
+        return "—"
+    return format(number, spec)
+
+
+def _format_frf_frequency(value) -> str:
+    return _format_frf_number(value, "g") if value is not None else "—"
+
+
+def _frf_unit(sample: FrfCursorSample, identity: str) -> str:
+    if identity == "magnitude":
+        return str(sample.magnitude_unit or "").strip()
+    if identity == "phase":
+        return "°"
+    return ""
+
+
+def _frf_metric_block(
+    *,
+    identity: str,
+    label: str,
+    metric_texts: tuple[str, ...],
+    unit: str,
+    cursor_mode: str,
+    mini: bool,
+) -> CursorDisplayBlock:
+    if cursor_mode == "single" or mini:
+        role = "Δ" if cursor_mode == "dual" else "value"
+        visible = (CursorDisplayRow(label, metric_texts[0], role=role),)
+        tooltip = (CursorDisplayRow(label, metric_texts[0]),)
+    else:
+        visible = (
+            CursorDisplayRow("A", metric_texts[0]),
+            CursorDisplayRow("B", metric_texts[1]),
+            CursorDisplayRow("Δ", metric_texts[2]),
+        )
+        tooltip = (CursorDisplayRow(label, ""),) + visible
+    return CursorDisplayBlock(
+        identity=identity,
+        qualified_label=label,
+        channel_label=label,
+        color="#111827",
+        visible_rows=visible,
+        tooltip_rows=tooltip,
+        metric_texts=metric_texts,
+        unit_text=unit,
+        table_rows=(CursorTableRow(metric_texts=metric_texts),),
+    )
+
+
+def _frf_presentation(
+    blocks: tuple[CursorDisplayBlock, ...],
+    *,
+    cursor_mode: str,
+    mini: bool,
+    layout_category: str,
+) -> CursorPresentation:
+    if not blocks:
+        metric_labels: tuple[str, ...] = ()
+    elif cursor_mode == "single":
+        metric_labels = ("Value",)
+    elif mini:
+        metric_labels = ("Δ",)
+    else:
+        metric_labels = ("A", "B", "Δ")
+    projection = CursorPresentation(
+        blocks=blocks,
+        html="",
+        tooltip="",
+        layout_category=layout_category,
+        cursor_mode=cursor_mode,
+        x_mode="frf",
+        mini=bool(mini),
+        omit_visible_source_prefix=True,
+        metric_labels=metric_labels,
+        retain_mini_labels=True,
+        overflow_noun="项指标",
+    )
+    return CursorPresentation(
+        blocks=projection.blocks,
+        html=render_cursor_presentation(projection),
+        tooltip=_tooltip(projection.blocks),
+        layout_category=projection.layout_category,
+        cursor_mode=projection.cursor_mode,
+        x_mode=projection.x_mode,
+        mini=projection.mini,
+        omit_visible_source_prefix=projection.omit_visible_source_prefix,
+        metric_labels=projection.metric_labels,
+        retain_mini_labels=True,
+        overflow_noun="项指标",
+    )
+
+
+def frf_live_primary_html(facts: FrfLiveCursorFacts | None) -> str:
+    """Frequency title for one live FRF reading. Metrics stay in the table."""
+    if facts is None or facts.mode == "off":
+        return ""
+    if facts.awaiting_b:
+        return (
+            f"A={_format_frf_frequency(facts.a_frequency_hz)} Hz"
+            f"{_FRF_TITLE_SEP}点击 B 选择第二点"
+        )
+    sample = facts.sample
+    if sample is None:
+        return ""
+    if facts.mode == "single" or sample.a is None or sample.b is None:
+        return f"f={_format_frf_frequency(sample.frequency_hz)} Hz"
+    delta = _format_frf_number(sample.delta_frequency_hz, "+g")
+    return _FRF_TITLE_SEP.join((
+        f"A={_format_frf_frequency(sample.a.frequency_hz)} Hz",
+        f"B={_format_frf_frequency(sample.b.frequency_hz)} Hz",
+        f'<span style="{_FRF_DELTA_STYLE}">Δf={delta} Hz</span>',
+    ))
+
+
 def build_frf_cursor_presentation(
     sample: FrfCursorSample | None,
     *,
     mini: bool,
     layout_category: str = "natural",
+    awaiting_b: bool = False,
 ) -> CursorPresentation:
-    """Project FRF evaluate facts into the shared table (one panel, three rows)."""
-    if sample is None:
-        return build_fft_cursor_presentation(
-            (), cursor_mode="single", mini=mini, layout_category=layout_category,
-        )
-    unit = str(sample.magnitude_unit or "")
-    if sample.a is not None and sample.b is not None:
-        channels = (
-            FrequencyCursorChannel(
-                identity="magnitude",
-                source_label="",
-                channel_label="|H|",
-                a_value=sample.a.magnitude,
-                b_value=sample.b.magnitude,
-                delta_ab=sample.delta_magnitude,
-                unit_suffix=unit,
-            ),
-            FrequencyCursorChannel(
-                identity="phase",
-                source_label="",
-                channel_label="phase",
-                a_value=sample.a.phase_deg,
-                b_value=sample.b.phase_deg,
-                delta_ab=sample.delta_phase_deg,
-                unit_suffix="°",
-            ),
-            FrequencyCursorChannel(
-                identity="coherence",
-                source_label="",
-                channel_label="coherence",
-                a_value=sample.a.coherence,
-                b_value=sample.b.coherence,
-                delta_ab=sample.delta_coherence,
-            ),
-        )
-        return build_fft_cursor_presentation(
-            channels, cursor_mode="dual", mini=mini,
+    """Project FRF evaluate facts into the shared table (one panel, three rows).
+
+    Full rows use the long name plus the symbol. Mini keeps only the short
+    symbol (``|H|`` / ``φ`` / ``γ²``) and still shows the unit. Positive
+    deltas keep a leading ``+``. Missing or non-finite metrics render ``—``.
+    """
+    if awaiting_b or sample is None:
+        return _frf_presentation(
+            (),
+            cursor_mode="dual" if awaiting_b else "single",
+            mini=mini,
             layout_category=layout_category,
         )
-    channels = (
-        FrequencyCursorChannel(
-            identity="magnitude",
-            source_label="",
-            channel_label="|H|",
-            value=sample.magnitude,
-            unit_suffix=unit,
-        ),
-        FrequencyCursorChannel(
-            identity="phase",
-            source_label="",
-            channel_label="phase",
-            value=sample.phase_deg,
-            unit_suffix="°",
-        ),
-        FrequencyCursorChannel(
-            identity="coherence",
-            source_label="",
-            channel_label="coherence",
-            value=sample.coherence,
-        ),
-    )
-    return build_fft_cursor_presentation(
-        channels, cursor_mode="single", mini=mini,
+    dual = sample.a is not None and sample.b is not None
+    cursor_mode = "dual" if dual else "single"
+    blocks = []
+    for identity, full_label, short_label, sample_attr, point_attr in _FRF_METRICS:
+        label = short_label if mini else full_label
+        unit = _frf_unit(sample, identity)
+        if dual:
+            texts = (
+                _format_frf_number(getattr(sample.a, point_attr), _FRF_VALUE_SPEC[identity]),
+                _format_frf_number(getattr(sample.b, point_attr), _FRF_VALUE_SPEC[identity]),
+                _format_frf_number(
+                    getattr(sample, _FRF_DELTA_ATTR[identity]),
+                    _FRF_DELTA_SPEC[identity],
+                ),
+            )
+            shown = (texts[2],) if mini else texts
+        else:
+            shown = (
+                _format_frf_number(getattr(sample, sample_attr), _FRF_VALUE_SPEC[identity]),
+            )
+        blocks.append(_frf_metric_block(
+            identity=identity,
+            label=label,
+            metric_texts=shown,
+            unit=unit,
+            cursor_mode=cursor_mode,
+            mini=mini,
+        ))
+    return _frf_presentation(
+        tuple(blocks),
+        cursor_mode=cursor_mode,
+        mini=mini,
         layout_category=layout_category,
     )
 
@@ -1215,6 +1356,8 @@ __all__ = [
     "FrequencyCursorChannel",
     "build_cursor_presentation",
     "build_fft_cursor_presentation",
+    "build_frf_cursor_presentation",
+    "frf_live_primary_html",
     "enabled_value_fields",
     "render_cursor_presentation",
     "visible_block_label",

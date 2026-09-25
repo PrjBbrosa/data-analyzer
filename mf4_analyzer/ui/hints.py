@@ -585,7 +585,7 @@ _HINTS = (
     # copies a time range once and is never a live pan/zoom subscription.
     Hint(
         id="frf.linked_cursor",
-        text="工具栏：关/单/双游标，三图双游标读数 Δf",
+        text="频响游标数值留短标签，双看Δ，仅A待B",
         surface="context",
         modes=frozenset({"frf"}),
         priority=120,

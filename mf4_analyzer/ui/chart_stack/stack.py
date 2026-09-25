@@ -48,9 +48,14 @@ from .cursor_display import (
     FrequencyCursorChannel,
     build_cursor_presentation,
     build_fft_cursor_presentation,
+    build_frf_cursor_presentation,
+    frf_live_primary_html,
     live_pin_hint_text,
 )
-from ..cursor_display_model import cursor_display_channel_from_dual_row
+from ..cursor_display_model import (
+    FrfLiveCursorFacts,
+    cursor_display_channel_from_dual_row,
+)
 from .pinned_cursor_controller import PinnedCursorController
 from ..plot_helpers import (
     apply_cursor_source_prefix_policy,
@@ -538,6 +543,10 @@ class ChartStack(QWidget):
         if canvas is not None and hasattr(canvas, 'frequency_cursor_channels'):
             canvas.frequency_cursor_channels.connect(
                 partial(self._on_frequency_cursor_channels, source=canvas)
+            )
+        if canvas is not None and hasattr(canvas, 'frf_cursor_facts'):
+            canvas.frf_cursor_facts.connect(
+                partial(self._on_frf_cursor_facts, source=canvas)
             )
         if (
             canvas is not None
@@ -2451,7 +2460,17 @@ class ChartStack(QWidget):
         """True when ``source`` is this stack's live FFT spectrum canvas."""
         return isinstance(source, PgLineCanvas)
 
+    def _is_managed_frf_canvas(self, source):
+        """True when ``source`` publishes live FRF facts for this stack.
+
+        Identity is the FRF canvas, not a widened FFT ``isinstance`` check.
+        Legacy ``cursor_info`` strings from this canvas must not paint the pill.
+        """
+        return isinstance(source, PgFrfCanvas)
+
     def _on_cursor_info(self, text, source=None):
+        if self._is_managed_frf_canvas(source):
+            return
         if not self._cursor_source_on_screen(source):
             return
         if text:
@@ -2530,6 +2549,8 @@ class ChartStack(QWidget):
         return strip_html(value)
 
     def _on_dual_cursor_info(self, text, source=None):
+        if self._is_managed_frf_canvas(source):
+            return
         if not self._cursor_source_on_screen(source):
             return
         if text:
@@ -2666,6 +2687,13 @@ class ChartStack(QWidget):
                 cursor_mode=cursor_mode,
                 mini=pill.display_mode() == "mini",
             )
+        elif x_mode == "frf":
+            facts = channels
+            projection = build_frf_cursor_presentation(
+                None if getattr(facts, "awaiting_b", False) else getattr(facts, "sample", None),
+                mini=pill.display_mode() == "mini",
+                awaiting_b=bool(getattr(facts, "awaiting_b", False)),
+            )
         else:
             projection = build_cursor_presentation(
                 channels,
@@ -2685,7 +2713,9 @@ class ChartStack(QWidget):
                 pill._primary_original = primary_text
             pill.set_pin_role("live")
             dual_complete = True
-            if cursor_mode == "dual":
+            if x_mode == "frf":
+                dual_complete = not bool(getattr(channels, "awaiting_b", False))
+            elif cursor_mode == "dual":
                 snap_fn = getattr(source, "snapshot_cursor_placement", None)
                 snap = snap_fn() if callable(snap_fn) else None
                 dual_complete = bool(
@@ -2788,6 +2818,45 @@ class ChartStack(QWidget):
             delta_ab=channel.delta_ab,
         )
 
+    def _frf_facts_are_clear(self, facts) -> bool:
+        if not isinstance(facts, FrfLiveCursorFacts):
+            return True
+        if facts.mode == "off":
+            return True
+        if facts.awaiting_b:
+            return False
+        return facts.sample is None
+
+    def _on_frf_cursor_facts(self, facts, source=None):
+        """Apply one structured FRF reading, or drop it when the pane is hidden.
+
+        A hidden clear removes only this canvas cache. It must not erase the
+        pill currently showing another section. Legacy HTML from the same
+        canvas is ignored by the cursor-info slots.
+        """
+        if source is None or not self._is_managed_frf_canvas(source):
+            return
+        on_screen = self._cursor_source_on_screen(source)
+        self._cancel_legacy_detail_fallback(source)
+        if self._frf_facts_are_clear(facts):
+            self._drop_cursor_canvas_state(source)
+            if not on_screen or self._pinned_cursors.is_live_suppressed(source):
+                return
+            pill = self._pill_for_canvas(source)
+            card = self._card_for_canvas(source)
+            self._active_cursor_card = card
+            self._update_pill_content(pill, card, pill.clear)
+            return
+        self._pinned_cursors.clear_live_suppressed(source)
+        primary = frf_live_primary_html(facts)
+        self._cursor_rows_by_canvas[source] = (
+            facts.mode, "frf", facts, primary,
+        )
+        if not on_screen:
+            return
+        self._active_cursor_card = self._card_for_canvas(source)
+        self._refresh_cursor_projection(source, primary=primary)
+
     def _on_frequency_cursor_channels(self, channels, source=None):
         if not self._cursor_source_on_screen(source):
             return
@@ -2862,7 +2931,7 @@ class ChartStack(QWidget):
                     card.close_cursor_display_popover()
         for canvas in tuple(self._cursor_rows_by_canvas):
             cached = self._cursor_snapshot(canvas)
-            if cached is not None and cached[1] == "frequency":
+            if cached is not None and cached[1] in {"frequency", "frf"}:
                 continue
             self._refresh_cursor_projection(canvas)
 
@@ -2886,10 +2955,8 @@ class ChartStack(QWidget):
     def _sync_cursor_pill_to_mode(self, mode):
         """Keep the shared pill on the visible section's cached readout.
 
-        Time and FFT both own the same widget. Switching sections must not
-        leave the previous domain's projection on screen, and must restore
-        the destination canvas cache when it still exists. FRF keeps its
-        legacy HTML path, so this only isolates the two managed domains.
+        Time, FFT, and FRF share one live widget. Switching sections restores
+        that section's cache or hides the pill when the cache is empty.
         Primary and detail belong to the same per-canvas snapshot.
         """
         if mode == "time":
@@ -2906,13 +2973,22 @@ class ChartStack(QWidget):
                 self._pill.setVisible(False)
             self._reposition_pill()
             return
-        if mode != "fft":
+        if mode == "fft":
+            self._restore_section_cursor_pill(
+                self.page_fft, "frequency", self._fft_card,
+            )
             return
+        if mode == "frf":
+            self._restore_section_cursor_pill(
+                self.page_frf, "frf", self._frf_card,
+            )
+
+    def _restore_section_cursor_pill(self, page, x_mode, fallback_card):
         restored = False
-        for card in self.page_fft._cards:
+        for card in page._cards:
             source = getattr(card, "canvas", None)
             cached = self._cursor_snapshot(source)
-            if cached is not None and cached[1] == "frequency":
+            if cached is not None and cached[1] == x_mode:
                 self._active_cursor_card = card
                 self._refresh_cursor_projection(
                     source, primary=cached[3] or "",
@@ -2920,8 +2996,8 @@ class ChartStack(QWidget):
                 restored = True
                 break
         if not restored:
-            self._active_cursor_card = self._fft_card
-            self._pill.setVisible(False)
+            self._active_cursor_card = fallback_card
+            self._clear_cursor_pill_content(self._pill, fallback_card)
         if self._pill_secondary is not None:
             self._pill_secondary.setVisible(False)
         self._reposition_pill()

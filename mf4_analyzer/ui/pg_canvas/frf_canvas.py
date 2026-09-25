@@ -54,6 +54,7 @@ from .pinned_cursor_overlay import PinnedCursorOverlay
 from mf4_analyzer.ui.cursor_display_model import (
     FrfCursorPoint,
     FrfCursorSample,
+    FrfLiveCursorFacts,
     PinnedCursorSample,
 )
 from mf4_analyzer.ui.view_overlay_state import normalize_cursor_placement
@@ -177,6 +178,9 @@ class PgFrfCanvas(QWidget):
 
     cursor_info = pyqtSignal(str)
     dual_cursor_info = pyqtSignal(str)
+    # Structured live reading. ChartStack paints managed FRF from this payload
+    # only; the string signals stay for compatibility callers.
+    frf_cursor_facts = pyqtSignal(object)
     context_menu_requested = pyqtSignal()
     layout_geometry_changed = pyqtSignal()
     manual_zoom_changed = pyqtSignal(bool)
@@ -1917,6 +1921,7 @@ class PgFrfCanvas(QWidget):
         if emit_empty:
             self.cursor_info.emit("")
             self.dual_cursor_info.emit("")
+            self.frf_cursor_facts.emit(FrfLiveCursorFacts(mode="off"))
 
     def _clear_frequency_cursor_readout(self) -> None:
         """Wipe A/B placement and hide lines. File-close / empty-canvas path."""
@@ -2064,10 +2069,12 @@ class PgFrfCanvas(QWidget):
         idx = self._nearest_frequency_index(frequency)
         if idx is None:
             self.cursor_info.emit("")
+            self.frf_cursor_facts.emit(FrfLiveCursorFacts(mode="off"))
             return ""
         sample = self._frf_sample_from_index(idx)
         if sample is None:
             self.cursor_info.emit("")
+            self.frf_cursor_facts.emit(FrfLiveCursorFacts(mode="off"))
             return ""
         self._show_frequency_lines(self._cursor_lines, sample.frequency_hz)
         text = (
@@ -2078,6 +2085,9 @@ class PgFrfCanvas(QWidget):
             f"coherence={self._format_frf_qty(sample.coherence, '.4g')}"
         )
         self.cursor_info.emit(text)
+        self.frf_cursor_facts.emit(
+            FrfLiveCursorFacts(mode="single", sample=sample)
+        )
         return text
 
     def _format_dual_sample(self, prefix, index) -> str:
@@ -2131,6 +2141,7 @@ class PgFrfCanvas(QWidget):
         if a_index is None:
             self.cursor_info.emit("")
             self.dual_cursor_info.emit("")
+            self.frf_cursor_facts.emit(FrfLiveCursorFacts(mode="off"))
             return ""
         self._cursor_a_frequency = float(self._draw_frequencies[a_index])
         self._show_frequency_lines(self._cursor_a_lines, self._cursor_a_frequency)
@@ -2140,6 +2151,11 @@ class PgFrfCanvas(QWidget):
             primary = f"A: f={self._cursor_a_frequency:g} Hz | 点击 B 选择第二点"
             self.cursor_info.emit(primary)
             self.dual_cursor_info.emit("")
+            self.frf_cursor_facts.emit(FrfLiveCursorFacts(
+                mode="dual",
+                awaiting_b=True,
+                a_frequency_hz=self._cursor_a_frequency,
+            ))
             return primary
         b_index = self._nearest_frequency_index(b_frequency)
         if b_index is None:
@@ -2164,6 +2180,9 @@ class PgFrfCanvas(QWidget):
             f"{self._format_dual_sample('A', a_index)}<br>"
             f"{self._format_dual_sample('B', b_index)}<br>"
             f"{self._format_dual_delta(a_index, b_index)}"
+        )
+        self.frf_cursor_facts.emit(
+            FrfLiveCursorFacts(mode="dual", sample=sample)
         )
         return primary
 

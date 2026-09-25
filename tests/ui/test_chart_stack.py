@@ -252,7 +252,13 @@ def test_frf_cursor_toolbar_reuses_the_off_single_dual_controls(qapp, qtbot):
     canvas.set_cursor_frequency(10.0)
     qapp.processEvents()
     assert cs._pill.isVisible()
-    assert "coherence=" in cs._pill.primary_text()
+    assert "f=" in cs._pill.primary_text()
+    assert "Hz" in cs._pill.primary_text()
+    assert "coherence=" not in cs._pill.primary_text()
+    assert "|H|" in cs._pill.detail_text()
+    assert "φ" in cs._pill.detail_text()
+    assert "γ²" in cs._pill.detail_text()
+    assert all(line.isVisible() for line in canvas._cursor_lines)
 
     buttons["dual"].click()
     qapp.processEvents()
@@ -261,8 +267,13 @@ def test_frf_cursor_toolbar_reuses_the_off_single_dual_controls(qapp, qtbot):
     assert cs._pill.isVisible()
     assert "Δf=" in cs._pill.primary_text()
     assert "background-color:#e8f1ff" in cs._pill.primary_text()
-    assert "ΔY：Δ|H|=" in cs._pill._detail.text()
+    assert "coherence=" not in cs._pill.primary_text()
+    detail = cs._pill.detail_text()
+    assert "|H|" in detail and "φ" in detail and "γ²" in detail
+    assert ">A</td>" in detail and ">B</td>" in detail
     assert cs._pill.has_detail()
+    assert all(line.isVisible() for line in canvas._cursor_a_lines)
+    assert all(line.isVisible() for line in canvas._cursor_b_lines)
 
     buttons["off"].click()
     qapp.processEvents()

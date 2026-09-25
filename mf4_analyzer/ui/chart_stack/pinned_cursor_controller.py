@@ -1526,6 +1526,8 @@ class PinnedCursorController(QObject):
         )
         channels = tuple(getattr(sample, "channels", ()) or ())
         if domain == "frf":
+            # Live FRF already published FrfLiveCursorFacts. Rewriting that
+            # cache as FFT channels would drop the three-metric table.
             return
         host._cursor_rows_by_canvas[source] = (
             mode, x_mode, channels, self._live_primary_html(domain, mode, sample),

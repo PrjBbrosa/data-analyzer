@@ -147,6 +147,22 @@ class FrfCursorSample:
 
 
 @dataclass(frozen=True)
+class FrfLiveCursorFacts:
+    """One live FRF cursor publication. Qt-free; no ChartStack dependency.
+
+    ``mode`` is ``single``, ``dual``, or ``off``. A complete reading carries
+    ``sample``. Dual placement that has only A sets ``awaiting_b`` and
+    ``a_frequency_hz`` with ``sample is None``, so a later full/mini toggle
+    cannot rebuild the previous B or Δ. ``off`` clears the live cache.
+    """
+
+    mode: str = "off"
+    sample: FrfCursorSample | None = None
+    awaiting_b: bool = False
+    a_frequency_hz: float | None = None
+
+
+@dataclass(frozen=True)
 class CursorExtremaFact:
     """Time-domain dual-cursor min/max marker fact already computed by the owner."""
 
@@ -193,6 +209,11 @@ class CursorPresentation:
     # Actual displayed columns: Value for single, enabled stats for dual,
     # one priority stat for dual mini, or empty for identity-only display.
     metric_labels: tuple[str, ...] = ()
+    # FFT/time mini hides names and keeps the color dot. FRF metrics are
+    # different quantities, so mini keeps the short label on each row.
+    retain_mini_labels: bool = False
+    # Overflow summary noun. Time/FFT stay "channels"; FRF passes "项指标".
+    overflow_noun: str = "channels"
 
 
 def enabled_value_fields(options: CursorDisplayOptions | None):
@@ -285,6 +306,7 @@ __all__ = [
     "FrequencyCursorChannel",
     "FrfCursorPoint",
     "FrfCursorSample",
+    "FrfLiveCursorFacts",
     "PinnedCursorSample",
     "_OPTION_NAMES",
     "cursor_display_channel_from_dual_row",
