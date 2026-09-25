@@ -24,7 +24,7 @@ Published guide entry points:
 
 ## Current Product Baseline
 
-The current baseline is TraceLab 8.4. It retains the 7.6 ASCII (`.asc`),
+The current baseline is TraceLab 8.4.1. It retains the 7.6 ASCII (`.asc`),
 NI TDMS (`.tdms`), and the original 12-View expansion (time-domain is now 24
 Views; the four analysis sections stay at 12), as well as the native WinWert
 (`.wwt`), ZFGE2/TestRunPRO (`.zfd`), and MATLAB (`.mat`) imports introduced
@@ -143,6 +143,13 @@ match exactly. A real signal named `t` or `time` stays if it is not a time maste
 8.4 adds a DPI-aware startup panel that closes before the main window appears,
 refines the sky-blue glass panels with a native Cocoa backdrop and an opaque
 fallback, and improves repeat chart transitions and tooltip responsiveness.
+8.4.1 keeps a measurement channel named exactly Time from replacing the MF4
+public time axis, so the sampling rate stays the file's real time base, while
+signals named t or zeit remain selectable. Batch results and Replay report
+shared-axis alignment and endpoint fill instead of treating the filled samples
+as the original measurement. An FRF range change refreshes the UltraView
+preview. The startup panel scales to the current work area, hands over on the
+main window's screen, and keeps a reduced-motion preference.
 Update the published guides when these behaviours change; preserve each loader's
 timing and unit boundaries instead of describing inferred metadata as measured
 truth.
