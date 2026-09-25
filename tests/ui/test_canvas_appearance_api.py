@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 import sys
@@ -267,6 +268,69 @@ def test_apply_does_not_emit_user_modified_signal(qapp):
     assert snap.y_label == "Nm"
     assert snap.grid is False
     assert seen == []
+
+
+def test_log_repair_keeps_decade_whose_viewbox_starts_at_zero(qapp):
+    """Engineering 1…100 is ViewBox 0…2. Repair must not autoscale that away."""
+    canvas = _pg_canvas(qapp)
+    y = np.linspace(1.0, 100.0, 64)
+    canvas.plot_channels(
+        [_row("a", fid="f1", channel="a", y=y)], mode="subplot",
+    )
+    qapp.processEvents()
+    handle = canvas.axes_list[0]
+    handle.set_yscale("log")
+    assert handle.set_engineering_ylim(1.0, 100.0) is True
+    before = handle.get_ylim()
+    calls = []
+    original = handle.autoscale
+
+    def _record(axis="both"):
+        calls.append(axis)
+        return original(axis=axis)
+
+    handle.autoscale = _record
+    canvas.repair_chart_appearance_ranges({
+        "x_scale": "linear",
+        "axes": [{"handle": handle, "y_scale": "log"}],
+    })
+    after = handle.get_ylim()
+    engineering = handle.get_engineering_ylim()
+    assert calls == []
+    assert after[0] == pytest.approx(before[0])
+    assert after[1] == pytest.approx(before[1])
+    assert engineering[0] == pytest.approx(1.0)
+    assert engineering[1] == pytest.approx(100.0)
+    assert after[0] == pytest.approx(0.0)
+    assert after[1] == pytest.approx(2.0)
+
+
+def test_apply_log_still_autoscales_non_positive_engineering_span(qapp):
+    canvas = _pg_canvas(qapp)
+    y = np.linspace(-5.0, 5.0, 64)
+    canvas.plot_channels(
+        [_row("a", fid="f1", channel="a", y=y)], mode="subplot",
+    )
+    qapp.processEvents()
+    handle = canvas.axes_list[0]
+    before_lo, _before_hi = handle.get_ylim()
+    assert before_lo <= 0.0
+    calls = []
+    original = handle.autoscale
+
+    def _record(axis="both"):
+        calls.append(axis)
+        return original(axis=axis)
+
+    handle.autoscale = _record
+    canvas.apply_chart_appearance({
+        "x_scale": "linear",
+        "axes": [{"handle": handle, "y_scale": "log"}],
+    })
+    assert "y" in calls
+    after_lo, after_hi = handle.get_ylim()
+    assert after_lo < after_hi
+    assert math.isfinite(after_lo) and math.isfinite(after_hi)
 
 
 def test_repair_does_not_settle_or_change_quiet_timer(qapp):

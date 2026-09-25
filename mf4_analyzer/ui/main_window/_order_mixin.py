@@ -17,7 +17,7 @@ from ...signal.analysis_defaults import DEFAULT_ANALYSIS_WINDOW, DEFAULT_ORDER_R
 from ...signal.fft import unconstrained_window_nfft
 from ...signal.order import order_facts_from_result
 from ...signal.spectrogram import SpectrogramAnalyzer
-from ..pg_canvas.heatmap_canvas import DEFAULT_HEATMAP_CMAP, DEFAULT_HEATMAP_INTERP
+from ..pg_canvas.heatmap_canvas import DEFAULT_HEATMAP_INTERP
 from ...qt_analysis_shared import amplitude_mode_is_db
 from ..compute_feedback import ComputeOutcome
 from ._sentinel import _INSPECTOR_TIME_RANGE
@@ -696,7 +696,7 @@ class OrderMixin:
             y_auto=bool(order_params.get("y_auto", True)),
             y_min=float(order_params.get("y_min", 0.0)),
             y_max=float(order_params.get("y_max", 0.0)),
-            cmap=str(getattr(canvas, "_cmap_name", DEFAULT_HEATMAP_CMAP)),
+            cmap=self._heatmap_cmap_for_canvas("order", canvas),
             interp=str(DEFAULT_HEATMAP_INTERP),
             tick_x=tick_x,
             tick_y=tick_y,
@@ -827,6 +827,9 @@ class OrderMixin:
         if inputs.seed_slice:
             canvas._seed_slice()
         canvas.set_tick_density(inputs.tick_x, inputs.tick_y)
+        project = getattr(self, "_project_heatmap_pane_appearance", None)
+        if callable(project):
+            project("order", canvas)
 
     def _render_order_on(self, canvas, result, source=None):
         """Multi-pane variant: draw an Order COT ``result`` on an arbitrary

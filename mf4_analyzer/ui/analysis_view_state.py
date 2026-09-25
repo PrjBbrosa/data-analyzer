@@ -196,6 +196,140 @@ def _coerce_preset_baseline(value: Any) -> dict[str, Any] | None:
     }
 
 
+CHART_APPEARANCE_ROLES = ("spectrum", "preview", "heatmap")
+_CHART_APPEARANCE_COMMON = frozenset({
+    "title", "x_label", "y_label", "grid", "line_colors",
+})
+_CHART_APPEARANCE_HEATMAP = _CHART_APPEARANCE_COMMON | frozenset({
+    "cmap", "z_auto", "z_min", "z_max",
+})
+
+
+def _appearance_text(value: Any) -> str | None:
+    """Keep "" (explicit delete). None / non-text means the key is absent."""
+    if value is None or isinstance(value, bool):
+        return None
+    if not isinstance(value, str):
+        return None
+    return value
+
+
+def _appearance_color_key(value: Any) -> str:
+    from .chart_appearance_model import appearance_channel_key
+
+    if isinstance(value, str) and value.strip():
+        return value
+    if isinstance(value, (list, tuple)) and len(value) >= 2:
+        fid = str(value[0] or "").strip()
+        channel = str(value[1] or "").strip()
+        if fid and channel:
+            return appearance_channel_key(fid, channel)
+    return ""
+
+
+def _finite_appearance_number(value: Any) -> float | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number):
+        return None
+    return number
+
+
+def _normalize_appearance_spec(role: str, spec: Any) -> dict[str, Any]:
+    if role not in CHART_APPEARANCE_ROLES or not isinstance(spec, dict):
+        return {}
+    allowed = (
+        _CHART_APPEARANCE_HEATMAP if role == "heatmap" else _CHART_APPEARANCE_COMMON
+    )
+    cleaned: dict[str, Any] = {}
+    for key in ("title", "x_label", "y_label"):
+        if key not in spec or key not in allowed:
+            continue
+        text = _appearance_text(spec.get(key))
+        if text is not None:
+            cleaned[key] = text
+    if "grid" in spec and "grid" in allowed and isinstance(spec.get("grid"), bool):
+        cleaned["grid"] = spec["grid"]
+    if role == "heatmap" and "cmap" in spec:
+        cmap = spec.get("cmap")
+        if isinstance(cmap, str) and cmap.strip():
+            cleaned["cmap"] = cmap.strip()
+    colors = spec.get("line_colors")
+    if isinstance(colors, dict) and "line_colors" in allowed:
+        line_colors: dict[str, str] = {}
+        for raw_key, raw_color in colors.items():
+            identity = _appearance_color_key(raw_key)
+            color = raw_color if isinstance(raw_color, str) else ""
+            if identity and color.strip():
+                line_colors[identity] = color.strip()
+        if line_colors:
+            cleaned["line_colors"] = line_colors
+    if role == "heatmap" and isinstance(spec.get("z_auto"), bool):
+        cleaned["z_auto"] = spec["z_auto"]
+        lo = _finite_appearance_number(spec.get("z_min"))
+        hi = _finite_appearance_number(spec.get("z_max"))
+        if lo is not None and hi is not None and lo < hi:
+            cleaned["z_min"] = lo
+            cleaned["z_max"] = hi
+    return cleaned
+
+
+def normalize_pane_chart_appearances(value: Any) -> dict[str, dict[str, Any]]:
+    """Drop unknown roles/keys. An empty result means "follow system defaults"."""
+    if not isinstance(value, dict):
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for role, spec in value.items():
+        cleaned = _normalize_appearance_spec(str(role), spec)
+        if cleaned:
+            out[str(role)] = cleaned
+    return out
+
+
+def remap_pane_chart_appearances(
+    value: Any, fid_map: Mapping[str, str],
+) -> dict[str, dict[str, Any]]:
+    """Rewrite file ids inside pane line-color overrides.
+
+    Title, labels, grid, colormap, and color-scale policy have no file id.
+    A line color whose file is missing from ``fid_map`` is dropped. Other
+    overrides on that role stay.
+    """
+    from .chart_appearance_model import (
+        appearance_channel_key,
+        parse_appearance_axis_key,
+    )
+
+    appearances = normalize_pane_chart_appearances(value)
+    remapped: dict[str, dict[str, Any]] = {}
+    for role, spec in appearances.items():
+        cleaned = dict(spec)
+        colors = spec.get("line_colors")
+        if isinstance(colors, dict):
+            mapped_colors: dict[str, str] = {}
+            for raw_key, color in colors.items():
+                parsed = parse_appearance_axis_key(raw_key)
+                if (
+                    parsed is None
+                    or parsed[0] != "ch"
+                    or len(parsed) < 3
+                    or parsed[1] not in fid_map
+                ):
+                    continue
+                mapped_colors[appearance_channel_key(fid_map[parsed[1]], parsed[2])] = color
+            if mapped_colors:
+                cleaned["line_colors"] = mapped_colors
+            else:
+                cleaned.pop("line_colors", None)
+        if cleaned:
+            remapped[role] = cleaned
+    return remapped
+
+
 def analysis_view_source_fids(
     state_or_payload: "AnalysisViewState | Mapping[str, Any] | None",
 ) -> list[str]:
@@ -257,6 +391,10 @@ class PaneState:
     remarks: list[dict[str, Any]] = field(default_factory=list)
     cursor_placement: dict[str, Any] | None = None
     pinned_cursors: PinnedCursorCollection = field(default_factory=empty_collection)
+    # User chart-option overrides only. A missing role follows the system
+    # default; an explicit "" title is a user delete. The two are not the
+    # same state. Roles: spectrum, preview, heatmap.
+    chart_appearances: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -285,7 +423,11 @@ class PaneState:
                 self.cursor_placement, cursor_mode=self.cursor_mode,
             ),
             "pinned_cursors": collection_to_dict(self.pinned_cursors),
-        }
+        } | (
+            {"chart_appearances": copy.deepcopy(appearances)}
+            if (appearances := normalize_pane_chart_appearances(self.chart_appearances))
+            else {}
+        )
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "PaneState":
@@ -325,6 +467,9 @@ class PaneState:
                 cursor_mode=_cursor_mode_from_data(data),
             ),
             pinned_cursors=collection_from_dict(data.get("pinned_cursors")),
+            chart_appearances=normalize_pane_chart_appearances(
+                data.get("chart_appearances")
+            ),
         )
 
 

@@ -669,6 +669,7 @@ def remap_analysis_view_fids(analysis_views: dict, fid_map: dict) -> dict:
     from .analysis_view_state import (
         analysis_view_source_fids,
         normalize_analysis_attachments,
+        remap_pane_chart_appearances,
     )
 
     out = {}
@@ -699,6 +700,14 @@ def remap_analysis_view_fids(analysis_views: dict, fid_map: dict) -> dict:
                 pn["pinned_cursors"] = _remap_pinned_cursors(
                     pane.get("pinned_cursors"), fid_map,
                 )
+                if "chart_appearances" in pane:
+                    appearances = remap_pane_chart_appearances(
+                        pane.get("chart_appearances"), fid_map,
+                    )
+                    if appearances:
+                        pn["chart_appearances"] = appearances
+                    else:
+                        pn.pop("chart_appearances", None)
                 panes.append(pn)
             v["panes"] = panes
             if "attached_file_ids" in view:

@@ -54,6 +54,40 @@ def test_remap_drops_missing_fids():
     assert srcs == [["F1", "vib"]]
 
 
+def test_remap_analysis_line_colors_follow_file_ids():
+    from mf4_analyzer.ui.chart_appearance_model import appearance_channel_key
+
+    kept = appearance_channel_key("f1", "vib")
+    dropped = appearance_channel_key("f-missing", "vib")
+    analysis_views = {
+        "fft": {
+            "active": 0,
+            "views": [{
+                "schema": 11,
+                "name": "FFT",
+                "panes": [{
+                    "sources": [["f1", "vib"]],
+                    "chart_appearances": {
+                        "spectrum": {
+                            "title": "Kept",
+                            "line_colors": {kept: "#ff0000", dropped: "#00ff00"},
+                        },
+                        "preview": {"title": ""},
+                    },
+                }],
+            }],
+        },
+    }
+    out = remap_analysis_view_fids(analysis_views, {"f1": "F1"})
+    appearances = out["fft"]["views"][0]["panes"][0]["chart_appearances"]
+    assert appearances["spectrum"]["title"] == "Kept"
+    assert appearances["spectrum"]["line_colors"] == {
+        appearance_channel_key("F1", "vib"): "#ff0000",
+    }
+    assert appearances["preview"]["title"] == ""
+    assert "chart_appearances" in analysis_views["fft"]["views"][0]["panes"][0]
+
+
 def test_remap_analysis_remarks_rewrites_fid_and_drops_missing():
     analysis_views = {
         "fft": {

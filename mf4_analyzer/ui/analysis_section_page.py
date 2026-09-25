@@ -179,6 +179,7 @@ class AnalysisSectionPage(QWidget):
         self._previous_focused = 0
         self._linked = False
         self._levels_locked = False
+        self._suppress_color_policy_echo = False
         self.manager.active_changed.connect(self.refresh_focus_style)
         self.manager.views_changed.connect(self.refresh_focus_style)
         # Swallows the toggled(bool) edge during programmatic
@@ -900,6 +901,9 @@ class AnalysisSectionPage(QWidget):
                 self._set_canvas_levels(c, lo, hi)
         for c in canvases:
             c.levels_changed.connect(self._on_locked_levels_changed)
+            policy = getattr(c, "color_policy_committed", None)
+            if policy is not None:
+                policy.connect(self._on_locked_color_policy)
         self._refresh_compare_buttons()
 
     def is_levels_locked(self) -> bool:
@@ -909,6 +913,13 @@ class AnalysisSectionPage(QWidget):
         for c in canvases:
             try:
                 c.levels_changed.disconnect(self._on_locked_levels_changed)
+            except TypeError:
+                pass
+            policy = getattr(c, "color_policy_committed", None)
+            if policy is None:
+                continue
+            try:
+                policy.disconnect(self._on_locked_color_policy)
             except TypeError:
                 pass
 
@@ -977,6 +988,23 @@ class AnalysisSectionPage(QWidget):
         cbar.blockSignals(True)
         cbar.setLevels((lo, hi))
         cbar.blockSignals(False)
+
+    def _on_locked_color_policy(self, z_auto, lo: float, hi: float) -> None:
+        """Manual chart-options levels follow a locked sibling.
+
+        Auto policy is not a colorbar drag, and this echo must not re-enter
+        ``levels_changed`` handling.
+        """
+        if not self._levels_locked or self._suppress_color_policy_echo:
+            return
+        if bool(z_auto):
+            return
+        self._suppress_color_policy_echo = True
+        try:
+            for canvas in self._heatmap_canvases():
+                self._set_canvas_levels(canvas, float(lo), float(hi))
+        finally:
+            self._suppress_color_policy_echo = False
 
     def _on_locked_levels_changed(self, lo: float, hi: float) -> None:
         """A user dragged one pane's colorbar while locked → apply the same

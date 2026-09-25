@@ -3307,7 +3307,7 @@ def test_unchanged_heatmap_section_entry_does_not_redraw(two_file_win, section):
     assert ready == [1]
     assert section in candidates
 
-    canvas._cmap_name = "plasma"
+    state.panes[0].chart_appearances = {"heatmap": {"cmap": "plasma"}}
     win._on_analysis_view_switched(section, win.analysis_managers[section].active)
     assert len(plots) == 1
 
@@ -3334,3 +3334,141 @@ def test_order_z_auto_section_entry_still_redraws_heatmap(two_file_win):
     win._on_analysis_view_switched("order", active)
     win._on_analysis_view_switched("order", active)
     assert len(plots) == 2
+
+
+def test_fft_cache_redraw_keeps_pane_chart_appearance(two_file_win):
+    """Title, Y label and identity color stay on the artists after a cache redraw."""
+    from mf4_analyzer.ui._axis_handle import PgAxisHandle
+    from mf4_analyzer.ui.chart_appearance_model import appearance_channel_key
+
+    win = two_file_win
+    win.toolbar._set_mode("fft")
+    _seed_active_analysis_attachments(win)
+    fid = next(iter(win.files))
+    win.navigator.set_checked_channels([(fid, "torque")])
+    win.do_fft()
+
+    mgr = win.analysis_managers["fft"]
+    state = mgr.get(mgr.active)
+    color_key = appearance_channel_key(fid, "torque")
+    state.panes[0].chart_appearances = {
+        "spectrum": {
+            "title": "Torque spectrum",
+            "y_label": "Torque",
+            "line_colors": {color_key: "#ff0000"},
+        },
+    }
+    xlim_before = state.panes[0].xlim
+    origin_before = dict(state.panes[0].viewport_origin)
+    z_before = state.params.get("z_auto", None)
+    win._render_analysis_view_from_cache("fft", state)
+
+    canvas = win.chart_stack.page_fft.pane_canvas(0)
+    handle = PgAxisHandle(canvas._plot_amp, owner_canvas=canvas)
+    assert handle.get_title() == "Torque spectrum"
+    assert canvas._plot_amp.titleLabel.isVisible()
+    assert "Torque" in str(canvas._plot_amp.getAxis("left").labelText)
+    pen = canvas._amp_curves[0].opts["pen"]
+    assert pen.color().name().lower() == "#ff0000"
+    assert state.panes[0].xlim == xlim_before
+    assert state.panes[0].viewport_origin == origin_before
+    assert state.params.get("z_auto", None) == z_before
+
+    mgr.new_view()
+    fresh = mgr.get(mgr.active)
+    assert fresh.panes[0].chart_appearances == {}
+    assert not canvas._plot_amp.titleLabel.isVisible()
+    assert canvas._plot_amp.titleLabel.maximumHeight() == 0
+    reread = PgAxisHandle(canvas._plot_amp, owner_canvas=canvas).get_title()
+    assert reread in ("", None)
+    assert "Torque spectrum" not in str(canvas._plot_amp.titleLabel.text)
+
+    mgr.set_active(0)
+    restored = PgAxisHandle(canvas._plot_amp, owner_canvas=canvas)
+    assert restored.get_title() == "Torque spectrum"
+    assert canvas._amp_curves[0].opts["pen"].color().name().lower() == "#ff0000"
+
+
+def test_heatmap_cmap_stays_on_its_view_and_survives_project_reopen(
+    two_file_win, tmp_path, qtbot,
+):
+    win = two_file_win
+    win.toolbar._set_mode("fft_time")
+    _seed_active_analysis_attachments(win)
+    state, _result, _key = _seed_heatmap_cache(win, "fft_time")
+    win.inspector.fft_time_ctx.apply_params({"z_auto": True})
+    state.params = dict(win.inspector.fft_time_ctx.current_params())
+    state.panes[0].xlim = (0.1, 0.4)
+    state.panes[0].viewport_origin["x"] = "user"
+    state.panes[0].chart_appearances = {
+        "heatmap": {"title": "Only title", "cmap": "plasma"},
+    }
+    win._render_analysis_view_from_cache("fft_time", state)
+    canvas = win._analysis_page("fft_time").pane_canvas(0)
+    assert canvas._cmap_name == "plasma"
+    assert state.params.get("z_auto") is True
+    assert state.panes[0].xlim == (0.1, 0.4)
+
+    mgr = win.analysis_managers["fft_time"]
+    mgr.new_view()
+    assert canvas._cmap_name != "plasma"
+    fresh = mgr.get(mgr.active)
+    assert fresh.panes[0].chart_appearances == {}
+
+    mgr.set_active(0)
+    win._render_analysis_view_from_cache("fft_time", mgr.get(0))
+    assert canvas._cmap_name == "plasma"
+    copied = mgr.duplicate(0)
+    assert mgr.get(copied).panes[0].chart_appearances["heatmap"]["cmap"] == "plasma"
+
+    proj = tmp_path / "appearance.tlproj"
+    win.save_project(proj)
+    win2 = MainWindow()
+    qtbot.addWidget(win2)
+    win2.open_project(proj)
+    cmaps = [
+        (pane.chart_appearances.get("heatmap") or {}).get("cmap")
+        for view in win2.analysis_managers["fft_time"].views
+        for pane in view.panes
+    ]
+    assert "plasma" in cmaps
+    reopened = next(
+        view for view in win2.analysis_managers["fft_time"].views
+        if any(
+            (pane.chart_appearances.get("heatmap") or {}).get("cmap") == "plasma"
+            for pane in view.panes
+        )
+    )
+    assert reopened.panes[0].chart_appearances["heatmap"]["title"] == "Only title"
+    assert reopened.params.get("cmap") != "plasma"
+
+
+def test_color_policy_commit_keeps_auto_distinct_from_colorbar_drag(two_file_win):
+    win = two_file_win
+    win.toolbar._set_mode("fft_time")
+    _seed_active_analysis_attachments(win)
+    state, _result, _key = _seed_heatmap_cache(win, "fft_time")
+    ctx = win.inspector.fft_time_ctx
+    ctx.apply_params({"z_auto": True, "z_floor": -80.0, "z_ceiling": 0.0})
+    state.params = dict(ctx.current_params())
+    page = win._analysis_page("fft_time")
+    win._on_analysis_split("fft_time", True)
+    page.set_levels_locked(True)
+
+    win._on_analysis_color_policy("fft_time", 0, True, -40.0, -5.0)
+    assert ctx.current_params()["z_auto"] is True
+    assert state.panes[0].chart_appearances["heatmap"]["z_auto"] is True
+
+    drags = []
+    original = page._on_locked_levels_changed
+    page._on_locked_levels_changed = lambda *args: drags.append(args)
+    try:
+        page._on_locked_color_policy(False, -20.0, -4.0)
+    finally:
+        page._on_locked_levels_changed = original
+    assert drags == []
+    win._on_analysis_color_policy("fft_time", 0, False, -20.0, -4.0)
+    params = ctx.current_params()
+    assert params["z_auto"] is False
+    assert params["z_floor"] == pytest.approx(-20.0)
+    assert params["z_ceiling"] == pytest.approx(-4.0)

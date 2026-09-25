@@ -4140,3 +4140,91 @@ def test_fft_restore_x_user_reapplies_visible_auto_y(canvas):
     full_y = canvas._plot_amp.vb.viewRange()[1]
     canvas.restore_xy_viewport((0., 200.), full_y)
     assert canvas._plot_amp.vb.viewRange()[1] == pytest.approx((-10., 210.))
+
+
+def _pen_color(curve):
+    pen = curve.opts.get("pen")
+    return pen.color().name().lower()
+
+
+def test_user_appearance_survives_spectrum_replot_and_clears_title_text(canvas):
+    """Custom title, Y label and identity color stay on the artists after redraw."""
+    from mf4_analyzer.ui._axis_handle import PgAxisHandle
+    from mf4_analyzer.ui.chart_appearance_model import appearance_channel_key
+
+    entry = _entry("torque", "#2563eb")
+    entry["fid"] = "f1"
+    entry["channel"] = "torque"
+    color_key = appearance_channel_key("f1", "torque")
+    canvas.set_user_appearances({
+        "spectrum": {
+            "title": "Torque spectrum",
+            "y_label": "Torque",
+            "line_colors": {color_key: "#ff0000"},
+        },
+        "preview": {"y_label": "Time torque"},
+    })
+    canvas.plot_spectra(
+        [entry], xlim=(0.0, 500.0), amp_label="Amplitude", title="FFT · 1",
+    )
+
+    amp = canvas._plot_amp
+    handle = PgAxisHandle(amp, owner_canvas=canvas)
+    assert handle.get_title() == "Torque spectrum"
+    assert amp.titleLabel.isVisible()
+    assert "Torque" in str(amp.getAxis("left").labelText)
+    assert _pen_color(canvas._amp_curves[0]) == "#ff0000"
+    assert "Time torque" in str(canvas._plot_time.getAxis("left").labelText)
+
+    x_before, y_before = amp.vb.viewRange()
+    canvas.apply_user_appearance({"title": "Title only"}, role="spectrum")
+    x_after, y_after = amp.vb.viewRange()
+    assert x_after == pytest.approx(x_before)
+    assert y_after == pytest.approx(y_before)
+    assert "Torque" in str(amp.getAxis("left").labelText)
+
+    canvas.set_user_appearances({})
+    canvas.full_reset()
+    assert not amp.titleLabel.isVisible()
+    assert amp.titleLabel.maximumHeight() == 0
+    assert PgAxisHandle(amp, owner_canvas=canvas).get_title() == ""
+    assert "Torque spectrum" not in str(getattr(amp.titleLabel, "text", ""))
+
+
+def test_chart_options_targets_are_split_and_preview_skips_spectrum_policy(
+    canvas, monkeypatch,
+):
+    from mf4_analyzer.ui import _axis_interaction
+    from mf4_analyzer.ui._axis_handle import PgAxisHandle
+
+    captured = {}
+
+    def fake_edit(_parent, handle):
+        captured["target"] = getattr(handle, "_chart_options_target", None)
+        captured["policy"] = handle.analysis_range_policy()
+        return True
+
+    monkeypatch.setattr(
+        _axis_interaction, "edit_chart_options_dialog", fake_edit, raising=True,
+    )
+    applied = []
+    canvas.analysis_range_adapter = (
+        lambda: {"x_auto": False, "x_min": 1.0, "x_max": 9.0, "y_auto": True},
+        lambda policies: applied.append(policies),
+    )
+    canvas.plot_spectra(
+        [_entry()], xlim=(0.0, 500.0), amp_label="Amplitude", title="FFT",
+    )
+    assert canvas.open_chart_options_dialog(parent=canvas) is True
+    assert captured["target"] == "spectrum"
+    assert captured["policy"]["x_min"] == 1.0
+
+    preview = PgAxisHandle(canvas._plot_time, owner_canvas=canvas)
+    preview._chart_options_target = "preview"
+    assert preview.analysis_range_policy() is None
+    assert preview.apply_analysis_range_policy({"x": (False, (1.0, 9.0))}) is False
+    assert applied == []
+
+    canvas._edit_time_curve_appearance(0)
+    assert captured["target"] == "preview"
+    assert captured["policy"] is None

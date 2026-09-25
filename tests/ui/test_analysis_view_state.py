@@ -567,6 +567,56 @@ def test_pane_pinned_cursors_roundtrip_and_schema11():
     assert again.panes[0].pinned_cursors.records[0].record_id == pins.records[0].record_id
 
 
+def test_chart_appearances_omit_defaults_and_keep_explicit_empty_title():
+    """Missing appearance follows the system default; "" is an explicit delete."""
+    from mf4_analyzer.ui.chart_appearance_model import appearance_channel_key
+
+    bare = PaneState(sources=[("f1", "sig")])
+    payload = bare.to_dict()
+    assert "chart_appearances" not in payload
+    assert PaneState.from_dict(payload).chart_appearances == {}
+
+    legacy = PaneState.from_dict({
+        "sources": [["f1", "sig"]],
+        "time_range": [1.0, 2.0],
+    })
+    assert legacy.chart_appearances == {}
+    assert legacy.time_range == (1.0, 2.0)
+    assert "chart_appearances" not in legacy.to_dict()
+
+    color_key = appearance_channel_key("f1", "torque")
+    pane = PaneState(
+        sources=[("f1", "torque")],
+        chart_appearances={
+            "spectrum": {
+                "title": "Torque spectrum",
+                "y_label": "Torque",
+                "line_colors": {color_key: "#ff0000"},
+            },
+            "preview": {"title": ""},
+            "heatmap": {"cmap": "plasma", "z_auto": True, "z_min": -40.0, "z_max": -5.0},
+            "ignored": {"title": "nope"},
+            "spectrum_extra": {},
+        },
+    )
+    encoded = pane.to_dict()["chart_appearances"]
+    assert set(encoded) == {"spectrum", "preview", "heatmap"}
+    assert encoded["preview"] == {"title": ""}
+    assert encoded["heatmap"]["cmap"] == "plasma"
+    assert encoded["heatmap"]["z_auto"] is True
+    assert "ignored" not in encoded
+    restored = PaneState.from_dict(pane.to_dict())
+    assert restored.chart_appearances["spectrum"]["title"] == "Torque spectrum"
+    assert restored.chart_appearances["spectrum"]["y_label"] == "Torque"
+    assert restored.chart_appearances["spectrum"]["line_colors"] == {color_key: "#ff0000"}
+    assert restored.chart_appearances["preview"]["title"] == ""
+    assert restored.chart_appearances["heatmap"]["cmap"] == "plasma"
+    view = AnalysisViewState(name="FFT", tab_color="#2d7ff9", panes=[pane])
+    again = AnalysisViewState.from_dict(view.to_dict())
+    assert again.panes[0].chart_appearances == restored.chart_appearances
+    assert again.to_dict()["schema"] == 11
+
+
 def test_schema10_payload_loads_with_empty_pins():
     restored = AnalysisViewState.from_dict({
         "schema": 10,

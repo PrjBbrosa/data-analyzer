@@ -15,7 +15,6 @@ from ...signal.analysis_defaults import (
     DEFAULT_FFT_T_WIN_S,
 )
 from ...signal.spectrogram import spectrogram_facts_from_result
-from ..pg_canvas.heatmap_canvas import DEFAULT_HEATMAP_CMAP
 from ..compute_feedback import ComputeOutcome
 from ._sentinel import _INSPECTOR_TIME_RANGE
 from ._state_holders import (
@@ -745,7 +744,7 @@ class FFTTimeMixin:
             y_min=float(p.get("y_min", 0.0)),
             y_max=float(p.get("y_max", 0.0)),
             freq_range=freq_range,
-            cmap=str(getattr(canvas, "_cmap_name", DEFAULT_HEATMAP_CMAP)),
+            cmap=self._heatmap_cmap_for_canvas("fft_time", canvas),
             interp="bilinear",
             tick_x=tick_x,
             tick_y=tick_y,
@@ -837,6 +836,9 @@ class FFTTimeMixin:
                     spin.setValue(val)
                     spin.blockSignals(False)
         canvas.set_tick_density(inputs.tick_x, inputs.tick_y)
+        project = getattr(self, "_project_heatmap_pane_appearance", None)
+        if callable(project):
+            project("fft_time", canvas)
 
     def _render_fft_time_on(self, canvas, result, p, source=None):
         """Multi-pane variant: render ``result`` on an arbitrary FFT-vs-Time

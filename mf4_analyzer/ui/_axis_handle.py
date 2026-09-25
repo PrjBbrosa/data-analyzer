@@ -6,6 +6,8 @@ handles; raw renderer objects are not wrapped here.
 """
 from __future__ import annotations
 
+import json
+import math
 from typing import Protocol, runtime_checkable
 
 
@@ -265,6 +267,10 @@ class PgAxisHandle:
         self._yscale = self._read_log_scale("y")
         self._line_items = []
         self._title_changed_callbacks = []
+        # Canvas sets these before opening chart options. Defaults keep a
+        # handle usable when the canvas has not classified it yet.
+        self._shares_x_axis = False
+        self._chart_options_target = ""
 
     # Internal helpers -----------------------------------------------------
     def _ax(self, side: str):
@@ -341,6 +347,85 @@ class PgAxisHandle:
         after = self.get_ylim()
         if before != after:
             self._notify_dense_raster_y_changed()
+
+    def get_engineering_xlim(self) -> tuple[float, float]:
+        """Visible X limits in user engineering units.
+
+        Linear mode matches ``get_xlim``. Log mode inverts the ViewBox's
+        log10 coordinates so the result is the range the ticks read.
+        """
+        lo, hi = self.get_xlim()
+        return _view_to_engineering_limits(self.get_xscale(), lo, hi)
+
+    def get_engineering_ylim(self) -> tuple[float, float]:
+        """Visible Y limits in user engineering units. See ``get_engineering_xlim``."""
+        lo, hi = self.get_ylim()
+        return _view_to_engineering_limits(self.get_yscale(), lo, hi)
+
+    def set_engineering_xlim(self, lo, hi) -> bool:
+        """Apply an engineering X range. Returns False when the range is rejected.
+
+        ``get_xlim`` / ``set_xlim`` stay in ViewBox coordinates. This method is
+        the dialog boundary: linear values pass through, log values become
+        ``log10`` so they line up with already log-mapped curves and ticks.
+        Illegal limits (non-finite, non-positive on a log axis, empty or
+        reversed) leave the ViewBox and curves untouched. Non-scalar shape or
+        a non-numeric dtype raises ``ValueError`` before any write.
+        """
+        return self._set_engineering_limit("x", lo, hi)
+
+    def set_engineering_ylim(self, lo, hi) -> bool:
+        """Apply an engineering Y range. See ``set_engineering_xlim``."""
+        return self._set_engineering_limit("y", lo, hi)
+
+    def _set_engineering_limit(self, axis: str, lo, hi) -> bool:
+        limits = _engineering_to_view_limits(
+            self.get_xscale() if axis == "x" else self.get_yscale(),
+            lo,
+            hi,
+        )
+        if limits is None:
+            return False
+        vb = self._view_box
+        setter_name = "setXRange" if axis == "x" else "setYRange"
+        if vb is None or not hasattr(vb, setter_name):
+            return False
+        if axis == "x":
+            self.set_xlim(*limits)
+        else:
+            self.set_ylim(*limits)
+        return True
+
+    def supports_log_scale(self, axis: str) -> bool:
+        """Whether this chart can put ``axis`` into log mode.
+
+        The base implementation accepts every axis. Heatmap subclasses
+        override this when their image has no log mapping.
+        """
+        return True
+
+    def supports_legend_rebuild(self) -> bool:
+        """Whether automatic legend rebuild applies to this chart."""
+        return True
+
+    def chart_options_target_text(self) -> str:
+        """Name the chart-options target: explicit canvas text, else axis role."""
+        custom = getattr(self, "_chart_options_target", "")
+        if isinstance(custom, str) and custom.strip():
+            return custom.strip()
+        role = "副轴" if self._is_secondary_y_axis() else "主轴"
+        title = _normalized_title(self.get_title())
+        if title:
+            return f"{role}：{title}"
+        return role
+
+    def shares_x_axis(self) -> bool:
+        """True when this pane's X limits are shared with another pane."""
+        return bool(getattr(self, "_shares_x_axis", False))
+
+    def _is_secondary_y_axis(self) -> bool:
+        axis = self.y_axis_item()
+        return getattr(axis, "orientation", "") == "right"
 
     def autoscale(self, axis: str = "both") -> None:
         vb = self._view_box
@@ -526,10 +611,18 @@ class PgAxisHandle:
         pi = self._plot_item
         if pi is None or not hasattr(pi, "setTitle"):
             return
-        pi.setTitle(title)
+        # Blank input is an explicit delete. pyqtgraph only collapses the
+        # title row for None; "" still occupies the 30 px display branch.
+        # The callback still receives "" so inside-labels can come back.
+        normalized = _normalized_title(title)
+        if normalized == "":
+            pi.setTitle(None)
+            _clear_title_label_text(pi)
+        else:
+            pi.setTitle(normalized)
         for callback in list(self._title_changed_callbacks):
             try:
-                callback(self, str(title))
+                callback(self, normalized)
             except Exception:
                 pass
 
@@ -633,15 +726,41 @@ class PgAxisHandle:
         clear = getattr(legend, "clear", None)
         if callable(clear):
             clear()
-        seen: set[str] = set()
+        # Deduplicate by the curve itself (or its composite source/channel
+        # key), never by the display string. Two channels can share a
+        # truncated label and still be different curves.
+        entries = []
+        seen_items: set[int] = set()
+        seen_keys: set[tuple] = set()
         for line in self.get_lines():
             label = line.get_label()
-            if not label or label.startswith("_") or label in seen:
+            if not label or label.startswith("_"):
                 continue
             item = getattr(line, "plot_data_item", line)
+            item_id = id(item)
+            if item_id in seen_items:
+                continue
+            composite = self._composite_key_for_line(
+                getattr(self, "_owner_canvas", None), line,
+            )
+            key = _legend_identity_key(composite)
+            if key is not None and key in seen_keys:
+                continue
+            seen_items.add(item_id)
+            if key is not None:
+                seen_keys.add(key)
+            entries.append((item, label, composite))
+        label_counts: dict[str, int] = {}
+        for _item, label, _composite in entries:
+            label_counts[label] = label_counts.get(label, 0) + 1
+        for item, label, composite in entries:
+            text = label
+            if label_counts[label] > 1:
+                qualifier = _legend_source_text(composite, label)
+                if qualifier:
+                    text = f"{label} [{qualifier}]"
             try:
-                legend.addItem(item, label)
-                seen.add(label)
+                legend.addItem(item, text)
             except Exception:
                 continue
 
@@ -765,6 +884,116 @@ class PgAxisHandle:
         """Raw pyqtgraph ``ViewBox``. Used by interaction helpers and
         the cursor/overlay layer. Migration-temporary."""
         return self._view_box
+
+
+def _normalized_title(title) -> str:
+    """Map None and whitespace to an explicit empty title."""
+    if title is None:
+        return ""
+    return str(title).strip()
+
+
+def _clear_title_label_text(plot_item) -> None:
+    """Drop readable title text without reopening the title row.
+
+    ``PlotItem.setTitle(None)`` hides the row but leaves ``titleLabel.text``
+    in place, so the next dialog would read the deleted title back.
+    """
+    label = getattr(plot_item, "titleLabel", None)
+    if label is None:
+        return
+    label.text = ""
+    item = getattr(label, "item", None)
+    set_plain = getattr(item, "setPlainText", None)
+    if callable(set_plain):
+        set_plain("")
+
+
+def _limit_scalar(value) -> float:
+    """Coerce one numeric limit. Non-scalars fail instead of being shortened."""
+    if isinstance(value, bool):
+        raise ValueError("axis limit must be a real scalar, not bool")
+    shape = getattr(value, "shape", None)
+    if shape is not None:
+        shape = tuple(shape)
+        size = getattr(value, "size", None)
+        if shape != () and size != 1:
+            raise ValueError(f"axis limit must be one scalar, got shape {shape}")
+        dtype = getattr(value, "dtype", None)
+        kind = getattr(dtype, "kind", None)
+        if kind is not None and kind not in "iuf":
+            raise ValueError(f"axis limit dtype {dtype} is not real")
+        if shape != ():
+            value = value.reshape(-1)[0]
+    try:
+        return float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("axis limit must be a real scalar") from exc
+
+
+def _engineering_to_view_limits(scale: str, lo, hi):
+    """Return ViewBox limits, or None when the engineering range must not be written."""
+    lo_f = _limit_scalar(lo)
+    hi_f = _limit_scalar(hi)
+    if not math.isfinite(lo_f) or not math.isfinite(hi_f) or lo_f >= hi_f:
+        return None
+    if scale == "log":
+        if lo_f <= 0.0 or hi_f <= 0.0:
+            return None
+        return (math.log10(lo_f), math.log10(hi_f))
+    return (lo_f, hi_f)
+
+
+def _view_to_engineering_limits(scale: str, lo: float, hi: float) -> tuple[float, float]:
+    if scale != "log":
+        return (float(lo), float(hi))
+    lo_f = float(lo)
+    hi_f = float(hi)
+    if not math.isfinite(lo_f) or not math.isfinite(hi_f):
+        raise ValueError(f"log view range is not finite: {(lo_f, hi_f)}")
+    eng_lo = 10.0 ** lo_f
+    eng_hi = 10.0 ** hi_f
+    if not math.isfinite(eng_lo) or not math.isfinite(eng_hi):
+        raise ValueError("log view range is outside a finite engineering span")
+    return (eng_lo, eng_hi)
+
+
+def _legend_identity_key(composite):
+    if composite is None:
+        return None
+    if isinstance(composite, (list, tuple)):
+        return ("composite", tuple(composite))
+    return ("composite", composite)
+
+
+def _split_composite_identity(composite):
+    if isinstance(composite, (list, tuple)):
+        source = composite[0] if composite else None
+        channel = composite[1] if len(composite) > 1 else None
+        return source, channel
+    if isinstance(composite, str):
+        try:
+            parsed = json.loads(composite)
+        except json.JSONDecodeError:
+            return composite, None
+        if isinstance(parsed, list):
+            source = parsed[0] if parsed else None
+            channel = parsed[1] if len(parsed) > 1 else None
+            return source, channel
+    return composite, None
+
+
+def _legend_source_text(composite, display_label: str) -> str:
+    """Source text for a duplicate legend label. Display name is not the key."""
+    source, channel = _split_composite_identity(composite)
+    parts = []
+    if source not in (None, ""):
+        parts.append(str(source))
+    if channel not in (None, "") and str(channel) != display_label:
+        parts.append(str(channel))
+    if not parts and composite not in (None, ""):
+        return str(composite)
+    return " ".join(parts)
 
 
 # ---------------------------------------------------------------------------

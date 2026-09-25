@@ -112,16 +112,21 @@ def test_dialog_log_scale_toggle_applies_via_handle(qapp):
     assert handle.get_xscale() == "linear"
 
 
-def test_dialog_log_scale_with_non_positive_range_falls_back_to_autoscale(
+def test_dialog_log_scale_with_non_positive_range_does_not_mutate(
     qapp, monkeypatch,
 ):
+    """Invalid log limits fail the whole commit. Earlier success stays applied."""
     from mf4_analyzer.ui import dialogs as dlg_mod
     from mf4_analyzer.ui.dialogs import ChartOptionsDialog
 
     _canvas, handle = _pg_handle_with_curve(qapp)
     dlg = ChartOptionsDialog(None, handle)
+    scale_before = handle.get_yscale()
+    ylim_before = handle.get_ylim()
+    auto_before = handle.is_autorange("y")
 
     dlg.combo_y_scale.setCurrentText("对数")
+    dlg.chk_y_auto.setChecked(False)
     dlg.spin_y_min.setValue(-1.0)
     dlg.spin_y_max.setValue(10.0)
 
@@ -137,7 +142,10 @@ def test_dialog_log_scale_with_non_positive_range_falls_back_to_autoscale(
     assert "y" in dlg._invalid_axes
     assert dlg.was_applied() is False
     assert len(warning_calls) == 1
-    assert handle.is_autorange("y") is True
+    assert any("Y 最小值" in str(args) for args in warning_calls)
+    assert handle.get_yscale() == scale_before
+    assert handle.get_ylim() == pytest.approx(ylim_before)
+    assert handle.is_autorange("y") is auto_before
 
 
 def test_grid_apply_skipped_when_checkbox_unchanged(qapp):
@@ -208,7 +216,7 @@ def _snapshot_widget_text(dlg) -> dict:
 EXPECTED_SNAPSHOT = {
     "labels": sorted([
         "图表选项",
-        "目标：原始标题",
+        "目标：主轴：原始标题",
         "基础信息",
         "X 轴",
         "Y 轴",
@@ -222,7 +230,7 @@ EXPECTED_SNAPSHOT = {
         "色图", "最小值", "最大值",
     ]),
     "buttons": sorted([
-        "重置", "取消", "应用", "确定", "选择",
+        "恢复打开时设置", "取消", "应用", "确定", "选择",
     ]),
     "groupboxes": [],
     "frames": sorted([

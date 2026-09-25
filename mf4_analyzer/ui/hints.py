@@ -904,6 +904,51 @@ _HINTS = (
         modes=frozenset({"time"}),
         priority=64,
     ),
+    Hint(
+        id="chart_options.empty_title",
+        text="清空图表标题会收回占位行",
+        surface="discovery",
+        modes=frozenset({"time", "fft", "fft_time", "order"}),
+        priority=20,
+    ),
+    Hint(
+        id="chart_options.reset_open",
+        text="图表选项重置是恢复打开时",
+        surface="discovery",
+        modes=frozenset({"time", "fft", "fft_time", "order"}),
+        priority=19,
+    ),
+    Hint(
+        id="chart_options.legend_once",
+        text="图例只重新生成，不保存",
+        surface="discovery",
+        modes=frozenset({"time", "fft"}),
+        priority=18,
+    ),
+    Hint(
+        id="chart_options.shared_axis",
+        text="共轴时标题和网格属于整图",
+        surface="discovery",
+        modes=frozenset({"time"}),
+        plot_modes=frozenset({"overlay"}),
+        priority=17,
+    ),
+    Hint(
+        id="chart_options.heatmap_log",
+        text="热图不能开对数轴",
+        surface="context",
+        tier="A",
+        modes=frozenset({"fft_time", "order"}),
+        priority=40,
+    ),
+    Hint(
+        id="chart_options.frf_unavailable",
+        text="频响暂不支持图表选项",
+        surface="context",
+        tier="A",
+        modes=frozenset({"frf"}),
+        priority=40,
+    ),
     # ---- Situational nudges (surface="nudge"): condition-gated, shown in the
     # footer's discovery slot only while their data predicate (see
     # _NUDGE_PREDICATES) holds. They self-clear when the situation clears and

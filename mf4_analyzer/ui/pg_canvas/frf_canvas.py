@@ -202,6 +202,13 @@ class PgFrfCanvas(QWidget):
     # layout_geometry_changed must not emit this.
     presentation_content_invalidated = pyqtSignal()
 
+    def chart_options_availability(self):
+        """FRF's three plots are not one chart-options target yet."""
+        return (
+            False,
+            "FRF 的幅值、相位和相干是三种量纲，当前图表选项还不能同时编辑这三张图。",
+        )
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("pgFrfCanvas")

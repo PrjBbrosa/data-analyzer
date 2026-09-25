@@ -316,6 +316,7 @@ class _ChartCard(QWidget):
         self._options_btn.setToolTip("图表选项")
         self._options_btn.setAutoRaise(True)
         self._options_btn.clicked.connect(self.open_chart_options)
+        self._options_btn.setAttribute(Qt.WA_AlwaysShowToolTips, True)
         self._copy_btn = QToolButton(self.toolbar)
         self._copy_btn.setIcon(qta.icon('mdi.content-copy', color=_ICON_COLOR))
         self._copy_btn.setIconSize(QSize(18, 18))
@@ -355,6 +356,7 @@ class _ChartCard(QWidget):
             self.toolbar.addWidget(self._tick_density_sep)
             self.toolbar.addWidget(self._tick_density_btn)
             self.toolbar.addWidget(self._options_btn)
+        self.sync_chart_options_button()
 
         self._loc_action = None
 
@@ -593,6 +595,7 @@ class _ChartCard(QWidget):
     def set_focus_marker(self, color):
         """Show a top accent strip in ``color`` (the focused split pane), or
         hide it when ``color`` is falsy. The strip overlays the canvas top."""
+        self.sync_chart_options_button()
         bar = getattr(self, "_focus_bar", None)
         if bar is None:
             return
@@ -816,14 +819,63 @@ class _ChartCard(QWidget):
         box.exec_()
         return box.clickedButton() is clear
 
+    @property
+    def _options_canvas_provider(self):
+        return getattr(self, "_options_canvas_provider_fn", None)
+
+    @_options_canvas_provider.setter
+    def _options_canvas_provider(self, value):
+        self._options_canvas_provider_fn = value
+        self.sync_chart_options_button()
+
+    def _options_canvas(self):
+        provider = self._options_canvas_provider
+        if callable(provider):
+            try:
+                canvas = provider()
+            except AttributeError as exc:
+                # AnalysisSectionPage assigns this provider before ``_focused``
+                # exists. The card's own canvas is that page's pane 0.
+                if getattr(exc, "name", None) != "_focused":
+                    raise
+                canvas = None
+            if canvas is not None:
+                return canvas
+        return getattr(self, "canvas", None)
+
+    def _chart_options_state(self, canvas):
+        """Enablement comes from the canvas, never from a section name."""
+        if canvas is None:
+            return False, "当前图表不支持图表选项"
+        probe = getattr(canvas, "chart_options_availability", None)
+        if callable(probe):
+            enabled, reason = probe()
+            if bool(enabled):
+                return True, "图表选项"
+            text = str(reason or "").strip()
+            return False, text or "当前图表不支持图表选项"
+        if getattr(canvas, "open_chart_options_dialog", None) is not None:
+            return True, "图表选项"
+        return False, "当前图表不支持图表选项"
+
+    def sync_chart_options_button(self) -> None:
+        button = getattr(self, "_options_btn", None)
+        if button is None:
+            return
+        enabled, tip = self._chart_options_state(self._options_canvas())
+        button.setEnabled(bool(enabled))
+        button.setToolTip(tip)
+
     def open_chart_options(self):
         # In split mode the primary card's options button is the shared
         # toolbar's; ChartStack points _options_canvas_provider at the focused
         # canvas so 图表选项 opens for whichever pane is focused. Default: own
         # canvas (every analysis card and the non-split time card).
-        provider = getattr(self, '_options_canvas_provider', None)
-        canvas = provider() if callable(provider) else self.canvas
-        opener = getattr(canvas, 'open_chart_options_dialog', None)
+        canvas = self._options_canvas()
+        enabled, _reason = self._chart_options_state(canvas)
+        if not enabled:
+            return False
+        opener = getattr(canvas, "open_chart_options_dialog", None)
         if opener is not None:
             return opener()
         return False

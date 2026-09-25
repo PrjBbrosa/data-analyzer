@@ -1116,6 +1116,9 @@ class TimeDomainCanvasPG(QWidget):
 
             for slot_idx, slot in enumerate(slots):
                 handle = self._overlay_axes._add_overlay_axis_handle(pi, slot_idx)
+                # Overlay Y slots share the X-master. The chart-options note
+                # reads this; title and grid stay on the one PlotItem.
+                handle._shares_x_axis = self._x_master_handle is not None
                 tag_axis_group(handle, slot["gid"])
                 self.axes_list.append(handle)
                 members = slot["members"]
@@ -3854,6 +3857,9 @@ class TimeDomainCanvasPG(QWidget):
             return False
         if handle is None or handle not in self.axes_list:
             return False
+        handle._shares_x_axis = bool(
+            self._overlay_mode and self._x_master_handle is not None
+        )
         from mf4_analyzer.ui import _axis_interaction
 
         self._chart_options_ax = handle

@@ -107,7 +107,7 @@ def test_order_and_fft_time_second_cache_restore_does_not_replot(qtbot):
     win._render_analysis_view_from_cache("order", order_state)
     win._render_analysis_view_from_cache("order", order_state)
     assert order_plots == [1]
-    order_canvas._cmap_name = "plasma"
+    order_state.panes[0].chart_appearances = {"heatmap": {"cmap": "plasma"}}
     win._render_analysis_view_from_cache("order", order_state)
     assert order_plots == [1, 1]
 

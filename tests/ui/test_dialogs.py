@@ -600,6 +600,35 @@ def test_pg_chart_options_title_hides_inside_label_via_apply(qapp):
     assert not canvas._inside_label_items[0].isVisible()
 
 
+def test_overlay_chart_options_marks_shared_x(qapp):
+    from PyQt5.QtCore import QCoreApplication
+    from PyQt5.QtWidgets import QLabel
+
+    from mf4_analyzer.ui.dialogs import ChartOptionsDialog
+    from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+    canvas = TimeDomainCanvasPG()
+    t = np.linspace(1.0, 10.0, 32)
+    rows = [
+        ("speed", True, t, 1.0 + np.sin(t), "#1769e0", "rpm"),
+        ("torque", True, t, 50.0 + np.cos(t), "#ef4444", "Nm"),
+    ]
+    canvas.plot_channels(rows, mode="overlay")
+    QCoreApplication.processEvents()
+    assert all(handle.shares_x_axis() for handle in canvas.axes_list)
+
+    dlg = ChartOptionsDialog(None, canvas.axes_list[1])
+    note = dlg.findChild(QLabel, "chartOptionsSharedNote")
+    assert note is not None
+    assert "X 为共享轴" in note.text()
+
+    subplot = TimeDomainCanvasPG()
+    subplot.plot_channels(rows, mode="subplot")
+    QCoreApplication.processEvents()
+    assert subplot.axes_list
+    assert all(not handle.shares_x_axis() for handle in subplot.axes_list)
+
+
 def test_pg_chart_options_overlay_aux_axis_yscale_updates_own_curve(qapp):
     from mf4_analyzer.ui.dialogs import ChartOptionsDialog
     from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
@@ -664,8 +693,8 @@ def test_chart_options_dialog_applies_heatmap_map_and_range(qapp):
     assert not dlg.spin_color_max.isEnabled()
 
 
-def test_chart_options_log_axis_rejects_non_positive(qapp):
-    """Log scale + non-positive vmin/vmax must skip set_ylim and record axis."""
+def test_chart_options_log_axis_rejects_non_positive(qapp, monkeypatch):
+    """Log + non-positive range is rejected before any axis write."""
     from mf4_analyzer.ui.dialogs import ChartOptionsDialog
 
     _canvas, handle = _pg_handle_with_one_curve(qapp)
@@ -687,24 +716,18 @@ def test_chart_options_log_axis_rejects_non_positive(qapp):
 
     handle.set_ylim = record_set_ylim
     handle.set_yscale = record_set_yscale
+    _mute_chart_warning(monkeypatch)
 
-    dlg._apply_axis(
-        axis="y",
-        auto=False,
-        vmin=-1,
-        vmax=10,
-        label="Y",
-        scale_text="对数",
-    )
+    dlg.combo_y_scale.setCurrentText("对数")
+    dlg.chk_y_auto.setChecked(False)
+    dlg.spin_y_min.setValue(-1.0)
+    dlg.spin_y_max.setValue(10.0)
+    dlg.apply_changes()
 
-    # set_yscale('log') was called, set_ylim was NOT called for the bad range
-    assert any(args and args[0] == "log" for args, _ in set_yscale_calls), \
-        f"set_yscale('log') not called: {set_yscale_calls}"
-    assert set_ylim_calls == [], (
-        f"set_ylim should not be called when log + non-positive range, "
-        f"got {set_ylim_calls}"
-    )
+    assert set_yscale_calls == [], set_yscale_calls
+    assert set_ylim_calls == [], set_ylim_calls
     assert "y" in dlg._invalid_axes
+    assert dlg.was_applied() is False
 
 
 def test_chart_options_log_axis_warning_blocks_close(qapp, monkeypatch):
@@ -748,33 +771,31 @@ def test_chart_options_log_axis_warning_blocks_close(qapp, monkeypatch):
 
 
 def test_chart_options_log_axis_positive_range_applies(qapp, monkeypatch):
-    """Log + positive vmin/vmax applies set_ylim and clears _invalid_axes."""
+    """Log + positive limits are committed as engineering values."""
     from mf4_analyzer.ui.dialogs import ChartOptionsDialog
 
     _canvas, handle = _pg_handle_with_one_curve(qapp)
     dlg = ChartOptionsDialog(None, handle)
 
-    set_ylim_calls = []
-    original_set_ylim = handle.set_ylim
+    engineering_calls = []
+    original = handle.set_engineering_ylim
 
-    def record_set_ylim(*args, **kwargs):
-        set_ylim_calls.append((args, kwargs))
-        return original_set_ylim(*args, **kwargs)
+    def record_engineering(lo, hi):
+        engineering_calls.append((lo, hi))
+        return original(lo, hi)
 
-    handle.set_ylim = record_set_ylim
+    handle.set_engineering_ylim = record_engineering
 
     dlg.combo_y_scale.setCurrentText("对数")
     dlg.chk_y_auto.setChecked(False)
     dlg.spin_y_min.setValue(0.1)
     dlg.spin_y_max.setValue(10.0)
-
-    # Use the public apply slot so reset of _invalid_axes is exercised
     dlg.apply_changes()
 
-    assert any(
-        args and args[0] == pytest.approx(0.1) and args[1] == pytest.approx(10.0)
-        for args, _ in set_ylim_calls
-    ), f"set_ylim(0.1, 10.0) not called, got {set_ylim_calls}"
+    assert engineering_calls, "set_engineering_ylim was not called"
+    assert engineering_calls[-1][0] == pytest.approx(0.1)
+    assert engineering_calls[-1][1] == pytest.approx(10.0)
+    assert handle.get_engineering_ylim() == pytest.approx((0.1, 10.0))
     assert dlg._invalid_axes == []
     assert dlg.was_applied() is True
 
@@ -1030,3 +1051,487 @@ def test_analysis_chart_options_unchanged_apply_reapplies_parameters(qapp, qtbot
     dialog.apply_changes()
     assert set(applied[-1]) == {'x', 'y'}
     assert all(policy[0] for policy in applied[-1].values())
+
+
+def _mute_chart_warning(monkeypatch):
+    calls = []
+
+    def fake(parent, title, text, *args, **kwargs):
+        calls.append({"parent": parent, "title": title, "text": text})
+        return 0
+
+    monkeypatch.setattr(
+        "mf4_analyzer.ui.dialogs.QMessageBox.warning",
+        staticmethod(fake),
+    )
+    return calls
+
+
+class _FakeCurve:
+    def __init__(self, label, color, key):
+        self.label = label
+        self.color = color
+        self.key = key
+        self.plot_data_item = object()
+
+    def get_label(self):
+        return self.label
+
+    def get_color(self):
+        return self.color
+
+    def set_color(self, color):
+        self.color = color
+
+    def get_visible(self):
+        return True
+
+    def composite_key(self):
+        return self.key
+
+
+class _FakeCmap:
+    def __init__(self, name):
+        self.name = name
+
+
+class _BareMappable:
+    """Color mappable without the new auto-policy methods."""
+
+    def __init__(self, *, clim=(0.0, 8.0), cmap="viridis"):
+        self.clim = clim
+        self.cmap_name = cmap
+        self.clim_calls = []
+
+    def get_cmap(self):
+        return _FakeCmap(self.cmap_name)
+
+    def set_cmap(self, name):
+        self.cmap_name = name
+
+    def get_clim(self):
+        return self.clim
+
+    def set_clim(self, lo, hi):
+        self.clim_calls.append((float(lo), float(hi)))
+        self.clim = (float(lo), float(hi))
+
+    def get_array(self):
+        return None
+
+
+class _FakeMappable:
+    def __init__(self, *, auto=None, clim=(0.0, 8.0), cmap="viridis"):
+        self._auto = auto
+        self.clim = clim
+        self.cmap_name = cmap
+        self.clim_calls = []
+        self.policy_calls = []
+
+    def get_cmap(self):
+        return _FakeCmap(self.cmap_name)
+
+    def set_cmap(self, name):
+        self.cmap_name = name
+
+    def get_clim(self):
+        return self.clim
+
+    def set_clim(self, lo, hi):
+        self.clim_calls.append((float(lo), float(hi)))
+        self.clim = (float(lo), float(hi))
+
+    def is_color_auto(self):
+        if self._auto is None:
+            raise AssertionError("is_color_auto should not be called")
+        return self._auto
+
+    def apply_color_policy(self, auto, lo, hi):
+        self.policy_calls.append((bool(auto), float(lo), float(hi)))
+        self._auto = bool(auto)
+
+    def get_array(self):
+        return None
+
+
+class _FakeChartHandle:
+    """AxisHandle stand-in so dialog tests can pin the frozen contract."""
+
+    def __init__(self):
+        self.title = "原始标题"
+        self.xlabel = "时间"
+        self.ylabel = "幅值"
+        self.x_scale = "linear"
+        self.y_scale = "linear"
+        self.grid_on = True
+        self.xlim = (1.0, 3.0)
+        self.ylim = (1.0, 10.0)
+        self.x_auto = False
+        self.y_auto = False
+        self.lines = []
+        self.mappables = []
+        self.title_calls = []
+        self.grid_calls = []
+        self.box_x = []
+        self.box_y = []
+        self.eng_x = []
+        self.eng_y = []
+        self.scale_x = []
+        self.scale_y = []
+        self.autos = []
+        self.legend_calls = 0
+        self.redraws = 0
+        self.target_text = ""
+        self.share_x = False
+        self.log_support = {"x": True, "y": True}
+        self.legend_support = None
+
+    def get_xlim(self):
+        return self.xlim
+
+    def set_xlim(self, lo, hi):
+        self.box_x.append((lo, hi))
+        self.xlim = (float(lo), float(hi))
+
+    def get_ylim(self):
+        return self.ylim
+
+    def set_ylim(self, lo, hi):
+        self.box_y.append((lo, hi))
+        self.ylim = (float(lo), float(hi))
+
+    def autoscale(self, axis="both"):
+        self.autos.append(axis)
+        if axis in ("x", "both"):
+            self.x_auto = True
+        if axis in ("y", "both"):
+            self.y_auto = True
+
+    def set_xscale(self, scale):
+        self.scale_x.append(scale)
+        self.x_scale = scale
+
+    def set_yscale(self, scale):
+        self.scale_y.append(scale)
+        self.y_scale = scale
+
+    def get_xscale(self):
+        return self.x_scale
+
+    def get_yscale(self):
+        return self.y_scale
+
+    def get_xlabel(self):
+        return self.xlabel
+
+    def set_xlabel(self, label):
+        self.xlabel = label
+
+    def get_ylabel(self):
+        return self.ylabel
+
+    def set_ylabel(self, label):
+        self.ylabel = label
+
+    def get_title(self):
+        return self.title
+
+    def set_title(self, title):
+        self.title_calls.append(title)
+        self.title = title
+
+    def grid(self, enabled):
+        self.grid_calls.append(bool(enabled))
+        self.grid_on = bool(enabled)
+
+    def is_grid_enabled(self):
+        return self.grid_on
+
+    def get_lines(self):
+        return list(self.lines)
+
+    def get_mappables(self):
+        return list(self.mappables)
+
+    def rebuild_legend(self):
+        self.legend_calls += 1
+
+    def sync_line_axis_color(self, line, color):
+        return None
+
+    def request_redraw(self):
+        self.redraws += 1
+
+    def is_autorange(self, axis="x"):
+        return self.x_auto if axis == "x" else self.y_auto
+
+    def supports_log_scale(self, axis):
+        return bool(self.log_support.get(axis, True))
+
+    def supports_legend_rebuild(self):
+        if self.legend_support is None:
+            return bool(self.lines)
+        return bool(self.legend_support)
+
+    def chart_options_target_text(self):
+        return self.target_text
+
+    def shares_x_axis(self):
+        return bool(self.share_x)
+
+
+def test_chart_options_empty_title_commits_blank_string(qapp):
+    from mf4_analyzer.ui.dialogs import ChartOptionsDialog
+
+    handle = _FakeChartHandle()
+    dlg = ChartOptionsDialog(None, handle)
+    dlg.edit_title.setText("   ")
+    dlg.apply_changes()
+
+    assert handle.title_calls == [""]
+    assert handle.get_title() == ""
+    assert dlg.was_applied() is True
+
+
+def test_chart_options_grid_round_trip_writes_each_change(qapp):
+    from mf4_analyzer.ui.dialogs import ChartOptionsDialog
+
+    handle = _FakeChartHandle()
+    handle.grid_on = True
+    dlg = ChartOptionsDialog(None, handle)
+    assert dlg.chk_grid.isChecked() is True
+
+    dlg.chk_grid.setChecked(False)
+    dlg.apply_changes()
+    dlg.chk_grid.setChecked(True)
+    dlg.apply_changes()
+
+    assert handle.grid_calls == [False, True]
+    assert handle.is_grid_enabled() is True
+
+
+def test_chart_options_failed_log_after_success_keeps_applied_chart(qapp, monkeypatch):
+    from PyQt5.QtWidgets import QDialog
+    from mf4_analyzer.ui.dialogs import ChartOptionsDialog
+
+    handle = _FakeChartHandle()
+    dlg = ChartOptionsDialog(None, handle)
+    warnings = _mute_chart_warning(monkeypatch)
+
+    dlg.edit_title.setText("已提交")
+    dlg.apply_changes()
+    assert dlg.was_applied() is True
+    assert handle.get_title() == "已提交"
+    title_calls = list(handle.title_calls)
+    scale_calls = list(handle.scale_y)
+
+    dlg.combo_y_scale.setCurrentText("对数")
+    dlg.chk_y_auto.setChecked(False)
+    dlg.spin_y_min.setValue(-5.0)
+    dlg.spin_y_max.setValue(1.0)
+    dlg._accept_with_apply()
+
+    assert dlg.result() != QDialog.Accepted
+    assert dlg.was_applied() is True
+    assert handle.get_title() == "已提交"
+    assert handle.title_calls == title_calls
+    assert handle.get_yscale() == "linear"
+    assert handle.scale_y == scale_calls
+    assert handle.get_ylim() == pytest.approx((1.0, 10.0))
+    assert warnings
+    assert "Y 最小值" in warnings[-1]["text"]
+
+
+def test_chart_options_invalid_color_and_reversed_clim_do_not_write(qapp, monkeypatch):
+    from mf4_analyzer.ui.dialogs import ChartOptionsDialog
+
+    handle = _FakeChartHandle()
+    curve = _FakeCurve("speed", "#112233", ("src", "speed"))
+    heat = _BareMappable(clim=(0.0, 8.0))
+    handle.lines = [curve]
+    handle.mappables = [heat]
+    dlg = ChartOptionsDialog(None, handle)
+    warnings = _mute_chart_warning(monkeypatch)
+
+    dlg.edit_curve_color.setText("not-a-color")
+    dlg.apply_changes()
+
+    assert curve.color == "#112233"
+    assert dlg.was_applied() is False
+    assert handle.get_title() == "原始标题"
+    assert any("颜色" in item["text"] for item in warnings)
+
+    dlg.edit_curve_color.setText("#112233")
+    dlg.chk_color_auto.setChecked(False)
+    dlg.spin_color_min.setValue(8.0)
+    dlg.spin_color_max.setValue(2.0)
+    warnings.clear()
+    dlg.apply_changes()
+
+    assert heat.clim_calls == []
+    assert heat.clim == pytest.approx((0.0, 8.0))
+    assert dlg.was_applied() is False
+    assert any("色阶最小值" in item["text"] for item in warnings)
+
+
+def test_chart_options_unedited_tiny_range_keeps_original_float(qapp):
+    from mf4_analyzer.ui.dialogs import ChartOptionsDialog
+
+    handle = _FakeChartHandle()
+    handle.xlim = (1e-8, 5e-8)
+    handle.ylim = (1.0, 2.0)
+    state = {"x": (1e-8, 5e-8)}
+
+    def get_engineering_xlim():
+        return state["x"]
+
+    def set_engineering_xlim(lo, hi):
+        handle.eng_x.append((lo, hi))
+        state["x"] = (lo, hi)
+
+    handle.get_engineering_xlim = get_engineering_xlim
+    handle.set_engineering_xlim = set_engineering_xlim
+
+    dlg = ChartOptionsDialog(None, handle)
+    assert dlg.spin_x_min.value() == pytest.approx(0.0)
+    dlg.apply_changes()
+
+    assert handle.box_x == []
+    assert state["x"][0] == 1e-8
+    assert state["x"][1] == 5e-8
+    if handle.eng_x:
+        assert handle.eng_x[-1][0] == 1e-8
+        assert handle.eng_x[-1][1] == 5e-8
+
+    dlg.spin_x_max.lineEdit().selectAll()
+    dlg.spin_x_max.lineEdit().insert("9e-8")
+    dlg.spin_x_max.lineEdit().textEdited.emit(dlg.spin_x_max.lineEdit().text())
+    dlg.apply_changes()
+
+    assert handle.box_x == []
+    assert handle.eng_x[-1][0] == 1e-8
+    assert handle.eng_x[-1][1] == 9e-8
+
+
+def test_chart_options_title_only_does_not_rewrite_color_auto(qapp):
+    from mf4_analyzer.ui.dialogs import ChartOptionsDialog
+
+    handle = _FakeChartHandle()
+    heat = _FakeMappable(auto=True, clim=(1.0, 4.0))
+    handle.mappables = [heat]
+    dlg = ChartOptionsDialog(None, handle)
+    assert dlg.chk_color_auto.isChecked() is True
+
+    dlg.edit_title.setText("只改标题")
+    dlg.apply_changes()
+
+    assert heat.policy_calls == []
+    assert heat.clim_calls == []
+    assert heat.is_color_auto() is True
+    assert handle.get_title() == "只改标题"
+    assert dlg.chk_color_auto.isChecked() is True
+
+
+def test_chart_options_missing_color_auto_does_not_hardcode_manual(qapp):
+    from mf4_analyzer.ui.dialogs import ChartOptionsDialog
+
+    handle = _FakeChartHandle()
+    heat = _BareMappable(clim=(1.0, 4.0))
+    handle.mappables = [heat]
+    opened = ChartOptionsDialog(None, handle)
+    initial_checked = opened.chk_color_auto.isChecked()
+    opened.edit_title.setText("只改标题")
+    opened.apply_changes()
+
+    assert heat.clim_calls == []
+    assert opened.chk_color_auto.isChecked() is initial_checked
+
+
+def test_chart_options_reset_restores_drafts_without_touching_chart(qapp):
+    from mf4_analyzer.ui.dialogs import ChartOptionsDialog
+
+    handle = _FakeChartHandle()
+    first = _FakeCurve("same", "#111111", ("file-a", "torque"))
+    second = _FakeCurve("same", "#222222", ("file-b", "torque"))
+    handle.lines = [first, second]
+    dlg = ChartOptionsDialog(None, handle)
+    assert dlg.btn_reset.text() == "恢复打开时设置"
+    assert "打开" in (dlg.btn_reset.toolTip() or dlg.btn_reset.text())
+
+    dlg.edit_title.setText("草稿标题")
+    dlg.edit_curve_color.setText("#aaaaaa")
+    dlg.combo_curve.setCurrentIndex(1)
+    dlg.edit_curve_color.setText("#bbbbbb")
+    dlg.combo_curve.setCurrentIndex(0)
+
+    assert dlg.edit_curve_color.text().lower() == "#aaaaaa"
+    dlg.reset_fields()
+
+    assert dlg.edit_title.text() == "原始标题"
+    assert dlg.edit_curve_color.text().lower() == "#111111"
+    dlg.combo_curve.setCurrentIndex(1)
+    assert dlg.edit_curve_color.text().lower() == "#222222"
+    assert handle.get_title() == "原始标题"
+    assert first.color == "#111111"
+    assert second.color == "#222222"
+    assert handle.title_calls == []
+
+
+def test_chart_options_target_shared_axis_and_disabled_capabilities(qapp, monkeypatch):
+    from mf4_analyzer.ui.dialogs import ChartOptionsDialog
+
+    handle = _FakeChartHandle()
+    handle.target_text = "时域 · 子图 2 · 副轴"
+    handle.share_x = True
+    handle.log_support = {"x": False, "y": False}
+    handle.lines = []
+    handle.legend_support = False
+    dlg = ChartOptionsDialog(None, handle)
+
+    assert "时域 · 子图 2 · 副轴" in dlg.findChild(
+        __import__("PyQt5.QtWidgets", fromlist=["QLabel"]).QLabel,
+        "chartOptionsSubtitle",
+    ).text()
+    note = " ".join(
+        label.text()
+        for label in dlg.findChildren(
+            __import__("PyQt5.QtWidgets", fromlist=["QLabel"]).QLabel
+        )
+    )
+    assert "标题与网格属于整张图" in note
+    assert "X 为共享轴" in note
+    assert not dlg.combo_x_scale.isEnabled()
+    assert not dlg.combo_y_scale.isEnabled()
+    assert "对数" in dlg.combo_x_scale.toolTip()
+    assert not dlg.edit_curve_color.isEnabled()
+    assert not dlg.chk_legend.isEnabled()
+    assert dlg.chk_legend.toolTip()
+
+    warnings = _mute_chart_warning(monkeypatch)
+    dlg.combo_y_scale.setCurrentText("对数")
+    dlg.chk_legend.setChecked(True)
+    dlg.apply_changes()
+    assert handle.scale_y == []
+    assert handle.legend_calls == 0
+    assert warnings == []
+
+
+def test_chart_options_help_copy_covers_the_dialog_contract():
+    from mf4_analyzer.ui import hints, quickref
+
+    hint_text = " ".join(hint.text for hint in hints.all_hints())
+    quick_text = " ".join(
+        f"{row.desc} {row.sub or ''}"
+        for group in quickref.QUICKREF
+        for row in group.rows
+    )
+    combined = hint_text + " " + quick_text
+    for phrase in (
+        "空标题",
+        "打开时",
+        "不保存",
+        "对数",
+        "频响",
+        "共享",
+    ):
+        assert phrase in combined, phrase

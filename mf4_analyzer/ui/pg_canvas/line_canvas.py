@@ -25,7 +25,10 @@ from mf4_analyzer.ui._axis_handle import (
     PG_AXIS_NEUTRAL_COLOR,
     PG_AXIS_NEUTRAL_WIDTH,
     PgAxisHandle,
+    _plain_axis_text,
 )
+from mf4_analyzer.ui.analysis_view_state import normalize_pane_chart_appearances
+from mf4_analyzer.ui.chart_appearance_model import appearance_channel_key
 from mf4_analyzer.signal.envelope import build_envelope, build_peak_trace
 from mf4_analyzer.signal.display_ranges import (
     line_amplitude_limits,
@@ -343,6 +346,9 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
     frequency_cursor_channels = pyqtSignal(object)
     context_menu_requested = pyqtSignal()
     layout_geometry_changed = pyqtSignal()
+    # role, override spec. Emitted after a chart-options commit so the pane
+    # owner can store it. The canvas slot is only the projection of that spec.
+    user_appearance_committed = pyqtSignal(str, object)
     time_preview_range_changed = pyqtSignal(float, float)
     manual_zoom_changed = pyqtSignal(bool)
     # User pan/box/modifier-wheel/View-All on the spectrum row only.
@@ -494,6 +500,9 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         self._replot_callbacks = []
         self._raw_amp_title = ''
         self._raw_time_title = ''
+        self._user_appearances = {}
+        self._spectrum_amp_label = _AMP_LEFT_LABEL
+        self._chart_title_commit = None
         self._split_title_width = None
         self._spectrum_stale = False
         self._stale_banner = None
@@ -2170,12 +2179,15 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
                 antialias=False)
             curve.setOpacity(1.0)
             curve._spectrum_entry = e
+            curve._source_color = str(e.get('color') or '#2563eb')
+            curve._appearance_key = self._appearance_key_for_entry(e)
             curve._prepared_line_range = prepared
             curve._prepared_display_revision = self._spectrum_display_revision
             curve._spectrum_xy_break_indices = _xy_break_indices(prepared)
             self._amp_curves.append(curve)
 
         self._raw_amp_title = title or ''
+        self._spectrum_amp_label = str(amp_label or _AMP_LEFT_LABEL)
         self._apply_title_texts()
         self._plot_amp.setLabel('left', amp_label)
         self._plot_amp.setLabel('bottom', 'Frequency (Hz)')
@@ -2243,6 +2255,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             self._last_xlim = None
             self._last_yrange = None
             self._raw_amp_title = ''
+            self._spectrum_amp_label = _AMP_LEFT_LABEL
             self._apply_title_texts()
             # Keep the amp plot labelled (default titles) so it never goes bare
             # while the time-preview row below stays labelled.
@@ -2418,7 +2431,9 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         self._raw_time_title = ''
         self._apply_title_texts()
         # Keep both plots labelled in the empty state (consistency fix).
+        self._spectrum_amp_label = _AMP_LEFT_LABEL
         self._apply_default_axis_labels()
+        self._reapply_user_appearances()
         # Spectrum still uses native Y grid, so pad empty auto-range to keep
         # the top tick line off the frame (historical spec R2). Time preview
         # Y grid is the shared k/N graticule (internal i/n lines only); pin
@@ -2529,14 +2544,196 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         self._repin_time_y_to_grid()
         self.layout_geometry_changed.emit()
 
-    def open_chart_options_dialog(self, parent=None):
-        """Open chart options for the main FFT axis."""
+    def set_user_appearances(self, appearances) -> None:
+        """Install the current pane's overrides. Plot/reset reapplies them."""
+        self._user_appearances = normalize_pane_chart_appearances(appearances)
+
+    def _role_spec(self, role: str) -> dict:
+        spec = self._user_appearances.get(role)
+        return dict(spec) if isinstance(spec, dict) else {}
+
+    def _appearance_key_for_entry(self, entry) -> str:
+        if not isinstance(entry, dict):
+            return ""
+        fid = entry.get("fid", entry.get("file_id"))
+        channel = entry.get("channel") or entry.get("name")
+        if not fid or not channel:
+            return ""
+        return appearance_channel_key(fid, channel)
+
+    def _curve_appearance_key(self, curve) -> str:
+        key = str(getattr(curve, "_appearance_key", "") or "")
+        if key:
+            return key
+        return self._appearance_key_for_entry(getattr(curve, "_spectrum_entry", None))
+
+    def _role_plot(self, role: str):
+        return self._plot_amp if role == "spectrum" else self._plot_time
+
+    def _role_curves(self, role: str):
+        return self._amp_curves if role == "spectrum" else self._time_curves
+
+    def _role_default_labels(self, role: str) -> tuple[str, str]:
+        if role == "spectrum":
+            return (_AMP_BOTTOM_LABEL, str(self._spectrum_amp_label or _AMP_LEFT_LABEL))
+        return (_TIME_BOTTOM_LABEL, _TIME_LEFT_LABEL)
+
+    def _restore_role_defaults(self, role: str) -> None:
+        plot = self._role_plot(role)
+        self._apply_title_text(plot, "")
+        x_label, y_label = self._role_default_labels(role)
+        plot.setLabel("bottom", x_label)
+        plot.setLabel("left", y_label)
+        if role == "spectrum":
+            show_major_grid_left_bottom_only(plot, x=True, y=True, alpha=0.25)
+        else:
+            show_major_grid_left_bottom_only(plot, x=True, y=False, alpha=0.25)
+        for curve in self._role_curves(role):
+            source = getattr(curve, "_source_color", None)
+            if source:
+                self._recolor_curve(curve, str(source))
+
+    def _recolor_curve(self, curve, color: str) -> None:
+        width = 1.5
+        pen = curve.opts.get("pen") if hasattr(curve, "opts") else None
+        try:
+            if pen is not None and hasattr(pen, "widthF"):
+                width = float(pen.widthF() or width)
+        except (TypeError, ValueError):
+            width = 1.5
+        new_pen = pg.mkPen(color, width=width)
+        new_pen.setJoinStyle(Qt.MiterJoin)
+        new_pen.setCapStyle(Qt.FlatCap)
+        curve.setPen(new_pen)
+
+    def apply_user_appearance(self, spec, *, role: str = "spectrum") -> None:
+        """Apply one role's user overrides. Does not touch browse ranges."""
+        if role not in {"spectrum", "preview"}:
+            return
+        cleaned = normalize_pane_chart_appearances({role: spec or {}}).get(role, {})
+        plot = self._role_plot(role)
+        title = cleaned.get("title")
+        if isinstance(title, str) and title:
+            plot.setTitle(title)
+        elif "title" in cleaned:
+            self._apply_title_text(plot, "")
+        if "x_label" in cleaned:
+            plot.setLabel("bottom", cleaned["x_label"])
+        if "y_label" in cleaned:
+            plot.setLabel("left", cleaned["y_label"])
+        if "grid" in cleaned:
+            enabled = bool(cleaned["grid"])
+            show_major_grid_left_bottom_only(
+                plot, x=enabled, y=enabled, alpha=0.25,
+            )
+        colors = cleaned.get("line_colors") or {}
+        if isinstance(colors, dict):
+            for curve in self._role_curves(role):
+                color = colors.get(self._curve_appearance_key(curve))
+                if isinstance(color, str) and color:
+                    self._recolor_curve(curve, color)
+
+    def _reapply_user_appearances(self) -> None:
+        """Default projection, then the current pane overrides. No range change."""
+        for role in ("spectrum", "preview"):
+            self._restore_role_defaults(role)
+            self.apply_user_appearance(self._role_spec(role), role=role)
+
+    def _note_chart_title(self, _handle, title) -> None:
+        self._chart_title_commit = "" if title is None else str(title)
+
+    def _commit_chart_options(self, role: str, handle, opening_title: str) -> None:
+        spec: dict = {}
+        previous = self._role_spec(role)
+        if self._chart_title_commit is not None:
+            title = self._chart_title_commit.strip()
+            title_committed = True
+        else:
+            title = _plain_axis_text(handle.get_title()).strip()
+            title_committed = False
+        if title:
+            spec["title"] = title
+        elif title_committed and ("title" in previous or opening_title):
+            # The dialog cleared a title that was actually present. An
+            # untouched empty chart leaves the key absent.
+            spec["title"] = ""
+        x_default, y_default = self._role_default_labels(role)
+        x_label = _plain_axis_text(handle.get_xlabel())
+        y_label = _plain_axis_text(handle.get_ylabel())
+        if x_label != x_default:
+            spec["x_label"] = x_label
+        if y_label != y_default:
+            spec["y_label"] = y_label
+        try:
+            grid = bool(handle.is_grid_enabled())
+        except (AttributeError, RuntimeError):
+            grid = True
+        if grid is not True:
+            spec["grid"] = grid
+        colors = {}
+        for line in handle.get_lines():
+            item = getattr(line, "plot_data_item", None)
+            key = self._curve_appearance_key(item) if item is not None else ""
+            source = str(getattr(item, "_source_color", "") or "").lower()
+            try:
+                color = str(line.get_color() or "")
+            except (AttributeError, RuntimeError, TypeError, ValueError):
+                color = ""
+            if key and color and color.lower() != source:
+                colors[key] = color
+        if colors:
+            spec["line_colors"] = colors
+        spec = normalize_pane_chart_appearances({role: spec}).get(role, {})
+        appearances = dict(self._user_appearances)
+        if spec:
+            appearances[role] = spec
+        else:
+            appearances.pop(role, None)
+        self._user_appearances = appearances
+        self.user_appearance_committed.emit(role, dict(spec))
+
+    def _commit_preview_curve_color(self, curve, color: str) -> None:
+        key = self._curve_appearance_key(curve)
+        if not key or not color:
+            return
+        spec = dict(self._role_spec("preview"))
+        colors = dict(spec.get("line_colors") or {})
+        source = str(getattr(curve, "_source_color", "") or "").lower()
+        if color.lower() == source:
+            colors.pop(key, None)
+        else:
+            colors[key] = color
+        if colors:
+            spec["line_colors"] = colors
+        else:
+            spec.pop("line_colors", None)
+        spec = normalize_pane_chart_appearances({"preview": spec}).get("preview", {})
+        appearances = dict(self._user_appearances)
+        if spec:
+            appearances["preview"] = spec
+        else:
+            appearances.pop("preview", None)
+        self._user_appearances = appearances
+        self.user_appearance_committed.emit("preview", dict(spec))
+
+    def _open_role_chart_options(self, role: str, plot, parent=None) -> bool:
         from mf4_analyzer.ui import _axis_interaction
 
-        handle = PgAxisHandle(self._plot_amp, owner_canvas=self)
+        handle = PgAxisHandle(plot, owner_canvas=self)
+        handle._chart_options_target = role
+        handle.add_title_changed_callback(self._note_chart_title)
+        opening_title = _plain_axis_text(handle.get_title()).strip()
+        self._chart_title_commit = None
         target_parent = parent if parent is not None else self.window()
-        return bool(_axis_interaction.edit_chart_options_dialog(
+        applied = bool(_axis_interaction.edit_chart_options_dialog(
             target_parent, handle))
+        if applied:
+            self._commit_chart_options(role, handle, opening_title)
+        return applied
+
+    def open_chart_options_dialog(self, parent=None):
+        """Open chart options for the main FFT axis."""
+        return self._open_role_chart_options("spectrum", self._plot_amp, parent)
 
     def _refresh_bottom_x_ticks(self, *_args) -> None:
         if self._bottom_tick_target is None or self._bottom_tick_density is None:
@@ -3077,6 +3274,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             # Native left-axis Y grid stays off; rebuild the shared k/N
             # graticule so an empty preview still has horizontal lines.
             self._repin_time_y_to_grid()
+            self._reapply_user_appearances()
             self.layout_geometry_changed.emit()
             return
         if selected_idx is None:
@@ -3136,6 +3334,8 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
                 aux_vb.addItem(curve)
             curve._channel_name = e.get('label', '')
             curve._overlay_source = self._entry_source(e)
+            curve._source_color = str(e.get('color') or '#2563eb')
+            curve._appearance_key = self._appearance_key_for_entry(e)
             self._time_curves.append(curve)
             x_bounds.append((float(t[0]), float(t[-1])))
         if x_bounds:
@@ -3153,6 +3353,11 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         # BEFORE emitting geometry-changed. Without this, extra right axes
         # stay at the origin and their tick text paints over the left gutter.
         self._realize_time_overlay_axis_columns()
+        # Default projection was written above. Reapply this pane's overrides
+        # before the single geometry settlement so a custom title occupies its
+        # row in that same pass.
+        self._reapply_user_appearances()
+        self._apply_time_preview_emphasis()
         self.layout_geometry_changed.emit()
         # Curves were built AA-off provisionally; their real drawn-point sum
         # and ink total are only knowable now that every curve is in
@@ -3161,7 +3366,6 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         # a rebuild mid pan/zoom is caught by _enable_idle_quality's busy
         # check, which hands it back to the 150 ms interactive path.
         self._arm_discrete_aa()
-        self._apply_time_preview_emphasis()
         # Time-preview-only updates (source selection before 计算) rebuild the
         # curve set, so refresh the AA dot here too — otherwise it keeps the
         # previous render's state until the next pan/zoom.
@@ -3770,6 +3974,9 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         self._apply_title_text(self._plot_time, self._raw_time_title)
 
     def _apply_title_text(self, plot, title: str) -> None:
+        """Hide the title row and wipe leftover text so the next dialog cannot
+        read the previous view's title."""
+        del title
         try:
             plot.setTitle(None)
         except Exception:
@@ -3778,6 +3985,17 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             except Exception:
                 pass
         label = plot.titleLabel
+        try:
+            label.setText("")
+        except Exception:
+            try:
+                label.text = ""
+            except Exception:
+                pass
+        try:
+            plot.setTitle(None)
+        except Exception:
+            pass
         for name, value in (
             ("setMinimumHeight", 0),
             ("setMaximumHeight", 0),
@@ -4818,10 +5036,11 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         self._selected_time_entry_idx = idx
         self._apply_time_preview_emphasis()
         if idx == 0:
-            from mf4_analyzer.ui import _axis_interaction
-            handle = PgAxisHandle(self._plot_time, owner_canvas=self)
-            _axis_interaction.edit_chart_options_dialog(
-                self.window() if self.window() is not None else self, handle)
+            self._open_role_chart_options(
+                "preview",
+                self._plot_time,
+                self.window() if self.window() is not None else self,
+            )
             self._apply_time_preview_emphasis()
             return
         from PyQt5.QtGui import QColor
@@ -4845,6 +5064,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             pass
         if idx < len(self._entries):
             self._entries[idx]['color'] = color.name()
+        self._commit_preview_curve_color(curve, color.name())
         self.layout_geometry_changed.emit()
 
     def _on_click(self, ev) -> None:

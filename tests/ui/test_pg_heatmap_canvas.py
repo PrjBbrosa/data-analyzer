@@ -4603,3 +4603,311 @@ def test_heatmap_slice_direction_backstop_stays_per_signature(qapp, monkeypatch)
     )
 
     case(qapp, monkeypatch)
+
+
+def _chart_options_handle(canvas):
+    from mf4_analyzer.ui.pg_canvas.heatmap_canvas import _HeatmapAxisHandle
+
+    return _HeatmapAxisHandle(canvas)
+
+
+def _color_lut(colormap):
+    return np.asarray(colormap.getLookupTable(nPts=32, alpha=True))
+
+
+def test_heatmap_log_scale_stays_unsupported_and_image_stays_linear(canvas):
+    """F02: heatmap axes refuse log, and the image transform stays linear."""
+    matrix = np.linspace(1.0, 100.0, 20).reshape(10, 2)
+    canvas.plot_or_update_heatmap(
+        matrix=matrix,
+        x_extent=(1.0, 10.0),
+        y_extent=(1.0, 100.0),
+        amplitude_mode="amplitude",
+        z_auto=True,
+    )
+    handle = _chart_options_handle(canvas)
+    before = canvas._img.transform()
+
+    assert handle.supports_log_scale("x") is False
+    assert handle.supports_log_scale("y") is False
+    assert handle.supports_legend_rebuild() is False
+
+    handle.set_xscale("log")
+    handle.set_yscale("log")
+
+    after = canvas._img.transform()
+    assert handle.get_xscale() == "linear"
+    assert handle.get_yscale() == "linear"
+    assert after.m11() == pytest.approx(before.m11())
+    assert after.m22() == pytest.approx(before.m22())
+    assert abs(after.m22()) > 0.0
+    assert getattr(canvas._img, "logMode", False) in (False, None, (False, False))
+
+
+def test_heatmap_chart_options_target_names_frequency_or_order(canvas):
+    from mf4_analyzer.ui import _axis_interaction
+
+    captured = {}
+
+    def fake_edit(parent, handle):
+        captured["handle"] = handle
+        return True
+
+    # Default product context is frequency-time, not a generic "当前图".
+    assert canvas._chart_options_target_label() == "FFT vs Time 热图"
+
+    canvas.set_default_axis_labels(y_label="Order")
+    canvas.set_slice_button_labels("时间", "阶次")
+    assert canvas._chart_options_target_label() == "阶次热图"
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(
+        _axis_interaction, "edit_chart_options_dialog", fake_edit, raising=True,
+    )
+    try:
+        assert canvas.open_chart_options_dialog(parent=canvas) is True
+    finally:
+        monkeypatch.undo()
+    assert captured["handle"]._chart_options_target == "阶次热图"
+    assert captured["handle"].supports_legend_rebuild() is False
+
+
+def test_heatmap_title_only_appearance_keeps_color_auto(qapp):
+    from mf4_analyzer.qt_analysis_shared import _auto_db_window
+
+    freqs = np.linspace(0.0, 400.0, 32)
+    times = np.linspace(0.0, 1.0, 8)
+    amp = np.linspace(0.02, 1.5, 32 * 8).reshape(32, 8)
+    result = SpectrogramResult(
+        times=times,
+        frequencies=freqs,
+        amplitude=amp,
+        params=SpectrogramParams(fs=800.0, nfft=64),
+        channel_name="torque",
+        unit="Nm",
+        metadata={"frames": 8},
+    )
+    canvas = PgHeatmapCanvas(with_slice=True)
+    canvas.resize(640, 480)
+    try:
+        canvas.plot_result(result, amplitude_mode="amplitude_db", z_auto=True)
+        mappable = _chart_options_handle(canvas).get_mappables()[0]
+        assert mappable.is_color_auto() is True
+        levels_before = mappable.get_clim()
+        window = _auto_db_window(canvas._matrix_disp)
+        assert window is not None
+        assert levels_before == pytest.approx(window)
+
+        levels = []
+        policies = []
+        canvas.levels_changed.connect(levels.append)
+        canvas.color_policy_committed.connect(policies.append)
+        canvas.apply_user_appearance({"title": "只改标题"})
+
+        assert levels == []
+        assert policies == []
+        assert mappable.is_color_auto() is True
+        assert mappable.get_clim() == pytest.approx(levels_before)
+        assert canvas._plot.titleLabel.isVisible()
+        assert "只改标题" in canvas._plot.titleLabel.text
+    finally:
+        canvas.deleteLater()
+
+
+def test_heatmap_color_policy_commit_skips_levels_changed(canvas):
+    canvas.plot_or_update_heatmap(
+        matrix=_mat(),
+        x_extent=(0.0, 10.0),
+        y_extent=(0.0, 8.0),
+        amplitude_mode="amplitude",
+        z_auto=True,
+        z_floor=0.0,
+        z_ceiling=10.0,
+    )
+    canvas._amplitude_mode = "amplitude"
+    canvas._color_window_policy = "bounds"
+    canvas._z_color_auto = True
+    mappable = _chart_options_handle(canvas).get_mappables()[0]
+    levels = []
+    policies = []
+
+    def _note_levels(lo, hi, bucket=levels):
+        bucket.append((float(lo), float(hi)))
+
+    def _note_policy(auto, lo, hi, bucket=policies):
+        bucket.append((bool(auto), float(lo), float(hi)))
+
+    canvas.levels_changed.connect(_note_levels)
+    canvas.color_policy_committed.connect(_note_policy)
+
+    mappable.apply_color_policy(False, 1.5, 4.5)
+
+    assert levels == []
+    assert len(policies) == 1
+    auto, lo, hi = policies[0]
+    assert auto is False
+    assert (lo, hi) == pytest.approx((1.5, 4.5))
+    assert mappable.is_color_auto() is False
+    assert mappable.get_clim() == pytest.approx((1.5, 4.5))
+    assert canvas._cbar.levels() == pytest.approx((1.5, 4.5))
+
+    mappable.apply_color_policy(True, 0.0, 1.0)
+    assert levels == []
+    assert policies[-1][0] is True
+    assert mappable.is_color_auto() is True
+    assert mappable.get_clim() != pytest.approx((0.0, 1.0))
+
+
+def test_heatmap_colorbar_drag_still_emits_levels_changed(canvas):
+    canvas.plot_or_update_heatmap(
+        matrix=_mat(),
+        x_extent=(0.0, 10.0),
+        y_extent=(0.0, 8.0),
+        amplitude_mode="amplitude",
+        z_auto=True,
+    )
+    canvas._z_color_auto = True
+    levels = []
+    policies = []
+
+    def _note_levels(lo, hi, bucket=levels):
+        bucket.append((float(lo), float(hi)))
+
+    def _note_policy(auto, lo, hi, bucket=policies):
+        bucket.append((bool(auto), float(lo), float(hi)))
+
+    canvas.levels_changed.connect(_note_levels)
+    canvas.color_policy_committed.connect(_note_policy)
+    canvas._cbar.blockSignals(True)
+    canvas._cbar.setLevels((0.2, 3.0))
+    canvas._cbar.blockSignals(False)
+
+    canvas._cbar.sigLevelsChanged.emit(canvas._cbar)
+
+    assert levels
+    assert levels[-1] == pytest.approx((0.2, 3.0))
+    assert policies == []
+    assert _chart_options_handle(canvas).get_mappables()[0].is_color_auto() is False
+
+
+def test_heatmap_empty_title_appearance_restores_title_row(canvas):
+    canvas.plot_or_update_heatmap(
+        matrix=_mat(),
+        x_extent=(0.0, 10.0),
+        y_extent=(0.0, 8.0),
+        title="系统标题",
+        amplitude_mode="amplitude",
+        z_auto=True,
+    )
+    baseline_height = canvas._plot.titleLabel.maximumHeight()
+    baseline_visible = canvas._plot.titleLabel.isVisible()
+    assert baseline_height == 0
+    assert baseline_visible is False
+    assert _chart_options_handle(canvas).get_title() == ""
+
+    canvas.apply_user_appearance({"title": "用户标题"})
+    assert canvas._plot.titleLabel.maximumHeight() > baseline_height
+    assert canvas._plot.titleLabel.isVisible()
+    assert _chart_options_handle(canvas).get_title() == "用户标题"
+
+    canvas.apply_user_appearance({"title": ""})
+    assert canvas._plot.titleLabel.maximumHeight() == baseline_height
+    assert canvas._plot.titleLabel.isVisible() is baseline_visible
+    assert _chart_options_handle(canvas).get_title() == ""
+    assert canvas._plot.layout.rowCount() >= 1
+
+
+def test_heatmap_cmap_appearance_changes_lut_without_writing_preset(canvas):
+    from mf4_analyzer.qt_analysis_shared import _resolve_colormap
+
+    preset = {"cmap": "viridis"}
+    canvas.plot_or_update_heatmap(
+        matrix=_mat(),
+        x_extent=(0.0, 10.0),
+        y_extent=(0.0, 8.0),
+        amplitude_mode="amplitude",
+        z_auto=True,
+        cmap="viridis",
+    )
+    canvas._result_params_compat = preset
+    before = _color_lut(canvas._img.getColorMap())
+
+    canvas.apply_user_appearance({"cmap": "plasma"})
+
+    after = _color_lut(canvas._img.getColorMap())
+    expected = _color_lut(_resolve_colormap("plasma"))
+    assert not np.array_equal(before, after)
+    assert np.array_equal(after, expected)
+    assert np.array_equal(_color_lut(canvas._cbar.colorMap()), expected)
+    assert preset == {"cmap": "viridis"}
+    assert canvas._cmap_name == "plasma"
+
+
+def test_heatmap_color_policy_keeps_last_legal_levels(canvas):
+    canvas.plot_or_update_heatmap(
+        matrix=np.full((3, 3), np.nan),
+        x_extent=(0.0, 1.0),
+        y_extent=(0.0, 1.0),
+        amplitude_mode="amplitude",
+        z_auto=False,
+        z_floor=1.0,
+        z_ceiling=4.0,
+    )
+    mappable = _chart_options_handle(canvas).get_mappables()[0]
+    policies = []
+    levels = []
+    canvas.color_policy_committed.connect(policies.append)
+    canvas.levels_changed.connect(levels.append)
+
+    mappable.apply_color_policy(False, 8.0, 2.0)
+    mappable.apply_color_policy(False, float("nan"), 3.0)
+    mappable.set_clim(9.0, 9.0)
+
+    assert mappable.get_clim() == pytest.approx((1.0, 4.0))
+    assert canvas._cbar.levels() == pytest.approx((1.0, 4.0))
+    assert mappable.get_clim() != pytest.approx((5.0, 5.0))
+    assert policies == []
+    assert levels == []
+
+
+def test_heatmap_replot_drops_previous_view_appearance(canvas):
+    from mf4_analyzer.qt_analysis_shared import _resolve_colormap
+
+    canvas.plot_or_update_heatmap(
+        matrix=_mat(),
+        x_extent=(0.0, 10.0),
+        y_extent=(0.0, 8.0),
+        amplitude_mode="amplitude",
+        z_auto=True,
+        cmap="viridis",
+    )
+    canvas.apply_user_appearance({
+        "title": "view A title",
+        "cmap": "plasma",
+        "x_label": "自定义时间",
+        "grid": False,
+    })
+    assert "view A title" in _chart_options_handle(canvas).get_title()
+    assert not bool(canvas._plot.getAxis("bottom").grid)
+
+    canvas.plot_or_update_heatmap(
+        matrix=_mat(),
+        x_extent=(0.0, 10.0),
+        y_extent=(0.0, 8.0),
+        x_label="Time (s)",
+        title="FFT vs Time - next",
+        amplitude_mode="amplitude",
+        z_auto=True,
+        cmap="viridis",
+    )
+
+    assert _chart_options_handle(canvas).get_title() == ""
+    assert not canvas._plot.titleLabel.isVisible()
+    assert canvas._plot.titleLabel.maximumHeight() == 0
+    assert "view A title" not in canvas._plot.titleLabel.text
+    assert np.array_equal(
+        _color_lut(canvas._img.getColorMap()),
+        _color_lut(_resolve_colormap("viridis")),
+    )
+    assert canvas._plot.getAxis("bottom").labelText == "Time (s)"
+    assert bool(canvas._plot.getAxis("bottom").grid)

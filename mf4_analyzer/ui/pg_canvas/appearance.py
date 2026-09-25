@@ -9,6 +9,7 @@ this module does not guess the first fid or a display-name prefix.
 from __future__ import annotations
 
 import logging
+import math
 
 from mf4_analyzer.diagnostics import throttled
 from mf4_analyzer.ui._axis_handle import snapshot_axis_appearance
@@ -335,12 +336,16 @@ class AppearanceManager(_CanvasBackref):
         if specs.x_scale == "log":
             primary = getattr(self, "_primary_xaxis_ax", None)
             if primary is not None:
-                self._autoscale_log_axis_if_invalid(primary, "x")
+                self._autoscale_log_axis_if_invalid(
+                    primary, "x", limits_are_log_space=True,
+                )
         for handle, spec in ((item.handle, dict(item.spec or {})) for item in specs.axes):
             if handle is None:
                 continue
             if spec.get("y_scale") == "log":
-                self._autoscale_log_axis_if_invalid(handle, "y")
+                self._autoscale_log_axis_if_invalid(
+                    handle, "y", limits_are_log_space=True,
+                )
 
     def emit_typed_color_if_unique(self, channel_key, color) -> None:
         """Emit the typed identity recolor signal only when the curve is unique.
@@ -403,20 +408,41 @@ class AppearanceManager(_CanvasBackref):
             setter(scale)
 
     @staticmethod
-    def _autoscale_log_axis_if_invalid(handle, axis):
+    def _autoscale_log_axis_if_invalid(handle, axis, *, limits_are_log_space=False):
+        """Autoscale a log axis whose current limits cannot be displayed.
+
+        ``apply_chart_appearance`` runs before range restore, while the
+        ViewBox still holds the linear engineering span. A non-positive end
+        there cannot survive ``setLogMode``.
+
+        ``repair_chart_appearance_ranges`` runs after restore. Those limits
+        are already ViewBox coordinates: log mode stores ``log10`` of the
+        engineering value, so ``0`` is engineering ``1`` and a negative end
+        is a positive fraction. Treating ``<= 0`` as illegal there wipes a
+        valid ``1…100`` decade back to autoscale.
+        """
         getter = getattr(handle, f"get_{axis}lim", None)
         autoscale = getattr(handle, "autoscale", None)
         if not callable(getter) or not callable(autoscale):
             return
         try:
             lo, hi = getter()
+            lo_f = float(lo)
+            hi_f = float(hi)
         except (AttributeError, RuntimeError, TypeError, ValueError):
             return
-        try:
-            if float(lo) <= 0.0 or float(hi) <= 0.0:
+        invalid = (
+            not math.isfinite(lo_f)
+            or not math.isfinite(hi_f)
+            or lo_f >= hi_f
+        )
+        if not limits_are_log_space:
+            invalid = invalid or lo_f <= 0.0 or hi_f <= 0.0
+        if invalid:
+            try:
                 autoscale(axis=axis)
-        except (TypeError, ValueError):
-            return
+            except (TypeError, ValueError):
+                return
 
     def _hide_inside_labels_for_handle(self, handle):
         labels = getattr(self, "_inside_label_items", None) or []

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import math
+from collections.abc import Mapping
 
 import numpy as np
 import pyqtgraph as pg
@@ -193,21 +194,51 @@ class _HeatmapMappable:
         return bounds
 
     def set_clim(self, vmin, vmax):
-        lo, hi = float(vmin), float(vmax)
+        """Legacy manual levels. User colorbar drags do not come through here.
+
+        An illegal pair (non-finite or ``lo >= hi``) is ignored so the colorbar
+        cannot collapse it to a midpoint such as ``(5, 5)``.
+        """
+        legal = _legal_color_levels(vmin, vmax)
+        if legal is None:
+            return
+        lo, hi = legal
         canvas = self._canvas
-        canvas._note_presentation_content_invalidated()
-        canvas._cancel_presentation_paint_ack()
-        canvas._img.setLevels((lo, hi))
-        if canvas._cbar is not None:
-            canvas._cbar.blockSignals(True)
-            canvas._cbar.setLevels((lo, hi))
-            canvas._cbar.blockSignals(False)
+        if not canvas._install_color_levels(lo, hi):
+            return
+        canvas._mark_color_levels_manual(lo, hi)
         canvas.levels_changed.emit(lo, hi)
-        canvas.layout_geometry_changed.emit()
-        canvas._size_colorbar_value_axis()
+
+    def is_color_auto(self) -> bool:
+        """Real Z auto intent, not a guess from the current numeric window."""
+        return bool(self._canvas._z_color_auto)
+
+    def apply_color_policy(self, auto: bool, lo: float, hi: float) -> None:
+        """Commit a color policy without pretending the user dragged the bar."""
+        self._canvas.apply_color_policy(bool(auto), lo, hi)
 
     def get_array(self):
         return self._canvas._matrix_disp
+
+
+def _legal_color_levels(lo, hi):
+    """Finite strictly increasing colour window, or None when it must be kept."""
+    try:
+        lo_f = float(lo)
+        hi_f = float(hi)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(lo_f) or not math.isfinite(hi_f) or not lo_f < hi_f:
+        return None
+    return lo_f, hi_f
+
+
+def _collapse_plot_title(plot) -> None:
+    """Hide the title row and drop leftover text so a later dialog cannot read it."""
+    label = getattr(plot, "titleLabel", None)
+    if label is not None and hasattr(label, "setText"):
+        label.setText("")
+    _hide_plot_title(plot)
 
 
 class _HeatmapAxisHandle(PgAxisHandle):
@@ -220,6 +251,24 @@ class _HeatmapAxisHandle(PgAxisHandle):
         if self._canvas._matrix_disp is None:
             return []
         return [self._mappable]
+
+    def supports_log_scale(self, axis) -> bool:
+        """X and Y stay linear. ImageItem has no log mapping in this release."""
+        return False
+
+    def supports_legend_rebuild(self) -> bool:
+        """A heatmap has no line legend to rebuild."""
+        return False
+
+    def set_xscale(self, scale: str) -> None:
+        if str(scale) == "log":
+            return
+        super().set_xscale(scale)
+
+    def set_yscale(self, scale: str) -> None:
+        if str(scale) == "log":
+            return
+        super().set_yscale(scale)
 
 
 def colorbar_interaction_active(cbar) -> bool:
@@ -274,6 +323,9 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
     context_menu_requested = pyqtSignal()
     # Emitted when the user drags the interactive colorbar (lo, hi).
     levels_changed = pyqtSignal(float, float)
+    # Chart-options color policy (z_auto, lo, hi). Distinct from
+    # ``levels_changed``, which MainWindow still treats as a colorbar drag.
+    color_policy_committed = pyqtSignal(bool, float, float)
     manual_zoom_changed = pyqtSignal(bool)
     # User pan/box/modifier-wheel/View-All on the heatmap (not the slice).
     # plot_or_update_heatmap / empty View-All / full_reset must not emit this.
@@ -374,6 +426,16 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         self._manual_axes_clear_timer.timeout.connect(self._clear_pending_manual_axes)
         self._extents = None      # (x0, x1, y0, y1)
         self._raw_title = ''
+        # None = system default (hidden title). "" = user cleared the title.
+        # A non-empty string is the user title. Never infer this from leftover
+        # titleLabel text: plot hides that row and leaves the old string behind.
+        self._title_override = None
+        # Explicit Z-auto intent. plot_result / plot_or_update_heatmap write it
+        # from their z_auto argument. Levels matching the matrix min/max is
+        # not a proxy: the dB auto window is a percentile span, not nanmin/max.
+        self._z_color_auto = True
+        # "db" reuses _auto_db_window; "bounds" reuses _finite_data_bounds.
+        self._color_window_policy = "bounds"
         self._split_title_width = None
         self._remarks = []
         self._remark_intent = AnalysisRemarkStore()
@@ -1263,8 +1325,13 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
 
         self._plot.setLabel('bottom', self._x_label)
         self._plot.setLabel('left', self._y_label)
+        # Default projection: drop the previous view's title, grid and the
+        # color-auto flag. User appearance is applied afterwards.
+        self._title_override = None
         self._raw_title = title or ''
         self._apply_title_text()
+        show_major_grid_left_bottom_only(self._plot, alpha=0.25)
+        self._remember_color_policy(bool(z_auto))
 
         self._heatmap_range_updating = True
         try:
@@ -1361,8 +1428,11 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             if scene is not None:
                 scene.removeItem(self._cbar)
             self._cbar = None
-        _hide_plot_title(self._plot)
+        self._title_override = None
         self._raw_title = ''
+        self._apply_title_text()
+        self._z_color_auto = True
+        self._color_window_policy = "bounds"
         self._matrix_disp = None
         self._matrix_amp_valid = None
         self._panel_time_range = None
@@ -1550,11 +1620,31 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             _apply_axis_tick_density(axis, y_d)
         self.layout_geometry_changed.emit()
 
+    def _chart_options_target_label(self) -> str:
+        """Product name of this heatmap, from labels the canvas already owns.
+
+        Order sets the Y label/button to 阶次; FFT vs Time keeps 频率.
+        There is no section-name lookup here.
+        """
+        y_button = str(getattr(self, "_slice_y_btn_label", "") or "")
+        y_default = str(getattr(self, "_default_y_label", "") or "")
+        y_live = str(getattr(self, "_y_label", "") or "")
+        pieces = (y_button, y_default, y_live)
+        if any("阶次" in item or item.strip().lower() == "order" for item in pieces):
+            return "阶次热图"
+        joined = " ".join(pieces).lower()
+        if "频率" in y_button or "frequency" in joined:
+            return "FFT vs Time 热图"
+        return "热图"
+
     def open_chart_options_dialog(self, parent=None):
         """Open coordinate/color-scale options for the main heatmap."""
         from mf4_analyzer.ui import _axis_interaction
 
         handle = _HeatmapAxisHandle(self)
+        target = self._chart_options_target_label()
+        handle._chart_options_target = target
+        self._chart_options_target = target
         target_parent = parent if parent is not None else self.window()
         return bool(_axis_interaction.edit_chart_options_dialog(
             target_parent, handle))
@@ -1836,6 +1926,9 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
                                   if amplitude_mode_is_db(amplitude_mode)
                                   else np.isfinite(result.amplitude)),
         )
+        # plot_or_update_heatmap is called with z_auto=True because vmin/vmax
+        # are already resolved. The product flag is this method's z_auto.
+        self._remember_color_policy(bool(z_auto))
         # plot_or_update_heatmap stores the matrix it was handed (the
         # display matrix) in self._matrix_disp; re-pin it explicitly so
         # the slice and remarks read the same display-space values.
@@ -2190,7 +2283,155 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         return self._slice._set_slice_right_spacer(width)
 
     def _apply_title_text(self) -> None:
-        _hide_plot_title(self._plot)
+        title = self._title_override
+        if isinstance(title, str) and title.strip():
+            self._plot.setTitle(title)
+            return
+        _collapse_plot_title(self._plot)
+
+    def _remember_color_policy(self, z_auto: bool) -> None:
+        self._z_color_auto = bool(z_auto)
+        self._color_window_policy = (
+            "db" if amplitude_mode_is_db(self._amplitude_mode) else "bounds"
+        )
+
+    def _automatic_color_window(self):
+        matrix = self._matrix_disp
+        if matrix is None:
+            return None
+        if self._color_window_policy == "db":
+            return _auto_db_window(matrix)
+        return _finite_data_bounds(matrix)
+
+    def _install_color_levels(self, lo: float, hi: float) -> bool:
+        """Write image and colorbar levels. Do not emit ``levels_changed``."""
+        if colorbar_interaction_active(self._cbar):
+            return False
+        self._note_presentation_content_invalidated()
+        self._cancel_presentation_paint_ack()
+        self._img.setLevels((float(lo), float(hi)))
+        if self._cbar is not None:
+            self._cbar.rounding = max((float(hi) - float(lo)) / 1000.0, 1e-9)
+            self._cbar.blockSignals(True)
+            self._cbar.setLevels((float(lo), float(hi)))
+            self._cbar.blockSignals(False)
+        self.layout_geometry_changed.emit()
+        self._size_colorbar_value_axis()
+        return True
+
+    def _mark_color_levels_manual(self, lo: float, hi: float) -> None:
+        self._z_color_auto = False
+        self._last_auto_levels = None
+        self._panel_amp_range = (float(lo), float(hi))
+        self._sync_slice_to_color_policy()
+
+    def _sync_slice_to_color_policy(self) -> None:
+        if self._slice_curve is None:
+            return
+        if self._panel_amp_range is not None:
+            self._apply_slice_amp_range(())
+            return
+        if self._matrix_disp is not None:
+            self._apply_slice()
+
+    def apply_color_policy(self, auto: bool, lo: float, hi: float) -> None:
+        """Apply Z auto or a manual window and emit ``color_policy_committed``.
+
+        Auto reuses the same dB percentile window or finite-data bounds the
+        last plot path used. Illegal manual ranges keep the previous levels
+        and do not emit.
+        """
+        auto = bool(auto)
+        if auto:
+            window = self._automatic_color_window()
+            if window is None:
+                window = (0.0, 1.0)
+            lo, hi = float(window[0]), float(window[1])
+        else:
+            legal = _legal_color_levels(lo, hi)
+            if legal is None:
+                return
+            lo, hi = legal
+        if not (math.isfinite(lo) and math.isfinite(hi) and lo < hi):
+            return
+        if not self._install_color_levels(lo, hi):
+            return
+        self._z_color_auto = auto
+        if auto:
+            self._last_auto_levels = (lo, hi)
+            self._panel_amp_range = None
+        else:
+            self._last_auto_levels = None
+            self._panel_amp_range = (lo, hi)
+        self._sync_slice_to_color_policy()
+        self.color_policy_committed.emit(auto, lo, hi)
+
+    def apply_user_appearance(self, spec: Mapping | None) -> None:
+        """Overlay one pane's saved appearance on the default projection.
+
+        Missing keys and ``None`` values keep whatever ``plot_*`` just drew.
+        Call this after the default projection, then settle layout once.
+        """
+        if not isinstance(spec, Mapping) or len(spec) == 0:
+            return
+        if "title" in spec:
+            self._set_title_override(spec.get("title"))
+        if "x_label" in spec and spec.get("x_label") is not None:
+            text = str(spec["x_label"])
+            self._plot.setLabel("bottom", text)
+            self._x_label = text
+        if "y_label" in spec and spec.get("y_label") is not None:
+            text = str(spec["y_label"])
+            self._plot.setLabel("left", text)
+            self._y_label = text
+        if "grid" in spec and spec.get("grid") is not None:
+            enabled = bool(spec["grid"])
+            show_major_grid_left_bottom_only(
+                self._plot, x=enabled, y=enabled, alpha=0.25,
+            )
+        if "cmap" in spec and spec.get("cmap") is not None:
+            self._apply_live_colormap(spec["cmap"])
+        if any(key in spec for key in ("z_auto", "z_min", "z_max")):
+            self._apply_appearance_color(spec)
+
+    def _set_title_override(self, title) -> None:
+        if title is None:
+            self._title_override = None
+        elif isinstance(title, str) and title.strip():
+            self._title_override = title
+        else:
+            self._title_override = ""
+        self._apply_title_text()
+
+    def _apply_live_colormap(self, name) -> None:
+        """Retint the current image and colorbar. Do not write preset params."""
+        normalized = _normalise_colormap_name(name)
+        cmap = _resolve_colormap(normalized)
+        self._note_presentation_content_invalidated()
+        self._cancel_presentation_paint_ack()
+        self._cmap_name = normalized
+        self._img.setColorMap(cmap)
+        if self._cbar is not None:
+            self._cbar.setColorMap(cmap)
+        self.layout_geometry_changed.emit()
+
+    def _apply_appearance_color(self, spec: Mapping) -> None:
+        if "z_auto" in spec:
+            auto = bool(spec.get("z_auto"))
+        else:
+            auto = bool(self._z_color_auto)
+        if auto:
+            self.apply_color_policy(True, 0.0, 1.0)
+            return
+        lo = spec.get("z_min") if "z_min" in spec else None
+        hi = spec.get("z_max") if "z_max" in spec else None
+        if lo is None or hi is None:
+            current_lo, current_hi = _HeatmapMappable(self).get_clim()
+            if lo is None:
+                lo = current_lo
+            if hi is None:
+                hi = current_hi
+        self.apply_color_policy(False, lo, hi)
 
     def _activate_graphics_layout(self) -> None:
         try:
@@ -2522,6 +2763,9 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         self._note_presentation_content_invalidated()
         self._cancel_presentation_paint_ack()
         lo, hi = float(bar.levels()[0]), float(bar.levels()[1])
+        # A drag is a manual window. Chart-options auto uses a different signal.
+        self._z_color_auto = False
+        self._last_auto_levels = None
         # ImageItem levels are already owned by ColorBarItem._update_items.
         # Keep the slice amplitude axis on the same window without a replot.
         if hi > lo:

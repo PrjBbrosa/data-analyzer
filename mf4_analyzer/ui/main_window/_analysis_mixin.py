@@ -513,6 +513,12 @@ class AnalysisMixin:
         restored = getattr(canvas, 'colorbar_restored', None)
         if restored is not None:
             restored.connect(echo)
+        policy = getattr(canvas, 'color_policy_committed', None)
+        if policy is not None:
+            policy.connect(partial(
+                self._on_analysis_color_policy, section, pane_idx,
+            ))
+        self._wrap_heatmap_chart_options(canvas, section, pane_idx)
         canvas._levels_echo_wired = True
 
     def _analysis_xy_fingerprint(self, params):
@@ -538,6 +544,7 @@ class AnalysisMixin:
             partial(self._analysis_range_policy, section, pane_idx),
             partial(self._apply_analysis_range_policy, section, pane_idx),
         )
+        self._wire_analysis_chart_appearance(canvas, section, pane_idx)
         signal = getattr(canvas, "viewport_action_committed", None)
         if signal is None or getattr(canvas, "_viewport_intent_wired", False):
             return
@@ -1072,6 +1079,215 @@ class AnalysisMixin:
         # Persist the View ledger here so a later view-switch still sees
         # the dragged / restored window.
         self._sync_active_analysis_params(section)
+
+    def _wire_analysis_chart_appearance(self, canvas, section, pane_idx):
+        """PaneState owns appearance. The canvas only projects the current spec."""
+        if canvas is None or getattr(canvas, "_chart_appearance_wired", False):
+            return
+        signal = getattr(canvas, "user_appearance_committed", None)
+        if signal is not None:
+            signal.connect(partial(
+                self._on_analysis_chart_appearance, section, pane_idx,
+            ))
+        canvas._chart_appearance_wired = True
+
+    def _on_analysis_chart_appearance(self, section, pane_idx, role, spec):
+        if getattr(self, "_applying_analysis_view", False):
+            return
+        mgr = self.analysis_managers.get(section)
+        if mgr is None or not mgr.views:
+            return
+        state = mgr.get(mgr.active)
+        if pane_idx >= len(state.panes):
+            return
+        from ..analysis_view_state import normalize_pane_chart_appearances
+
+        pane = state.panes[pane_idx]
+        appearances = dict(getattr(pane, "chart_appearances", None) or {})
+        cleaned = normalize_pane_chart_appearances({str(role): spec}).get(str(role))
+        if cleaned:
+            appearances[str(role)] = cleaned
+        else:
+            appearances.pop(str(role), None)
+        pane.chart_appearances = appearances
+        holder = getattr(self, "_project_dirty", None)
+        if holder is not None:
+            holder.mark_user_mutation()
+
+    def _on_analysis_color_policy(self, section, pane_idx, z_auto, lo, hi):
+        """Chart-options colour policy. Distinct from a colorbar drag."""
+        if self._applying_analysis_view:
+            return
+        page = self._analysis_page(section)
+        if pane_idx != page.focused_index():
+            return
+        auto = bool(z_auto)
+        floor = float(lo)
+        ceiling = float(hi)
+        ctx = self._analysis_ctx(section)
+        ctx.apply_params({
+            "z_auto": auto,
+            "z_floor": floor,
+            "z_ceiling": ceiling,
+        })
+        self._sync_active_analysis_params(section)
+        self._store_heatmap_color_policy(section, pane_idx, auto, floor, ceiling)
+
+    def _store_heatmap_color_policy(self, section, pane_idx, z_auto, lo, hi):
+        from ..analysis_view_state import normalize_pane_chart_appearances
+
+        mgr = self.analysis_managers.get(section)
+        if mgr is None or not mgr.views:
+            return
+        state = mgr.get(mgr.active)
+        if pane_idx >= len(state.panes):
+            return
+        pane = state.panes[pane_idx]
+        appearances = dict(getattr(pane, "chart_appearances", None) or {})
+        spec = dict(appearances.get("heatmap") or {})
+        spec["z_auto"] = bool(z_auto)
+        spec["z_min"] = float(lo)
+        spec["z_max"] = float(hi)
+        cleaned = normalize_pane_chart_appearances({"heatmap": spec}).get("heatmap")
+        if cleaned:
+            appearances["heatmap"] = cleaned
+        else:
+            appearances.pop("heatmap", None)
+        pane.chart_appearances = appearances
+
+    def _wrap_heatmap_chart_options(self, canvas, section, pane_idx):
+        if canvas is None or getattr(canvas, "_heatmap_chart_options_wrapped", False):
+            return
+        opener = getattr(canvas, "open_chart_options_dialog", None)
+        if not callable(opener):
+            return
+        canvas.open_chart_options_dialog = partial(
+            self._open_captured_heatmap_chart_options,
+            section,
+            pane_idx,
+            canvas,
+            opener,
+        )
+        canvas._heatmap_chart_options_wrapped = True
+
+    def _open_captured_heatmap_chart_options(
+        self, section, pane_idx, canvas, opener, parent=None,
+    ):
+        applied = bool(opener(parent))
+        if applied:
+            self._capture_heatmap_chart_options(section, pane_idx, canvas)
+        return applied
+
+    def _capture_heatmap_chart_options(self, section, pane_idx, canvas):
+        """Snapshot the dialog the user just closed on this view.
+
+        Render/restore does not read ``canvas._cmap_name``. This read happens
+        only at the commit, after chart options wrote the current view.
+        """
+        from ...qt_analysis_shared import DEFAULT_HEATMAP_CMAP
+        from .._axis_handle import PgAxisHandle, _plain_axis_text
+        from ..analysis_view_state import normalize_pane_chart_appearances
+
+        spec = {}
+        plot = getattr(canvas, "_plot", None)
+        if plot is not None:
+            handle = PgAxisHandle(plot, owner_canvas=canvas)
+            title = _plain_axis_text(handle.get_title()).strip()
+            label = getattr(plot, "titleLabel", None)
+            visible = False
+            if label is not None:
+                try:
+                    visible = bool(label.isVisible())
+                except RuntimeError:
+                    visible = False
+            if title:
+                spec["title"] = title
+            elif visible:
+                spec["title"] = ""
+            x_default = str(getattr(canvas, "_default_x_label", "") or "")
+            y_default = str(getattr(canvas, "_default_y_label", "") or "")
+            x_label = _plain_axis_text(handle.get_xlabel())
+            y_label = _plain_axis_text(handle.get_ylabel())
+            if x_default and x_label != x_default:
+                spec["x_label"] = x_label
+            if y_default and y_label != y_default:
+                spec["y_label"] = y_label
+            try:
+                grid = bool(handle.is_grid_enabled())
+            except (AttributeError, RuntimeError):
+                grid = True
+            if grid is not True:
+                spec["grid"] = grid
+        cmap = getattr(canvas, "_cmap_name", None)
+        if isinstance(cmap, str) and cmap.strip() and cmap.strip() != DEFAULT_HEATMAP_CMAP:
+            spec["cmap"] = cmap.strip()
+        mgr = self.analysis_managers.get(section)
+        if mgr is None or not mgr.views or pane_idx >= len(mgr.get(mgr.active).panes):
+            return
+        pane = mgr.get(mgr.active).panes[pane_idx]
+        existing = dict((getattr(pane, "chart_appearances", None) or {}).get("heatmap") or {})
+        for key in ("z_auto", "z_min", "z_max"):
+            if key in existing:
+                spec[key] = existing[key]
+        appearances = dict(getattr(pane, "chart_appearances", None) or {})
+        cleaned = normalize_pane_chart_appearances({"heatmap": spec}).get("heatmap")
+        if cleaned:
+            appearances["heatmap"] = cleaned
+        else:
+            appearances.pop("heatmap", None)
+        pane.chart_appearances = appearances
+        holder = getattr(self, "_project_dirty", None)
+        if holder is not None:
+            holder.mark_user_mutation()
+
+    def _analysis_pane_for_canvas(self, section, canvas):
+        managers = getattr(self, "analysis_managers", None) or {}
+        mgr = managers.get(section)
+        if mgr is None or not getattr(mgr, "views", None) or canvas is None:
+            return None
+        page = self._analysis_page(section)
+        if page is None or not hasattr(page, "pane_canvas"):
+            return None
+        state = mgr.get(mgr.active)
+        panes = getattr(state, "panes", ()) or ()
+        for pane_idx in range(min(page.pane_count(), len(panes))):
+            if page.pane_canvas(pane_idx) is canvas:
+                return panes[pane_idx]
+        return None
+
+    def _heatmap_cmap_for_canvas(self, section, canvas) -> str:
+        from ...qt_analysis_shared import DEFAULT_HEATMAP_CMAP
+
+        pane = self._analysis_pane_for_canvas(section, canvas)
+        if pane is None:
+            fallback = getattr(canvas, "_cmap_name", DEFAULT_HEATMAP_CMAP)
+            text = str(fallback or DEFAULT_HEATMAP_CMAP).strip()
+            return text or DEFAULT_HEATMAP_CMAP
+        spec = (getattr(pane, "chart_appearances", None) or {}).get("heatmap") or {}
+        cmap = spec.get("cmap") if isinstance(spec, dict) else None
+        if isinstance(cmap, str) and cmap.strip():
+            return cmap.strip()
+        return DEFAULT_HEATMAP_CMAP
+
+    def _publish_line_chart_appearance(self, canvas, pane) -> None:
+        setter = getattr(canvas, "set_user_appearances", None)
+        if callable(setter):
+            setter(getattr(pane, "chart_appearances", None) or {})
+
+    def _project_heatmap_pane_appearance(self, section, canvas, pane=None) -> None:
+        """Project the pane spec after a redraw. Missing method is tolerated."""
+        if pane is None:
+            pane = self._analysis_pane_for_canvas(section, canvas)
+        spec = {}
+        if pane is not None:
+            raw = (getattr(pane, "chart_appearances", None) or {}).get("heatmap") or {}
+            if isinstance(raw, dict):
+                spec = dict(raw)
+            if hasattr(canvas, "_cmap_name"):
+                canvas._cmap_name = self._heatmap_cmap_for_canvas(section, canvas)
+        apply = getattr(canvas, "apply_user_appearance", None)
+        if callable(apply):
+            apply(spec)
 
     # -- source routing (Step 4) ----------------------------------------
     @staticmethod
@@ -2766,6 +2982,7 @@ class AnalysisMixin:
                         time_range=time_range))
                 self._replace_analysis_pane_pins(
                     section, state.view_id, pane_idx, pane_keys)
+                self._publish_line_chart_appearance(canvas, pane)
                 if entries:
                     self._plot_fft_entries(entries, canvas)
                 else:
@@ -2784,6 +3001,7 @@ class AnalysisMixin:
             else:
                 if not pane.sources:
                     self._clear_analysis_canvas(canvas)
+                    self._project_heatmap_pane_appearance(section, canvas, pane)
                     self._rebind_pane_overlay(canvas, pane)
                     self._replace_analysis_pane_pins(
                         section, state.view_id, pane_idx, ())
@@ -2801,6 +3019,7 @@ class AnalysisMixin:
                 if result is None:
                     any_missing = True
                     self._clear_analysis_canvas(canvas)
+                    self._project_heatmap_pane_appearance(section, canvas, pane)
                     self._rebind_pane_overlay(canvas, pane)
                     self._show_analysis_empty_hint(canvas)
                 else:
@@ -2813,6 +3032,9 @@ class AnalysisMixin:
                         # The image stays. The saved viewport can still move
                         # the existing picture; that is not a cache replot.
                         self._restore_analysis_canvas_viewport(section, canvas)
+                        self._project_heatmap_pane_appearance(
+                            section, canvas, pane,
+                        )
                     else:
                         self._render_cached_heatmap(
                             section, canvas, result, source=source)
