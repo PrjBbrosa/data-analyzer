@@ -82,13 +82,9 @@ def test_demux_native_samples(tmp_path):
     assert hf.channels[1].samples.size == 4
 
 
-def test_non_float32_channel_skipped_not_fatal(tmp_path):
-    """A file with one FLOAT32 + one non-FLOAT32 channel must parse without error.
-
-    The non-FLOAT32 channel's .samples must be None (demux skipped it);
-    the FLOAT32 channel must have its samples populated.
-    """
-    fast = np.arange(4, dtype=float)  # factor 1, 4 scans -> 4 samples
+def test_unknown_storage_width_rejects_the_layout(tmp_path):
+    """INT16 width is not confirmed, so the file must not be demuxed as 4-byte slots."""
+    fast = np.arange(4, dtype=float)
     p = write_head_hdf(
         tmp_path / "mixed.hdf", n_scans=4, start_of_data=2048,
         channels=[
@@ -98,14 +94,8 @@ def test_non_float32_channel_skipped_not_fatal(tmp_path):
              "unit": "", "calibration": 1.0, "impl_type": "INT16",
              "samples": np.zeros(4)},
         ])
-    hf = parse_head_hdf(p)
-    # FLOAT32 channel L must have samples
-    l_ch = next(c for c in hf.channels if c.name == "L")
-    assert l_ch.samples is not None
-    np.testing.assert_allclose(l_ch.samples, fast)
-    # INT16 channel CAN must be skipped (samples=None)
-    can_ch = next(c for c in hf.channels if c.name == "CAN")
-    assert can_ch.samples is None
+    with pytest.raises(NotImplementedError, match="INT16"):
+        parse_head_hdf(p)
 
 
 @pytest.mark.parametrize("n_scans", [0, 1, 3])
@@ -132,8 +122,14 @@ def test_uint32_bits_are_not_converted_to_float64(tmp_path, n_scans, raw_channel
         hf = parse_head_hdf(p)
 
     for i, channel in enumerate(hf.channels):
-        if i == raw_channel or n_scans == 0:
+        if i == raw_channel:
             assert channel.samples is None
+        elif n_scans == 0:
+            assert channel.samples is not None
+            assert channel.samples.shape == (0,)
+            assert channel.fs == pytest.approx(
+                channel.factor / (hf.delta * hf.slot_count)
+            )
         else:
             assert channel.samples.dtype == np.float64
             assert channel.samples.shape == (n_scans * factors[i],)

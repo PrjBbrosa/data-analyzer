@@ -205,6 +205,7 @@ class ProjectFileRestoreResult:
     fid_map: dict = field(default_factory=dict)
     missing_paths: list[str] = field(default_factory=list)
     missing_old_fids: list[str] = field(default_factory=list)
+    timebase_notices: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -220,6 +221,7 @@ class ProjectRestoreHealth:
     dropped_time_refs: list[Any] = field(default_factory=list)
     # (section, view_id, pane_idx, role)
     dropped_analysis_refs: list[tuple] = field(default_factory=list)
+    timebase_notices: list[str] = field(default_factory=list)
     degraded: bool = False
 
     def clear(self) -> None:
@@ -227,6 +229,7 @@ class ProjectRestoreHealth:
         self.missing_old_fids.clear()
         self.dropped_time_refs.clear()
         self.dropped_analysis_refs.clear()
+        self.timebase_notices.clear()
         self.degraded = False
 
     def adopt_restore(
@@ -236,12 +239,19 @@ class ProjectRestoreHealth:
         missing_old_fids,
         dropped_time_refs=(),
         dropped_analysis_refs=(),
+        timebase_notices=(),
     ) -> None:
-        """Replace health from one restore pass and set ``degraded`` accordingly."""
+        """Replace health from one restore pass and set ``degraded`` accordingly.
+
+        Time-base notices are reported, but they are not missing-file
+        degradation: the project file is left unchanged and ranges are not
+        rescaled.
+        """
         self.missing_paths = list(missing_paths or ())
         self.missing_old_fids = list(missing_old_fids or ())
         self.dropped_time_refs = list(dropped_time_refs or ())
         self.dropped_analysis_refs = list(dropped_analysis_refs or ())
+        self.timebase_notices = list(timebase_notices or ())
         self.degraded = bool(
             self.missing_paths
             or self.missing_old_fids

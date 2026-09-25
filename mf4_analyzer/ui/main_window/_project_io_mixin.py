@@ -2559,9 +2559,12 @@ class ProjectIOMixin:
     def _restore_project_file_refs(self, doc, path, pio):
         from ._state_holders import ProjectFileRestoreResult
 
+        from ...io.head_hdf import classify_saved_hdf_sampling
+
         fid_map = {}
         missing_paths = []
         missing_old_fids = []
+        timebase_notices = []
         pending_by_path = {}
         for ref in doc.files:
             resolved = pio.resolve_file_path(ref, path)
@@ -2583,12 +2586,27 @@ class ProjectIOMixin:
             new_fid = pending_by_path[key].pop(0)
             fid_map[ref.fid] = new_fid
             fd = self.files[new_fid]
+            decision = classify_saved_hdf_sampling(
+                fd.source_metadata,
+                fd.channel_metadata,
+                saved_fs=ref.fs,
+                time_source=ref.time_source,
+                channel_order=getattr(ref, "channel_order", ()) or (),
+            )
+            skip_saved_rate = (
+                decision is not None
+                and decision.action in {"keep-verified", "unproven"}
+            )
+            if decision is not None and decision.notice:
+                timebase_notices.append(decision.notice)
             # Older projects persisted automatic analysis repair on the source.
             # Reload original file timing instead; each analysis now prepares
             # its own grid. Explicit legacy source calibration stays compatible.
-            if ref.time_source != "auto_rebuilt":
+            # A corrected HEAD HDF axis is not divided by channel count, and a
+            # manual override is restored at the saved rate rather than scaled.
+            if not skip_saved_rate and ref.time_source != "auto_rebuilt":
                 fd.fs = float(ref.fs)
-            if ref.time_source in ("generated", "manual"):
+            if not skip_saved_rate and ref.time_source in ("generated", "manual"):
                 try:
                     fd.rebuild_time_axis(
                         float(ref.fs), reason="project_restore",
@@ -2603,7 +2621,11 @@ class ProjectIOMixin:
                 # stay distinguishable from a popover Accept.
                 fd._time_source = ref.time_source
             raw_provenance = getattr(ref, "time_axis_provenance", None)
-            if raw_provenance and ref.time_source != "auto_rebuilt":
+            if (
+                not skip_saved_rate
+                and raw_provenance
+                and ref.time_source != "auto_rebuilt"
+            ):
                 fd.time_axis_provenance = TimeAxisProvenance.from_dict(
                     raw_provenance,
                 )
@@ -2627,6 +2649,7 @@ class ProjectIOMixin:
             fid_map=fid_map,
             missing_paths=missing_paths,
             missing_old_fids=missing_old_fids,
+            timebase_notices=timebase_notices,
         )
 
     def open_project(self, path):
@@ -2685,13 +2708,17 @@ class ProjectIOMixin:
             doc.analysis_views, fid_map,
         )
         health = getattr(self, "_project_restore_health", None)
+        timebase_notices = list(getattr(restore, "timebase_notices", ()) or ())
         if health is not None:
             health.adopt_restore(
                 missing_paths=missing,
                 missing_old_fids=restore.missing_old_fids,
                 dropped_time_refs=dropped_time,
                 dropped_analysis_refs=dropped_analysis,
+                timebase_notices=timebase_notices,
             )
+        for notice in timebase_notices:
+            self.toast(notice, "warning")
 
         remapped = pio.remap_view_fids(doc.views, fid_map)
         states = [ViewState.from_dict(v) for v in remapped]

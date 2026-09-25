@@ -6,33 +6,37 @@ import numpy as np
 
 def write_head_hdf(path, *, channels, n_scans, delta=3.861e-06,
                    start_of_data=4096, version=4, byte_order="Intel",
-                   kind="Time data", scan_mode="synchronised multiple"):
+                   kind="Time data", scan_mode="synchronised multiple",
+                   first_value=0, release="6", idx_order="1",
+                   data_org="a1b1 a2b2", distribution="linear",
+                   absc_unit="s", absc_quantity="time", absc_sort="calc"):
     """Write a minimal HEAD acoustics datafile-format v4 file for tests."""
     L = []
     a = L.append
     a(";"); a("; HEAD acoustics datafile format"); a(";")
     a(f"version:                           {version}")
-    a("release:                           6")
+    a(f"release:                           {release}")
     a(f"byte order:                        {byte_order}")
     a(f"kind:                              {kind}")
     a(";#code page:                       936")
     a(f"start of data:                     {start_of_data}")
     a("nbr of abscissa:                   1")
     a(f"nbr of channel:                    {len(channels)}")
+    a(f"idx order:                         {idx_order}")
     toks = [(f"{c['factor']}*{i}" if c['factor'] != 1 else f"{i}")
             for i, c in enumerate(channels, 1)]
     a("ch order:                          " + ", ".join(toks))
-    a("data org:                          a1b1 a2b2")
+    a(f"data org:                          {data_org}")
     a(f"scan mode:                         {scan_mode}")
     a("abscissa definition:               1")
     a("name str:                          Time")
-    a("physical quantity:                 time")
-    a("physical unit:                     s")
-    a("absc sort:                         calc")
-    a("first value:                       0")
+    a(f"physical quantity:                 {absc_quantity}")
+    a(f"physical unit:                     {absc_unit}")
+    a(f"absc sort:                         {absc_sort}")
+    a(f"first value:                       {first_value!r}")
     a(f"delta value:                       {delta!r}")
     a(f"nbr of scans:                      {n_scans}")
-    a("distribution func:                 linear")
+    a(f"distribution func:                 {distribution}")
     for i, c in enumerate(channels, 1):
         a(f"channel definition:                {i}")
         a(f"name str:                          {c['name']}")

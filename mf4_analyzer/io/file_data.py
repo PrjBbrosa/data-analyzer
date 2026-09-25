@@ -205,6 +205,29 @@ def build_time_axis_provenance(
     )
 
 
+def apply_verified_hdf_sampling(fd):
+    """Write a verified HEAD HDF interval onto an existing Time column.
+
+    ``FileData(..., fs=...)`` rebuilds ``arange(n)/fs`` and drops a non-zero
+    t0. HDF groups already carry the parser's time axis. One-point records
+    have no diff, so Fs has to come from the verified ``dt`` rather than the
+    1000 Hz default.
+    """
+    meta = fd.source_metadata
+    if not isinstance(meta, Mapping) or not meta.get("sampling_rule"):
+        return fd
+    try:
+        dt = float(meta.get("dt"))
+    except (TypeError, ValueError):
+        return fd
+    if not math.isfinite(dt) or dt <= 0:
+        return fd
+    fd.fs = 1.0 / dt
+    if fd.time_array is not None:
+        fd._time_source = "column"
+    return fd
+
+
 def apply_verified_zfd_sampling(fd):
     """Write verified ZFD Fs onto an existing Time column. Does not rebuild Time.
 
@@ -279,6 +302,7 @@ class FileData:
                         break
 
             apply_verified_zfd_sampling(self)
+            apply_verified_hdf_sampling(self)
 
             # 如果没有时间列，根据采样率生成
             if self.time_array is None:

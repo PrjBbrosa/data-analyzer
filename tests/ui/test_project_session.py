@@ -904,6 +904,77 @@ def test_open_project_multi_group_hdf_no_duplication(qapp, tmp_path):
         assert fd.fs > 0, f"fid {fid} has non-positive fs={fd.fs}"
 
 
+def test_open_project_keeps_simultaneous_file_time_and_does_not_rescale(
+        qapp, tmp_path, monkeypatch):
+    """A saved simultaneous rate from the old channel-count formula is not reapplied.
+
+    Manual overrides stay at the saved rate. View limits are not divided by
+    the channel count, and the project file on disk is not rewritten.
+    """
+    import json
+
+    import numpy as np
+
+    from mf4_analyzer.ui.main_window import MainWindow
+    from tests._helpers.head_hdf_factory import write_head_hdf
+
+    n_scans = 16
+    delta = 1.0 / 24000.0
+    hdf = write_head_hdf(
+        tmp_path / "sim.hdf",
+        n_scans=n_scans,
+        delta=delta,
+        scan_mode="simultaneous",
+        first_value=1.5,
+        channels=[
+            {"name": "A", "factor": 1, "quantity": "acceleration",
+             "unit": "m/s^2", "calibration": 1.0,
+             "samples": np.arange(n_scans, dtype=float)},
+            {"name": "B", "factor": 1, "quantity": "acceleration",
+             "unit": "m/s^2", "calibration": 1.0,
+             "samples": np.arange(n_scans, dtype=float) + 1},
+        ],
+    )
+    proj = tmp_path / "sim.tlproj"
+    mw = MainWindow()
+    mw._load_one(str(hdf))
+    assert len(mw.files) == 1
+    assert next(iter(mw.files.values())).fs == pytest.approx(24000.0)
+    mw.save_project(proj)
+
+    payload = json.loads(proj.read_text(encoding="utf-8"))
+    legacy_fs = 24000.0 / 2.0
+    payload["files"][0]["fs"] = legacy_fs
+    payload["views"][0]["xlim"] = [0.25, 0.5]
+    proj.write_text(json.dumps(payload), encoding="utf-8")
+
+    mw2 = MainWindow()
+    monkeypatch.setattr(mw2, "toast", lambda *args, **kwargs: None)
+    mw2.open_project(proj)
+    restored = next(iter(mw2.files.values()))
+    assert len(mw2.files) == 1
+    assert restored.fs == pytest.approx(24000.0)
+    assert restored.time_array[0] == pytest.approx(1.5)
+    assert restored.time_array[1] - restored.time_array[0] == pytest.approx(delta)
+    assert mw2.view_manager.get(0).xlim == (0.25, 0.5)
+    notices = mw2._project_restore_health.timebase_notices
+    assert any("simultaneous" in notice for notice in notices)
+    assert json.loads(proj.read_text(encoding="utf-8"))["files"][0]["fs"] == legacy_fs
+
+    payload["files"][0]["fs"] = 800.0
+    payload["files"][0]["time_source"] = "manual"
+    proj.write_text(json.dumps(payload), encoding="utf-8")
+    mw3 = MainWindow()
+    monkeypatch.setattr(mw3, "toast", lambda *args, **kwargs: None)
+    mw3.open_project(proj)
+    manual = next(iter(mw3.files.values()))
+    assert manual.fs == pytest.approx(800.0)
+    assert manual.time_array[0] == pytest.approx(0.0)
+    assert manual.time_array[1] == pytest.approx(1.0 / 800.0)
+    assert mw3.view_manager.get(0).xlim == (0.25, 0.5)
+    assert any("手动采样率" in notice for notice in mw3._project_restore_health.timebase_notices)
+
+
 def test_project_roundtrip_restores_blf_dbc_binding_without_picker(
         qapp, tmp_path, monkeypatch):
     pytest.importorskip("can", reason="python-can not installed (win32-gated)")
@@ -1429,7 +1500,7 @@ def test_toast_io_load_diagnostics_dedupes_file_level_dropped_across_groups(
 def test_toast_io_load_diagnostics_surfaces_and_dedupes_source_warnings(
     qapp, monkeypatch,
 ):
-    """F5: HDF factor warnings live in smeta['warnings']; toast them once."""
+    """File-level HDF warnings are toasted once across raster groups."""
     from mf4_analyzer.ui.main_window import MainWindow
 
     mw = MainWindow()
@@ -1437,7 +1508,7 @@ def test_toast_io_load_diagnostics_surfaces_and_dedupes_source_warnings(
     monkeypatch.setattr(
         mw, "toast", lambda msg, level="info": toasts.append((msg, level)),
     )
-    warning = "通道 2 (SP) 的 factor 未在 ch order 中声明，已按 1 估算"
+    warning = "通道 L 含非有限样本，已原样保留"
     smeta = {"warnings": [warning]}
     mw._toast_io_load_diagnostics(smeta, smeta, smeta)
 
@@ -1445,21 +1516,24 @@ def test_toast_io_load_diagnostics_surfaces_and_dedupes_source_warnings(
     assert warn.count(warning) == 1, toasts
 
 
-def test_load_hdf_toasts_assumed_factor_warning(qapp, tmp_path, monkeypatch):
-    """F5: loading an HDF with an assumed factor must toast the A5 warning."""
+def test_load_hdf_rejects_incomplete_ch_order(qapp, tmp_path, monkeypatch):
+    """A missing ch-order entry is a load error, not an estimated factor."""
+    from PyQt5.QtWidgets import QMessageBox
+
     from mf4_analyzer.ui.main_window import MainWindow
     from tests.test_head_hdf_loader import _write_hdf_with_extra_channel_def
 
     hdf = _write_hdf_with_extra_channel_def(tmp_path / "assumed_factor.hdf")
     mw = MainWindow()
-    toasts = []
+    crits = []
     monkeypatch.setattr(
-        mw, "toast", lambda msg, level="info": toasts.append((msg, level)),
+        QMessageBox, "critical", lambda *args, **kwargs: crits.append(args),
     )
     mw._load_one(str(hdf))
 
-    warn = [m for m, lv in toasts if lv == "warning"]
-    assert any("factor" in m.lower() and "估算" in m for m in warn), toasts
+    assert list(mw.files) == []
+    assert crits
+    assert any("不再按 1 估算" in str(args) for args in crits)
 
 
 def test_load_zfd_toasts_renamed_channels_summary(qapp, tmp_path, monkeypatch):

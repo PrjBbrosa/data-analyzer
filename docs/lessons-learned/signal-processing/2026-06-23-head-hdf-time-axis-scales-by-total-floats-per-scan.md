@@ -2,7 +2,7 @@
 role: signal-processing
 tags: [head, hdf, loader, time-axis, sample-rate, fs, raster-factor, per-scan, interleave, scan-period, absolute-scale]
 created: 2026-06-23
-updated: 2026-06-23
+updated: 2026-09-25
 cause: insight
 supersedes: []
 ---
@@ -24,8 +24,15 @@ HEAD Companion」。用户实测时间轴明显偏短。
 129.5 / 5.4 kHz 都不是标准率。
 
 ## How to apply
-HEAD HDF 时间轴/采样率按 `Σfactor`（每 scan 浮点数）缩放，不是 max raster
-factor——别被 design 里的 `max_factor` 公式带回去。**自洽于公式的合成测试钉不住
-绝对尺度**（旧测试就放过了 5.4× 错误）：必须用 `Σfactor ≠ max_factor` 的合成用例
-断言真实「每通道周期 + 跨组总时长」，并对标 HEAD Companion 显示的 fs/时长。同源问题
-见 [[head-calibration-is-metadata-not-sample-gain]]（同一 loader 的另一处「系数」翻车）。
+这条缩放只属于 **synchronised multiple**。`dt = delta × Σfactor / factor`，
+`Σfactor` 含被丢的 UINT32 槽，不要改回 `max_factor`。
+
+**simultaneous 且全部 factor=1 时不要用这条公式。** 那种文件的 `dt` 就是 header
+`delta`，通道数不参与；套用 Σfactor 会把 24 kHz / 72.2 s 读成 2 kHz / 866.4 s。
+其他 scan mode 或 simultaneous 的非 1 factor 组合在有官方依据前直接拒绝，不要猜采样率。
+
+**自洽于公式的合成测试钉不住绝对尺度**（旧测试就放过了 5.4× 错误）：synchronised
+multiple 必须用 `Σfactor ≠ max_factor` 的合成用例断言每通道周期和跨组总时长；
+simultaneous 必须用通道数不同、delta 相同的用例断言 fs 不变。官方软件对照仍是绝对
+时间的发布验收，结构自洽不能代替它。同源问题见
+[[head-calibration-is-metadata-not-sample-gain]]。

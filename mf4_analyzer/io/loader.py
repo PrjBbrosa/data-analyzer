@@ -1287,17 +1287,20 @@ class DataLoader:
 
     @staticmethod
     def load_hdf(fp):
-        from .head_hdf import full_channel_name as head_full_channel_name, parse_head_hdf
+        from .head_hdf import (
+            build_time_axis,
+            full_channel_name as head_full_channel_name,
+            parse_head_hdf,
+        )
 
         hf = parse_head_hdf(fp)
+        if hf.n_scans == 0:
+            raise ValueError("HEAD .hdf: 0 个 scan，没有可分析的数据")
         max_factor = max((f for _, f in hf.ch_order), default=1)
-        # 时间轴绝对尺度：delta 是「一个 scan 内交织浮点槽」的间隔，所以一个 scan
-        # 跨 delta×per_scan（per_scan = 每 scan 总浮点数 = Σ 所有通道 factor，含被丢的
-        # 非 FLOAT32 / 全 NaN 通道——它们仍占二进制槽位），factor-f 通道采样周期
-        # = (delta×per_scan)/factor。早先误用 max_factor 代替 per_scan，使时间轴短了
-        # per_scan/max_factor 倍、fs 同比偏大（真实文件实测应 ~50 s / 48 kHz，而非
-        # ~9 s / 129.5 kHz）。绝对尺度已对标真实文件确认，勿改回 max_factor。
-        per_scan = sum(f for _, f in hf.ch_order)
+        # 时间轴只使用 head_hdf 已经校验的 dt。synchronised multiple 的
+        # dt = delta × 槽数 / factor（槽数含被跳过的 UINT32）；simultaneous 且
+        # 全部 factor=1 时 dt = delta，通道数不参与。不要在这里再写一套公式。
+        per_scan = hf.slot_count
 
         # 标定 + 丢全 NaN；收集被丢通道名+原因（不静默丢弃）。带 1-based 文件内
         # 序号 idx：HEAD 的 name str 截断到 16 字符会让物理不同的通道塌成同名，
@@ -1320,7 +1323,7 @@ class DataLoader:
             # 荒唐量级，且 calibration=0 的通道被 ×0 抹零）。仅保留原始 samples，
             # calibration 仍存入 channel_metadata 供显示/参考。
             s = c.samples
-            if np.isnan(s).all():
+            if s.size and np.isnan(s).all():
                 dropped.append(
                     {"name": head_full_channel_name(c), "reason": "all-NaN"}
                 )
@@ -1335,9 +1338,12 @@ class DataLoader:
                            if "speed of rotation" in c.quantity.lower()
                            and np.any(s != 0)), None)
 
-        def axis(factor, length):
-            period = hf.delta * (per_scan / factor)
-            return hf.first_value + np.arange(length, dtype=float) * period
+        def axis_for(channel, length):
+            if channel.dt is None or channel.n_samples != length:
+                raise ValueError(
+                    f"通道 {channel.definition_index} 的采样事实与样本数不一致"
+                )
+            return build_time_axis(hf.first_value, channel.dt, length)
 
         groups = []
         by_factor = {}
@@ -1345,8 +1351,19 @@ class DataLoader:
             by_factor.setdefault(c.factor, []).append((idx, c, s))
 
         for factor, items in sorted(by_factor.items(), reverse=True):
+            lengths = {sample.size for _idx, _channel, sample in items}
+            if len(lengths) != 1:
+                raise ValueError(
+                    f"HEAD .hdf factor {factor} 组内样本数不一致，不能按最短长度裁剪"
+                )
             length = items[0][2].size
-            t = axis(factor, length)
+            anchor = items[0][1]
+            if any(channel.dt != anchor.dt or channel.t0 != anchor.t0
+                   for _idx, channel, _sample in items):
+                raise ValueError(
+                    f"HEAD .hdf factor {factor} 组内时间轴不一致，不能按显示频率合并"
+                )
+            t = axis_for(anchor, length)
             data = {"Time": t}
             units = {}
             cmeta = {}
@@ -1380,24 +1397,41 @@ class DataLoader:
                     "physical_channel_nbr": c.physical_channel_nbr,
                     "raster_factor": c.factor, "impl_type": c.impl_type,
                     "equalization": c.equalization, "emphasis": c.emphasis,
+                    "dt": c.dt, "fs": c.fs, "t0": c.t0, "n_samples": c.n_samples,
+                    "sampling_rule": hf.sampling_rule,
+                    "rule_version": hf.rule_version,
                 }
             # 转速注入：仅注入到含 acceleration 的组、且本组不是转速所在组
             has_acc = any("acceleration" in c.quantity.lower() for _i, c, _s in items)
             if rpm is not None and has_acc and factor != rpm_factor:
-                rpm_t = axis(rpm_factor, rpm.size)
+                rpm_channel = next(
+                    c for _i, c, s in live
+                    if "speed of rotation" in c.quantity.lower() and np.any(s != 0)
+                )
+                rpm_t = axis_for(rpm_channel, rpm.size)
                 inj = np.interp(t, rpm_t, rpm)
                 data["SP (rpm-injected)"] = inj
                 units["SP (rpm-injected)"] = "deg/s"
-                cmeta["SP (rpm-injected)"] = {"quantity": "speed of rotation",
-                                              "raster_factor": factor,
-                                              "injected": True}
+                # 插值到加速度组的时间网格上，不是原始高采样率通道。
+                cmeta["SP (rpm-injected)"] = {
+                    "quantity": "speed of rotation",
+                    "raster_factor": factor,
+                    "injected": True,
+                    "derived": True,
+                    "sampling_role": "derived",
+                }
             smeta = {
                 "recording_date": hf.recording_date, "timezone": hf.timezone,
                 "version": hf.version, "release": hf.release,
                 "kind": hf.kind, "scan_mode": hf.scan_mode,
                 "code_page": hf.code_page, "delta": hf.delta,
+                "t0": hf.first_value,
                 "n_scans": hf.n_scans, "max_factor": max_factor,
-                "per_scan": per_scan,
+                "per_scan": per_scan, "slot_count": per_scan,
+                "factor": factor, "dt": anchor.dt, "fs": anchor.fs,
+                "n_samples": length,
+                "sampling_rule": hf.sampling_rule,
+                "rule_version": hf.rule_version,
                 "source_filename": Path(fp).name,
                 "dropped_channels": dropped,
                 "renamed_channels": renamed,

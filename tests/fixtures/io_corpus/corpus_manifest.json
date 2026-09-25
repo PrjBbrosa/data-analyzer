@@ -27,6 +27,18 @@
       "absent_suffixes": ["48x"],
       "fast_length": 1188000,
       "slow_length": 49500,
+      "official_time_basis": "pending",
+      "expected_sampling": {
+        "sampling_rule": "synchronised-multiple",
+        "delta_s": 3.86100386100386e-6,
+        "slot_count": 259,
+        "t0_s": 0.0,
+        "coverage_s": 49.5,
+        "groups": {
+          "24x": {"fs_hz": 24000.0, "n_samples": 1188000},
+          "1x": {"fs_hz": 1000.0, "n_samples": 49500}
+        }
+      },
       "dropped_channel_name": "CAN 1@SQuadriga III",
       "amplitude_baseline": {
         "channel": "L",
@@ -38,6 +50,29 @@
         "min": -0.3592185974121094,
         "max": 0.45237383246421814,
         "absmax": 0.45237383246421814
+      }
+    },
+    {
+      "id": "head-hdf-20260924-simultaneous",
+      "format": "head-hdf",
+      "scene": "HEAD acoustics v4 simultaneous 12-channel acceleration: header delta is 24 kHz, channel count must not scale dt",
+      "relative_path": "20260924_LS6_直驱#1 gear_running_outdoor.hdf",
+      "path_env": "TRACELAB_HEAD_HDF_SIMULTANEOUS_SAMPLE",
+      "sha256": "26f46c89cef10ce9514e7d5e11d14738db19b386e0c98bf70bc079215e965f22",
+      "size_bytes": 83239936,
+      "n_scans": 1732800,
+      "per_scan": 12,
+      "official_time_basis": "pending",
+      "expected_suffixes": ["1x"],
+      "expected_sampling": {
+        "sampling_rule": "simultaneous",
+        "delta_s": 4.16666666666667e-5,
+        "slot_count": 12,
+        "t0_s": 0.0,
+        "coverage_s": 72.2,
+        "groups": {
+          "1x": {"fs_hz": 24000.0, "n_samples": 1732800}
+        }
       }
     },
     {

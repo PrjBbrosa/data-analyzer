@@ -386,6 +386,7 @@ def _write_hdf_with_extra_channel_def(path, *, n_scans=4):
     a(f"start of data:                     {start}")
     a("nbr of abscissa:                   1")
     a("nbr of channel:                    2")
+    a("idx order:                         1")
     a("ch order:                          1")
     a("data org:                          a1b1 a2b2")
     a("scan mode:                         synchronised multiple")
@@ -414,12 +415,8 @@ def _write_hdf_with_extra_channel_def(path, *, n_scans=4):
     return path
 
 
-def test_assumed_channel_factor_records_warning_in_source_metadata(tmp_path):
-    """A5: factor defaulted via ``.get(i, 1)`` must leave a source_metadata warning."""
+def test_incomplete_ch_order_is_rejected_instead_of_assuming_factor(tmp_path):
+    """A channel missing from ch order is a data error, not factor=1."""
     p = _write_hdf_with_extra_channel_def(tmp_path / "assumed_factor.hdf")
-    groups = DataLoader.load_hdf(str(p))
-    assert len(groups) == 1
-    warnings = groups[0]["source_metadata"].get("warnings") or []
-    assert any("factor" in str(w).lower() and "SP" in str(w) for w in warnings)
-    assert "L" in groups[0]["channels"]
-    assert "SP" not in groups[0]["channels"]  # not in ch order → no samples
+    with pytest.raises(ValueError, match="不再按 1 估算"):
+        DataLoader.load_hdf(str(p))
