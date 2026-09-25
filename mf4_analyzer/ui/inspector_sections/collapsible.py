@@ -1,7 +1,7 @@
 """Collapsible parameter section widget for inspector contextuals."""
 from PyQt5 import sip
 from PyQt5.QtCore import QEvent, QPointF, QSize, Qt
-from PyQt5.QtGui import QIcon, QPainter, QPixmap, QPolygonF, QRegion
+from PyQt5.QtGui import QColor, QIcon, QPainter, QPen, QPixmap, QPolygonF, QRegion
 from PyQt5.QtWidgets import (
     QApplication,
     QFrame,
@@ -127,6 +127,7 @@ class _CollapsibleParamSection(QWidget):
         self.btn_collapser.setAutoRaise(True)
         self.btn_collapser.setText(title)
         self.btn_collapser.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.btn_collapser.setIconSize(QSize(12, 12))
         self.btn_collapser.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         try:
             self.btn_collapser.setStyleSheet(
@@ -391,14 +392,6 @@ class _CollapsibleParamSection(QWidget):
     def _apply_arrow_degrees(self, degrees):
         degrees = max(0.0, min(90.0, float(degrees)))
         self._arrow_degrees = degrees
-        if degrees <= 0.5:
-            self.btn_collapser.setIcon(QIcon())
-            self.btn_collapser.setArrowType(Qt.RightArrow)
-            return
-        if degrees >= 89.5:
-            self.btn_collapser.setIcon(QIcon())
-            self.btn_collapser.setArrowType(Qt.DownArrow)
-            return
         self.btn_collapser.setArrowType(Qt.NoArrow)
         self.btn_collapser.setIcon(self._make_arrow_icon(degrees))
 
@@ -413,18 +406,15 @@ class _CollapsibleParamSection(QWidget):
         painter.setRenderHint(QPainter.Antialiasing, True)
         painter.translate(logical / 2.0, logical / 2.0)
         painter.rotate(degrees)
-        color = self.btn_collapser.palette().color(
-            self.btn_collapser.foregroundRole()
-        )
-        painter.setBrush(color)
-        painter.setPen(Qt.NoPen)
-        span = 3.5
-        painter.drawPolygon(
+        pen = QPen(QColor("#475569"), 1.6, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+        painter.setPen(pen)
+        painter.setBrush(Qt.NoBrush)
+        painter.drawPolyline(
             QPolygonF(
                 (
-                    QPointF(-span * 0.4, -span),
-                    QPointF(-span * 0.4, span),
-                    QPointF(span, 0.0),
+                    QPointF(-1.5, -2.7),
+                    QPointF(1.2, 0.0),
+                    QPointF(-1.5, 2.7),
                 )
             )
         )
@@ -435,11 +425,7 @@ class _CollapsibleParamSection(QWidget):
         self._motion_target_height = None
         self._set_body_input_blocked(False)
         self._release_clip_height()
-        self.btn_collapser.setIcon(QIcon())
-        self.btn_collapser.setArrowType(
-            Qt.DownArrow if self._expanded else Qt.RightArrow
-        )
-        self._arrow_degrees = 90.0 if self._expanded else 0.0
+        self._apply_arrow_degrees(90.0 if self._expanded else 0.0)
         self._presented_openness = 1.0 if self._expanded else 0.0
         self._body.setVisible(self._expanded)
         if self._body_widget is not None:

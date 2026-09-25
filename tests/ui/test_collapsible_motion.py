@@ -7,7 +7,7 @@ file (lesson ``codex-qt-render-probes-isolate-qsettings``).
 from __future__ import annotations
 
 import pytest
-from PyQt5.QtCore import QSettings, Qt
+from PyQt5.QtCore import QSettings, QSize, Qt
 from PyQt5.QtWidgets import (
     QApplication,
     QLabel,
@@ -102,6 +102,24 @@ def test_default_off_is_immediate_show_hide(qtbot, tmp_path):
     assert _settings_is_true(settings, "tests/params_expanded")
 
 
+def test_collapser_uses_the_same_compact_icon_in_both_resting_states(qtbot, tmp_path):
+    section, _settings, _persistent, _body = _make_section(qtbot, tmp_path)
+    button = section.btn_collapser
+
+    for expanded in (False, True, False):
+        section.set_expanded(expanded)
+        assert button.arrowType() == Qt.NoArrow
+        assert button.iconSize() == QSize(12, 12)
+        assert not button.icon().isNull()
+        image = button.icon().pixmap(QSize(12, 12)).toImage()
+        bounds = _alpha_bounds(image)
+        assert bounds is not None
+        left, top, right, bottom = bounds
+        assert right - left <= 7
+        assert bottom - top <= 7
+        assert (right - left > bottom - top) is expanded
+
+
 def test_reduced_motion_snaps_without_active_clock(qtbot, tmp_path):
     section, settings, persistent, body = _make_section(qtbot, tmp_path)
     section.set_motion_policy(POLICY_REDUCED)
@@ -175,7 +193,8 @@ def test_height_mid_frames_and_settle_releases_clip(qtbot, tmp_path):
     assert body.isVisible()
     assert section._body.maximumHeight() == QWIDGETSIZE_MAX
     assert section._body.minimumHeight() == 0
-    assert section.btn_collapser.arrowType() == Qt.DownArrow
+    assert section.btn_collapser.arrowType() == Qt.NoArrow
+    assert not section.btn_collapser.icon().isNull()
 
     section.set_expanded(False)
     clock = section._openness_driver.clock()
@@ -187,7 +206,8 @@ def test_height_mid_frames_and_settle_releases_clip(qtbot, tmp_path):
     assert not body.isVisible()
     assert persistent.isVisible()
     assert section._body.maximumHeight() == QWIDGETSIZE_MAX
-    assert section.btn_collapser.arrowType() == Qt.RightArrow
+    assert section.btn_collapser.arrowType() == Qt.NoArrow
+    assert not section.btn_collapser.icon().isNull()
 
 
 def test_collapse_moves_body_focus_to_collapser(qtbot, tmp_path):
