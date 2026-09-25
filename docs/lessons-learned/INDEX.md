@@ -283,7 +283,7 @@ lesson by default.
 | [Empty Target Must Complete Its Page Transition](page-transition-empty-target-completion.md) | A chart transition holds the outgoing image while the destination may skip rendering because its selection is empty. | See lesson |
 | [View Marker Must Follow The Child Strip Layout](view-marker-follows-child-layout.md) | A cached selection marker uses QTabBar tabRect while labels, tab count, or visible widths change. | See lesson |
 | [Release Pytest Item Pin Records After The Filter Check](pytest-item-pin-records-release-after-check.md) | Editing UI teardown or pin-filter bookkeeping when deleted Qt wrappers survive the next item. | See lesson |
-| [FRF live cursor publishes structured facts](frf-live-cursor-publishes-structured-facts.md) | Wiring an analysis cursor into the shared ChartStack pill, or changing full/mini labels for a domain whose rows are different quantities. | See lesson |
+| [Open macOS Help From a Browser-Readable Copy](macos-help-html-blank-under-downloads.md) | Opening bundled HTML help on macOS from a checkout under Downloads, Desktop, or Documents. | See lesson |
 
 ## Selection Rules
 
