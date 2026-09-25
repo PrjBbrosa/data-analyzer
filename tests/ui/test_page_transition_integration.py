@@ -153,6 +153,23 @@ def test_measured_policy_does_not_enable_an_unadmitted_section(qtbot, monkeypatc
     assert chart_stack.page_transition().image_bytes() == 0
 
 
+def test_section_switch_keeps_outgoing_cover_above_new_stacked_page(qtbot, monkeypatch):
+    chart_stack = _stack(qtbot)
+    token, _calls = _begin_light_transition(chart_stack, monkeypatch)
+    controller = chart_stack.page_transition()
+    chart_stack.set_mode("fft")
+    QApplication.processEvents()
+    # QStackedLayout raises the incoming page. It must not expose B before
+    # the target paint fence/capture have admitted the A -> B animation.
+    center = controller._overlay.geometry().center()
+    visible = chart_stack.stack.grab().toImage()
+    dpr = visible.devicePixelRatio()
+    assert visible.pixelColor(round(center.x() * dpr), round(center.y() * dpr)) == QColor("#204080")
+    assert not controller.is_active()
+    assert token == chart_stack._page_transition_target
+    controller.cancel("stacking-probe-complete")
+
+
 def test_light_transition_waits_for_natural_paint_then_fades_to_live_target(
     qtbot, monkeypatch,
 ):
@@ -181,12 +198,13 @@ def test_light_transition_waits_for_natural_paint_then_fades_to_live_target(
     # A GraphicsView paint callback must never synchronously grab another
     # QWidget. The target snapshot is queued until this callback unwinds.
     assert calls == [(chart_stack.stack, False, False)]
-    assert chart_stack.page_transition().is_active()
+    assert not chart_stack.page_transition().is_active()
     assert chart_stack.page_transition().image_bytes() == (
         _plot_surface_image_bytes(chart_stack)
     )
 
     QApplication.processEvents()
+    assert chart_stack.page_transition().is_active()
     assert calls == [
         (chart_stack.stack, False, False),
         (chart_stack.stack, True, True),
@@ -213,7 +231,7 @@ def test_paint_ack_waits_for_pin_restore_commit_then_fades(qtbot, monkeypatch):
     assert calls == [(chart_stack.stack, False, False)]
 
     assert pins.commit_restore_presentation(fence, hold)
-    assert chart_stack.page_transition().is_active()
+    qtbot.waitUntil(chart_stack.page_transition().is_active)
 
 
 def test_pin_restore_committed_before_paint_still_fades_on_ack(qtbot, monkeypatch):
@@ -227,8 +245,9 @@ def test_pin_restore_committed_before_paint_still_fades_on_ack(qtbot, monkeypatc
     assert not chart_stack.page_transition().is_active()
 
     fence.acknowledge()
-    assert chart_stack.page_transition().is_active()
+    assert not chart_stack.page_transition().is_active()
     assert calls == [(chart_stack.stack, False, False)]
+    qtbot.waitUntil(chart_stack.page_transition().is_active)
 
 
 def test_explicit_presentation_capture_cancels_active_transition(qtbot, monkeypatch):
@@ -256,7 +275,7 @@ def test_rapid_redirect_keeps_bridge_captured_visible_source_on_single_image_pat
     chart_stack.set_page_transition_motion_policy(POLICY_LIGHT)
     chart_stack.set_page_transition_enabled_sections(("time",))
     controller = chart_stack.page_transition()
-    captures = iter(("#ff0000", "#7f0080"))
+    captures = iter(("#ff0000", "#0000ff", "#7f0080", "#00a040"))
 
     def _capture(widget, *, exclude_overlay=False):
         return _frame(widget, next(captures))
@@ -272,7 +291,7 @@ def test_rapid_redirect_keeps_bridge_captured_visible_source_on_single_image_pat
     fence_b = _NaturalPaintFence()
     assert chart_stack.request_page_transition_target(token_b, (fence_b,))
     fence_b.acknowledge()
-    assert controller.is_active()
+    qtbot.waitUntil(controller.is_active)
     duration = duration_ms("page_transition", POLICY_LIGHT)
     controller._driver.clock().setCurrentTime(duration // 2)
 
@@ -288,6 +307,7 @@ def test_rapid_redirect_keeps_bridge_captured_visible_source_on_single_image_pat
     fence_c = _NaturalPaintFence()
     assert chart_stack.request_page_transition_target(token_c, (fence_c,))
     fence_c.acknowledge()
+    qtbot.waitUntil(controller.is_active)
     controller._driver.clock().setCurrentTime(duration)
     qtbot.waitUntil(lambda: not controller.is_active())
 

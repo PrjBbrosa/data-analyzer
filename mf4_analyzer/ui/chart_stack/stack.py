@@ -1833,10 +1833,9 @@ class ChartStack(QWidget):
     def _accept_prepared_page_transition(self, token) -> None:
         """Fade once both the paint fence and the pin batch have committed."""
         self._page_transition_awaiting_pin_commit = False
-        # The ordinary GraphicsView paint has now proved the live target is
-        # underneath the transparent overlay.  Fading the retained source out
-        # over that live surface is visually the selected B crossfade, without
-        # a second QWidget.grab() that can synchronously repaint the target.
+        # The ordinary GraphicsView paint proves the target is ready. The
+        # controller queues its snapshot outside this callback, retaining the
+        # outgoing cover until both endpoints can be crossfaded safely.
         # Content-invalidation watches stay armed: keep_target must not drop
         # them, because a later rebuild happens after this paint fence is gone.
         self._clear_page_transition_ready_fence(keep_target=True)

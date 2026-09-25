@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from functools import partial
 
 from PyQt5.QtCore import QEvent, QObject, QPoint, QRect, Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QPainter, QPixmap
+from PyQt5.QtGui import QPainter, QPixmap, QRegion
 from PyQt5.QtWidgets import QApplication, QWidget
 
 from ...diagnostics import throttled
@@ -257,9 +258,9 @@ class PageTransitionController(QObject):
 
         This deliberately calls no canvas ``grab_pixmap``/flush helper.  It is
         valid only for a visible child of this controller's host and never
-        becomes a steady cache.  Target capture briefly hides the compositor
-        so the target endpoint cannot accidentally contain the old source;
-        callers invoke that branch only after a natural-paint acknowledgement.
+        becomes a steady cache. Target capture renders the host and its visible
+        children separately, omitting the compositor without hiding it on the
+        screen. Callers invoke that branch only after a natural-paint ack.
         """
         if (
             widget is None
@@ -269,17 +270,41 @@ class PageTransitionController(QObject):
             or widget.height() <= 0
         ):
             return QPixmap()
-        restore_overlay = bool(exclude_overlay and self._overlay.isVisible())
-        if restore_overlay:
-            self._overlay.hide()
         try:
+            if exclude_overlay and widget is self._host:
+                return self._capture_host_without_overlay()
             return widget.grab(widget.rect())
         except RuntimeError:
+            # A render may synchronously tear down a Qt endpoint.
             return QPixmap()
+
+    def _capture_host_without_overlay(self) -> QPixmap:
+        """Keep the outgoing cover on screen throughout target rendering.
+
+        hide/grab/show can publish the uncovered target to the Windows backing
+        store before the fade. Render only the content into a separate pixmap;
+        QObject's direct QWidget children are ordered from bottom to top.
+        """
+        host = self._host
+        dpr = float(host.devicePixelRatioF())
+        frame = QPixmap(round(host.width() * dpr), round(host.height() * dpr))
+        frame.setDevicePixelRatio(dpr)
+        frame.fill(Qt.transparent)
+        painter = QPainter(frame)
+        try:
+            painter.setClipRect(host.rect())
+            host.render(painter, QPoint(), QRegion(), QWidget.DrawWindowBackground)
+            for child in host.children():
+                if (
+                    isinstance(child, QWidget)
+                    and child is not self._overlay
+                    and child.isVisible()
+                    and not child.isWindow()
+                ):
+                    child.render(painter, child.pos())
         finally:
-            if restore_overlay and self._source_token is not None:
-                self._overlay.show()
-                self._overlay.raise_()
+            painter.end()
+        return frame
 
     def begin_transition(
         self,
@@ -496,6 +521,7 @@ class PageTransitionController(QObject):
             or token.rect != self._host.rect()
             or not self._overlay.isVisible()
             or self.is_active()
+            or self._target_ready
         ):
             return False
         if pixmap is not None and not pixmap.isNull():
@@ -505,12 +531,11 @@ class PageTransitionController(QObject):
         self._target_ready = True
         # Never grab inside the GraphicsView paint acknowledgement. On the
         # next turn, retain the target pixels BEFORE suppressing chart replays.
-        QTimer.singleShot(0, self._prepare_target_frame_and_freeze)
-        self._driver.snap(0.0)
-        self._driver.go(
-            1.0, duration_ms=duration_ms("page_transition", self._policy),
-        )
-        return self._driver.is_active()
+        if self._overlay.has_target():
+            self._prepare_target_frame_and_freeze(token)
+        else:
+            QTimer.singleShot(0, partial(self._prepare_target_frame_and_freeze, token))
+        return True
 
     def cancel(self, reason: str) -> None:
         """Release temporary images; business/render state deliberately stays."""
@@ -689,19 +714,22 @@ class PageTransitionController(QObject):
         self._input_target_destroyed_slots.clear()
         self._input_targets = ()
 
-    def _prepare_target_frame_and_freeze(self) -> None:
+    def _prepare_target_frame_and_freeze(self, token: PresentationToken) -> None:
         """Cache the admitted target, then suppress duplicate chart exposes.
 
         setUpdatesEnabled(False) removes a child from sibling composition; it
         does not preserve its backing pixels below a translucent overlay.
         Capturing once outside paint keeps both correctness and bounded work.
         """
-        if not self._target_ready or self._source_token is None:
+        if (
+            token != self._target_token
+            or not self._target_ready
+            or self._source_token is None
+        ):
             return
         if self._frozen_input_targets:
             return
         if not self._overlay.has_target():
-            token = self._target_token
             frame = self.capture_local_endpoint(self._host, exclude_overlay=True)
             # A grab can flush layouts and invalidate this presentation.
             if token != self._target_token or not self._target_ready:
@@ -730,6 +758,12 @@ class PageTransitionController(QObject):
             except RuntimeError:
                 continue
         self._frozen_input_targets = frozen
+        # The outgoing cover stays fully opaque until BOTH endpoints exist.
+        # In particular, a slow snapshot must not consume animation time.
+        self._driver.snap(0.0)
+        self._driver.go(
+            1.0, duration_ms=duration_ms("page_transition", self._policy),
+        )
 
     def _thaw_input_target_updates(self) -> None:
         for widget in self._frozen_input_targets:

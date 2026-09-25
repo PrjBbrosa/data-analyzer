@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import logging
 
-from PyQt5.QtCore import QEvent, QPoint, QPointF, QRect, Qt
-from PyQt5.QtGui import QColor, QPainter, QPixmap, QWheelEvent
+from PyQt5.QtCore import QEvent, QObject, QPoint, QPointF, QRect, Qt
+from PyQt5.QtGui import QColor, QImage, QPainter, QPixmap, QWheelEvent
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication, QWidget
 
@@ -170,6 +170,7 @@ def test_single_image_redirect_uses_the_visible_a_b_frame_before_fading_to_c(
     assert controller.begin_departure(source, _frame("#ff0000"))
     assert controller.arm_target(target_b)
     assert controller.accept_target(target_b)
+    qtbot.waitUntil(controller.is_active)
     duration = duration_ms("page_transition", POLICY_LIGHT)
     controller._driver.clock().setCurrentTime(duration // 2)
     visible_before_redirect = host.grab().toImage().pixelColor(120, 80)
@@ -184,6 +185,7 @@ def test_single_image_redirect_uses_the_visible_a_b_frame_before_fading_to_c(
     QApplication.processEvents()
     assert controller.arm_target(target_c)
     assert controller.accept_target(target_c)
+    qtbot.waitUntil(controller.is_active)
     controller._driver.clock().setCurrentTime(duration)
     qtbot.waitUntil(lambda: not controller.is_active())
     final = host.grab().toImage().pixelColor(120, 80)
@@ -258,6 +260,99 @@ def test_local_endpoint_capture_is_host_scoped_and_excludes_active_overlay(qtbot
     assert controller.capture_local_endpoint(outsider).isNull()
 
 
+def test_target_capture_keeps_cover_visible_and_preserves_child_composition(qtbot):
+    """Capturing B must never expose it before the A -> B fade starts."""
+    host = _ColorHost("#ffffff")
+    host.resize(240, 160)
+    qtbot.addWidget(host)
+    chart = _LiveInputSurface(host)
+    chart.color = QColor("#205080")
+    chart.setGeometry(10, 10, 220, 140)
+    pin = _LiveInputSurface(host)
+    pin.color = QColor(32, 160, 96, 128)
+    pin.setAttribute(Qt.WA_TranslucentBackground, True)
+    pin.setGeometry(30, 30, 60, 50)
+    hidden = _LiveInputSurface(host)
+    hidden.setGeometry(host.rect())
+    hidden.hide()
+    host.show()
+    qtbot.waitExposed(host)
+    QApplication.processEvents()
+    expected = host.grab().toImage()
+    controller = PageTransitionController(host, policy=POLICY_LIGHT)
+    assert controller.begin_departure(_token("A"), _frame("#000000"))
+
+    class CoverEvents(QObject):
+        def __init__(self):
+            super().__init__(host)
+            self.hidden = []
+
+        def eventFilter(self, watched, event):
+            if event.type() == QEvent.Hide:
+                self.hidden.append(event.type())
+            return False
+
+    events = CoverEvents()
+    controller._overlay.installEventFilter(events)
+    captured = controller.capture_local_endpoint(host, exclude_overlay=True)
+    assert captured.devicePixelRatioF() == host.devicePixelRatioF()
+    assert captured.size() == expected.size()
+    assert captured.toImage().convertToFormat(QImage.Format_ARGB32) == (
+        expected.convertToFormat(QImage.Format_ARGB32)
+    )
+    assert not hidden.isVisible()
+    assert events.hidden == [], "even a synchronous hide/grab/show can reach the screen"
+    assert host.grab().toImage().pixelColor(120, 80) == QColor("#000000")
+    controller.cancel("capture-probe-complete")
+
+
+def test_live_fade_waits_for_target_snapshot_and_rejects_duplicate_ack(qtbot, monkeypatch):
+    controller = _controller(qtbot)
+    captured = []
+
+    def capture(widget, *, exclude_overlay=False):
+        captured.append(controller.is_active())
+        return _frame("#ffffff")
+
+    monkeypatch.setattr(controller, "capture_local_endpoint", capture)
+    assert controller.begin_departure(_token("A"), _frame("#000000"))
+    assert controller.arm_target(_token("B"))
+    assert controller.accept_target(_token("B"))
+    assert not controller.is_active(), "the clock must not outrun target preparation"
+    assert not controller.accept_target(_token("B"))
+    assert captured == []
+    QApplication.processEvents()
+    assert captured == [False]
+    assert controller.is_active()
+    assert controller._overlay.has_target()
+    controller.cancel("capture-order-probe-complete")
+
+
+def test_queued_capture_cannot_prepare_a_ready_successor(qtbot, monkeypatch):
+    controller = _controller(qtbot)
+    prepared = []
+    prepare = controller._prepare_target_frame_and_freeze
+
+    def capture(widget, *, exclude_overlay=False):
+        prepared.append(controller._target_token)
+        return _frame("#ffffff")
+
+    monkeypatch.setattr(controller, "capture_local_endpoint", capture)
+    assert controller.begin_departure(_token("A", 7), _frame("#000000"))
+    assert controller.arm_target(_token("B", 7))
+    assert controller.accept_target(_token("B", 7))
+    assert controller.begin_departure(_token("B", 8), _frame("#000000"))
+    assert controller.arm_target(_token("C", 8))
+    assert controller.accept_target(_token("C", 8))
+    prepare(_token("B", 7))
+    assert prepared == []
+    assert not controller.is_active()
+    QApplication.processEvents()
+    assert prepared == [_token("C", 8)]
+    assert controller.is_active()
+    controller.cancel("redirect-probe-complete")
+
+
 def test_cropped_overlay_accepts_matching_host_token(qtbot):
     """Overlay may be a plot-surface subset; host rect still gates geometry."""
     controller = _controller(qtbot)
@@ -275,7 +370,7 @@ def test_cropped_overlay_accepts_matching_host_token(qtbot):
     assert controller._overlay.geometry() == overlay_rect
     assert controller._overlay.size() == frame.size()
     assert controller.accept_target(token)
-    assert controller.is_active()
+    qtbot.waitUntil(controller.is_active)
     controller.cancel("overlay-rect-probe")
     assert controller.image_bytes() == 0
 
@@ -347,7 +442,7 @@ def test_ordinary_ready_paint_does_not_cancel_live_fade(qtbot):
     assert controller.arm_target(target)
     assert controller.watch_input_targets(target, (surface,))
     assert controller.accept_target(target)
-    assert controller.is_active()
+    assert not controller.is_active()
 
     surface.update()
     QApplication.processEvents()
