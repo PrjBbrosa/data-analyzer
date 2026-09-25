@@ -2410,6 +2410,31 @@ def test_plot_spectra_prefers_legend_label_over_base_label(canvas):
     assert e['label'] == 'f1 · vib'
 
 
+def test_plot_spectra_auto_legend_survives_chart_options_recolor(canvas):
+    """Removing the legend tab must leave the spectrum legend in place."""
+    from mf4_analyzer.ui._axis_handle import PgAxisHandle
+    from mf4_analyzer.ui.dialogs import ChartOptionsDialog
+
+    canvas.plot_spectra(
+        [_entry(label="torque"), _entry(label="speed", color="#16a34a")],
+        xlim=(0.0, 500.0),
+        amp_label="Amplitude",
+        title="FFT",
+    )
+    legend = canvas._plot_amp.legend
+    assert legend is not None
+    assert len(legend.items) == 2
+    handle = PgAxisHandle(canvas._plot_amp, owner_canvas=canvas)
+    dlg = ChartOptionsDialog(None, handle)
+    assert dlg.tabs.count() == 2
+    dlg.edit_curve_color.setText("#123456")
+    dlg.apply_changes()
+
+    assert canvas._plot_amp.legend is legend
+    assert len(legend.items) == 2
+    assert handle.get_lines()[0].get_color().lower() == "#123456"
+
+
 def test_plot_spectra_falls_back_to_base_label_without_legend_label(canvas):
     """An entry with no 'legend_label' (the common single/exact-reference
     axis case, and every legacy direct-call test) names the curve and the

@@ -287,6 +287,7 @@ lesson by default.
 | [Open macOS Help From a Browser-Readable Copy](macos-help-html-blank-under-downloads.md) | Opening bundled HTML help on macOS from a checkout under Downloads, Desktop, or Documents. | See lesson |
 | [FRF live cursor publishes structured facts](frf-live-cursor-publishes-structured-facts.md) | Wiring an analysis cursor into the shared ChartStack pill, or changing full/mini labels for a domain whose rows are different quantities. | See lesson |
 | [Parentless Popup Final Reference Can Break SIP Exit Iteration](parentless-popup-final-reference-can-break-sip-exit-iteration.md) | Changing cached parentless Qt popups, destroyed callbacks, or diagnosing crashes in cleanup_qobject / sip_api_visit_wrappers at interpreter exit. | See lesson |
+| [Chart Options Restore Commits The Opening Snapshot](pyqt-ui/2026-09-25-chart-options-restore-commits-opening-snapshot.md) | Changing ChartOptionsDialog reset, apply, axis range, or color-scale commit. | See lesson |
 
 ## Selection Rules
 

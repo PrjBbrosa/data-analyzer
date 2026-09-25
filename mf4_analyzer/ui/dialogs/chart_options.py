@@ -42,9 +42,10 @@ _PARTIAL_NUMBER_RE = re.compile(
 )
 _LOG_DISABLED_TIP = "热图没有对数映射。开启对数会让坐标轴、像素、切片和读数脱节。"
 _CURVE_DISABLED_TIP = "当前没有可编辑曲线。"
-_LEGEND_DISABLED_TIP = "当前图没有线条，或不支持重新生成图例。"
 _COLOR_DISABLED_TIP = "当前图没有色阶。"
 _SHARED_AXIS_NOTE = "标题与网格属于整张图，X 为共享轴，Y 与曲线属于当前轴。"
+_RESTORE_TIP = "撤销本次打开图表选项后的修改，并立即还原图表。"
+_FORM_LABEL_TEXTS = ("标题", "最小值", "最大值", "标签", "刻度", "对象", "颜色", "色图")
 
 
 def _parse_chart_number(text):
@@ -199,6 +200,7 @@ class ChartOptionsDialog(QDialog):
         self._curve_combo_index = 0
         self._color_policy_dirty = False
         self._range_axes_edited = set()
+        self._form_labels = []
 
         root = QVBoxLayout(self)
         root.setContentsMargins(14, 14, 14, 12)
@@ -232,14 +234,13 @@ class ChartOptionsDialog(QDialog):
         tab_bar.setAttribute(Qt.WA_StyledBackground, True)
         self.tabs.addTab(self._scrollable_tab(self._axes_tab()), "坐标轴")
         self.tabs.addTab(self._scrollable_tab(self._appearance_tab()), "图形")
-        self.tabs.addTab(self._scrollable_tab(self._legend_tab()), "图例")
         root.addWidget(self.tabs, 1)
 
         actions = QHBoxLayout()
         actions.setContentsMargins(0, 2, 0, 0)
         actions.addStretch(1)
-        self.btn_reset = QPushButton("恢复打开时设置", self)
-        self.btn_reset.setToolTip("恢复打开对话框时的设置，不是出厂默认。应用后才改图。")
+        self.btn_reset = QPushButton("还原", self)
+        self.btn_reset.setToolTip(_RESTORE_TIP)
         self.btn_cancel = QPushButton("取消", self)
         self.btn_apply = QPushButton("应用", self)
         self.btn_ok = QPushButton("确定", self)
@@ -249,7 +250,7 @@ class ChartOptionsDialog(QDialog):
             actions.addWidget(btn)
         root.addLayout(actions)
 
-        self.btn_reset.clicked.connect(self.reset_fields)
+        self.btn_reset.clicked.connect(self.restore_opened)
         self.btn_cancel.clicked.connect(self.reject)
         self.btn_apply.clicked.connect(self.apply_changes)
         self.btn_ok.clicked.connect(self._accept_with_apply)
@@ -277,12 +278,22 @@ class ChartOptionsDialog(QDialog):
             getattr(self, f"spin_{axis}_max").lineEdit().textEdited.connect(
                 partial(self._note_range_edit, axis)
             )
+        self.edit_title.textChanged.connect(self._note_draft_changed)
+        self.edit_x_label.textChanged.connect(self._note_draft_changed)
+        self.edit_y_label.textChanged.connect(self._note_draft_changed)
+        self.chk_grid.toggled.connect(self._note_draft_changed)
+        self.combo_x_scale.currentTextChanged.connect(self._note_draft_changed)
+        self.combo_y_scale.currentTextChanged.connect(self._note_draft_changed)
+        self.edit_curve_color.textChanged.connect(self._note_draft_changed)
+        self.combo_cmap.currentTextChanged.connect(self._note_draft_changed)
         self._loading = False
+        self._sync_restore_button()
         self._geometry_fitted = False
         self._fit_to_available_height()
 
     def showEvent(self, event):  # noqa: N802
         super().showEvent(event)
+        self._apply_form_label_column()
         if not self._geometry_fitted:
             self._fit_to_available_height()
             self._geometry_fitted = True
@@ -346,14 +357,6 @@ class ChartOptionsDialog(QDialog):
         except TypeError:
             return bool(probe())
 
-    def _legend_supported(self):
-        probe = getattr(self.handle, "supports_legend_rebuild", None)
-        if callable(probe):
-            supported = bool(probe())
-        else:
-            supported = bool(self._lines)
-        return supported and bool(self._lines)
-
     def _apply_capability_locks(self):
         for axis in ("x", "y"):
             combo = getattr(self, f"combo_{axis}_scale")
@@ -367,9 +370,6 @@ class ChartOptionsDialog(QDialog):
             for widget in (self.combo_curve, self.edit_curve_color, self.btn_curve_color):
                 widget.setEnabled(False)
                 widget.setToolTip(_CURVE_DISABLED_TIP)
-        if not self._legend_supported():
-            self.chk_legend.setEnabled(False)
-            self.chk_legend.setToolTip(_LEGEND_DISABLED_TIP)
         if not self._mappables:
             for widget in (
                 self.chk_color_auto, self.combo_cmap,
@@ -400,24 +400,6 @@ class ChartOptionsDialog(QDialog):
         lay.addStretch(1)
         return page
 
-    def _legend_tab(self):
-        page = QWidget(self)
-        lay = QVBoxLayout(page)
-        lay.setContentsMargins(8, 10, 8, 8)
-        lay.setSpacing(10)
-        group = self._group_frame("图例")
-        form = QVBoxLayout(group)
-        form.setContentsMargins(10, 8, 10, 10)
-        form.setSpacing(8)
-        title = QLabel("图例", group)
-        title.setObjectName("chartOptionsGroupTitle")
-        form.addWidget(title)
-        self.chk_legend = QCheckBox("重新生成自动图例", group)
-        form.addWidget(self.chk_legend)
-        lay.addWidget(group)
-        lay.addStretch(1)
-        return page
-
     def _basic_group(self):
         group = self._group_frame("基础信息")
         box = QVBoxLayout(group)
@@ -426,11 +408,9 @@ class ChartOptionsDialog(QDialog):
         title = QLabel("基础信息", group)
         title.setObjectName("chartOptionsGroupTitle")
         box.addWidget(title)
-        form = QFormLayout()
-        form.setContentsMargins(0, 0, 0, 0)
-        form.setSpacing(8)
-        self.edit_title = QLineEdit(group)
-        form.addRow("标题", self.edit_title)
+        form = self._new_form()
+        self.edit_title = self._grow_field(QLineEdit(group))
+        form.addRow(self._form_label("标题", group), self.edit_title)
         box.addLayout(form)
         self.chk_grid = QCheckBox("显示网格线", group)
         box.addWidget(self.chk_grid)
@@ -444,21 +424,19 @@ class ChartOptionsDialog(QDialog):
         title = QLabel(group_title, group)
         title.setObjectName("chartOptionsGroupTitle")
         box.addWidget(title)
-        form = QFormLayout()
-        form.setContentsMargins(0, 0, 0, 0)
-        form.setSpacing(8)
+        form = self._new_form()
 
-        spin_min = self._spin(group)
-        spin_max = self._spin(group)
-        edit_label = QLineEdit(group)
-        combo_scale = QComboBox(group)
+        spin_min = self._grow_field(self._spin(group))
+        spin_max = self._grow_field(self._spin(group))
+        edit_label = self._grow_field(QLineEdit(group))
+        combo_scale = self._grow_field(QComboBox(group))
         combo_scale.addItems(["线性", "对数"])
         chk_auto = QCheckBox("自动范围", group)
 
-        form.addRow("最小值", spin_min)
-        form.addRow("最大值", spin_max)
-        form.addRow("标签", edit_label)
-        form.addRow("刻度", combo_scale)
+        form.addRow(self._form_label("最小值", group), spin_min)
+        form.addRow(self._form_label("最大值", group), spin_max)
+        form.addRow(self._form_label("标签", group), edit_label)
+        form.addRow(self._form_label("刻度", group), combo_scale)
         box.addLayout(form)
         box.addWidget(chk_auto)
 
@@ -477,11 +455,9 @@ class ChartOptionsDialog(QDialog):
         title = QLabel("曲线", group)
         title.setObjectName("chartOptionsGroupTitle")
         box.addWidget(title)
-        form = QFormLayout()
-        form.setContentsMargins(0, 0, 0, 0)
-        form.setSpacing(8)
+        form = self._new_form()
 
-        self.combo_curve = QComboBox(group)
+        self.combo_curve = self._grow_field(QComboBox(group))
         for i, line in enumerate(self._lines):
             label = line.get_label()
             if not label or label.startswith("_"):
@@ -491,10 +467,12 @@ class ChartOptionsDialog(QDialog):
             self.combo_curve.addItem("无可编辑曲线")
             self.combo_curve.setEnabled(False)
 
-        self.edit_curve_color = QLineEdit(group)
+        self.edit_curve_color = self._grow_field(QLineEdit(group))
         self.edit_curve_color.setPlaceholderText("#1769e0")
         self.btn_curve_color = QPushButton("选择", group)
+        self.btn_curve_color.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         color_row = QWidget(group)
+        color_row.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         color_lay = QHBoxLayout(color_row)
         color_lay.setContentsMargins(0, 0, 0, 0)
         color_lay.setSpacing(6)
@@ -504,8 +482,8 @@ class ChartOptionsDialog(QDialog):
             self.edit_curve_color.setEnabled(False)
             self.btn_curve_color.setEnabled(False)
 
-        form.addRow("对象", self.combo_curve)
-        form.addRow("颜色", color_row)
+        form.addRow(self._form_label("对象", group), self.combo_curve)
+        form.addRow(self._form_label("颜色", group), color_row)
         box.addLayout(form)
         return group
 
@@ -517,19 +495,17 @@ class ChartOptionsDialog(QDialog):
         title = QLabel("色图与色阶", group)
         title.setObjectName("chartOptionsGroupTitle")
         box.addWidget(title)
-        form = QFormLayout()
-        form.setContentsMargins(0, 0, 0, 0)
-        form.setSpacing(8)
+        form = self._new_form()
 
         self.chk_color_auto = QCheckBox("自动色阶范围", group)
-        self.combo_cmap = QComboBox(group)
+        self.combo_cmap = self._grow_field(QComboBox(group))
         self.combo_cmap.addItems(SUPPORTED_HEATMAP_COLORMAPS)
-        self.spin_color_min = self._spin(group)
-        self.spin_color_max = self._spin(group)
+        self.spin_color_min = self._grow_field(self._spin(group))
+        self.spin_color_max = self._grow_field(self._spin(group))
 
-        form.addRow("色图", self.combo_cmap)
-        form.addRow("最小值", self.spin_color_min)
-        form.addRow("最大值", self.spin_color_max)
+        form.addRow(self._form_label("色图", group), self.combo_cmap)
+        form.addRow(self._form_label("最小值", group), self.spin_color_min)
+        form.addRow(self._form_label("最大值", group), self.spin_color_max)
         box.addLayout(form)
         box.addWidget(self.chk_color_auto)
 
@@ -545,6 +521,45 @@ class ChartOptionsDialog(QDialog):
         frame.setObjectName("chartOptionsGroup")
         frame.setAttribute(Qt.WA_StyledBackground, True)
         return frame
+
+    def _new_form(self):
+        form = QFormLayout()
+        form.setContentsMargins(0, 0, 0, 0)
+        form.setHorizontalSpacing(8)
+        form.setVerticalSpacing(8)
+        form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        form.setFormAlignment(Qt.AlignLeft | Qt.AlignTop)
+        form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        form.setRowWrapPolicy(QFormLayout.DontWrapRows)
+        return form
+
+    def _form_label(self, text, parent):
+        label = QLabel(text, parent)
+        label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+        # QFormLayout sizes its label column from sizeHint. A shared fixed
+        # width, measured from this dialog's labels, keeps every group on
+        # the same field origin.
+        label.setFixedWidth(self._measured_form_label_width())
+        self._form_labels.append(label)
+        return label
+
+    def _grow_field(self, widget):
+        widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        return widget
+
+    def _measured_form_label_width(self):
+        metrics = self.fontMetrics()
+        text_width = max(metrics.horizontalAdvance(text) for text in _FORM_LABEL_TEXTS)
+        return text_width + metrics.horizontalAdvance(" ")
+
+    def _apply_form_label_column(self):
+        width = self._measured_form_label_width()
+        if width == getattr(self, "_applied_label_width", None):
+            return
+        self._applied_label_width = width
+        for label in self._form_labels:
+            label.setFixedWidth(width)
 
     def _spin(self, parent):
         return _ChartFloatSpin(parent)
@@ -635,7 +650,6 @@ class ChartOptionsDialog(QDialog):
             "y_scale": self.SCALE_TO_TEXT.get(y_scale_raw, y_scale_raw),
             "y_auto": y_auto,
             "grid": grid_visible,
-            "legend": False,
             "curve_index": 0,
             "curve_color": line_color,
             "color_min": float(cmin),
@@ -645,6 +659,18 @@ class ChartOptionsDialog(QDialog):
         }
 
     def reset_fields(self):
+        """Reload the opening draft. Does not write the chart.
+
+        Construction uses this fill. The footer button calls
+        ``restore_opened`` so an already-applied edit is written back
+        in the same click.
+        """
+        self._load_opened_fields()
+        self._color_policy_dirty = False
+        self._range_axes_edited = set()
+        self._sync_restore_button()
+
+    def _load_opened_fields(self):
         self._loading = True
         d = self._opened
         self.edit_title.setText(d["title"])
@@ -659,7 +685,6 @@ class ChartOptionsDialog(QDialog):
         self.combo_y_scale.setCurrentText(d["y_scale"])
         self.chk_y_auto.setChecked(d["y_auto"])
         self.chk_grid.setChecked(d["grid"])
-        self.chk_legend.setChecked(False)
         self._curve_drafts = dict(self._curve_opened)
         index = d["curve_index"] if self._lines else 0
         self._curve_combo_index = index
@@ -669,21 +694,190 @@ class ChartOptionsDialog(QDialog):
         self.spin_color_max.set_source_value(d["color_max"])
         self.chk_color_auto.setChecked(bool(d["color_auto"]))
         self._show_curve_color(index)
-        self._color_policy_dirty = False
-        self._range_axes_edited = set()
         self._loading = False
         self._sync_auto_fields()
         self._apply_capability_locks()
+
+    def restore_opened(self):
+        """Put fields, the chart, and the owning policy back to open time.
+
+        An unapplied draft is discarded. An applied edit is committed
+        through the same path as Apply, using the opening snapshot rather
+        than whatever invalid text is currently in the form.
+        """
+        if not self._restore_available():
+            return
+        write_chart = self._committed_differs_from_open()
+        self._load_opened_fields()
+        if not write_chart:
+            self._color_policy_dirty = False
+            self._range_axes_edited = set()
+            self._sync_restore_button()
+            return
+        range_edited = {
+            axis for axis in ("x", "y") if self._axis_needs_restore(axis)
+        }
+        self._range_axes_edited = set(range_edited)
+        self._color_policy_dirty = self._color_needs_restore()
+        self._commit_valid_draft(self._appearance_dirty(), range_edited)
+        self._last_apply_ok = True
+        self._range_axes_edited.clear()
+        self._color_policy_dirty = False
+        self._read_back_live_auto_fields()
+        self._sync_restore_button()
+
+    def _note_draft_changed(self, _value=None):
+        if self._loading:
+            return
+        self._sync_restore_button()
+
+    def _sync_restore_button(self):
+        button = getattr(self, "btn_reset", None)
+        if button is None:
+            return
+        button.setEnabled(self._restore_available())
+
+    def _restore_available(self):
+        if self._loading:
+            return False
+        return (
+            self._draft_differs_from_open()
+            or self._committed_differs_from_open()
+        )
+
+    def _draft_differs_from_open(self):
+        return self._current_draft_view() != self._intent_view(
+            self._opened, self._curve_opened,
+        )
+
+    def _committed_differs_from_open(self):
+        return self._intent_view(
+            self._committed, self._curve_committed,
+        ) != self._intent_view(self._opened, self._curve_opened)
+
+    def _intent_view(self, source, curves):
+        view = {
+            "title": str(source.get("title") or "").strip(),
+            "x_label": source.get("x_label"),
+            "y_label": source.get("y_label"),
+            "x_scale": source.get("x_scale"),
+            "y_scale": source.get("y_scale"),
+            "x_auto": bool(source.get("x_auto")),
+            "y_auto": bool(source.get("y_auto")),
+            "grid": bool(source.get("grid")),
+        }
+        if not view["x_auto"]:
+            view["x_min"] = float(source.get("x_min"))
+            view["x_max"] = float(source.get("x_max"))
+        if not view["y_auto"]:
+            view["y_min"] = float(source.get("y_min"))
+            view["y_max"] = float(source.get("y_max"))
+        if self._lines and self.edit_curve_color.isEnabled():
+            view["curves"] = tuple(sorted(curves.items()))
+        if self._mappables and self.combo_cmap.isEnabled():
+            view["cmap"] = source.get("cmap")
+            view["color_auto"] = bool(source.get("color_auto"))
+            if not view["color_auto"]:
+                view["color_min"] = float(source.get("color_min"))
+                view["color_max"] = float(source.get("color_max"))
+        return view
+
+    def _current_draft_view(self):
+        view = {
+            "title": self.edit_title.text().strip(),
+            "x_label": self.edit_x_label.text(),
+            "y_label": self.edit_y_label.text(),
+            "x_scale": self.combo_x_scale.currentText() if self.combo_x_scale.isEnabled() else self._opened.get("x_scale"),
+            "y_scale": self.combo_y_scale.currentText() if self.combo_y_scale.isEnabled() else self._opened.get("y_scale"),
+            "x_auto": self.chk_x_auto.isChecked(),
+            "y_auto": self.chk_y_auto.isChecked(),
+            "grid": self.chk_grid.isChecked(),
+        }
+        if not view["x_auto"]:
+            view["x_min"] = self._spin_draft_value(self.spin_x_min)
+            view["x_max"] = self._spin_draft_value(self.spin_x_max)
+        if not view["y_auto"]:
+            view["y_min"] = self._spin_draft_value(self.spin_y_min)
+            view["y_max"] = self._spin_draft_value(self.spin_y_max)
+        if self._lines and self.edit_curve_color.isEnabled():
+            self._stash_curve_draft()
+            view["curves"] = tuple(sorted(self._curve_drafts.items()))
+        if self._mappables and self.combo_cmap.isEnabled():
+            view["cmap"] = self.combo_cmap.currentText()
+            view["color_auto"] = self.chk_color_auto.isChecked()
+            if not view["color_auto"]:
+                view["color_min"] = self._spin_draft_value(self.spin_color_min)
+                view["color_max"] = self._spin_draft_value(self.spin_color_max)
+        return view
+
+    def _spin_draft_value(self, spin):
+        if spin._user_edited and spin._edited_text is not None:
+            parsed = _parse_chart_number(spin._edited_text)
+            if parsed is None:
+                return ("invalid", spin._edited_text)
+            return float(parsed)
+        return float(spin.value_for_commit())
+
+    def _axis_needs_restore(self, axis):
+        opened = self._opened
+        committed = self._committed
+        if bool(opened.get(f"{axis}_auto")) != bool(committed.get(f"{axis}_auto")):
+            return True
+        if self._scale_changed(axis):
+            return True
+        if opened.get(f"{axis}_auto"):
+            return False
+        return (
+            float(opened[f"{axis}_min"]) != float(committed.get(f"{axis}_min"))
+            or float(opened[f"{axis}_max"]) != float(committed.get(f"{axis}_max"))
+        )
+
+    def _color_needs_restore(self):
+        if not self._mappables or not self.combo_cmap.isEnabled():
+            return False
+        opened = self._opened
+        committed = self._committed
+        if bool(opened.get("color_auto")) != bool(committed.get("color_auto")):
+            return True
+        if opened.get("color_auto"):
+            return False
+        return (
+            float(opened["color_min"]) != float(committed.get("color_min"))
+            or float(opened["color_max"]) != float(committed.get("color_max"))
+        )
+
+    def _read_back_live_auto_fields(self):
+        """Show the owner's current automatic window, not the old typed numbers."""
+        self._loading = True
+        for axis in ("x", "y"):
+            if not getattr(self, f"chk_{axis}_auto").isChecked():
+                continue
+            lo, hi = self._read_axis_limits(axis)
+            getattr(self, f"spin_{axis}_min").set_source_value(lo)
+            getattr(self, f"spin_{axis}_max").set_source_value(hi)
+            self._committed[f"{axis}_min"] = float(lo)
+            self._committed[f"{axis}_max"] = float(hi)
+        if self._mappables and self.chk_color_auto.isChecked():
+            mappable = self._current_mappable()
+            if mappable is not None:
+                lo, hi = mappable.get_clim()
+                self.spin_color_min.set_source_value(lo)
+                self.spin_color_max.set_source_value(hi)
+                self._committed["color_min"] = float(lo)
+                self._committed["color_max"] = float(hi)
+        self._loading = False
 
     def _note_range_edit(self, axis, _value=None):
         if self._loading:
             return
         self._range_axes_edited.add(axis)
+        self._sync_restore_button()
 
     def _note_color_policy(self, _value=None):
         if self._loading:
             return
         self._color_policy_dirty = True
+        self._sync_restore_button()
 
     def apply_changes(self):
         self._invalid_axes = []
@@ -693,6 +887,7 @@ class ChartOptionsDialog(QDialog):
         if errors:
             QMessageBox.warning(self, "图表选项", "\n".join(errors))
             self._focus_first_invalid_axis()
+            self._sync_restore_button()
             return
         # Unchanged applies still reapply the analysis range policy. That
         # decision is separate from the last committed appearance diff.
@@ -703,6 +898,7 @@ class ChartOptionsDialog(QDialog):
         self._ever_applied = True
         self._range_axes_edited.clear()
         self._color_policy_dirty = False
+        self._sync_restore_button()
 
     def was_applied(self):
         return self._ever_applied
@@ -825,8 +1021,6 @@ class ChartOptionsDialog(QDialog):
             return True
         if self.chk_grid.isChecked() != bool(committed.get("grid")):
             return True
-        if self.chk_legend.isEnabled() and self.chk_legend.isChecked():
-            return True
         if self._curve_colors_dirty():
             return True
         if self._mappables and self.combo_cmap.isEnabled():
@@ -853,11 +1047,6 @@ class ChartOptionsDialog(QDialog):
         self._commit_curves()
         self._commit_cmap()
         self._commit_color_policy()
-        if self.chk_legend.isEnabled() and self.chk_legend.isChecked():
-            self._rebuild_legend()
-            self._loading = True
-            self.chk_legend.setChecked(False)
-            self._loading = False
         self._commit_analysis_policy(appearance_dirty, range_edited, has_policy)
         self.handle.request_redraw()
         self._refresh_spin_sources()
@@ -985,18 +1174,6 @@ class ChartOptionsDialog(QDialog):
             self.spin_color_max.set_source_value(self.spin_color_max.value_for_commit())
         self._loading = False
 
-    def _rebuild_legend(self):
-        if hasattr(self.handle, "rebuild_legend"):
-            self.handle.rebuild_legend()
-            return
-        if self.ax is None:
-            return
-        handles, labels = self.ax.get_legend_handles_labels()
-        pairs = [(h, label) for h, label in zip(handles, labels) if label and not label.startswith("_")]
-        if pairs:
-            handles, labels = zip(*pairs)
-            self.ax.legend(handles, labels)
-
     def _editable_lines(self):
         # ``handle.get_lines()`` already filters out invisible lines and
         # returns ``LineHandle`` wrappers.
@@ -1093,6 +1270,7 @@ class ChartOptionsDialog(QDialog):
             self._curve_drafts[ident] = self.edit_curve_color.text().strip()
         self._curve_combo_index = index
         self._show_curve_color(index)
+        self._sync_restore_button()
 
     def _sync_auto_fields(self):
         for axis in ("x", "y"):

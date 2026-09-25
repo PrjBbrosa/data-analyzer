@@ -913,17 +913,10 @@ _HINTS = (
     ),
     Hint(
         id="chart_options.reset_open",
-        text="图表选项重置是恢复打开时",
+        text="图表选项还原立即生效",
         surface="discovery",
         modes=frozenset({"time", "fft", "fft_time", "order"}),
         priority=19,
-    ),
-    Hint(
-        id="chart_options.legend_once",
-        text="图例只重新生成，不保存",
-        surface="discovery",
-        modes=frozenset({"time", "fft"}),
-        priority=18,
     ),
     Hint(
         id="chart_options.shared_axis",

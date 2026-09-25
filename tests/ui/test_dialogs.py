@@ -65,7 +65,7 @@ def test_chart_options_dialog_uses_chinese_labels_and_reads_handle(qapp):
     assert dlg.objectName() == "ChartOptionsDialog"
     assert dlg.windowTitle() == "图表选项"
     labels = {label.text() for label in dlg.findChildren(QLabel)}
-    for text in ("基础信息", "X 轴", "Y 轴", "图例", "标题", "最小值", "最大值", "标签", "刻度"):
+    for text in ("基础信息", "X 轴", "Y 轴", "标题", "最小值", "最大值", "标签", "刻度"):
         assert text in labels
     assert dlg.edit_title.text() == "原始标题"
     assert dlg.edit_x_label.text() == "时间 (s)"
@@ -87,7 +87,7 @@ def test_chart_options_dialog_fits_available_height_and_keeps_actions_visible(qa
 
     available = QApplication.primaryScreen().availableGeometry()
     assert dlg.height() <= available.height()
-    assert len(dlg.findChildren(QScrollArea, "chartOptionsScroll")) == 3
+    assert len(dlg.findChildren(QScrollArea, "chartOptionsScroll")) == 2
 
     for button in (dlg.btn_reset, dlg.btn_cancel, dlg.btn_apply, dlg.btn_ok):
         assert dlg.rect().contains(button.mapTo(dlg, button.rect().topLeft()))
@@ -113,7 +113,7 @@ def test_chart_options_compact_work_area_does_not_keep_430_floor(qapp, monkeypat
     qapp.processEvents()
     assert dlg.width() <= 640 - 2 * SCREEN_MARGIN
     assert dlg.height() <= 360 - 2 * SCREEN_MARGIN
-    assert len(dlg.findChildren(QScrollArea, "chartOptionsScroll")) == 3
+    assert len(dlg.findChildren(QScrollArea, "chartOptionsScroll")) == 2
     for button in (dlg.btn_reset, dlg.btn_cancel, dlg.btn_apply, dlg.btn_ok):
         assert dlg.rect().contains(button.mapTo(dlg, button.rect().bottomRight()))
 
@@ -122,8 +122,8 @@ def test_chart_options_tab_bar_does_not_paint_trailing_white_base(qapp):
     """Unused tab-bar strip must match dialog chrome, not a leftover white slab.
 
     Global ``QWidget { background:#ffffff }`` otherwise fills the QTabBar
-    behind 图形/图例 and past the last tab. Fusion + production QSS, then
-    sample a pixel to the right of 「图例」.
+    behind 图形 and past the last tab. Fusion + production QSS, then
+    sample a pixel to the right of 「图形」.
     """
     from PyQt5.QtGui import QColor
     from mf4_analyzer.ui.dialogs import ChartOptionsDialog
@@ -139,10 +139,10 @@ def test_chart_options_tab_bar_does_not_paint_trailing_white_base(qapp):
     bar = dlg.tabs.tabBar()
     assert not bar.drawBase()
     assert not bar.expanding()
-    assert bar.count() == 3
-    assert dlg.tabs.tabText(2) == "图例"
+    assert bar.count() == 2
+    assert dlg.tabs.tabText(1) == "图形"
 
-    last = bar.tabRect(2)
+    last = bar.tabRect(1)
     sample = bar.mapTo(dlg, last.topRight())
     x = min(dlg.width() - 12, sample.x() + 18)
     y = sample.y() + max(2, last.height() // 2)
@@ -155,11 +155,13 @@ def test_chart_options_tab_bar_does_not_paint_trailing_white_base(qapp):
     assert abs(color.blue() - 251) <= 8, color.name()
 
 
-def test_chart_options_dialog_applies_axis_values_and_legend(qapp):
+def test_chart_options_dialog_applies_axis_values_without_manual_legend(qapp):
     from mf4_analyzer.ui.dialogs import ChartOptionsDialog
 
     _canvas, handle = _pg_handle_with_one_curve(qapp)
     dlg = ChartOptionsDialog(None, handle)
+    assert dlg.tabs.count() == 2
+    assert not hasattr(dlg, "chk_legend")
 
     dlg.edit_title.setText("新标题")
     dlg.chk_x_auto.setChecked(False)
@@ -173,7 +175,6 @@ def test_chart_options_dialog_applies_axis_values_and_legend(qapp):
     dlg.edit_y_label.setText("输出")
     dlg.combo_y_scale.setCurrentText("线性")
     dlg.chk_grid.setChecked(False)
-    dlg.chk_legend.setChecked(True)
 
     dlg.apply_changes()
 
@@ -184,7 +185,7 @@ def test_chart_options_dialog_applies_axis_values_and_legend(qapp):
     assert handle.get_ylim() == pytest.approx((1.0, 100.0))
     assert "输出" in handle.get_ylabel()
     assert handle.get_yscale() == "linear"
-    assert handle.plot_item.legend is not None
+    assert handle.plot_item.legend is None
 
 
 def test_pg_chart_options_x_range_flushes_viewport_envelope(qapp):
@@ -481,21 +482,23 @@ def test_dual_channel_unknown_op_warns(qapp, tmp_path, monkeypatch):
     assert "不支持的运算类型" in warning_calls[0][2]
 
 
-def test_pg_chart_options_rebuilds_legend_idempotently(qapp):
+def test_pg_axis_handle_rebuild_legend_stays_available_without_dialog_tab(qapp):
+    """The dialog no longer exposes legend rebuild. The adapter method stays."""
     from mf4_analyzer.ui.dialogs import ChartOptionsDialog
 
     canvas = _pg_canvas_with_one_curve(qapp)
     handle = canvas.axes_list[0]
     plot_item = handle.plot_item
     dlg = ChartOptionsDialog(None, handle)
+    assert dlg.tabs.count() == 2
+    assert not hasattr(dlg, "chk_legend")
 
-    dlg.chk_legend.setChecked(True)
-    dlg.apply_changes()
+    handle.rebuild_legend()
     legend = plot_item.legend
     assert legend is not None
     assert len(legend.items) == 1
 
-    dlg.apply_changes()
+    handle.rebuild_legend()
     assert plot_item.legend is legend
     assert len(legend.items) == 1
 
@@ -1192,6 +1195,7 @@ class _FakeChartHandle:
     def set_xlim(self, lo, hi):
         self.box_x.append((lo, hi))
         self.xlim = (float(lo), float(hi))
+        self.x_auto = False
 
     def get_ylim(self):
         return self.ylim
@@ -1199,6 +1203,7 @@ class _FakeChartHandle:
     def set_ylim(self, lo, hi):
         self.box_y.append((lo, hi))
         self.ylim = (float(lo), float(hi))
+        self.y_auto = False
 
     def autoscale(self, axis="both"):
         self.autos.append(axis)
@@ -1455,8 +1460,10 @@ def test_chart_options_reset_restores_drafts_without_touching_chart(qapp):
     second = _FakeCurve("same", "#222222", ("file-b", "torque"))
     handle.lines = [first, second]
     dlg = ChartOptionsDialog(None, handle)
-    assert dlg.btn_reset.text() == "恢复打开时设置"
-    assert "打开" in (dlg.btn_reset.toolTip() or dlg.btn_reset.text())
+    assert dlg.btn_reset.text() == "还原"
+    assert "撤销" in dlg.btn_reset.toolTip()
+    assert "立即" in dlg.btn_reset.toolTip()
+    assert dlg.btn_reset.isEnabled() is False
 
     dlg.edit_title.setText("草稿标题")
     dlg.edit_curve_color.setText("#aaaaaa")
@@ -1504,12 +1511,10 @@ def test_chart_options_target_shared_axis_and_disabled_capabilities(qapp, monkey
     assert not dlg.combo_y_scale.isEnabled()
     assert "对数" in dlg.combo_x_scale.toolTip()
     assert not dlg.edit_curve_color.isEnabled()
-    assert not dlg.chk_legend.isEnabled()
-    assert dlg.chk_legend.toolTip()
+    assert not hasattr(dlg, "chk_legend")
 
     warnings = _mute_chart_warning(monkeypatch)
     dlg.combo_y_scale.setCurrentText("对数")
-    dlg.chk_legend.setChecked(True)
     dlg.apply_changes()
     assert handle.scale_y == []
     assert handle.legend_calls == 0
@@ -1529,9 +1534,396 @@ def test_chart_options_help_copy_covers_the_dialog_contract():
     for phrase in (
         "空标题",
         "打开时",
-        "不保存",
+        "还原",
         "对数",
         "频响",
         "共享",
+        "共轴图例逐行显示",
     ):
         assert phrase in combined, phrase
+
+
+def test_chart_options_constructor_does_not_write_the_chart(qapp):
+    from mf4_analyzer.ui.dialogs import ChartOptionsDialog
+
+    handle = _FakeChartHandle()
+    dlg = ChartOptionsDialog(None, handle)
+
+    assert handle.title_calls == []
+    assert handle.box_x == []
+    assert handle.box_y == []
+    assert handle.redraws == 0
+    assert dlg.was_applied() is False
+    assert dlg.btn_reset.isEnabled() is False
+
+
+def test_chart_options_restore_discards_unapplied_draft(qapp):
+    from mf4_analyzer.ui.dialogs import ChartOptionsDialog
+
+    handle = _FakeChartHandle()
+    dlg = ChartOptionsDialog(None, handle)
+    dlg.edit_title.setText("草稿标题")
+    dlg.spin_x_min.setValue(-4.0)
+    assert dlg.btn_reset.isEnabled() is True
+
+    dlg.btn_reset.click()
+
+    assert dlg.edit_title.text() == "原始标题"
+    assert dlg.spin_x_min.value() == pytest.approx(1.0)
+    assert handle.get_title() == "原始标题"
+    assert handle.title_calls == []
+    assert handle.redraws == 0
+    assert dlg.was_applied() is False
+    assert dlg.btn_reset.isEnabled() is False
+
+
+def test_chart_options_restore_writes_applied_title_and_ranges(qapp):
+    from mf4_analyzer.ui.dialogs import ChartOptionsDialog
+
+    handle = _FakeChartHandle()
+    handle.title = "已有标题"
+    handle.xlim = (2.0, 8.0)
+    handle.ylim = (3.0, 9.0)
+    dlg = ChartOptionsDialog(None, handle)
+    dlg.edit_title.setText("临时标题")
+    dlg.chk_x_auto.setChecked(False)
+    dlg.spin_x_min.setValue(0.0)
+    dlg.spin_x_max.setValue(4.0)
+    dlg.chk_y_auto.setChecked(False)
+    dlg.spin_y_min.setValue(0.5)
+    dlg.spin_y_max.setValue(5.0)
+    dlg.edit_y_label.setText("临时轴")
+    dlg.apply_changes()
+    assert handle.get_title() == "临时标题"
+    assert handle.get_xlim() == pytest.approx((0.0, 4.0))
+    assert handle.get_ylim() == pytest.approx((0.5, 5.0))
+    assert dlg.was_applied() is True
+
+    dlg.btn_reset.click()
+
+    assert handle.get_title() == "已有标题"
+    assert handle.get_xlim() == pytest.approx((2.0, 8.0))
+    assert handle.get_ylim() == pytest.approx((3.0, 9.0))
+    assert handle.get_ylabel() == "幅值"
+    assert dlg.edit_title.text() == "已有标题"
+    assert dlg.was_applied() is True
+    assert dlg.btn_reset.isEnabled() is False
+
+
+def test_chart_options_restore_round_trips_auto_and_can_edit_again(qapp):
+    from mf4_analyzer.ui.dialogs import ChartOptionsDialog
+
+    handle = _FakeChartHandle()
+    dlg = ChartOptionsDialog(None, handle)
+    dlg.chk_x_auto.setChecked(True)
+    dlg.chk_y_auto.setChecked(True)
+    dlg.apply_changes()
+    assert handle.autos[-2:] == ["x", "y"]
+    assert handle.x_auto is True
+    assert handle.y_auto is True
+
+    dlg.btn_reset.click()
+
+    assert handle.get_xlim() == pytest.approx((1.0, 3.0))
+    assert handle.get_ylim() == pytest.approx((1.0, 10.0))
+    assert handle.x_auto is False
+    assert dlg.chk_x_auto.isChecked() is False
+    assert dlg.btn_reset.isEnabled() is False
+
+    dlg.edit_title.setText("再次")
+    dlg.apply_changes()
+    assert handle.get_title() == "再次"
+    dlg.btn_reset.click()
+    assert handle.get_title() == "原始标题"
+    assert dlg.btn_reset.isEnabled() is False
+
+
+def test_chart_options_restore_ignores_invalid_draft_and_keeps_cancel_ok(qapp):
+    from PyQt5.QtWidgets import QDialog
+    from mf4_analyzer.ui.dialogs import ChartOptionsDialog
+
+    handle = _FakeChartHandle()
+    dlg = ChartOptionsDialog(None, handle)
+    dlg.chk_x_auto.setChecked(False)
+    dlg.spin_x_min.setValue(1.2)
+    dlg.spin_x_max.setValue(2.5)
+    dlg.edit_title.setText("已应用")
+    dlg.apply_changes()
+    dlg.spin_x_min.lineEdit().setText("nope")
+    dlg.spin_x_min.lineEdit().textEdited.emit("nope")
+    assert dlg.btn_reset.isEnabled() is True
+
+    dlg.btn_reset.click()
+
+    assert handle.get_xlim() == pytest.approx((1.0, 3.0))
+    assert handle.get_title() == "原始标题"
+    assert "nope" not in dlg.spin_x_min.lineEdit().text()
+    dlg.btn_cancel.click()
+    assert dlg.result() == QDialog.Rejected
+    assert handle.get_title() == "原始标题"
+    assert dlg.was_applied() is True
+
+    again = ChartOptionsDialog(None, handle)
+    again.edit_title.setText("第二次")
+    again.apply_changes()
+    again.btn_reset.click()
+    again.btn_ok.click()
+    assert again.result() == QDialog.Accepted
+    assert handle.get_title() == "原始标题"
+
+
+def test_chart_options_restore_puts_each_same_name_curve_back(qapp):
+    from mf4_analyzer.ui.dialogs import ChartOptionsDialog
+
+    handle = _FakeChartHandle()
+    first = _FakeCurve("same", "#111111", ("file-a", "torque"))
+    second = _FakeCurve("same", "#222222", ("file-b", "torque"))
+    handle.lines = [first, second]
+    dlg = ChartOptionsDialog(None, handle)
+    dlg.edit_curve_color.setText("#aaaaaa")
+    dlg.combo_curve.setCurrentIndex(1)
+    dlg.edit_curve_color.setText("#bbbbbb")
+    dlg.apply_changes()
+    assert first.color.lower() == "#aaaaaa"
+    assert second.color.lower() == "#bbbbbb"
+
+    dlg.btn_reset.click()
+
+    assert first.color.lower() == "#111111"
+    assert second.color.lower() == "#222222"
+    dlg.combo_curve.setCurrentIndex(1)
+    assert dlg.edit_curve_color.text().lower() == "#222222"
+
+
+def test_chart_options_restore_reverts_heatmap_scale_and_cmap(qapp):
+    from mf4_analyzer.ui.dialogs import ChartOptionsDialog
+
+    canvas, handle = _pg_heatmap_handle(qapp)
+    mappable = handle.get_mappables()[0]
+    dlg = ChartOptionsDialog(None, handle)
+    opened_clim = mappable.get_clim()
+    assert dlg.chk_color_auto.isChecked() is False
+    dlg.combo_cmap.setCurrentText("gnuplot2")
+    dlg.spin_color_min.setValue(1.0)
+    dlg.spin_color_max.setValue(5.0)
+    dlg.apply_changes()
+    assert mappable.get_cmap().name == "gnuplot2"
+    assert mappable.get_clim() == pytest.approx((1.0, 5.0))
+    assert canvas._z_color_auto is False
+
+    dlg.btn_reset.click()
+
+    assert mappable.get_cmap().name == "viridis"
+    assert mappable.get_clim() == pytest.approx(opened_clim)
+    assert mappable.is_color_auto() is False
+    assert dlg.btn_reset.isEnabled() is False
+
+    dlg.chk_color_auto.setChecked(True)
+    dlg.apply_changes()
+    assert mappable.is_color_auto() is True
+    dlg.btn_reset.click()
+    assert mappable.is_color_auto() is False
+    assert mappable.get_clim() == pytest.approx(opened_clim)
+
+
+def test_pg_chart_options_restore_flushes_x_and_leaves_the_other_axis(qapp):
+    from PyQt5.QtCore import QCoreApplication
+    from mf4_analyzer.ui.dialogs import ChartOptionsDialog
+    from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+    canvas, handle = _pg_handle_with_one_curve(qapp)
+    line = handle.get_lines()[0].plot_data_item
+    dlg = ChartOptionsDialog(None, handle)
+    dlg.edit_title.setText("Applied title")
+    dlg.chk_x_auto.setChecked(False)
+    dlg.spin_x_min.setValue(1.8)
+    dlg.spin_x_max.setValue(2.2)
+    dlg.chk_y_auto.setChecked(False)
+    dlg.spin_y_min.setValue(0.2)
+    dlg.spin_y_max.setValue(3.0)
+    dlg.apply_changes()
+    clipped, _y = line.getData()
+    assert float(np.min(clipped)) > 1.0
+    assert "Applied title" in handle.get_title()
+
+    dlg.btn_reset.click()
+    QCoreApplication.processEvents()
+
+    rendered, _y = line.getData()
+    assert handle.get_xlim() == pytest.approx((1.0, 3.0))
+    assert handle.get_ylim() == pytest.approx((1.0, 10.0))
+    assert (float(np.min(rendered)), float(np.max(rendered))) == pytest.approx((1.0, 3.0))
+    assert "原始标题" in handle.get_title()
+    assert "Applied title" not in handle.get_title()
+    assert canvas._refresh_pending is False
+
+    other = TimeDomainCanvasPG()
+    other.resize(640, 360)
+    t = np.linspace(1.0, 3.0, 80)
+    other.plot_channels([
+        ("speed", True, t, 1.0 + np.sin(t), "#1769e0", "rpm"),
+        ("torque", True, t, 2.0 + np.cos(t), "#ef4444", "Nm"),
+    ], mode="subplot")
+    QCoreApplication.processEvents()
+    sibling = other.axes_list[0]
+    sibling.set_ylim(0.5, 2.5)
+    target = other.axes_list[1]
+    target.set_ylim(1.1, 3.3)
+    QCoreApplication.processEvents()
+    target_dlg = ChartOptionsDialog(None, target)
+    assert target_dlg.chk_y_auto.isChecked() is False
+    opened_y = (target_dlg._opened["y_min"], target_dlg._opened["y_max"])
+    target_dlg.spin_y_min.setValue(0.4)
+    target_dlg.spin_y_max.setValue(6.0)
+    target_dlg.apply_changes()
+    assert target.get_ylim() == pytest.approx((0.4, 6.0))
+    assert sibling.get_ylim() == pytest.approx((0.5, 2.5))
+    target_dlg.btn_reset.click()
+    assert target.get_ylim() == pytest.approx(opened_y)
+    assert sibling.get_ylim() == pytest.approx((0.5, 2.5))
+
+
+def test_chart_options_restore_returns_live_autorange(qapp):
+    from mf4_analyzer.ui.dialogs import ChartOptionsDialog
+
+    _canvas, handle = _pg_handle_with_one_curve(qapp)
+    handle.autoscale(axis="x")
+    handle.autoscale(axis="y")
+    dlg = ChartOptionsDialog(None, handle)
+    assert dlg.chk_x_auto.isChecked() is True
+    assert dlg.chk_y_auto.isChecked() is True
+    dlg.chk_x_auto.setChecked(False)
+    dlg.spin_x_min.setValue(1.4)
+    dlg.spin_x_max.setValue(2.1)
+    dlg.chk_y_auto.setChecked(False)
+    dlg.spin_y_min.setValue(1.2)
+    dlg.spin_y_max.setValue(4.0)
+    dlg.apply_changes()
+    assert handle.is_autorange("x") is False
+    assert handle.get_xlim() == pytest.approx((1.4, 2.1))
+
+    dlg.btn_reset.click()
+
+    assert handle.is_autorange("x") is True
+    assert handle.is_autorange("y") is True
+    assert dlg.chk_x_auto.isChecked() is True
+    assert dlg.spin_x_min.isEnabled() is False
+    assert dlg.btn_reset.isEnabled() is False
+
+
+def test_coaxis_channel_labels_survive_chart_options_without_legend_tab(qapp):
+    from PyQt5.QtCore import QCoreApplication
+    from mf4_analyzer.ui.dialogs import ChartOptionsDialog
+    from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+    canvas = TimeDomainCanvasPG()
+    canvas.resize(640, 360)
+    t = np.linspace(0.0, 1.0, 64)
+    group = {"axis_group": 1}
+    canvas.plot_channels([
+        ("torque", True, t, np.sin(t), "#1769e0", "Nm", "fid-1", group),
+        ("angle", True, t, np.cos(t), "#ef4444", "deg", "fid-1", group),
+    ], mode="subplot")
+    QCoreApplication.processEvents()
+    assert len(canvas.axes_list) == 1
+    handle = canvas.axes_list[0]
+    before = [name for name, _color, _unit in canvas._subplot_legend_members(handle)]
+    assert before == ["torque", "angle"]
+
+    dlg = ChartOptionsDialog(None, handle)
+    assert dlg.tabs.tabText(0) == "坐标轴"
+    assert dlg.tabs.tabText(1) == "图形"
+    dlg.edit_title.setText("共轴标题")
+    dlg.apply_changes()
+    QCoreApplication.processEvents()
+
+    after = [name for name, _color, _unit in canvas._subplot_legend_members(handle)]
+    assert after == ["torque", "angle"]
+    assert len(handle.get_lines()) == 2
+
+
+def _form_page(widget):
+    host = widget.parentWidget()
+    while host is not None and not host.objectName() == "chartOptionsScroll":
+        host = host.parentWidget()
+    if host is None:
+        return widget.window()
+    return host.widget()
+
+
+def _form_edge(widget, side):
+    page = _form_page(widget)
+    rect = widget.rect()
+    point = rect.topLeft() if side == "left" else rect.topRight()
+    return widget.mapTo(page, point).x()
+
+
+def _assert_shared_field_column(fields):
+    lefts = [_form_edge(widget, "left") for widget in fields]
+    rights = [_form_edge(widget, "right") for widget in fields]
+    assert max(lefts) - min(lefts) <= 1, lefts
+    assert max(rights) - min(rights) <= 1, rights
+    assert min(widget.width() for widget in fields) > 180
+
+
+def test_chart_options_form_columns_track_dialog_width(qapp):
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtWidgets import QScrollArea, QStyleFactory
+    from mf4_analyzer.ui.dialogs import ChartOptionsDialog
+    from mf4_analyzer.ui_kit import load_stylesheet
+
+    load_stylesheet(qapp)
+    _canvas, handle = _pg_handle_with_one_curve(qapp)
+    styles = [name for name in ("macintosh", "Windows", "Fusion") if name in QStyleFactory.keys()]
+    assert "Fusion" in styles
+    previous = qapp.style().objectName()
+    try:
+        for style_name in styles:
+            qapp.setStyle(style_name)
+            dlg = ChartOptionsDialog(None, handle)
+            dlg.show()
+            qapp.processEvents()
+            dlg.resize(430, max(dlg.height(), 720))
+            qapp.processEvents()
+            dlg.tabs.setCurrentIndex(0)
+            qapp.processEvents()
+            axis_fields = [
+                dlg.edit_title, dlg.spin_x_min, dlg.spin_x_max, dlg.edit_x_label,
+                dlg.combo_x_scale, dlg.spin_y_min, dlg.edit_y_label, dlg.combo_y_scale,
+            ]
+            _assert_shared_field_column(axis_fields)
+            narrow = dlg.spin_x_min.width()
+            dlg.chk_x_auto.setChecked(True)
+            qapp.processEvents()
+            assert dlg.spin_x_min.width() == narrow
+            assert dlg.spin_x_min.isEnabled() is False
+            dlg.chk_x_auto.setChecked(False)
+            dlg.spin_x_min.lineEdit().setText("-1.234567890123e-6")
+            dlg.spin_x_min.lineEdit().textEdited.emit(dlg.spin_x_min.lineEdit().text())
+            qapp.processEvents()
+            assert dlg.spin_x_min.width() == narrow
+
+            dlg.resize(680, dlg.height())
+            qapp.processEvents()
+            assert dlg.spin_x_min.width() >= narrow + 140
+            assert dlg.edit_title.width() == dlg.spin_x_min.width()
+            assert dlg.combo_y_scale.width() == dlg.edit_title.width()
+
+            dlg.tabs.setCurrentIndex(1)
+            qapp.processEvents()
+            appearance_fields = [
+                dlg.combo_curve, dlg.combo_cmap, dlg.spin_color_min, dlg.spin_color_max,
+            ]
+            _assert_shared_field_column(appearance_fields)
+            assert abs(
+                _form_edge(dlg.btn_curve_color, "right")
+                - _form_edge(dlg.combo_curve, "right")
+            ) <= 2
+            assert dlg.edit_curve_color.width() + dlg.btn_curve_color.width() < dlg.combo_curve.width() + 8
+            assert _form_edge(dlg.combo_curve, "left") == _form_edge(dlg.edit_title, "left")
+            for scroll in dlg.findChildren(QScrollArea, "chartOptionsScroll"):
+                assert scroll.horizontalScrollBarPolicy() == Qt.ScrollBarAlwaysOff
+            assert dlg.rect().contains(dlg.btn_ok.mapTo(dlg, dlg.btn_ok.rect().bottomRight()))
+    finally:
+        if previous:
+            qapp.setStyle(previous)

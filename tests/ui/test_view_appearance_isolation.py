@@ -295,6 +295,99 @@ def test_duplicate_and_save_reopen_keep_chart_appearance(
     assert handle.is_grid_enabled() is False
 
 
+def test_chart_options_restore_drops_withdrawn_title_on_reopen(
+    qtbot, qapp, loaded_csv, monkeypatch,
+):
+    w = _make_loaded_window(qtbot, qapp, loaded_csv)
+    _set_checked(w, "torque")
+    w.plot_time()
+    _wait_time_view_idle(qtbot, w)
+    canvas, handle = _torque_handle(w)
+    opening = handle.get_title()
+
+    def fake_edit(parent, axis_handle):
+        dlg = ChartOptionsDialog(parent, axis_handle)
+        dlg.edit_title.setText("撤回标题")
+        dlg.chk_y_auto.setChecked(False)
+        dlg.spin_y_min.setValue(40.0)
+        dlg.spin_y_max.setValue(70.0)
+        dlg.apply_changes()
+        assert "撤回标题" in axis_handle.get_title()
+        dlg.btn_reset.click()
+        assert "撤回标题" not in axis_handle.get_title()
+        return bool(dlg.was_applied())
+
+    monkeypatch.setattr(
+        "mf4_analyzer.ui._axis_interaction.edit_chart_options_dialog",
+        fake_edit,
+    )
+    assert canvas._open_chart_options_for_handle(handle) is True
+    _flush(qapp)
+    assert "撤回标题" not in str(w.view_manager.get(0).chart_appearance)
+    assert w._project_dirty.is_dirty is True
+    w.plot_time()
+    _wait_time_view_idle(qtbot, w)
+    _canvas, handle = _torque_handle(w)
+    assert handle.get_title() == opening
+    assert "撤回标题" not in handle.get_title()
+
+    fid = _fid(w)
+    _new_attached_view(w, qapp, fid)
+    w._switch_view(0)
+    _wait_time_view_idle(qtbot, w)
+    _canvas, handle = _torque_handle(w)
+    assert "撤回标题" not in handle.get_title()
+
+
+def test_unfocused_chart_options_restore_does_not_stamp_the_other_pane(
+    qtbot, qapp, loaded_csv, monkeypatch,
+):
+    w = _make_loaded_window(qtbot, qapp, loaded_csv)
+    fid = _fid(w)
+    _set_checked(w, "torque")
+    w.plot_time()
+    _wait_time_view_idle(qtbot, w)
+    canvas, handle = _torque_handle(w)
+    _apply_chart_options(
+        w, canvas, handle, monkeypatch, title="主图标题", y_scale="log",
+    )
+    _flush(qapp)
+    _new_attached_view(w, qapp, fid)
+    _set_checked(w, "torque")
+    w.plot_time()
+    _wait_time_view_idle(qtbot, w)
+    w._switch_view(0)
+    _flush(qapp)
+    w.view_manager.set_split(1)
+    _flush(qapp)
+    w.chart_stack.set_focused_card(w.chart_stack._time_card)
+    _flush(qapp)
+    secondary = w.chart_stack.secondary_canvas()
+    assert secondary is not None and secondary.axes_list
+
+    def fake_edit(parent, axis_handle):
+        dlg = ChartOptionsDialog(parent, axis_handle)
+        dlg.edit_title.setText("分屏临时")
+        dlg.apply_changes()
+        dlg.btn_reset.click()
+        assert "分屏临时" not in axis_handle.get_title()
+        return bool(dlg.was_applied())
+
+    monkeypatch.setattr(
+        "mf4_analyzer.ui._axis_interaction.edit_chart_options_dialog",
+        fake_edit,
+    )
+    assert secondary._open_chart_options_for_handle(secondary.axes_list[0]) is True
+    _flush(qapp)
+    primary = w.view_manager.get(0).chart_appearance
+    compare = w.view_manager.get(1).chart_appearance
+    pkey = appearance_channel_key(fid, "torque")
+    assert (primary.get("axes") or {}).get(pkey, {}).get("y_scale") == "log"
+    assert "主图标题" in str((primary.get("axes") or {}).get(pkey, {}).get("title"))
+    assert "分屏临时" not in str(compare)
+    assert "分屏临时" not in secondary.axes_list[0].get_title()
+
+
 def test_split_unfocused_chart_options_do_not_stamp_focused_view(
     qtbot, qapp, loaded_csv, monkeypatch,
 ):

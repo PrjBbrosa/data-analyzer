@@ -3029,6 +3029,57 @@ def test_fft_time_chart_options_updates_frequency_alias_policy(two_file_win, qtb
     assert canvas.capture_xy_viewport()[1][1] > 60.
 
 
+def test_fft_time_chart_options_restore_reverts_range_and_color(two_file_win, qtbot):
+    from mf4_analyzer.ui.dialogs import ChartOptionsDialog
+    from mf4_analyzer.ui.pg_canvas.heatmap_canvas import _HeatmapAxisHandle
+
+    win = two_file_win
+    win.toolbar._set_mode("fft_time")
+    _seed_active_analysis_attachments(win)
+    fid = next(iter(win.files))
+    ctx = win.inspector.fft_time_ctx
+    win._echo_combo_signal(ctx.combo_sig, (fid, "speed"))
+    ctx.apply_params({
+        "y_auto": False,
+        "y_min": 10.0,
+        "y_max": 60.0,
+        "nfft": 512,
+    })
+    win.do_fft_time()
+    _drain_fft_time_jobs(win, qtbot)
+    canvas = win.chart_stack.page_fft_time.pane_canvas(0)
+    manager = win.analysis_managers["fft_time"]
+    state = manager.get(manager.active)
+    dialog = ChartOptionsDialog(None, _HeatmapAxisHandle(canvas))
+    qtbot.addWidget(dialog)
+    assert dialog.tabs.count() == 2
+    assert not hasattr(dialog, "chk_legend")
+    mappable = dialog.handle.get_mappables()[0]
+    opened_auto = mappable.is_color_auto()
+    opened_cmap = mappable.get_cmap().name
+    opened_clim = mappable.get_clim()
+    dialog.chk_y_auto.setChecked(True)
+    dialog.chk_color_auto.setChecked(False)
+    dialog.spin_color_min.setValue(1.0)
+    dialog.spin_color_max.setValue(5.0)
+    dialog.combo_cmap.setCurrentText("gnuplot2")
+    dialog.apply_changes()
+    assert state.params["y_auto"] is True
+    assert state.params["freq_auto"] is True
+    assert mappable.get_cmap().name == "gnuplot2"
+
+    dialog.btn_reset.click()
+
+    assert state.params["y_auto"] is False
+    assert state.params["freq_auto"] is False
+    assert state.params["y_min"] == pytest.approx(10.0)
+    assert state.params["y_max"] == pytest.approx(60.0)
+    assert mappable.is_color_auto() is opened_auto
+    assert mappable.get_cmap().name == opened_cmap
+    if not opened_auto:
+        assert mappable.get_clim() == pytest.approx(opened_clim)
+
+
 def _perturb_heatmap_field(value):
     """One value that cannot compare equal to ``value``."""
     if isinstance(value, bool):
