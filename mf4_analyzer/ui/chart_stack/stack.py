@@ -330,7 +330,10 @@ class ChartStack(QWidget):
             self._secondary_peer_toolbars
         )
         self._time_toolbar._save_pixmap_provider = as_weak_callable(
-            self._combined_split_pixmap
+            self.capture_explicit_export_pixmap
+        )
+        self._time_card._annotation_target_provider = as_weak_callable(
+            self.focused_card
         )
         self._time_toolbar.home_triggered.connect(self.home_triggered.emit)
         # 图表选项 on the shared toolbar opens for the focused pane's canvas.
@@ -420,7 +423,7 @@ class ChartStack(QWidget):
         # The time card's annotation relay; analysis cards (pane 0) are wired in
         # _connect_analysis_card_signals during page construction above.
         self._time_card.annotation_enabled_changed.connect(
-            lambda enabled: self.annotation_enabled_changed.emit('time', enabled)
+            self._on_time_annotation_enabled
         )
         self._time_card.tick_density_changed.connect(
             self._on_card_tick_density_changed
@@ -517,7 +520,7 @@ class ChartStack(QWidget):
         )
         mode = card._chart_mode
         card.annotation_enabled_changed.connect(
-            lambda enabled, m=mode: self.annotation_enabled_changed.emit(m, enabled)
+            partial(self._relay_card_annotation, mode, card)
         )
         card.tick_density_changed.connect(self._on_card_tick_density_changed)
         card.quickref_requested.connect(self.quickref_requested.emit)
@@ -906,11 +909,13 @@ class ChartStack(QWidget):
             self._refresh_focus_borders()
             self._sync_shared_time_controls_to_focus()
             self._sync_shared_nav_highlight()
+            self._time_card.sync_annotation_button()
             return
         self._focused_card = card
         self._refresh_focus_borders()
         self._sync_secondary_controls_to_focus()
         self._sync_shared_nav_highlight()
+        self._time_card.sync_annotation_button()
         self.focus_changed.emit(card is self._secondary_card)
 
     def set_focus_accent(self, color):
@@ -1234,6 +1239,11 @@ class ChartStack(QWidget):
             self._secondary_card.toolbar.mouse_mode_changed.connect(
                 self._sync_shared_nav_highlight
             )
+            self._secondary_card.annotation_enabled_changed.connect(
+                self._on_secondary_annotation_enabled
+            )
+            if self._secondary_card.toolbar.mode != self._time_toolbar.mode:
+                self._secondary_card.toolbar.set_mouse_mode(self._time_toolbar.mode)
             # The secondary pane has its own pill so both split panes can show
             # independent single/dual cursor readouts at the same time.
             if self._pill_secondary is None:
@@ -2077,20 +2087,71 @@ class ChartStack(QWidget):
             if card is not None:
                 card.mark_discovered(hint_id)
 
+    def _on_time_annotation_enabled(self, enabled):
+        if self.split_active() and self.focused_card() is not self._time_card:
+            return
+        self.annotation_enabled_changed.emit("time", bool(enabled))
+
+    def _on_secondary_annotation_enabled(self, enabled):
+        if not self.split_active() or self.focused_card() is not self._secondary_card:
+            return
+        self.annotation_enabled_changed.emit("time", bool(enabled))
+        self._time_card.sync_annotation_button()
+
+    def _relay_card_annotation(self, mode, card, enabled):
+        """Forward annotation changes for the focused pane only."""
+        target = self._annotation_card_for_mode(mode)
+        if target is not None and card is not target:
+            return
+        self.annotation_enabled_changed.emit(mode, bool(enabled))
+        host = self._shared_annotation_host(mode)
+        if host is not None and host is not card:
+            host.sync_annotation_button()
+
+    def _shared_annotation_host(self, mode):
+        if mode == "time":
+            return self._time_card
+        page = self.page_for_mode.get(mode)
+        if page is None:
+            return None
+        cards = page.peek_cards() if hasattr(page, "peek_cards") else []
+        if not cards:
+            return None
+        return cards[0]
+
+    def _annotation_card_for_mode(self, mode):
+        if mode == "time":
+            return self.focused_card() if self.split_active() else self._time_card
+        if mode not in self.page_for_mode:
+            return None
+        page = self.page_for_mode[mode]
+        cards = page.peek_cards() if hasattr(page, "peek_cards") else []
+        if not cards:
+            return None
+        if len(cards) == 1:
+            return cards[0]
+        idx = page.focused_index()
+        idx = max(0, min(int(idx), len(cards) - 1))
+        return cards[idx]
+
     def set_annotation_enabled(self, mode, enabled, notify=False):
         if mode == "time":
-            card = self._time_card
+            card = self._annotation_card_for_mode(mode)
         elif mode in self.page_for_mode:
             # Prefer peek so incidental calls do not construct siblings;
             # an explicit annotation toggle for that section still ensures.
-            card = self.peek_analysis_card(mode)
+            card = self._annotation_card_for_mode(mode)
             if card is None:
                 self.ensure_analysis_page_ready(mode)
-                card = self.peek_analysis_card(mode)
+                card = self._annotation_card_for_mode(mode)
         else:
             card = None
-        if card is not None:
-            card.set_annotation_enabled(enabled, notify=notify)
+        if card is None:
+            return
+        card.set_annotation_enabled(enabled, notify=notify)
+        host = self._shared_annotation_host(mode)
+        if host is not None and host is not card:
+            host.sync_annotation_button()
 
     def full_reset_all(self):
         self.cancel_page_transition("full-reset")
@@ -2299,7 +2360,31 @@ class ChartStack(QWidget):
             if painter is not None:
                 painter.end()
 
-    def _copy_card_image(self, card):
+    def capture_explicit_export_pixmap(self):
+        """Presentation image shared by explicit save and copy.
+
+        Time-domain split reuses the side-by-side pixmap. A single time pane
+        reuses ``grab_presentation_pixmap`` so the live readout is included.
+        Analysis pages reuse their combined capture, including slice panels.
+        UltraView automatic previews do not use this entry.
+        """
+        self.cancel_page_transition("explicit-presentation-capture")
+        mode = self.current_mode()
+        if mode == "time":
+            if self.split_active():
+                return self._combined_split_pixmap()
+            return self.grab_presentation_pixmap(
+                self._time_card,
+                scale=_HIDPI_EXPORT_SCALE,
+                cancel_page_transition=False,
+            )
+        page = self.page_for_mode.get(mode)
+        grab = getattr(page, "grab_combined_pixmap", None)
+        if not callable(grab):
+            return None
+        return grab()
+
+    def _copy_card_image(self, _card):
         """Capture the card's canvas for MainWindow to publish. For the
         time-domain card, the floating cursor chrome (live pill, pinned
         pills, Pn labels) overlapping the canvas is composited onto the
@@ -2308,15 +2393,10 @@ class ChartStack(QWidget):
         The canvas is grabbed at a hi-DPI scale (spec §E) for a crisp,
         DPI-independent bitmap; the canvas caps the magnification for
         speed. Floater position AND size are scaled by the SAME
-        effective factor so they still line up on the magnified bitmap."""
-        if (self.current_mode() == 'time'
-                and self.split_active()
-                and card in (self._time_card, self._secondary_card)):
-            pix = self._combined_split_pixmap()
-            if pix is not None and not pix.isNull():
-                self.image_captured.emit(pix)
-            return
-        pix = self.grab_presentation_pixmap(card, scale=_HIDPI_EXPORT_SCALE)
+        effective factor so they still line up on the magnified bitmap.
+        Explicit copy and save share :meth:`capture_explicit_export_pixmap`.
+        """
+        pix = self.capture_explicit_export_pixmap()
         if pix is not None and not pix.isNull():
             self.image_captured.emit(pix)
 

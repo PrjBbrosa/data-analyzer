@@ -2118,6 +2118,9 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
     def plot_spectra(self, entries, *, xlim, amp_label, title,
                      y_auto=True, y_min=0.0, y_max=0.0):
         """Plot FFT curves and show all source time traces below."""
+        from ._shared import notify_content_replacement
+
+        notify_content_replacement(self)
         entries = list(entries)
         db = self._is_db_amp_label(amp_label)
         prepared_ranges = [
@@ -2394,6 +2397,9 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         self._reframe_time_y_to_grid()
 
     def full_reset(self) -> None:
+        from ._shared import notify_history_reset
+
+        notify_history_reset(self)
         self._note_presentation_content_invalidated()
         self._invalidate_spectrum_display_generation()
         self._stop_aa_idle_timer()

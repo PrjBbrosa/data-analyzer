@@ -538,6 +538,7 @@ class AnalysisSectionPage(QWidget):
         left = max(1, total // 2)
         self._split.setSizes([left, max(1, total - left)])
         self._configure_shared_toolbar()
+        self._inherit_shared_mouse_mode(card)
         self.set_linked(self._linked)
         self.set_levels_locked(self._levels_locked)
         self._apply_focus_style()
@@ -556,10 +557,24 @@ class AnalysisSectionPage(QWidget):
         toolbar._action_delegate_provider = as_weak_callable(
             self._focused_nav_delegate
         )
-        toolbar._peer_toolbars_provider = as_weak_callable(self._peer_toolbars)
+        toolbar._peer_toolbars_provider = as_weak_callable(self._peers_for_primary)
         toolbar._save_pixmap_provider = as_weak_callable(
             self.grab_combined_pixmap
         )
+        self._connect_toolbar_highlight(toolbar)
+        if self._cards:
+            self._cards[0]._annotation_target_provider = as_weak_callable(
+                self._focused_annotation_card
+            )
+            self._cards[0]._annotation_view_token_provider = as_weak_callable(
+                self._annotation_view_token
+            )
+        if len(self._cards) > 1:
+            secondary = self._cards[1].toolbar
+            secondary._peer_toolbars_provider = as_weak_callable(
+                self._peers_for_secondary
+            )
+            self._connect_toolbar_highlight(secondary)
         if self._cards:
             self._cards[0]._options_canvas_provider = as_weak_callable(
                 self.focused_canvas
@@ -585,15 +600,81 @@ class AnalysisSectionPage(QWidget):
             return None
         return getattr(self._cards[self._focused], 'toolbar', None)
 
-    def _peer_toolbars(self):
+    def _focused_annotation_card(self):
+        if not self._cards:
+            return None
+        idx = getattr(self, "_focused", 0)
+        idx = max(0, min(int(idx), len(self._cards) - 1))
+        return self._cards[idx]
+
+    def _annotation_view_token(self):
+        return ("analysis", self.section, self.manager.active)
+
+    def _visible_peer_toolbars(self, card):
+        """Visible same-page toolbars other than ``card``.
+
+        Hidden sections and a pane that has left split are not targets.
+        The detached secondary toolbar widget stays hidden on purpose; the
+        card's visibility is what decides membership.
+        """
+        if card is None or len(self._cards) < 2:
+            return []
+        peers = []
+        for other in self._cards:
+            if other is card:
+                continue
+            try:
+                visible = other.isVisible()
+            except RuntimeError:
+                continue
+            if not visible:
+                continue
+            toolbar = getattr(other, "toolbar", None)
+            if toolbar is not None:
+                peers.append(toolbar)
+        return peers
+
+    def _peers_for_primary(self):
+        if not self._cards:
+            return []
+        return self._visible_peer_toolbars(self._cards[0])
+
+    def _peers_for_secondary(self):
         if len(self._cards) < 2:
             return []
-        return [
-            toolbar for toolbar in (
-                getattr(card, 'toolbar', None) for card in self._cards[1:]
-            )
-            if toolbar is not None
-        ]
+        return self._visible_peer_toolbars(self._cards[1])
+
+    def _peer_toolbars(self):
+        return self._peers_for_primary()
+
+    def _inherit_shared_mouse_mode(self, card):
+        shared = getattr(self, "_toolbar", None)
+        toolbar = getattr(card, "toolbar", None)
+        if shared is None or toolbar is None or toolbar is shared:
+            return
+        if toolbar.mode != shared.mode:
+            toolbar.set_mouse_mode(shared.mode)
+
+    def _connect_toolbar_highlight(self, toolbar):
+        if toolbar is None or getattr(toolbar, "_section_highlight_connected", False):
+            return
+        toolbar.mouse_mode_changed.connect(self._sync_shared_nav_highlight)
+        toolbar._section_highlight_connected = True
+
+    def _sync_shared_nav_highlight(self, *_args):
+        toolbar = getattr(self, "_toolbar", None)
+        if toolbar is None or not self._cards:
+            return
+        focused = self._focused_annotation_card()
+        source = getattr(focused, "toolbar", None)
+        toolbar.paint_nav_highlight(getattr(source, "mode", ""))
+
+    def _sync_shared_annotation_button(self):
+        if not self._cards:
+            return
+        sync = getattr(self._cards[0], "sync_annotation_button", None)
+        if callable(sync):
+            sync()
 
     def focused_canvas(self):
         self.ensure_ready()
@@ -609,6 +690,20 @@ class AnalysisSectionPage(QWidget):
         # Tear down level-lock signal wiring before the pane is destroyed.
         self._disconnect_level_lock_handlers(self._heatmap_canvases())
         card = self._cards.pop(1)
+        secondary_toolbar = getattr(card, "toolbar", None)
+        if secondary_toolbar is not None and getattr(
+            secondary_toolbar, "_section_highlight_connected", False
+        ):
+            try:
+                secondary_toolbar.mouse_mode_changed.disconnect(
+                    self._sync_shared_nav_highlight
+                )
+            except TypeError:
+                pass
+            secondary_toolbar._section_highlight_connected = False
+        if secondary_toolbar is not None:
+            secondary_toolbar._peer_toolbars_provider = None
+            secondary_toolbar.discard_pending_history()
         card.removeEventFilter(self)
         card.setParent(None)
         card.deleteLater()
@@ -640,11 +735,15 @@ class AnalysisSectionPage(QWidget):
         if idx == self._focused:
             self._apply_focus_style()
             self._sync_frequency_cursor_control()
+            self._sync_shared_nav_highlight()
+            self._sync_shared_annotation_button()
             return
         self._previous_focused = self._focused
         self._focused = idx
         self._apply_focus_style()
         self._sync_frequency_cursor_control()
+        self._sync_shared_nav_highlight()
+        self._sync_shared_annotation_button()
         self.focus_changed.emit(idx)
 
     def _sync_frequency_cursor_control(self) -> None:

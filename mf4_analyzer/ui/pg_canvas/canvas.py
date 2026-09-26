@@ -856,6 +856,9 @@ class TimeDomainCanvasPG(QWidget):
         mutations to the caller's complete restore transaction; it does not
         select a native policy or skip subplot layout settlement.
         """
+        from ._shared import notify_content_replacement
+
+        notify_content_replacement(self)
         def report_progress(current, total=1000):
             if not callable(progress_callback):
                 return
@@ -3576,6 +3579,9 @@ class TimeDomainCanvasPG(QWidget):
 
     def full_reset(self):
         """Clear chart AND cursor state. Use on file close."""
+        from ._shared import notify_history_reset
+
+        notify_history_reset(self)
         self.clear()
         self._cursor.reset_all_state()
         self._curve_path_cache.clear()

@@ -670,7 +670,7 @@ _HINTS = (
     ),
     Hint(
         id="annotation.mode",
-        text="左键添加标注 · 右键删除最近一处",
+        text="左键添加标注 · 右键删除最近一处 · 只改焦点",
         surface="context",
         modes=frozenset({"fft", "frf", "order"}),
         requires=frozenset({"annotation_on"}),
@@ -838,7 +838,7 @@ _HINTS = (
     # cards as well (the existing annotation.mode hint only covers fft + order).
     Hint(
         id="annotation.mode_fft_time",
-        text="左键添加标注 · 右键删除最近一处",
+        text="左键添加标注 · 右键删除最近一处 · 只改焦点",
         surface="context",
         modes=frozenset({"fft_time"}),
         requires=frozenset({"annotation_on"}),

@@ -24,6 +24,10 @@ from ...ui_kit.widgets.selection_indicator import (
 from .. import hints
 from ..file_navigator import _ElidedLabel
 from ..pg_canvases import TimeDomainCanvasPG
+from ..pg_canvas._shared import (
+    register_content_replacement_hook,
+    register_history_reset_hook,
+)
 from ..pg_canvas.heatmap_canvas import PgHeatmapCanvas
 from ..pg_canvas.frf_canvas import PgFrfCanvas
 from ..pg_canvas.line_canvas import PgLineCanvas
@@ -194,6 +198,10 @@ class _ChartCard(QWidget):
                 # back() has somewhere to return to. Registered AFTER the mode
                 # re-apply so the capture sees the fully-built axes_list.
                 register(self.toolbar.rebind_history_capture)
+            register_content_replacement_hook(
+                canvas, self.toolbar.discard_pending_history,
+            )
+            register_history_reset_hook(canvas, self.toolbar.clear_view_history)
             # Design D: make the toolbar the canvas's single mouse-mode
             # controller so the right-click 鼠标操作 submenu and the toolbar
             # share one state machine. The menu reads current_mouse_mode() for
@@ -744,11 +752,11 @@ class _ChartCard(QWidget):
         self._annotation_btn.setFixedSize(QSize(32, 32))
         self._annotation_btn.setCheckable(True)
         self._annotation_btn.setAutoRaise(True)
-        self._annotation_btn.setToolTip("标注：开启后左键添加标注；右键删除最近标注")
-        self._annotation_btn.setProperty("compactAnnotation", True)
-        self._annotation_btn.clicked.connect(
-            lambda checked=False: self.set_annotation_enabled(checked)
+        self._annotation_btn.setToolTip(
+            "标注：作用于当前焦点图表；开启后左键添加，右键删除最近一处"
         )
+        self._annotation_btn.setProperty("compactAnnotation", True)
+        self._annotation_btn.clicked.connect(self._on_annotation_button_clicked)
         self._insert_toolbar_widget_after(after_action, self._annotation_btn)
 
     def _install_compact_clear_annotation_control_after(self, after_action):
@@ -760,40 +768,95 @@ class _ChartCard(QWidget):
         self._clear_annotation_btn.setIconSize(QSize(18, 18))
         self._clear_annotation_btn.setFixedSize(QSize(32, 32))
         self._clear_annotation_btn.setAutoRaise(True)
-        self._clear_annotation_btn.setToolTip("清除当前图表中的所有标注")
+        self._clear_annotation_btn.setToolTip("清除当前焦点图表中的所有标注")
         self._clear_annotation_btn.clicked.connect(self.clear_annotations)
         self._insert_toolbar_widget_after(after_action, self._clear_annotation_btn)
 
     def annotation_enabled(self):
         return self._annotation_enabled
 
+    def _annotation_target_card(self):
+        """Card whose annotation state the shared button should operate on.
+
+        A missing provider means this card. The provider is not allowed to
+        call back into the shared click handler.
+        """
+        provider = getattr(self, "_annotation_target_provider", None)
+        if not callable(provider):
+            return self
+        try:
+            card = provider()
+        except AttributeError as exc:
+            if getattr(exc, "name", None) != "_focused":
+                raise
+            card = None
+        if card is None or sip.isdeleted(card):
+            return self
+        return card
+
+    def _read_annotation_view_token(self):
+        provider = getattr(self, "_annotation_view_token_provider", None)
+        if not callable(provider):
+            return None
+        return provider()
+
+    def _on_annotation_button_clicked(self, checked=False):
+        target = self._annotation_target_card()
+        target.set_annotation_enabled(bool(checked), notify=True)
+        if target is not self:
+            self.sync_annotation_button()
+
+    def _paint_annotation_button(self, enabled):
+        btn = getattr(self, "_annotation_btn", None)
+        if btn is None:
+            return
+        enabled = bool(enabled)
+        btn.blockSignals(True)
+        btn.setChecked(enabled)
+        icon_color = _ICON_ACTIVE if enabled else _ICON_COLOR
+        if btn.property("compactAnnotation"):
+            btn.setIcon(Icons.annotate(QColor(icon_color)))
+        else:
+            btn.setText("关闭" if enabled else "开启")
+            btn.setIcon(qta.icon("mdi.map-marker-plus-outline", color=icon_color))
+        btn.blockSignals(False)
+
+    def sync_annotation_button(self):
+        """Mirror the focus target's annotation state onto this button.
+
+        Appearance only: this does not change this card's canvas and does
+        not emit ``annotation_enabled_changed``.
+        """
+        target = self._annotation_target_card()
+        enabled = bool(target.annotation_enabled()) if target is not None else False
+        self._paint_annotation_button(enabled)
+
     def set_annotation_enabled(self, enabled, notify=True):
         self._annotation_enabled = bool(enabled)
         if hasattr(self.canvas, 'set_remark_enabled'):
             self.canvas.set_remark_enabled(self._annotation_enabled)
-        btn = getattr(self, '_annotation_btn', None)
-        if btn is not None:
-            btn.blockSignals(True)
-            btn.setChecked(self._annotation_enabled)
-            icon_color = _ICON_ACTIVE if self._annotation_enabled else _ICON_COLOR
-            if btn.property("compactAnnotation"):
-                btn.setIcon(Icons.annotate(QColor(icon_color)))
-            else:
-                btn.setText("关闭" if self._annotation_enabled else "开启")
-                btn.setIcon(qta.icon('mdi.map-marker-plus-outline', color=icon_color))
-            btn.blockSignals(False)
+        self._paint_annotation_button(self._annotation_enabled)
         if notify:
             self.annotation_enabled_changed.emit(self._annotation_enabled)
         self._refresh_bottom_hint()
 
     def clear_annotations(self):
-        canvas = self.canvas
-        if not hasattr(canvas, 'clear_remarks'):
+        target = self._annotation_target_card()
+        canvas = getattr(target, "canvas", None)
+        if canvas is None or sip.isdeleted(target) or sip.isdeleted(canvas):
             return
-        # 一键清空全部标注不可撤销；仅当图表里确有标注时才拦一道，
-        # 空图直接静默清空，避免高频误触时的无谓弹窗。
-        count = self._current_remark_count(canvas)
+        if not hasattr(canvas, "clear_remarks"):
+            return
+        # Pin the target and the view token before the confirm dialog. A
+        # later focus change does not retarget this confirmation; a destroyed
+        # target or a switched View cancels instead of clearing the new one.
+        view_token = self._read_annotation_view_token()
+        count = target._current_remark_count(canvas)
         if count > 0 and not self._confirm_clear_annotations(count):
+            return
+        if sip.isdeleted(target) or sip.isdeleted(canvas):
+            return
+        if self._read_annotation_view_token() != view_token:
             return
         canvas.clear_remarks()
 

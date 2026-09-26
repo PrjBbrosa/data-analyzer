@@ -32,6 +32,10 @@ from PyQt5.QtWidgets import (
 
 from mf4_analyzer.ui._axis_handle import PgAxisHandle
 from mf4_analyzer.ui_kit.ticks_math import finite_non_degenerate_range
+from mf4_analyzer.ui.pg_canvas._shared import (
+    notify_content_replacement,
+    notify_history_reset,
+)
 
 # The shared analysis axis/tick/dB layer used to live in this file. It now
 # lives in analysis_axes.py, but every name is re-exported here so the old
@@ -459,6 +463,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         )
         self._mouse_mode_controller = None
         self._copy_image_handler = None
+        self._replot_callbacks = []
         self._bottom_tick_target = None
         self._bottom_tick_density = None
         # Slice AA starts off. A rebuild arms the strip's 0 ms discrete timer;
@@ -1215,6 +1220,15 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
     # ------------------------------------------------------------------
     # main API (signature mirrors canvases.PlotCanvas.plot_or_update_heatmap)
     # ------------------------------------------------------------------
+    def register_replot_callback(self, callback) -> None:
+        """Register toolbar rebind / mouse-mode reapply after a heatmap plot."""
+        if callable(callback) and callback not in self._replot_callbacks:
+            self._replot_callbacks.append(callback)
+
+    def _run_replot_callbacks(self) -> None:
+        for callback in list(self._replot_callbacks):
+            callback()
+
     def plot_or_update_heatmap(
         self, matrix, x_extent, y_extent, *,
         x_label='', y_label='', title='', cmap=DEFAULT_HEATMAP_CMAP, interp=None,
@@ -1227,6 +1241,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         amplitude_label=None, z_unit_suffix=None,
         amplitude_valid_mask=None,
     ):
+        notify_content_replacement(self)
         self._note_presentation_content_invalidated()
         self._cancel_presentation_paint_ack()
         self.clear_empty_hint()
@@ -1360,6 +1375,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         self.layout_geometry_changed.emit()
         self.manual_zoom_changed.emit(False)
         self._project_remarks()
+        self._run_replot_callbacks()
 
     def has_result(self) -> bool:
         return self._has_result
@@ -1407,6 +1423,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         hidden) so a stale color scale never outlives its data; the next
         ``plot_or_update_heatmap`` recreates it.
         """
+        notify_history_reset(self)
         self._note_presentation_content_invalidated()
         self._cancel_presentation_paint_ack()
         self._manual_axes_clear_timer.stop()

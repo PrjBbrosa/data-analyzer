@@ -1193,6 +1193,9 @@ class PgFrfCanvas(QWidget):
         self.set_state("stale")
 
     def set_result(self, result, display_params=None, context=None) -> None:
+        from ._shared import notify_content_replacement
+
+        notify_content_replacement(self)
         frequencies = np.asarray(result.frequencies, dtype=np.float64)
         transfer = np.asarray(result.transfer, dtype=np.complex128)
         coherence = np.asarray(result.coherence, dtype=np.float64)
@@ -2353,6 +2356,9 @@ class PgFrfCanvas(QWidget):
         self._emit_quality_status()
 
     def full_reset(self) -> None:
+        from ._shared import notify_history_reset
+
+        notify_history_reset(self)
         self.clear()
 
     def grab_pixmap(self, scale: float = 2.0) -> QPixmap:

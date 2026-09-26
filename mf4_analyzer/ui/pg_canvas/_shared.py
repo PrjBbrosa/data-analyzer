@@ -275,3 +275,41 @@ class _ChannelKeyDict(dict):
                 self._labels.get(composite_key, composite_key),
                 dict.__getitem__(self, composite_key),
             )
+
+
+def register_content_replacement_hook(canvas, callback) -> None:
+    """Run ``callback`` before a plot replaces the canvas contents.
+
+    The toolbar uses this to drop an uncommitted gesture before the old
+    axis geometry disappears. Hooks are not view history and are not persisted.
+    """
+    if not callable(callback):
+        return
+    hooks = getattr(canvas, "_content_replacement_hooks", None)
+    if hooks is None:
+        hooks = []
+        canvas._content_replacement_hooks = hooks
+    if callback not in hooks:
+        hooks.append(callback)
+
+
+def notify_content_replacement(canvas) -> None:
+    for callback in list(getattr(canvas, "_content_replacement_hooks", ()) or ()):
+        callback()
+
+
+def register_history_reset_hook(canvas, callback) -> None:
+    """Run ``callback`` when the canvas is cleared for a new session."""
+    if not callable(callback):
+        return
+    hooks = getattr(canvas, "_history_reset_hooks", None)
+    if hooks is None:
+        hooks = []
+        canvas._history_reset_hooks = hooks
+    if callback not in hooks:
+        hooks.append(callback)
+
+
+def notify_history_reset(canvas) -> None:
+    for callback in list(getattr(canvas, "_history_reset_hooks", ()) or ()):
+        callback()
