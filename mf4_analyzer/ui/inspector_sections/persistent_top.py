@@ -2,7 +2,7 @@
 from functools import partial
 import math
 
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import QSize, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QPalette, QValidator
 from PyQt5.QtWidgets import (
     QCheckBox,
@@ -27,6 +27,7 @@ from .. import hints
 from ..chart_stack.toolbar import DEFAULT_CHART_TICK_DENSITY
 from ..widgets.compact_spinbox import CompactDoubleSpinBox
 from ..widgets.wrapped_hint import WrappedHintFrame
+from .disclosure_icon import inspector_chevron_icon
 from ._helpers import (
     _SHORT_FIELD_MAX_WIDTH,
     _LONG_FIELD_MAX_WIDTH,
@@ -121,17 +122,17 @@ class PersistentTop(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
 
         # ------- Collapser handle -------
-        # R3 #6: single-row toggle that reveals the inner three groups.
-        # We use QToolButton so the arrow icon is rendered natively (no
-        # painter call into icons.py for an admin affordance) and so the
-        # button gets a proper "checkable" semantics.
+        # Same stroke chevron as the analysis parameter sections
+        # (谱参数 / 时频参数). Qt's native arrow is a filled triangle that
+        # QMacStyle draws heavy and accent-blue while the button is checked.
         self.btn_collapser = QToolButton(self)
         self.btn_collapser.setObjectName("inspectorCollapser")
         self.btn_collapser.setCheckable(True)
         self.btn_collapser.setAutoRaise(True)
         self.btn_collapser.setText("图表设置 (横坐标 · 时间范围)")
         self.btn_collapser.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-        self.btn_collapser.setArrowType(Qt.RightArrow)
+        self.btn_collapser.setArrowType(Qt.NoArrow)
+        self.btn_collapser.setIconSize(QSize(12, 12))
         self.btn_collapser.setSizePolicy(
             QSizePolicy.Expanding, QSizePolicy.Fixed,
         )
@@ -141,9 +142,12 @@ class PersistentTop(QWidget):
             self.btn_collapser.setStyleSheet(
                 "QToolButton#inspectorCollapser { "
                 "  text-align: left; padding: 4px 6px; font-weight: 600; "
+                "  color: #111827; "
                 "  border: none; background: transparent; "
                 "}"
                 "QToolButton#inspectorCollapser:hover { background: #eef2f7; }"
+                "QToolButton#inspectorCollapser:checked,"
+                "QToolButton#inspectorCollapser:pressed { color: #111827; }"
             )
         except Exception:  # pragma: no cover — defensive on Qt style failures
             pass
@@ -205,7 +209,9 @@ class PersistentTop(QWidget):
         self.edit_xlabel.setPlaceholderText("Time (s)")
         fl.addRow("标签:", _fit_field(self.edit_xlabel))
         self.btn_apply_xaxis = QPushButton("应用")
-        self.btn_apply_xaxis.setProperty("role", "primary")
+        # Same quiet wash as 「在时域查看」: applying an axis label is not a
+        # primary compute action, so it does not take the solid accent fill.
+        self.btn_apply_xaxis.setProperty("role", "secondary")
         fl.addRow(self.btn_apply_xaxis)
         self._xaxis_drop_hint = self._build_xaxis_drop_hint()
         fl.addRow(self._xaxis_drop_hint)
@@ -479,8 +485,11 @@ class PersistentTop(QWidget):
         """
         expanded = bool(expanded)
         self._collapser_body.setVisible(expanded)
-        self.btn_collapser.setArrowType(
-            Qt.DownArrow if expanded else Qt.RightArrow,
+        self.btn_collapser.setArrowType(Qt.NoArrow)
+        self.btn_collapser.setIcon(
+            inspector_chevron_icon(
+                self.btn_collapser, 90.0 if expanded else 0.0,
+            )
         )
         try:
             _preset_settings().setValue(self._SETTINGS_KEY, expanded)

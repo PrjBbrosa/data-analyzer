@@ -1009,6 +1009,7 @@ def test_persistent_top_returns_tagged_xaxis_selection(qapp):
 def test_persistent_top_apply_emits(qapp, qtbot):
     from mf4_analyzer.ui.inspector_sections import PersistentTop
     pt = PersistentTop()
+    assert pt.btn_apply_xaxis.property("role") == "secondary"
     with qtbot.waitSignal(pt.xaxis_apply_requested, timeout=200):
         pt.btn_apply_xaxis.click()
 
@@ -2567,6 +2568,40 @@ def test_persistent_top_has_collapser(qapp):
         assert pt._collapser_body.isVisible() is True
     finally:
         pt.hide()
+
+
+def test_persistent_top_collapser_uses_spectrum_stroke_chevron(qapp):
+    """Time-domain chart settings share the analysis-section hairline chevron.
+
+    Qt's native arrow is a filled triangle. Expanded, QMacStyle draws it
+    heavy and accent-blue — the old bold handle next to 图表设置.
+    """
+    from PyQt5.QtCore import QSize, Qt
+    from PyQt5.QtGui import QImage
+    from mf4_analyzer.ui.inspector_sections import PersistentTop, _preset_settings
+    from mf4_analyzer.ui.inspector_sections.disclosure_icon import (
+        inspector_chevron_icon,
+    )
+
+    settings = _preset_settings()
+    settings.remove("inspector/persistent_top/expanded")
+    settings.remove("inspector/persistent_top/expanded_v2")
+    pt = PersistentTop()
+    button = pt.btn_collapser
+
+    def _pixels(icon):
+        image = icon.pixmap(QSize(12, 12)).toImage().convertToFormat(
+            QImage.Format_ARGB32
+        )
+        return bytes(image.bits().asstring(image.sizeInBytes()))
+
+    assert button.arrowType() == Qt.NoArrow
+    assert button.iconSize() == QSize(12, 12)
+    assert _pixels(button.icon()) == _pixels(inspector_chevron_icon(button, 90.0))
+
+    button.setChecked(False)
+    assert button.arrowType() == Qt.NoArrow
+    assert _pixels(button.icon()) == _pixels(inspector_chevron_icon(button, 0.0))
 
 
 def test_persistent_top_collapser_toggle_reveals_groups(qapp):

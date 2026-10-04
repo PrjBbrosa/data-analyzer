@@ -1,7 +1,7 @@
 """Collapsible parameter section widget for inspector contextuals."""
 from PyQt5 import sip
-from PyQt5.QtCore import QEvent, QPointF, QSize, Qt
-from PyQt5.QtGui import QColor, QIcon, QPainter, QPen, QPixmap, QPolygonF, QRegion
+from PyQt5.QtCore import QEvent, QSize, Qt
+from PyQt5.QtGui import QPainter, QRegion
 from PyQt5.QtWidgets import (
     QApplication,
     QFrame,
@@ -22,6 +22,7 @@ from mf4_analyzer.ui_kit.motion import (
 )
 
 from ._helpers import _preset_settings, _settings_bool
+from .disclosure_icon import inspector_chevron_icon
 
 _EATEN_INPUT_EVENTS = frozenset(
     {
@@ -133,9 +134,12 @@ class _CollapsibleParamSection(QWidget):
             self.btn_collapser.setStyleSheet(
                 "QToolButton#inspectorCollapser { "
                 "  text-align: left; padding: 4px 6px; font-weight: 600; "
+                "  color: #111827; "
                 "  border: none; background: transparent; "
                 "}"
                 "QToolButton#inspectorCollapser:hover { background: #eef2f7; }"
+                "QToolButton#inspectorCollapser:checked,"
+                "QToolButton#inspectorCollapser:pressed { color: #111827; }"
             )
         except Exception:  # pragma: no cover - defensive on Qt style failures
             pass
@@ -396,30 +400,7 @@ class _CollapsibleParamSection(QWidget):
         self.btn_collapser.setIcon(self._make_arrow_icon(degrees))
 
     def _make_arrow_icon(self, degrees):
-        dpr = max(1.0, float(self.devicePixelRatioF()))
-        logical = 12
-        side = max(12, int(round(logical * dpr)))
-        pixmap = QPixmap(side, side)
-        pixmap.setDevicePixelRatio(dpr)
-        pixmap.fill(Qt.transparent)
-        painter = QPainter(pixmap)
-        painter.setRenderHint(QPainter.Antialiasing, True)
-        painter.translate(logical / 2.0, logical / 2.0)
-        painter.rotate(degrees)
-        pen = QPen(QColor("#475569"), 1.6, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
-        painter.setPen(pen)
-        painter.setBrush(Qt.NoBrush)
-        painter.drawPolyline(
-            QPolygonF(
-                (
-                    QPointF(-1.5, -2.7),
-                    QPointF(1.2, 0.0),
-                    QPointF(-1.5, 2.7),
-                )
-            )
-        )
-        painter.end()
-        return QIcon(pixmap)
+        return inspector_chevron_icon(self, degrees)
 
     def _settle_presentation(self):
         self._motion_target_height = None

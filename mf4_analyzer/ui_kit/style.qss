@@ -2273,8 +2273,13 @@ Inspector QToolButton#inspectorCollapser {
     text-align: left;
     padding: 4px 6px;
     font-weight: 600;
+    color: #111827;
     border: none;
     background-color: transparent;
+}
+Inspector QToolButton#inspectorCollapser:checked,
+Inspector QToolButton#inspectorCollapser:pressed {
+    color: #111827;
 }
 Inspector QToolButton#inspectorCollapser:hover {
     background-color: #eef2f7;
