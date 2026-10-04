@@ -244,10 +244,51 @@ class FrfMixin:
             return
         _manager, state, _page, _pane_idx, _pane = self._active_frf_state()
         state.params.update(dict(params or {}))
-        # Compute controls belong to the whole Analysis View, so both split
-        # panes must reject any completion produced with the previous values.
+        # Compute controls belong to the whole Analysis View. Reconcile does
+        # not submit; a cached request becomes current again, a miss stays stale.
+        self._reconcile_frf_result_validity(state)
+
+    def _reconcile_frf_result_validity(self, state):
+        """Publish the cached FRF for the current request, or keep it stale.
+
+        ``invalidate_pane`` drops an in-flight job so it cannot paint as the
+        new request. The completed cache entry stays. A hit restores that
+        result and clears the facts stale bit; a miss keeps the previous
+        curves and the explicit stale label.
+        """
+        focused = self._frf_focused_pane_index(state)
+        page = self._analysis_page("frf")
+        active = self.analysis_managers["frf"].get(
+            self.analysis_managers["frf"].active
+        ) is state
         for pane_idx in range(len(state.panes)):
-            self._dirty_frf_pane(state, pane_idx)
+            self._frf_coordinator.invalidate_pane(state.view_id, pane_idx)
+            pane = state.panes[pane_idx]
+            result = self._frf_cached_result_for_pane(state, pane)
+            visible = active and page is not None and 0 <= pane_idx < page.pane_count()
+            if result is None:
+                self._mark_frf_pane_stale(state, pane_idx)
+                if pane_idx == focused:
+                    self.inspector.frf_ctx.mark_effective_facts_stale()
+                continue
+            key = self._frf_cache_key_for_pane(state, pane)
+            if key is not None:
+                self._replace_analysis_pane_pins(
+                    "frf", state.view_id, pane_idx, (key,),
+                )
+            if not visible:
+                if pane_idx == focused:
+                    self._publish_frf_effective_facts(result)
+                continue
+            canvas = page.pane_canvas(pane_idx)
+            canvas.set_result(
+                result,
+                display_params=self._frf_display_params_for_state(state),
+                context=self._frf_render_context_for_pane(pane),
+            )
+            self._restore_frf_canvas_ranges(canvas, pane)
+            if pane_idx == focused:
+                self._publish_frf_effective_facts(result)
 
     def _on_frf_display_params_changed(self, params):
         if self._applying_analysis_view:

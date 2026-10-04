@@ -575,9 +575,17 @@ class OrderMixin:
             rpm_source=tuple(rpm_source) if rpm_source else None,
             time_range=time_range,
         )
+        owner = state
+        if owner is None:
+            order_mgr = self.analysis_managers['order']
+            owner = order_mgr.get(order_mgr.active) if order_mgr.views else None
+        pane_token = None
+        if owner is not None and 0 <= int(pane_idx) < len(owner.panes):
+            pane_token = id(owner.panes[int(pane_idx)])
         ctx = {
             'analysis_key': analysis_key,
             'pane_idx': pane_idx,
+            'pane_token': pane_token,
             'source': (fid, ch),
             # Capture at dispatch: completion may land after the user switched
             # Views, so the callback must not read the then-active view.
@@ -903,9 +911,14 @@ class OrderMixin:
         outcome = getattr(self, '_order_outcome', None)
         if outcome is not None:
             outcome.computed += 1
-        # A7: cache/pin above uses dispatch-time view_id; only skip the live
-        # page draw when the user has already switched away.
-        if not self._analysis_ctx_targets_active_view('order', ctx):
+        # A7: an inactive View keeps the dispatch pin and skips the live draw.
+        # A still-active View whose request changed keeps the cache entry under
+        # the old key and does not publish that result as current.
+        decision = self._order_completion_decision(ctx)
+        if decision == 'keep':
+            return
+        if decision == 'reject':
+            self._unpublish_analysis_completion('order', ctx)
             return
         self._cancel_order_page_transition_cover(ctx.get('view_id'))
         # V7b: render onto the SPECIFIC pane this job was computed for.
@@ -923,6 +936,69 @@ class OrderMixin:
         else:
             self._render_order_time(
                 result, emit_feedback=outcome is None, source=source)
+
+    def _order_completion_decision(self, ctx) -> str:
+        """``draw``, ``keep`` (inactive A7), or ``reject`` (not the current request)."""
+        state = self._analysis_state_by_id('order', ctx.get('view_id'))
+        if state is None:
+            return 'reject'
+        if not self._analysis_ctx_targets_active_view('order', ctx):
+            return 'keep'
+        try:
+            pane_idx = int(ctx.get('pane_idx', 0))
+        except (TypeError, ValueError):
+            return 'reject'
+        if not (0 <= pane_idx < len(state.panes)):
+            return 'reject'
+        pane = state.panes[pane_idx]
+        token = ctx.get('pane_token')
+        if token is not None and token != id(pane):
+            return 'reject'
+        source = ctx.get('source')
+        if source:
+            source = tuple(source)
+            if source[0] not in getattr(self, 'files', {}):
+                return 'reject'
+            live = list(pane.sources or [])
+            if live and tuple(live[0]) != source:
+                return 'reject'
+        if self._order_completion_request_changed(state, pane, pane_idx, ctx):
+            return 'reject'
+        return 'draw'
+
+    def _order_current_cache_key(self, state, pane, pane_idx):
+        sources = list(pane.sources or [])
+        if not sources:
+            return None
+        fid, ch = sources[0]
+        if fid not in getattr(self, 'files', {}):
+            return None
+        time_range = self._normalize_analysis_time_range(
+            getattr(pane, 'time_range', None),
+        )
+        params = self._compute_params_overlay_state('order', state)
+        rpm_source = getattr(pane, 'rpm_source', None)
+        return self._analysis_cache_key(
+            'order', fid, ch,
+            rpm_source=tuple(rpm_source) if rpm_source else None,
+            pane_idx=pane_idx,
+            params=params,
+            time_range=time_range,
+        )
+
+    def _order_completion_request_changed(self, state, pane, pane_idx, ctx) -> bool:
+        """True when a real cache key disagrees with the pane's current request.
+
+        A non-tuple ``analysis_key`` is not a compute identity. Callers that
+        inject a placeholder still follow the view-id gate.
+        """
+        completed = ctx.get('analysis_key')
+        if not isinstance(completed, tuple):
+            return False
+        current = self._order_current_cache_key(state, pane, pane_idx)
+        if current is None:
+            return True
+        return completed != current
 
     def _sync_order_effective_facts(self, state=None):
         """Re-fill the Inspector facts card from the focused order result."""

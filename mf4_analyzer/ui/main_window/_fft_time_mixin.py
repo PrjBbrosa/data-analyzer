@@ -319,6 +319,7 @@ class FFTTimeMixin:
                 "channel": ch,
                 "params": dict(effective_compute_p),
                 "pane_idx": pane_idx,
+                "pane_token": id(pane),
                 "time_range": time_range,
                 "render_params": dict(render_p),
                 "source": (fid, ch),
@@ -393,6 +394,7 @@ class FFTTimeMixin:
                     'channel': ch,
                     'params': dict(compute_p),
                     'pane_idx': pane_idx,
+                    'pane_token': id(state.panes[pane_idx]),
                     'time_range': time_range,
                     'job': None,
                     'render_params': dict(render_p),
@@ -408,6 +410,7 @@ class FFTTimeMixin:
                 'channel': ch,
                 'params': dict(effective_compute_p),
                 'pane_idx': pane_idx,
+                'pane_token': id(state.panes[pane_idx]),
                 'time_range': time_range,
                 'render_params': dict(render_p),
                 'source': (fid, ch),
@@ -485,11 +488,17 @@ class FFTTimeMixin:
         self._fft_time_outcome = None
         mgr = self.analysis_managers['fft_time']
         view_id = mgr.get(mgr.active).view_id
+        single_state = mgr.get(mgr.active)
+        pane_token = (
+            id(single_state.panes[pane_idx])
+            if 0 <= pane_idx < len(single_state.panes) else None
+        )
         self._fft_time_coordinator.request_batch([{
             'fid': fid,
             'channel': ch,
             'params': dict(effective_compute_p),
             'pane_idx': pane_idx,
+            'pane_token': pane_token,
             'time_range': self._pane_time_range_for('fft_time', pane_idx),
             'render_params': dict(render_p),
             'source': (fid, ch),
@@ -863,30 +872,39 @@ class FFTTimeMixin:
     def _on_fft_time_render_requested(self, ctx, result, cache_hit):
         """Render a cache hit or freshly computed result for its own pane.
 
-        The coordinator stores cache/pin under the dispatch-time ``view_id``
-        before emitting this signal.  When that View is no longer active we
-        skip only the live draw (A7); switching back restores via
-        ``_render_analysis_view_from_cache``.
+        The coordinator stores cache/pin under the dispatch-time identity
+        before emitting this signal.  An inactive View keeps that pin and
+        skips the live draw (A7).  A completion whose compute request is no
+        longer the active pane's request is not published: the cache entry
+        stays under the old key, and its pin is removed.
         """
-        p = ctx.get('render_params') or {}
-        pane_idx = ctx.get('pane_idx')
-        source = ctx.get('source')
         outcome = getattr(self, '_fft_time_outcome', None)
         if outcome is not None:
             if cache_hit:
                 outcome.cached += 1
             else:
                 outcome.computed += 1
-        if not self._analysis_ctx_targets_active_view('fft_time', ctx):
+        decision = self._fft_time_completion_decision(ctx)
+        if decision == 'keep':
             return
+        if decision == 'reject':
+            self._unpublish_analysis_completion('fft_time', ctx)
+            return
+        state = self._analysis_state_by_id('fft_time', ctx.get('view_id'))
+        pane_idx = ctx.get('pane_idx', 0)
+        source = ctx.get('source')
+        p = self._fft_time_completion_display_params(state, ctx)
         self._cancel_fft_time_page_transition_cover(ctx.get('view_id'))
-        if p is not None:
-            page = self._analysis_page('fft_time')
-            if pane_idx is not None and pane_idx < page.pane_count():
-                self._render_fft_time_on(
-                    page.pane_canvas(pane_idx), result, p, source=source)
-            else:
-                self._render_fft_time(result, p, source=source)
+        page = self._analysis_page('fft_time')
+        try:
+            pane_idx = int(pane_idx)
+        except (TypeError, ValueError):
+            pane_idx = 0
+        if page is not None and 0 <= pane_idx < page.pane_count():
+            self._render_fft_time_on(
+                page.pane_canvas(pane_idx), result, p, source=source)
+        else:
+            self._render_fft_time(result, p, source=source)
         nfft = getattr(getattr(result, 'params', None), 'nfft', None)
         suffix = f" · NFFT {int(nfft)}" if nfft is not None else ""
         if cache_hit:
@@ -900,6 +918,110 @@ class FFTTimeMixin:
                 f"{suffix}"
             )
         self._sync_fft_time_effective_facts()
+
+    def _fft_time_completion_decision(self, ctx) -> str:
+        """``draw``, ``keep`` (inactive A7), or ``reject`` (not the current request)."""
+        state = self._analysis_state_by_id('fft_time', ctx.get('view_id'))
+        if state is None:
+            return 'reject'
+        if not self._analysis_ctx_targets_active_view('fft_time', ctx):
+            return 'keep'
+        try:
+            pane_idx = int(ctx.get('pane_idx', 0))
+        except (TypeError, ValueError):
+            return 'reject'
+        if not (0 <= pane_idx < len(state.panes)):
+            return 'reject'
+        pane = state.panes[pane_idx]
+        token = ctx.get('pane_token')
+        if token is not None and token != id(pane):
+            return 'reject'
+        source = ctx.get('source')
+        if source is None and ctx.get('fid') is not None:
+            source = (ctx.get('fid'), ctx.get('channel'))
+        if source:
+            source = tuple(source)
+            if source[0] not in getattr(self, 'files', {}):
+                return 'reject'
+            live = list(pane.sources or [])
+            if live and tuple(live[0]) != source:
+                return 'reject'
+        if self._fft_time_completion_request_changed(state, pane, pane_idx, ctx):
+            return 'reject'
+        return 'draw'
+
+    def _fft_time_current_cache_key(self, state, pane, pane_idx):
+        sources = list(pane.sources or [])
+        if not sources:
+            return None
+        fid, ch = sources[0]
+        if fid not in getattr(self, 'files', {}):
+            return None
+        time_range = self._normalize_analysis_time_range(
+            getattr(pane, 'time_range', None),
+        )
+        params = self._compute_params_overlay_state('fft_time', state)
+        return self._analysis_cache_key(
+            'fft_time', fid, ch, pane_idx=pane_idx,
+            params=params, time_range=time_range,
+        )
+
+    def _fft_time_completion_request_changed(self, state, pane, pane_idx, ctx) -> bool:
+        """True only when the completion carries a compute identity that disagrees.
+
+        A callback with no ``params`` and no real cache key keeps the view-id
+        gate. Dispatch display (``render_params``) is not compute identity.
+        """
+        completed = ctx.get('analysis_key')
+        params = ctx.get('params')
+        if not isinstance(completed, tuple) and not params:
+            return False
+        current = self._fft_time_current_cache_key(state, pane, pane_idx)
+        if current is None:
+            return True
+        if isinstance(completed, tuple):
+            return completed != current
+        source = ctx.get('source') or (ctx.get('fid'), ctx.get('channel'))
+        if not source or source[0] is None:
+            return True
+        time_range = None
+        if 'time_range' in ctx:
+            time_range = self._normalize_analysis_time_range(ctx.get('time_range'))
+        built = self._fft_time_analysis_cache_key(
+            source[0], source[1], params, time_range,
+        )
+        return built != current
+
+    def _fft_time_completion_display_params(self, state, ctx):
+        """Latest display intent over the completed compute params.
+
+        ``render_params`` is the dispatch-time snapshot. It fills compute
+        fields only when the job context has no ``params``; live display
+        always wins.
+        """
+        base = dict(ctx.get('params') or ctx.get('render_params') or {})
+        live = {}
+        inspector = getattr(self, 'inspector', None)
+        fft_ctx = getattr(inspector, 'fft_time_ctx', None) if inspector else None
+        getter = getattr(fft_ctx, 'display_params', None)
+        if callable(getter) and self._analysis_ctx_targets_active_view('fft_time', ctx):
+            live = dict(getter())
+        elif state is not None:
+            saved = dict(getattr(state, 'params', None) or {})
+            display_names = {
+                'amplitude_mode', 'cmap', 'dynamic',
+                'x_auto', 'x_min', 'x_max',
+                'y_auto', 'y_min', 'y_max',
+                'z_auto', 'z_floor', 'z_ceiling',
+                'freq_auto', 'freq_min', 'freq_max',
+            }
+            live = {
+                key: saved[key]
+                for key in saved
+                if key in display_names or key.startswith('db_')
+            }
+        base.update(live)
+        return base
 
     def _sync_fft_time_effective_facts(self, state=None):
         """Re-fill the Inspector facts card from the focused spectrogram."""

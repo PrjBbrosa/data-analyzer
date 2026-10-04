@@ -771,40 +771,209 @@ class AnalysisMixin:
         holder = getattr(self, '_project_dirty', None)
         if holder is not None:
             holder.mark_user_mutation()
-        params_changed = before_params != dict(state.params or {})
-        if params_changed:
-            self._mark_section_effective_facts_stale(section)
+        after_params = dict(state.params or {})
+        compute_changed = (
+            self._requested_compute_projection(section, before_params)
+            != self._requested_compute_projection(section, after_params)
+        )
+        display_changed = before_params != after_params
+        chart_stack = getattr(self, 'chart_stack', None)
+        visible = (
+            chart_stack is not None and chart_stack.current_mode() == section
+        )
+        if compute_changed:
+            # A preset rename or a new baseline with the same numbers does not
+            # reach here. Source capture stays on the real compute edit only.
             if section == 'order':
                 self._commit_live_analysis_sources(section)
-            dirty_frf = getattr(self, '_dirty_frf_pane', None)
-            if section == 'frf' and callable(dirty_frf):
-                for pane_idx in range(len(state.panes)):
-                    dirty_frf(state, pane_idx)
-        chart_stack = getattr(self, 'chart_stack', None)
-        current_mode = (
-            chart_stack.current_mode() if chart_stack is not None else None
-        )
-        if current_mode != section:
+            self._reconcile_section_result_validity(section, visible=visible)
+        if not visible or compute_changed or not display_changed:
             return
-        if section == 'frf' and params_changed and hasattr(ctx, 'display_params'):
+        self._reproject_analysis_display(section, state, ctx, before_params, after_params)
+
+    def _requested_compute_projection(self, section, params):
+        """Requested compute intent, without source-specific effective facts.
+
+        Cache projections still carry analysis Fs, prepared NFFT signatures,
+        and pane range/RPM. Those are result identity, not preset intent, so
+        a display-only payload must not look like a new DSP request.
+        """
+        values = dict(params or {})
+        if section == 'frf':
+            from .frf_coordinator import frf_compute_cache_params
+
+            projected = frf_compute_cache_params(values)
+            projected.pop('fs', None)
+            return projected
+        if section == 'fft':
+            projected = self._fft_compute_cache_params(values)
+            projected.pop('fs', None)
+            projected.pop('nfft_facts_signature', None)
+            projected['t_win_s'] = values.get('t_win_s')
+            projected['nfft_mode'] = values.get('nfft_mode')
+            return projected
+        if section == 'fft_time':
+            from .fft_time_coordinator import fft_time_compute_cache_params
+
+            projected = fft_time_compute_cache_params(values, None)
+            projected.pop('time_range', None)
+            projected.pop('nfft_facts_signature', None)
+            projected['t_win_s'] = values.get('t_win_s')
+            projected['nfft_mode'] = values.get('nfft_mode')
+            return projected
+        if section == 'order':
+            projected = self._order_compute_cache_params(values, None, None)
+            projected.pop('time_range', None)
+            projected.pop('rpm_source', None)
+            return projected
+        return values
+
+    def _reproject_analysis_display(self, section, state, ctx, before_params, after_params):
+        """Redraw the current result the same way a direct display edit does."""
+        if (section, getattr(state, 'view_id', None)) in getattr(
+            self, '_analysis_restore_pending', (),
+        ):
+            return
+        if section == 'frf' and hasattr(ctx, 'display_params'):
             page = self._analysis_page(section)
             display = ctx.display_params()
             for idx in range(min(page.pane_count(), len(state.panes))):
                 page.pane_canvas(idx).set_display_params(display)
             return
-        if (
-            section in {'fft', 'fft_time', 'order'}
-            and self._analysis_changed_range_axes(before_params, state.params, section)
-        ):
-            self._clear_analysis_view_viewports(state, self._analysis_changed_range_axes(before_params, state.params, section))
-            self._render_analysis_view_from_cache(section, state)
+        if section not in {'fft', 'fft_time', 'order'}:
+            return
+        axes = self._analysis_changed_range_axes(before_params, after_params, section)
+        if axes:
+            self._clear_analysis_view_viewports(state, axes)
+        self._render_analysis_view_from_cache(section, state)
+
+    def _analysis_preset_transaction_open(self, section) -> bool:
+        """True while PresetBar still owns the apply, before commit."""
+        if hasattr(self, '_analysis_context'):
+            ctx = self._analysis_ctx(section)
+        else:
+            ctx_name = 'fft_time_ctx' if section == 'fft_time' else f'{section}_ctx'
+            ctx = getattr(getattr(self, 'inspector', None), ctx_name, None)
+        bar = getattr(ctx, 'preset_bar', None) if ctx is not None else None
+        if bar is None:
+            return False
+        return bool(bar.is_transaction_open)
 
     def _on_analysis_compute_params_changed(self, section, _params):
         """Record a compute edit without implicitly submitting a new job."""
-        self._sync_active_analysis_params(section)
-        self._mark_section_effective_facts_stale(section)
-        if section == "order":
+        if getattr(self, '_applying_analysis_view', False):
+            return
+        # Preset apply can emit a compute signal while the transaction is
+        # still open. Commit compares the requested projection and is the
+        # only owner of validity for that apply.
+        if self._analysis_preset_transaction_open(section):
+            return
+        state = self._sync_active_analysis_params(section)
+        if section == 'order':
             self._commit_live_analysis_sources(section)
+        chart_stack = getattr(self, 'chart_stack', None)
+        visible = chart_stack is not None and chart_stack.current_mode() == section
+        if state is None or not visible:
+            self._mark_section_effective_facts_stale(section)
+            return
+        self._reconcile_section_result_validity(section, visible=True)
+
+    def _reconcile_section_result_validity(self, section, *, visible):
+        """One owner: cache hit republishes the result; a miss stays stale.
+
+        Validity is whether the current request matches a stored result, not
+        an event dirty bit. This path never submits DSP.
+        """
+        if not visible:
+            self._mark_section_effective_facts_stale(section)
+            return
+        if section == 'frf':
+            reconcile = getattr(self, '_reconcile_frf_result_validity', None)
+            mgr = (getattr(self, 'analysis_managers', None) or {}).get('frf')
+            if callable(reconcile) and mgr is not None and mgr.views:
+                reconcile(mgr.get(mgr.active))
+            else:
+                self._mark_section_effective_facts_stale(section)
+            return
+        mgr = (getattr(self, 'analysis_managers', None) or {}).get(section)
+        if mgr is None or not mgr.views:
+            self._mark_section_effective_facts_stale(section)
+            return
+        state = mgr.get(mgr.active)
+        if (section, state.view_id) in getattr(self, '_analysis_restore_pending', ()):
+            self._mark_retained_analysis_result_stale(section, state)
+            return
+        if self._analysis_focused_request_is_cached(section, state):
+            self._render_analysis_view_from_cache(section, state)
+            return
+        self._mark_retained_analysis_result_stale(section, state)
+
+    def _analysis_focused_request_is_cached(self, section, state) -> bool:
+        page = self._analysis_page(section)
+        if page is None or not getattr(state, 'panes', None):
+            return False
+        idx = page.focused_index()
+        if not (0 <= idx < len(state.panes)):
+            return False
+        pane = state.panes[idx]
+        sources = list(pane.sources or [])
+        if not sources:
+            return False
+        cache = self.analysis_caches[section]
+        if section == 'fft':
+            return all(
+                cache.get(self._analysis_cache_key(
+                    section, fid, ch, pane_idx=idx,
+                )) is not None
+                for fid, ch in sources
+            )
+        fid, ch = sources[0]
+        rpm_source = pane.rpm_source if section == 'order' else None
+        key = self._analysis_cache_key(
+            section, fid, ch, rpm_source=rpm_source, pane_idx=idx,
+        )
+        return cache.get(key) is not None
+
+    def _mark_retained_analysis_result_stale(self, section, state):
+        """Keep the previous picture and say the numbers are the last result."""
+        self._mark_section_effective_facts_stale(section)
+        if section != 'fft':
+            return
+        page = self._analysis_page(section)
+        if page is None:
+            return
+        for pane_idx in range(min(page.pane_count(), len(getattr(state, 'panes', ())))):
+            marker = getattr(page.pane_canvas(pane_idx), 'mark_spectrum_stale', None)
+            if callable(marker):
+                marker()
+
+    def _unpublish_analysis_completion(self, section, ctx):
+        """Drop a late completion's pin without removing its cache entry.
+
+        The coordinator may already have stored the old identity. That entry
+        stays addressable. It must not remain the pane's current binding.
+        """
+        view_id = ctx.get('view_id')
+        if view_id is None:
+            return
+        if self._analysis_state_by_id(section, view_id) is None:
+            self._drop_analysis_view_pins(section, view_id)
+            return
+        key = ctx.get('analysis_key')
+        if key is None:
+            return
+        try:
+            pane_idx = int(ctx.get('pane_idx', 0))
+        except (TypeError, ValueError):
+            return
+        pins = getattr(self, '_analysis_pins', None)
+        slot = (section, str(view_id), pane_idx)
+        if pins is None or slot not in pins:
+            return
+        self._replace_analysis_pane_pins(
+            section, view_id, pane_idx,
+            [item for item in pins[slot] if item != key],
+        )
 
     def _effective_facts_health(self, sig, fid=None, sources=None):
         """Caller-filled health fields for an effective-facts dataclass."""
