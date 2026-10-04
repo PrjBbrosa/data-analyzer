@@ -6,7 +6,7 @@ from mf4_analyzer.ui.analysis_view_state import (
 )
 from mf4_analyzer.ui.project_io import (
     ProjectDocument, collect_dropped_analysis_refs, load_project_from_json,
-    remap_analysis_view_fids, save_project_to_json,
+    normalize_analysis_comparisons, remap_analysis_view_fids, save_project_to_json,
 )
 
 
@@ -33,6 +33,100 @@ def test_round_trip(tmp_path):
     save_project_to_json(_doc(), p)
     loaded = load_project_from_json(p)
     assert loaded.analysis_views["fft"]["views"][0]["params"]["nfft"] == 2048
+
+
+def test_comparisons_round_trip_without_becoming_view_compare(tmp_path):
+    doc = _doc()
+    doc.analysis_views["fft"]["comparisons"] = {
+        "host-a": {
+            "peer": "peer-b",
+            "axis_linked": False,
+            "levels_locked": True,
+        },
+    }
+    path = tmp_path / "comparisons.tlproj"
+    save_project_to_json(doc, path)
+    loaded = load_project_from_json(path)
+    row = loaded.analysis_views["fft"]["comparisons"]["host-a"]
+    assert row["peer"] == "peer-b"
+    assert row["axis_linked"] is False
+    assert row["levels_locked"] is True
+    assert loaded.analysis_views["fft"]["views"][0]["params"]["nfft"] == 2048
+    assert "peer" not in loaded.analysis_views["fft"]["views"][0]["compare"]
+
+
+def test_absent_comparisons_normalize_to_empty():
+    payload, dropped = normalize_analysis_comparisons(None, ["host"])
+    assert payload == {}
+    assert dropped == []
+
+
+def test_normalize_drops_missing_peer_and_rejects_non_bool_flags():
+    payload, dropped = normalize_analysis_comparisons(
+        {
+            "host": {
+                "peer": "gone",
+                "axis_linked": "false",
+                "levels_locked": 1,
+                "canvas": "token",
+            },
+            "other": {
+                "peer": "host",
+                "axis_linked": True,
+                "levels_locked": False,
+                "result": [1, 2, 3],
+            },
+        },
+        ["host", "other"],
+    )
+    assert dropped == ["host"]
+    assert "host" not in payload
+    assert payload["other"] == {
+        "peer": "host",
+        "axis_linked": True,
+        "levels_locked": False,
+    }
+
+
+def test_remap_keeps_comparison_view_ids_when_a_view_id_matches_a_file_id():
+    analysis_views = {
+        "fft": {
+            "active": 0,
+            "views": [{
+                "schema": 1,
+                "name": "View 1",
+                "view_id": "f1",
+                "panes": [{"sources": [["f1", "vib"]]}],
+            }, {
+                "schema": 1,
+                "name": "View 2",
+                "view_id": "peer-view",
+                "panes": [{"sources": []}],
+            }],
+            "comparisons": {
+                "f1": {
+                    "peer": "peer-view",
+                    "axis_linked": False,
+                    "levels_locked": True,
+                    "canvas": {"token": 1},
+                },
+            },
+        },
+    }
+    out = remap_analysis_view_fids(analysis_views, {"f1": "F1"})
+    assert out["fft"]["views"][0]["panes"][0]["sources"] == [["F1", "vib"]]
+    assert out["fft"]["views"][0]["view_id"] == "f1"
+    assert out["fft"]["comparisons"]["f1"]["peer"] == "peer-view"
+    assert "F1" not in out["fft"]["comparisons"]
+    payload, dropped = normalize_analysis_comparisons(
+        out["fft"]["comparisons"], ["f1", "peer-view"],
+    )
+    assert dropped == []
+    assert payload["f1"] == {
+        "peer": "peer-view",
+        "axis_linked": False,
+        "levels_locked": True,
+    }
 
 
 def test_old_file_without_field_defaults_empty(tmp_path):

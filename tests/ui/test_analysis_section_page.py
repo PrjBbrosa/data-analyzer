@@ -1045,3 +1045,62 @@ def test_comparison_peer_is_a_second_region_with_one_tabbar(page, qapp):
     assert page.findChild(QSplitter, "analysisComparisonSplit") is None
     assert page.layout().indexOf(page._split) >= 0
     page.hide_comparison_peer()
+
+
+def test_cross_view_controls_stay_hidden_until_a_peer_is_mounted(page):
+    assert not page.btn_view_link.isVisible()
+    assert not page.btn_view_levels.isVisible()
+    assert not page.btn_view_expand.isVisible()
+    assert page._comparison_export_filename() == ""
+
+
+def test_comparison_expand_keeps_both_regions_and_export_names(page, qapp):
+    manager = page.manager
+    manager.new_view(activate=False)
+    host = manager.get(0)
+    peer = manager.get(1)
+    host.name = "Alpha"
+    peer.name = "Beta"
+    page.resize(900, 500)
+    page.show_comparison_peer(host.view_id, peer.view_id, 1)
+    qapp.processEvents()
+
+    assert page.btn_view_link.isVisible()
+    assert page.btn_view_levels.isVisible()
+    assert page.btn_view_expand.text() == "展开焦点"
+    assert not page.btn_view_link.isChecked()
+    display = []
+    compares = []
+    page.comparison_display_toggled.connect(lambda key, on: display.append((key, on)))
+    page.compare_toggled.connect(lambda key, on: compares.append((key, on)))
+    page.btn_view_link.setChecked(True)
+    assert display == [("axis_linked", True)]
+    assert compares == []
+
+    host_panes = page.pane_count()
+    page.expand_focused_comparison()
+    qapp.processEvents()
+    sizes = page._view_split.sizes()
+    assert min(sizes) >= 1
+    assert page.pane_count() == host_panes
+    assert page._peer_host.pane_count() == 1
+    assert page.btn_view_expand.text() == "返回并排"
+    page.return_to_comparison_layout()
+    assert min(page._view_split.sizes()) >= 1
+    assert page.pane_count() == host_panes
+
+    combined = page.export_target(combined=True)
+    assert combined["kind"] == "comparison"
+    assert combined["view_ids"] == [str(host.view_id), str(peer.view_id)]
+    assert combined["label"] == "Alpha + Beta"
+    assert page._comparison_export_filename() == "Alpha + Beta.png"
+    assert page.export_target(combined=False)["view_id"] == str(host.view_id)
+    page.mark_comparison_focus(peer.view_id, 0)
+    focused = page.export_target(combined=False)
+    assert focused == {
+        "kind": "pane",
+        "view_id": str(peer.view_id),
+        "pane_index": 0,
+    }
+    assert page.view_id_for_canvas(page.peer_cards()[0].canvas) == str(peer.view_id)
+    assert page.focused_canvas() is page.peer_cards()[0].canvas

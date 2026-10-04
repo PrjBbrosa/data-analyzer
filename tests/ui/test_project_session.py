@@ -12,6 +12,66 @@ def test_app_meta_constants():
     assert app_meta.RELEASE_URL.startswith("https://")
 
 
+def test_project_restores_analysis_comparison_by_view_id(qapp, tmp_path):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    window = MainWindow()
+    manager = window.analysis_managers["fft"]
+    manager.new_view(activate=False)
+    host = manager.get(0)
+    peer = manager.get(1)
+    host.name = "Alpha"
+    peer.name = "Beta"
+    assert window.open_comparison("fft", host.view_id, peer.view_id)
+    assert window.set_comparison_axis_linked("fft", True)
+    window.toolbar._set_mode("fft")
+    project = tmp_path / "comparison.tlproj"
+    assert window.save_project(project)
+
+    raw = json.loads(project.read_text(encoding="utf-8"))
+    row = raw["analysis_views"]["fft"]["comparisons"][host.view_id]
+    assert row == {
+        "peer": peer.view_id,
+        "axis_linked": True,
+        "levels_locked": False,
+    }
+    assert "peer" not in raw["analysis_views"]["fft"]["views"][0]["compare"]
+
+    restored = MainWindow()
+    restored.open_project(project)
+    relation = restored._comparison().relations_payload("fft")[host.view_id]
+    assert relation["peer"] == peer.view_id
+    assert relation["axis_linked"] is True
+    assert restored._comparison().displayed("fft") == (host.view_id, peer.view_id)
+    assert "peer" not in restored.analysis_managers["fft"].get(0).compare
+
+    raw["analysis_views"]["fft"].pop("comparisons")
+    bare = tmp_path / "bare.tlproj"
+    bare.write_text(json.dumps(raw), encoding="utf-8")
+    bare_window = MainWindow()
+    bare_window.open_project(bare)
+    assert bare_window._comparison().peer_of("fft", host.view_id) is None
+    assert not bare_window._comparison().is_open("fft")
+
+    raw["analysis_views"]["fft"]["comparisons"] = {
+        host.view_id: {
+            "peer": "missing-view",
+            "axis_linked": True,
+            "levels_locked": False,
+            "canvas": "not-stored",
+        },
+    }
+    missing = tmp_path / "missing.tlproj"
+    missing.write_text(json.dumps(raw), encoding="utf-8")
+    missing_window = MainWindow()
+    notes = []
+    missing_window.toast = lambda msg, level="info": notes.append((msg, level))
+    missing_window.open_project(missing)
+    assert missing_window._comparison().peer_of("fft", host.view_id) is None
+    assert missing_window._comparison().peer_of("fft", "missing-view") is None
+    assert any("目标 View 不在此项目中" in msg for msg, _level in notes)
+
+
 def test_window_title_uses_app_meta(qapp):
     from mf4_analyzer.ui.main_window import MainWindow
     mw = MainWindow()

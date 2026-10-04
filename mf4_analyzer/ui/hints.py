@@ -1016,6 +1016,13 @@ _HINTS = (
         priority=55,
     ),
     Hint(
+        id="analysis.cross_view_compare",
+        text="右键其他 View 可并排对比",
+        surface="discovery",
+        modes=frozenset({"fft", "fft_time", "frf", "order"}),
+        priority=56,
+    ),
+    Hint(
         id="ultraview.empty_board",
         text="空板时左侧实心按钮打开 View 库添加对比",
         surface="context",

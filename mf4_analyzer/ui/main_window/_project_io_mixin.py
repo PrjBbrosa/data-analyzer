@@ -2484,6 +2484,22 @@ class ProjectIOMixin:
         self._refresh_project_session_chrome()
         return True
 
+    def _analysis_views_payload(self) -> dict:
+        """Analysis views plus optional cross-view relations, keyed by view id."""
+        payload = {}
+        comp = self._comparison() if hasattr(self, "_comparison") else None
+        for sec, mgr in self.analysis_managers.items():
+            block = {
+                "active": mgr.active,
+                "views": [view.to_dict() for view in mgr.views],
+            }
+            if comp is not None:
+                relations = comp.relations_payload(sec)
+                if relations:
+                    block["comparisons"] = relations
+            payload[sec] = block
+        return payload
+
     def _assemble_project_document(self, path, saved_mode=None):
         """Build the save-path ``ProjectDocument`` without writing it.
 
@@ -2545,13 +2561,7 @@ class ProjectIOMixin:
             files=file_refs,
             views=[v.to_dict() for v in self.view_manager.views],
             view_manager=vm,
-            analysis_views={
-                sec: {
-                    "active": mgr.active,
-                    "views": [v.to_dict() for v in mgr.views],
-                }
-                for sec, mgr in self.analysis_managers.items()
-            },
+            analysis_views=self._analysis_views_payload(),
             filter=None,
             ultraview=None if uv is None else uv.to_project_payload(),
         )
@@ -2762,12 +2772,17 @@ class ProjectIOMixin:
                 # Drop project-A ready closures; prepared charts may stay.
                 coord.invalidate_session()
             remapped = remap_analysis_view_fids(doc.analysis_views, fid_map)
+            self._teardown_comparison_display()
+            dropped_comparison = False
             for sec, mgr in self.analysis_managers.items():
                 block = remapped.get(sec)
                 if not block or not block.get("views"):
                     continue
                 mgr.views = [AnalysisViewState.from_dict(v) for v in block["views"]]
                 mgr.active = min(int(block.get("active", 0)), len(mgr.views) - 1)
+                _payload, dropped = self._install_analysis_comparisons(sec, block)
+                if dropped:
+                    dropped_comparison = True
                 # Queue every source-bearing view. Numeric results are not in
                 # the project file; after the window finishes opening we
                 # recompute all of them by view_id (not only the active tab).
@@ -2778,6 +2793,11 @@ class ProjectIOMixin:
                 # Apply restored structure/params/sources. Compute waits until
                 # _dispatch_pending_analysis_restore after this try block.
                 mgr.active_changed.emit(mgr.active)
+            if dropped_comparison:
+                self.toast(
+                    "View 对比已结束：目标 View 不在此项目中", "warning",
+                )
+                self.statusBar.showMessage("View 对比已结束")
 
             uv = getattr(self, "_ultraview", None)
             uv_warnings = []

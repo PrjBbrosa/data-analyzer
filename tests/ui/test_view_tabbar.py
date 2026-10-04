@@ -1296,6 +1296,111 @@ def test_context_menu_without_section_omits_add_to_ultraview(qtbot, monkeypatch)
     assert "加入总览" not in labels
 
 
+def _analysis_bar(qtbot, count=2, active=0, *, section="fft", comparison_open=False, focused_pane=0):
+    manager = _manager_with_views(count=count, active=active)
+    bar = ViewTabBar(
+        manager,
+        section=section,
+        split_action_mode="active_pane",
+        split_action_labels={
+            "split": "添加对比窗格",
+            "replace": "添加对比窗格",
+            "clear": "关闭对比窗格",
+        },
+        active_split_provider=lambda: 1,
+        comparison_open_provider=lambda: comparison_open,
+        focused_pane_provider=lambda: focused_pane,
+    )
+    qtbot.addWidget(bar)
+    bar.resize(640, 30)
+    bar.show()
+    return manager, bar
+
+
+def _menu_labels(monkeypatch, bar, idx):
+    labels = []
+
+    def fake_exec(menu, *_args):
+        labels.extend(action.text() for action in menu.actions())
+        return None
+
+    monkeypatch.setattr("mf4_analyzer.ui.view_tabbar.QMenu.exec_", fake_exec)
+    bar._on_context_menu(_tab_point(bar, idx))
+    return labels
+
+
+def test_analysis_menu_beside_names_the_current_host_and_clicked_peer(qtbot, monkeypatch):
+    manager, bar = _analysis_bar(qtbot, count=3, active=0, focused_pane=1)
+    received = []
+    splits = []
+    bar.cross_view_compare_requested.connect(lambda *args: received.append(args))
+    bar.split_requested.connect(splits.append)
+
+    def fake_exec(menu, *_args):
+        return next(action for action in menu.actions() if action.text() == "与此 View 并排")
+
+    monkeypatch.setattr("mf4_analyzer.ui.view_tabbar.QMenu.exec_", fake_exec)
+    bar._on_context_menu(_tab_point(bar, 2))
+
+    assert splits == []
+    assert received == [(
+        str(manager.get(0).view_id),
+        str(manager.get(2).view_id),
+        1,
+        0,
+    )]
+
+
+def test_analysis_menu_target_list_names_the_chosen_peer(qtbot, monkeypatch):
+    manager, bar = _analysis_bar(qtbot, count=3, active=0, focused_pane=0)
+    received = []
+    bar.cross_view_compare_requested.connect(lambda *args: received.append(args))
+
+    def fake_exec(menu, *_args):
+        submenu = next(
+            action.menu()
+            for action in menu.actions()
+            if action.text() == "与其他 View 并排…"
+        )
+        return submenu.actions()[0]
+
+    monkeypatch.setattr("mf4_analyzer.ui.view_tabbar.QMenu.exec_", fake_exec)
+    bar._on_context_menu(_tab_point(bar, 0))
+
+    host_id, peer_id, host_pane, peer_pane = received[0]
+    assert host_id == str(manager.get(0).view_id)
+    assert peer_id == str(manager.get(1).view_id)
+    assert host_pane == 0
+    assert peer_pane == 0
+    assert "与此 View 并排" not in _menu_labels(monkeypatch, bar, 0)
+
+
+def test_analysis_menu_end_names_the_clicked_view_and_pane(qtbot, monkeypatch):
+    manager, bar = _analysis_bar(qtbot, count=2, active=0, comparison_open=True, focused_pane=1)
+    received = []
+    bar.end_view_comparison_requested.connect(lambda *args: received.append(args))
+
+    def fake_exec(menu, *_args):
+        return next(action for action in menu.actions() if action.text() == "结束 View 对比")
+
+    monkeypatch.setattr("mf4_analyzer.ui.view_tabbar.QMenu.exec_", fake_exec)
+    bar._on_context_menu(_tab_point(bar, 0))
+    assert received == [(str(manager.get(0).view_id), 1)]
+
+    bar._on_context_menu(_tab_point(bar, 1))
+    assert received[-1] == (str(manager.get(1).view_id), 0)
+
+
+def test_one_view_analysis_menu_has_no_empty_compare_submenu(qtbot, monkeypatch):
+    _manager, bar = _analysis_bar(qtbot, count=1, section="fft")
+    labels = _menu_labels(monkeypatch, bar, 0)
+    assert "与其他 View 并排…" not in labels
+    assert "与此 View 并排" not in labels
+    assert "结束 View 对比" not in labels
+    assert "加入总览" in labels
+    assert "添加对比窗格" in labels
+
+
 def _shown_bar(qtbot, count=3, active=0):
     manager, bar = _bar(qtbot, count=count, active=active)
     bar.resize(900, 30)

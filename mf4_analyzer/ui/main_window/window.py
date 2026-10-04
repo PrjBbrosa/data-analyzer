@@ -1512,6 +1512,12 @@ class MainWindow(
                     s, key, on))
             page.comparison_focus_requested.connect(
                 partial(self._on_comparison_focus_requested, sec))
+            bar.cross_view_compare_requested.connect(
+                partial(self._on_cross_view_compare, sec))
+            bar.end_view_comparison_requested.connect(
+                partial(self._on_end_view_comparison, sec))
+            page.comparison_display_toggled.connect(
+                partial(self._on_comparison_display_toggled, sec))
             # Canvas-level wiring (levels echo / preview range / viewport
             # intent / markup) runs from _on_analysis_page_ready when the
             # deferred chart is first prepared — not here, or blank startup

@@ -45,6 +45,9 @@ _FOCUS_ACCENT = "#2d7ff9"
 # The single-view page stays horizontal; the threshold applies only while a
 # cross-view pair is mounted.
 _NARROW_PANE_REGION_PX = 420
+# Each cross-view region keeps a usable width. The single-view splitter
+# does not take this minimum, so in-view alignment stays unchanged.
+_COMPARISON_REGION_MIN_PX = 180
 
 
 class AnalysisPageReadiness:
@@ -322,6 +325,9 @@ class AnalysisSectionPage(QWidget):
     # Cross-view focus. Carries the clicked view id and pane. The page does
     # not guess whether the user wanted an in-view split.
     comparison_focus_requested = pyqtSignal(str, int)
+    # Cross-view camera / color-scale flags. Distinct from compare_toggled,
+    # which writes AnalysisViewState.compare for the in-view pane pair.
+    comparison_display_toggled = pyqtSignal(str, bool)
 
     def __init__(
         self,
@@ -358,6 +364,7 @@ class AnalysisSectionPage(QWidget):
         self._host_view_id = ""
         self._peer_view_id = ""
         self._comparison_focus_is_host = True
+        self._comparison_expanded = False
         self._suppress_focus_emit = False
         self._suppress_color_policy_echo = False
         self._split.splitterMoved.connect(self._schedule_heatmap_layout_sync)
@@ -426,6 +433,8 @@ class AnalysisSectionPage(QWidget):
             section=self.section,
             split_action_mode='active_pane',
             active_split_provider=self.pane_count,
+            comparison_open_provider=self.cross_view_comparison_open,
+            focused_pane_provider=self.focused_index,
             split_action_labels={
                 'split': "添加对比窗格",
                 'replace': "添加对比窗格",
@@ -439,8 +448,17 @@ class AnalysisSectionPage(QWidget):
             "联动缩放", "两个分屏同步缩放/平移（X 轴，热力图含 Y 轴）")
         self.btn_lock_levels = self._make_toggle(
             "锁定色阶", "两个热力图共用同一色阶范围；拖动一格 colorbar 另一格跟随")
+        self.btn_view_link = self._make_toggle(
+            "联动两 View", "两个 View 的相机一起移动；不改变分析时间和数值参数")
+        self.btn_view_levels = self._make_toggle(
+            "锁定两 View 色阶", "两个热图共用色阶；色阶不一致时不锁定")
+        self.btn_view_expand = self._make_command(
+            "展开焦点", "展开当前焦点区域，另一侧保留可返回的宽度")
         row.addWidget(self.btn_link, 0, Qt.AlignVCenter)
         row.addWidget(self.btn_lock_levels, 0, Qt.AlignVCenter)
+        row.addWidget(self.btn_view_link, 0, Qt.AlignVCenter)
+        row.addWidget(self.btn_view_levels, 0, Qt.AlignVCenter)
+        row.addWidget(self.btn_view_expand, 0, Qt.AlignVCenter)
         self.ultraview_separator = make_ultraview_separator(self._compare_row)
         self.ultraview_entry = UltraViewEntryButton(self._compare_row)
         row.addWidget(self.ultraview_separator, 0, Qt.AlignVCenter)
@@ -449,10 +467,19 @@ class AnalysisSectionPage(QWidget):
             host=self._compare_row,
             tabbar=self.tabbar,
             entry=self.ultraview_entry,
-            extra_widgets=(self.btn_link, self.btn_lock_levels),
+            extra_widgets=(
+                self.btn_link,
+                self.btn_lock_levels,
+                self.btn_view_link,
+                self.btn_view_levels,
+                self.btn_view_expand,
+            ),
         )
         self.btn_link.toggled.connect(self._on_link_button_toggled)
         self.btn_lock_levels.toggled.connect(self._on_lock_button_toggled)
+        self.btn_view_link.toggled.connect(self._on_view_link_toggled)
+        self.btn_view_levels.toggled.connect(self._on_view_levels_toggled)
+        self.btn_view_expand.clicked.connect(self._on_expand_clicked)
         # 联动缩放 + 锁定色阶 defaults mirror AnalysisViewState.compare.
         # Seed under suppression so no compare_toggled fires at construction.
         self.sync_compare_buttons(x_linked=True, levels_locked=True)
@@ -571,6 +598,10 @@ class AnalysisSectionPage(QWidget):
         super().resizeEvent(event)
         self._layout_prepare_banner()
         self._update_comparison_orientation()
+        if self._view_split is not None:
+            self._apply_comparison_minimums()
+            if self._comparison_expanded:
+                self._apply_comparison_sizes()
 
     def _materialize_primary_card(self) -> None:
         if self._cards:
@@ -672,24 +703,115 @@ class AnalysisSectionPage(QWidget):
         return self._cards[idx].canvas
 
     def grab_combined_pixmap(self, scale: float = 2.0):
-        """Return every pane's canvas pixels composited side-by-side.
+        """Return this page's own panes composited side-by-side.
 
-        Single-pane: the lone canvas's ``grab_pixmap(scale)`` (byte-identical
-        width to ``pane_canvas(0).grab_pixmap(scale)``). Split: each pane's
-        ``grab_pixmap`` laid out left-to-right with a thin white gutter,
-        mirroring the time-domain ``chart_stack._combined_split_pixmap`` so
-        both export paths read the same. Each pane's own pinned pills and
-        Pn labels are composited onto that pane before the side-by-side
-        layout so primary chrome is never painted onto the secondary.
-        Device-pixel-ratio is normalized to
-        1.0 on each grab BEFORE composing so the widths add in real pixels
-        (a Retina 2× DPR pixmap would otherwise report half its pixel width
-        to ``width()``, mis-sizing the canvas). Null/degenerate grabs are
-        skipped; an all-null result returns ``None``.
+        The cross-view peer is not included. Explicit comparison export uses
+        :meth:`grab_export_pixmap`.
         """
-        from PyQt5.QtGui import QPainter, QPixmap
-        from PyQt5.QtCore import Qt
+        return self._compose_pixmaps(self._card_pixmaps(self._cards, scale), scale)
 
+    def grab_export_pixmap(self, scale: float = 2.0):
+        """Combined export. An open comparison composites host and peer."""
+        host = self.grab_combined_pixmap(scale)
+        if self._peer_host is None:
+            return host
+        peer = self._compose_pixmaps(
+            self._card_pixmaps(self.peer_cards(), scale), scale,
+        )
+        sides = [
+            pix for pix in (host, peer)
+            if pix is not None and not pix.isNull()
+        ]
+        return self._compose_pixmaps(sides, scale)
+
+    def grab_view_pixmap(self, view_id, scale: float = 2.0):
+        """Pixels of one real view. A peer canvas is not the host composite."""
+        if (
+            self._peer_host is not None
+            and str(view_id) == str(self._peer_view_id)
+        ):
+            return self._compose_pixmaps(
+                self._card_pixmaps(self.peer_cards(), scale), scale,
+            )
+        return self.grab_combined_pixmap(scale)
+
+    def grab_focused_pixmap(self, scale: float = 2.0):
+        """Single-chart export follows the focused view, not A+B."""
+        if self._peer_host is not None and not self._comparison_focus_is_host:
+            return self.grab_view_pixmap(self._peer_view_id, scale)
+        if self._host_view_id:
+            return self.grab_view_pixmap(self._host_view_id, scale)
+        return self.grab_combined_pixmap(scale)
+
+    def view_id_for_canvas(self, canvas) -> str:
+        if canvas is None:
+            return ""
+        for card in self.peer_cards():
+            if getattr(card, "canvas", None) is canvas:
+                return str(self._peer_view_id)
+        for card in self._cards:
+            if getattr(card, "canvas", None) is canvas:
+                if self._host_view_id:
+                    return str(self._host_view_id)
+                break
+        if not self.manager.views:
+            return ""
+        try:
+            state = self.manager.get(self.manager.active)
+        except (IndexError, TypeError):
+            return ""
+        return str(getattr(state, "view_id", "") or "")
+
+    def export_target(self, combined: bool = False) -> dict:
+        """Identity of an export. Combined names both views; single names one pane."""
+        if combined and self._peer_host is not None:
+            host_name = self._view_label(self._host_view_id)
+            peer_name = self._view_label(self._peer_view_id)
+            return {
+                "kind": "comparison",
+                "view_ids": [str(self._host_view_id), str(self._peer_view_id)],
+                "label": f"{host_name} + {peer_name}",
+            }
+        view_id = str(self._host_view_id or "")
+        pane = self.focused_index()
+        if self._peer_host is not None and not self._comparison_focus_is_host:
+            view_id = str(self._peer_view_id)
+            pane = int(getattr(self._peer_host, "_focused", 0))
+        elif not view_id:
+            view_id = self.view_id_for_canvas(None) or self._active_view_id()
+        return {
+            "kind": "pane",
+            "view_id": view_id,
+            "pane_index": int(pane),
+        }
+
+    def _comparison_export_filename(self) -> str:
+        if self._peer_host is None:
+            return ""
+        label = str(self.export_target(combined=True).get("label") or "")
+        cleaned = label.replace("/", " ").replace("\\", " ").strip()
+        if not cleaned:
+            return ""
+        return f"{cleaned}.png"
+
+    def _view_label(self, view_id) -> str:
+        target = str(view_id or "")
+        for state in self.manager.views:
+            if str(getattr(state, "view_id", "")) == target:
+                return str(getattr(state, "name", "") or target)
+        return target
+
+    def _active_view_id(self) -> str:
+        if not self.manager.views:
+            return ""
+        try:
+            state = self.manager.get(self.manager.active)
+        except (IndexError, TypeError):
+            return ""
+        return str(getattr(state, "view_id", "") or "")
+
+    def _card_pixmaps(self, cards, scale: float):
+        """Grab one region's cards. Null grabs are skipped."""
         stack = self.parent()
         controller = getattr(stack, "_pinned_cursors", None)
         flush = getattr(controller, "flush_layout", None)
@@ -697,11 +819,14 @@ class AnalysisSectionPage(QWidget):
             flush()
         compositor = getattr(self, "_pin_chrome_compositor", None)
         pixes = []
-        for card in self._cards:
-            canvas = getattr(card, 'canvas', None)
+        for card in cards:
+            canvas = getattr(card, "canvas", None)
             if canvas is None:
                 continue
-            pix = canvas.grab_pixmap(scale=scale)
+            grab = getattr(canvas, "grab_pixmap", None)
+            if not callable(grab):
+                continue
+            pix = grab(scale=scale)
             if pix is None or pix.isNull():
                 continue
             pix = pixmap_as_device_pixels(pix)
@@ -711,27 +836,32 @@ class AnalysisSectionPage(QWidget):
                 try:
                     compositor(pix, canvas)
                 except RuntimeError:
-                    # Qt C++ object already deleted during grab/teardown.
                     logger.warning(
                         "pin chrome compositor failed for canvas %r",
                         canvas,
                         exc_info=True,
                     )
             pixes.append(pix)
+        return pixes
+
+    def _compose_pixmaps(self, pixes, scale: float):
+        """Lay pixmaps left to right. One pixmap is returned unchanged."""
+        from PyQt5.QtGui import QPainter, QPixmap
+
         if not pixes:
             return None
         if len(pixes) == 1:
             return pixes[0]
         gap = max(1, int(round(4 * scale)))
-        w = sum(p.width() for p in pixes) + gap * (len(pixes) - 1)
-        h = max(p.height() for p in pixes)
-        out = QPixmap(w, h)
+        width = sum(pix.width() for pix in pixes) + gap * (len(pixes) - 1)
+        height = max(pix.height() for pix in pixes)
+        out = QPixmap(width, height)
         out.fill(Qt.white)
         painter = QPainter(out)
         x = 0
-        for p in pixes:
-            painter.drawPixmap(x, 0, p)
-            x += p.width() + gap
+        for pix in pixes:
+            painter.drawPixmap(x, 0, pix)
+            x += pix.width() + gap
         painter.end()
         return out
 
@@ -771,7 +901,10 @@ class AnalysisSectionPage(QWidget):
         )
         toolbar._peer_toolbars_provider = as_weak_callable(self._peers_for_primary)
         toolbar._save_pixmap_provider = as_weak_callable(
-            self.grab_combined_pixmap
+            self.grab_export_pixmap
+        )
+        toolbar._export_name_provider = as_weak_callable(
+            self._comparison_export_filename
         )
         self._connect_toolbar_highlight(toolbar)
         if self._cards:
@@ -1347,11 +1480,15 @@ class AnalysisSectionPage(QWidget):
 
     # -- compare toggle buttons -----------------------------------------
     def _make_toggle(self, text, tooltip):
+        btn = self._make_command(text, tooltip)
+        btn.setCheckable(True)
+        return btn
+
+    def _make_command(self, text, tooltip):
         btn = QToolButton(self._compare_row)
         btn.setObjectName("analysisCompareToggle")
         btn.setText(text)
         btn.setToolTip(tooltip)
-        btn.setCheckable(True)
         btn.setCursor(Qt.PointingHandCursor)
         btn.setFocusPolicy(Qt.NoFocus)
         btn.setFixedHeight(22)
@@ -1377,6 +1514,22 @@ class AnalysisSectionPage(QWidget):
             region.set_levels_locked(on)
         self.compare_toggled.emit('levels_locked', bool(on))
 
+    def _on_view_link_toggled(self, on: bool) -> None:
+        if self._suppress_compare_edge:
+            return
+        self.comparison_display_toggled.emit('axis_linked', bool(on))
+
+    def _on_view_levels_toggled(self, on: bool) -> None:
+        if self._suppress_compare_edge:
+            return
+        self.comparison_display_toggled.emit('levels_locked', bool(on))
+
+    def _on_expand_clicked(self) -> None:
+        if self._comparison_expanded:
+            self.return_to_comparison_layout()
+        else:
+            self.expand_focused_comparison()
+
     def sync_compare_buttons(self, *, x_linked, levels_locked) -> None:
         """State → buttons (NO edge emit).
 
@@ -1393,15 +1546,36 @@ class AnalysisSectionPage(QWidget):
             self._suppress_compare_edge = False
         self._refresh_compare_buttons()
 
+    def sync_comparison_display_buttons(self, *, axis_linked, levels_locked) -> None:
+        """Relation flags → cross-view buttons, without writing state.compare."""
+        self._suppress_compare_edge = True
+        try:
+            self.btn_view_link.setChecked(bool(axis_linked))
+            self.btn_view_levels.setChecked(bool(levels_locked))
+        finally:
+            self._suppress_compare_edge = False
+        self._refresh_compare_buttons()
+
     def _refresh_compare_buttons(self) -> None:
         """Visibility/enabled state: compare toggles only matter while split.
-        锁定色阶 is heatmap-only (line sections have no colorbar)."""
+        锁定色阶 is heatmap-only (line sections have no colorbar).
+        Cross-view controls stay hidden until a peer region is mounted."""
         if self._peer_host is not None and not self._comparison_focus_is_host:
             split = self._peer_host.pane_count() > 1
         else:
             split = len(self._cards) > 1
         self.btn_link.setVisible(split)
         self.btn_lock_levels.setVisible(split and self._is_heatmap_section())
+        open_pair = self._peer_host is not None
+        self.btn_view_link.setVisible(open_pair)
+        self.btn_view_levels.setVisible(
+            open_pair and self.section in {"fft_time", "order"}
+        )
+        self.btn_view_expand.setVisible(open_pair)
+        if open_pair:
+            self.btn_view_expand.setText(
+                "返回并排" if self._comparison_expanded else "展开焦点"
+            )
         fitter = getattr(self, '_ultraview_rail_fitter', None)
         if fitter is not None:
             fitter.schedule()
@@ -1429,15 +1603,19 @@ class AnalysisSectionPage(QWidget):
             self._peer_host.pressed.connect(self._on_peer_pane_pressed)
             self._view_split.addWidget(self._peer_host)
         self._peer_host.set_pane_count(peer_pane_count)
-        total = max(2, self._view_split.width() or self.width() or 2)
-        half = max(1, total // 2)
-        self._view_split.setSizes([half, max(1, total - half)])
+        self._comparison_expanded = False
+        self._apply_comparison_minimums()
+        self._apply_comparison_sizes()
         self._update_comparison_orientation()
+        self._refresh_compare_buttons()
 
     def hide_comparison_peer(self) -> None:
         """Return the page to its single-view splitter. Pins are not touched."""
         if self._view_split is None and self._peer_host is None:
             self._comparison_focus_is_host = True
+            self._comparison_expanded = False
+            self._split.setMinimumWidth(0)
+            self._refresh_compare_buttons()
             return
         host = self._peer_host
         self._peer_host = None
@@ -1457,10 +1635,13 @@ class AnalysisSectionPage(QWidget):
             view_split.setParent(None)
             view_split.deleteLater()
         self._comparison_focus_is_host = True
+        self._comparison_expanded = False
         self._host_view_id = ""
         self._peer_view_id = ""
+        self._split.setMinimumWidth(0)
         self._split.setOrientation(Qt.Horizontal)
         self._apply_focus_style()
+        self._refresh_compare_buttons()
 
     def mark_comparison_focus(self, view_id, pane_index) -> None:
         pane_index = int(pane_index)
@@ -1499,6 +1680,62 @@ class AnalysisSectionPage(QWidget):
         if self._peer_host is not None and not self._comparison_focus_is_host:
             return self._peer_host
         return None
+
+    def cross_view_comparison_open(self) -> bool:
+        return self._peer_host is not None
+
+    def expand_focused_comparison(self) -> None:
+        """Give the focused region the spare width. The other side stays visible."""
+        if self._view_split is None or self._peer_host is None:
+            return
+        self._comparison_expanded = True
+        self._apply_comparison_minimums()
+        self._apply_comparison_sizes()
+        self._refresh_compare_buttons()
+
+    def return_to_comparison_layout(self) -> None:
+        """Restore a side-by-side pair. Does not change pane counts."""
+        self._comparison_expanded = False
+        if self._view_split is not None:
+            self._apply_comparison_sizes()
+        self._refresh_compare_buttons()
+
+    def _comparison_region_minimum(self) -> int:
+        split = self._view_split
+        total = 0
+        if split is not None:
+            total = int(split.width() or self.width() or 0)
+        if total <= 2:
+            return 1
+        return max(1, min(_COMPARISON_REGION_MIN_PX, total // 2))
+
+    def _comparison_sizes(self):
+        split = self._view_split
+        total = 2
+        if split is not None:
+            total = max(2, int(split.width() or self.width() or 2))
+        minimum = max(1, min(_COMPARISON_REGION_MIN_PX, total // 2))
+        if not self._comparison_expanded or total < minimum * 2:
+            half = max(1, total // 2)
+            return [half, max(1, total - half)]
+        rest = minimum
+        main = max(1, total - rest)
+        if self._comparison_focus_is_host:
+            return [main, rest]
+        return [rest, main]
+
+    def _apply_comparison_sizes(self) -> None:
+        if self._view_split is None:
+            return
+        self._view_split.setSizes(self._comparison_sizes())
+
+    def _apply_comparison_minimums(self) -> None:
+        if self._view_split is None:
+            return
+        minimum = self._comparison_region_minimum()
+        self._split.setMinimumWidth(minimum)
+        if self._peer_host is not None:
+            self._peer_host.setMinimumWidth(minimum)
 
     def _on_peer_pane_pressed(self, idx: int) -> None:
         self.comparison_focus_requested.emit(self._peer_view_id, int(idx))

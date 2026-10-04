@@ -519,6 +519,7 @@ class PgNavigationToolbar(QToolBar):
         # toolbar and any visible peer pane toolbar without changing focus.
         self._peer_toolbars_provider = None
         self._save_pixmap_provider = None
+        self._export_name_provider = None
         # View history: a single stack
         # of view snapshots plus a pointer into it. ``back()`` decrements the
         # pointer, ``forward()`` increments it, and a brand-new gesture
@@ -1108,8 +1109,15 @@ class PgNavigationToolbar(QToolBar):
         import sys as _sys
         _pkg = _sys.modules.get('mf4_analyzer.ui.chart_stack')
         _QFileDialog = getattr(_pkg, 'QFileDialog', QFileDialog) if _pkg is not None else QFileDialog
+        suggested = ""
+        name_provider = getattr(self, "_export_name_provider", None)
+        if callable(name_provider):
+            try:
+                suggested = str(name_provider() or "")
+            except Exception:
+                suggested = ""
         path, _filter = _QFileDialog.getSaveFileName(
-            self, "保存图片", "", "PNG (*.png);;JPEG (*.jpg *.jpeg)"
+            self, "保存图片", suggested, "PNG (*.png);;JPEG (*.jpg *.jpeg)"
         )
         if not path:
             return

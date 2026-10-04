@@ -2232,6 +2232,25 @@ class ChartStack(QWidget):
             self.cancel_page_transition("explicit-presentation-capture")
         self._flush_pinned_layout()
         canvas, page = self._presentation_canvas_and_page(target)
+        if page is not None and getattr(page, "_peer_host", None) is not None:
+            grab_view = getattr(page, "grab_view_pixmap", None)
+            if callable(grab_view):
+                view_id = ""
+                resolver = getattr(page, "view_id_for_canvas", None)
+                if canvas is not None and callable(resolver):
+                    try:
+                        view_id = str(resolver(canvas) or "")
+                    except (RuntimeError, TypeError):
+                        view_id = ""
+                if not view_id:
+                    view_id = str(getattr(page, "_host_view_id", "") or "")
+                pix = grab_view(view_id, scale=scale) if view_id else None
+                if pix is None or pix.isNull():
+                    return None
+                pix = _pixmap_as_device_pixels(pix)
+                if self._comparison_grab_is_one_canvas(page, canvas, view_id):
+                    self._composite_cursor_pill_onto(pix, canvas)
+                return pix
         if page is not None and callable(getattr(page, "pane_count", None)):
             try:
                 pane_count = int(page.pane_count())
@@ -2254,6 +2273,25 @@ class ChartStack(QWidget):
             return None
         self._composite_cursor_pill_onto(pix, canvas)
         return pix
+
+    def _comparison_grab_is_one_canvas(self, page, canvas, view_id) -> bool:
+        """Live pill belongs on a one-pane grab of the canvas that was asked for."""
+        if canvas is None or page is None or not view_id:
+            return False
+        resolver = getattr(page, "view_id_for_canvas", None)
+        if not callable(resolver):
+            return False
+        try:
+            if str(resolver(canvas) or "") != str(view_id):
+                return False
+        except (RuntimeError, TypeError):
+            return False
+        if str(view_id) == str(getattr(page, "_peer_view_id", "")):
+            return len(page.peer_cards()) <= 1
+        try:
+            return int(page.pane_count()) <= 1
+        except (TypeError, RuntimeError):
+            return False
 
     def _presentation_canvas_and_page(self, target):
         mode = getattr(target, "_chart_mode", "")
@@ -2379,7 +2417,9 @@ class ChartStack(QWidget):
                 cancel_page_transition=False,
             )
         page = self.page_for_mode.get(mode)
-        grab = getattr(page, "grab_combined_pixmap", None)
+        grab = getattr(page, "grab_export_pixmap", None)
+        if not callable(grab):
+            grab = getattr(page, "grab_combined_pixmap", None)
         if not callable(grab):
             return None
         return grab()

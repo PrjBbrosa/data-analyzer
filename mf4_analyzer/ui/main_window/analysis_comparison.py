@@ -156,6 +156,57 @@ class AnalysisComparisonDisplay:
             self.suspend(section)
         return ended
 
+    def relations_payload(self, section) -> dict:
+        """Host → peer rows safe to store in a project file.
+
+        Canvases, numeric results, and process-local tokens are not included.
+        """
+        out = {}
+        for host_id, rel in self._relations.get(section, {}).items():
+            out[str(host_id)] = {
+                "peer": str(rel.peer_id),
+                "axis_linked": bool(rel.axis_linked),
+                "levels_locked": bool(rel.levels_locked),
+            }
+        return out
+
+    def replace_relations(self, section, payload) -> None:
+        """Replace remembered rows for one section. Does not mount a display."""
+        rels = {}
+        rows = payload if isinstance(payload, dict) else {}
+        for host_id, row in rows.items():
+            if not isinstance(row, dict):
+                continue
+            host = str(host_id or "")
+            peer = row.get("peer")
+            peer_id = str(peer) if isinstance(peer, str) and peer else ""
+            if not host or not peer_id or host == peer_id:
+                continue
+            rels[host] = _HostRelation(
+                peer_id,
+                axis_linked=row.get("axis_linked") is True,
+                levels_locked=row.get("levels_locked") is True,
+            )
+        if rels:
+            self._relations[section] = rels
+        else:
+            self._relations.pop(section, None)
+        pair = self._displayed.get(section)
+        if pair is not None and str(pair[0]) not in rels:
+            self.suspend(section)
+
+    def drop_host(self, section, host_id) -> bool:
+        """Forget one host → peer row. Suspend only when that host is displayed."""
+        host = str(host_id or "")
+        rels = self._relations.get(section, {})
+        existed = host in rels
+        if existed:
+            rels.pop(host, None)
+        pair = self._displayed.get(section)
+        if pair is not None and str(pair[0]) == host:
+            self.suspend(section)
+        return existed
+
     def set_axis_linked(self, section, on) -> bool:
         rel = self._displayed_relation(section)
         if rel is None:

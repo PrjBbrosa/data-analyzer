@@ -483,6 +483,11 @@ class ViewTabBar(QWidget):
     split_requested = pyqtSignal(int)
     clear_split_requested = pyqtSignal(int)
     add_to_ultraview_requested = pyqtSignal(str, str)
+    # Cross-view compare is a different action from the in-view pane split.
+    # Args: host view id, peer view id, host pane, peer pane.
+    cross_view_compare_requested = pyqtSignal(str, str, int, int)
+    # Args: the view id the menu was opened on, and that view's pane.
+    end_view_comparison_requested = pyqtSignal(str, int)
 
     def __init__(
         self,
@@ -493,6 +498,8 @@ class ViewTabBar(QWidget):
         split_action_labels=None,
         split_action_mode='view_pair',
         active_split_provider=None,
+        comparison_open_provider=None,
+        focused_pane_provider=None,
     ):
         super().__init__(parent)
         self.setObjectName("viewTabBar")
@@ -509,6 +516,8 @@ class ViewTabBar(QWidget):
             self._split_action_labels.update(split_action_labels)
         self._split_action_mode = str(split_action_mode)
         self._active_split_provider = active_split_provider
+        self._comparison_open_provider = comparison_open_provider
+        self._focused_pane_provider = focused_pane_provider
         self._suppress = False
         self._rename_editor = None
         self._rename_index = -1
@@ -1506,6 +1515,36 @@ class ViewTabBar(QWidget):
             return
         self.refresh()
 
+    def _focused_pane_index(self) -> int:
+        provider = self._focused_pane_provider
+        if not callable(provider):
+            return 0
+        try:
+            return max(0, int(provider()))
+        except (TypeError, ValueError, RuntimeError):
+            return 0
+
+    def _comparison_is_open(self) -> bool:
+        provider = self._comparison_open_provider
+        if not callable(provider):
+            return False
+        try:
+            return bool(provider())
+        except (TypeError, ValueError, RuntimeError):
+            return False
+
+    def _emit_cross_view_compare(self, host_idx: int, peer_idx: int) -> None:
+        host_pane = (
+            self._focused_pane_index()
+            if host_idx == self._manager.active else 0
+        )
+        self.cross_view_compare_requested.emit(
+            self._view_id_at(host_idx),
+            self._view_id_at(peer_idx),
+            int(host_pane),
+            0,
+        )
+
     def _split_context_partner(self, idx: int) -> int | None:
         partner_for = getattr(self._manager, "partner_for", None)
         if not callable(partner_for):
@@ -1553,6 +1592,29 @@ class ViewTabBar(QWidget):
             else:
                 split_action = menu.addAction(self._split_action_labels['split'])
                 split_action.setEnabled(idx != self._manager.active)
+        beside_action = None
+        compare_actions = []
+        end_action = None
+        if (
+            self._split_action_mode == 'active_pane'
+            and len(self._manager.views) >= 2
+        ):
+            active = self._manager.active
+            if idx != active:
+                beside_action = menu.addAction("与此 View 并排")
+            else:
+                others = [
+                    other for other in range(len(self._manager.views))
+                    if other != active
+                ]
+                if others:
+                    compare_menu = menu.addMenu("与其他 View 并排…")
+                    for other in others:
+                        action = compare_menu.addAction(self._view_name(other))
+                        action.setData(self._view_id_at(other))
+                        compare_actions.append(action)
+            if self._comparison_is_open():
+                end_action = menu.addAction("结束 View 对比")
         menu.addSeparator()
         delete_action = menu.addAction("删除")
         delete_action.setEnabled(len(self._manager.views) > 1)
@@ -1593,6 +1655,20 @@ class ViewTabBar(QWidget):
                     if ans != QMessageBox.Yes:
                         return
                 self.split_requested.emit(idx)
+        elif beside_action is not None and chosen is beside_action:
+            self._emit_cross_view_compare(self._manager.active, idx)
+        elif chosen in compare_actions:
+            peer_idx = self._index_for_view_id(str(chosen.data() or ""))
+            if peer_idx >= 0:
+                self._emit_cross_view_compare(self._manager.active, peer_idx)
+        elif end_action is not None and chosen is end_action:
+            pane = (
+                self._focused_pane_index()
+                if idx == self._manager.active else 0
+            )
+            self.end_view_comparison_requested.emit(
+                self._view_id_at(idx), int(pane),
+            )
         elif chosen is delete_action:
             self.delete_requested.emit(idx)
         elif add_ultraview_action is not None and chosen is add_ultraview_action:

@@ -430,8 +430,14 @@ class AnalysisMixin:
             for pane_idx in range(max(1, int(pane_count or 1))):
                 self._frf_coordinator.invalidate_pane(view_id, pane_idx)
         comp = self._comparison()
-        if comp is not None and comp.forget_view(section, view_id):
-            self._hide_comparison_widgets(section)
+        if comp is not None:
+            before = set(comp.relations_payload(section))
+            ended_display = comp.forget_view(section, view_id)
+            after = set(comp.relations_payload(section))
+            if ended_display:
+                self._hide_comparison_widgets(section)
+            if before != after:
+                self._announce_comparison_ended()
 
     def _comparison(self):
         ctx = getattr(self, "_analysis_context", None)
@@ -595,6 +601,127 @@ class AnalysisMixin:
     def _on_comparison_focus_requested(self, section, view_id, pane_index):
         self.focus_comparison(section, view_id, pane_index)
 
+    def _on_cross_view_compare(self, section, host_id, peer_id, host_pane, _peer_pane):
+        """Menu: open the named host beside the named peer. Does not submit."""
+        if not self.open_comparison(section, host_id, peer_id):
+            return
+        try:
+            pane = int(host_pane)
+        except (TypeError, ValueError):
+            pane = 0
+        self.focus_comparison(section, host_id, pane)
+
+    def _on_end_view_comparison(self, section, _view_id, _pane_index):
+        """Menu: drop the display relation. Views and panes stay."""
+        self.close_comparison(section)
+
+    def _on_comparison_display_toggled(self, section, key, on):
+        """Cross-view link controls. Does not write AnalysisViewState.compare."""
+        if getattr(self, "_applying_analysis_view", False):
+            return
+        comp = self._comparison()
+        if comp is None:
+            return
+        if key == "axis_linked":
+            self.set_comparison_axis_linked(section, bool(on))
+            return
+        if key != "levels_locked":
+            return
+        ok = self.set_comparison_levels_locked(section, bool(on))
+        if ok:
+            return
+        page = self._analysis_page(section)
+        sync = getattr(page, "sync_comparison_display_buttons", None)
+        if callable(sync):
+            sync(
+                axis_linked=comp.axis_linked(section),
+                levels_locked=comp.levels_locked(section),
+            )
+        if bool(on):
+            self.toast("色阶不一致，未锁定", "warning")
+            bar = getattr(self, "statusBar", None)
+            show = getattr(bar, "showMessage", None)
+            if callable(show):
+                show("两个热图色阶不一致，未锁定")
+
+    def _comparison_relations(self, section) -> dict:
+        comp = self._comparison()
+        if comp is None:
+            return {}
+        return comp.relations_payload(section)
+
+    def _note_comparison_mutation(self, section, before) -> None:
+        if self._comparison_relations(section) == before:
+            return
+        self._mark_comparison_user_change()
+
+    def _mark_comparison_user_change(self) -> None:
+        if getattr(self, "_opening_project", False):
+            return
+        if getattr(self, "_restoring_project", False):
+            return
+        if getattr(self, "_applying_analysis_view", False):
+            return
+        holder = getattr(self, "_project_dirty", None)
+        if holder is not None:
+            holder.mark_user_mutation()
+
+    def _announce_comparison_ended(self, *, explicit=False, missing=False) -> None:
+        if getattr(self, "_opening_project", False) or getattr(self, "_restoring_project", False):
+            return
+        bar = getattr(self, "statusBar", None)
+        show = getattr(bar, "showMessage", None)
+        if callable(show):
+            show("已结束 View 对比" if explicit else "View 对比已结束")
+        if explicit:
+            return
+        if missing:
+            self.toast("View 对比已结束：目标 View 不在此项目中", "warning")
+        else:
+            self.toast("View 对比已结束", "info")
+
+    def _restore_remembered_comparison(self, section, state) -> None:
+        """Mount a remembered peer only while this section is the current mode."""
+        comp = self._comparison()
+        if comp is None or state is None:
+            return
+        stack = getattr(self, "chart_stack", None)
+        current = getattr(stack, "current_mode", None)
+        mode = current() if callable(current) else None
+        if mode != section:
+            return
+        mgr = self.analysis_managers.get(section)
+        if mgr is None or not mgr.views:
+            return
+        if str(mgr.get(mgr.active).view_id) != str(state.view_id):
+            return
+        peer_id = comp.peer_of(section, state.view_id)
+        if not peer_id:
+            return
+        if self._analysis_state_by_id(section, peer_id) is None:
+            comp.drop_host(section, state.view_id)
+            self._announce_comparison_ended(missing=True)
+            return
+        self._present_comparison(section, state.view_id, peer_id)
+
+    def _install_analysis_comparisons(self, section, block):
+        """Read one section's comparison rows after its views exist."""
+        comp = self._comparison()
+        if comp is None:
+            return {}, []
+        from ..project_io import normalize_analysis_comparisons
+
+        mgr = self.analysis_managers[section]
+        view_ids = [str(item.view_id) for item in mgr.views]
+        if "comparisons" not in (block or {}):
+            comp.replace_relations(section, {})
+            return {}, []
+        payload, dropped = normalize_analysis_comparisons(
+            block.get("comparisons"), view_ids,
+        )
+        comp.replace_relations(section, payload)
+        return payload, dropped
+
     def open_comparison(self, section, host_id, peer_id) -> bool:
         """Show ``peer_id`` beside ``host_id``. Does not submit a job."""
         host = self._analysis_state_by_id(section, host_id)
@@ -602,6 +729,7 @@ class AnalysisMixin:
         comp = self._comparison()
         if host is None or peer is None or comp is None or host is peer:
             return False
+        before = comp.relations_payload(section)
         if comp.is_open(section):
             shown = comp.displayed(section)
             if shown is not None and (
@@ -619,6 +747,7 @@ class AnalysisMixin:
         if host_idx is not None and mgr.active != host_idx:
             mgr.set_active(host_idx)
         self._present_comparison(section, host.view_id, peer.view_id)
+        self._note_comparison_mutation(section, before)
         return True
 
     def close_comparison(self, section) -> None:
@@ -626,8 +755,13 @@ class AnalysisMixin:
         comp = self._comparison()
         if comp is None:
             return
+        before = comp.relations_payload(section)
+        was_open = comp.is_open(section)
         comp.close(section)
         self._hide_comparison_widgets(section)
+        self._note_comparison_mutation(section, before)
+        if was_open:
+            self._announce_comparison_ended(explicit=True)
 
     def focus_comparison(self, section, view_id, pane_index=0) -> bool:
         """Move inspector, sources, and cursors onto one on-screen pane.
@@ -748,6 +882,12 @@ class AnalysisMixin:
             comp.unlink(section)
         if comp.levels_locked(section):
             self._link_comparison_levels(section)
+        sync_display = getattr(page, "sync_comparison_display_buttons", None)
+        if callable(sync_display):
+            sync_display(
+                axis_linked=comp.axis_linked(section),
+                levels_locked=comp.levels_locked(section),
+            )
         self._render_comparison_view(section, host)
         self._render_comparison_view(section, peer)
 
@@ -823,8 +963,12 @@ class AnalysisMixin:
     def set_comparison_axis_linked(self, section, on) -> bool:
         """Link compatible cameras. Does not write time range or numeric params."""
         comp = self._comparison()
-        if comp is None or not comp.set_axis_linked(section, bool(on)):
+        if comp is None:
             return False
+        before = comp.relations_payload(section)
+        if not comp.set_axis_linked(section, bool(on)):
+            return False
+        self._note_comparison_mutation(section, before)
         if on:
             return self._link_comparison_cameras(section)
         if comp.levels_locked(section):
@@ -836,13 +980,16 @@ class AnalysisMixin:
         comp = self._comparison()
         if comp is None:
             return False
+        before = comp.relations_payload(section)
         if section not in {"fft_time", "order"}:
             comp.set_levels_locked(section, False)
+            self._note_comparison_mutation(section, before)
             return False
         if on and not self._comparison_levels_compatible(section):
             return False
         if not comp.set_levels_locked(section, bool(on)):
             return False
+        self._note_comparison_mutation(section, before)
         if on:
             self._link_comparison_levels(section)
             return True
@@ -1890,10 +2037,7 @@ class AnalysisMixin:
             self._sync_section_effective_facts(section, state)
         else:
             self._request_analysis_page_transition_ready(section, state)
-        comp = self._comparison()
-        peer_id = comp.peer_of(section, state.view_id) if comp is not None else None
-        if peer_id and str(mgr.get(mgr.active).view_id) == str(state.view_id):
-            self._present_comparison(section, state.view_id, peer_id)
+        self._restore_remembered_comparison(section, state)
 
     def _project_analysis_attachments(self, section, state):
         """Project one analysis View's file range onto the shared navigator."""

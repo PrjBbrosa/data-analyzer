@@ -37,6 +37,10 @@ Stable top-level keys (exactly :data:`PROJECT_PAYLOAD_KEYS`):
   ylim / ylims / effective_time_range / cursor_mode / remarks /
   cursor_placement / optional pinned_cursors.
   ``PaneState.source_time_view_id`` is **not** written.
+  Optional ``comparisons`` on the same section block is
+  ``{host_view_id: {peer, axis_linked, levels_locked}}``. Absent or empty
+  means no cross-view relation. It is not ``AnalysisViewState.compare``,
+  and it does not store canvases, results, or process-local tokens.
 * ``filter`` — compatibility input for schema 1–3 (project-level Inspector
   filter). Schema 4 writes ``null``; time-domain Views own ``time_filter``.
 * ``ultraview`` — ``workspace_to_payload`` Board/workspace blob (schema,
@@ -658,6 +662,46 @@ def remap_view_fids(views: list, fid_map: dict) -> list:
     return out
 
 
+def normalize_analysis_comparisons(raw, view_ids) -> tuple[dict, list]:
+    """Keep host → peer rows whose ids still exist.
+
+    Flags must be real bools (``bool("false")`` is true, so a non-bool is
+    stored as off). Extra keys are dropped. A non-dict payload drops the
+    whole block. Returns ``(payload, dropped_host_ids)``.
+    """
+    ids = {str(item) for item in view_ids if str(item or "")}
+    if raw is None:
+        return {}, []
+    if not isinstance(raw, dict):
+        return {}, ["comparisons"]
+    kept = {}
+    dropped = []
+    for host, row in raw.items():
+        host_id = str(host or "")
+        if not isinstance(row, dict):
+            if host_id:
+                dropped.append(host_id)
+            continue
+        peer = row.get("peer")
+        peer_id = str(peer) if isinstance(peer, str) and peer else ""
+        if (
+            not host_id
+            or host_id not in ids
+            or not peer_id
+            or peer_id not in ids
+            or peer_id == host_id
+        ):
+            if host_id:
+                dropped.append(host_id)
+            continue
+        kept[host_id] = {
+            "peer": peer_id,
+            "axis_linked": row.get("axis_linked") is True,
+            "levels_locked": row.get("levels_locked") is True,
+        }
+    return kept, dropped
+
+
 def remap_analysis_view_fids(analysis_views: dict, fid_map: dict) -> dict:
     """Rewrite fids inside analysis_views payloads; drop refs whose fid
     is absent from ``fid_map`` (same contract as remap_view_fids).
@@ -719,7 +763,12 @@ def remap_analysis_view_fids(analysis_views: dict, fid_map: dict) -> dict:
             else:
                 v["attached_file_ids"] = analysis_view_source_fids(v)
             views.append(v)
-        out[section] = {"active": int(block.get("active", 0)), "views": views}
+        section_out = {"active": int(block.get("active", 0)), "views": views}
+        comparisons = block.get("comparisons")
+        if isinstance(comparisons, dict):
+            import copy
+            section_out["comparisons"] = copy.deepcopy(comparisons)
+        out[section] = section_out
     return out
 
 

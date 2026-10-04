@@ -91,6 +91,26 @@ def _curve_y(canvas):
     return np.asarray(data[1], dtype=float)
 
 
+def _tab_hit(bar, idx):
+    """A point whose tabAt resolves to ``idx`` after the strip has laid out."""
+    from PyQt5.QtCore import QPoint
+
+    tabs = bar.tabBar()
+    QApplication.processEvents()
+    rect = tabs.tabRect(idx)
+    center = rect.center()
+    if tabs.isTabVisible(idx) and tabs.tabAt(center) == idx:
+        return center
+    y = center.y()
+    for x in range(max(0, rect.left()), max(rect.right(), rect.left() + 1)):
+        point = QPoint(x, y)
+        if tabs.tabAt(point) == idx:
+            return point
+    raise AssertionError(
+        f"tab {idx} is not hittable visible={tabs.isTabVisible(idx)} rect={rect}"
+    )
+
+
 def _arm_compute_spies(monkeypatch, win):
     calls = []
     jobs = win._analysis_jobs
@@ -650,3 +670,145 @@ def test_axis_link_does_not_change_analysis_params(two_file_win):
     assert not win._comparison().axis_linked("fft")
     win._teardown_comparison_display()
     assert win._comparison().running_timers() == []
+
+
+def test_cross_view_link_buttons_do_not_write_view_compare(two_file_win):
+    win = two_file_win
+    page = _enter(win, "fft_time")
+    _mgr, host, peer = _pair(win, "fft_time")
+    host.params = dict(host.params)
+    peer.params = dict(peer.params)
+    host.params["amplitude_mode"] = "rms"
+    peer.params["amplitude_mode"] = "peak"
+    host.compare["x_linked"] = False
+    host.compare["levels_locked"] = True
+    assert win.open_comparison("fft_time", host.view_id, peer.view_id)
+    page.btn_view_link.setChecked(True)
+    page.btn_view_levels.setChecked(True)
+    assert win._comparison().axis_linked("fft_time") is True
+    assert win._comparison().levels_locked("fft_time") is False
+    assert host.compare["x_linked"] is False
+    assert host.compare["levels_locked"] is True
+    assert page.btn_view_levels.isChecked() is False
+    win.resize(1400, 800)
+    win.show()
+    QApplication.processEvents()
+    assert page.btn_view_levels.isVisible()
+    fft_page = _enter(win, "fft")
+    QApplication.processEvents()
+    assert not fft_page.btn_view_levels.isVisible()
+
+
+def test_menu_actions_keep_views_and_submit_no_compute(two_file_win, monkeypatch):
+    win = two_file_win
+    calls = _arm_compute_spies(monkeypatch, win)
+    page = _enter(win, "fft")
+    mgr, host, peer = _pair(win, "fft")
+    host.name = "Alpha"
+    peer.name = "Beta"
+    host.compare["x_linked"] = False
+    opened = []
+    page.tabbar.cross_view_compare_requested.connect(lambda *args: opened.append(args))
+
+    def fake_beside(menu, *_args):
+        return next(action for action in menu.actions() if action.text() == "与此 View 并排")
+
+    monkeypatch.setattr("mf4_analyzer.ui.view_tabbar.QMenu.exec_", fake_beside)
+    win.resize(1200, 800)
+    win.show()
+    QApplication.processEvents()
+    page.tabbar._on_context_menu(page.tabbar.tabBar().tabRect(1).center())
+
+    assert opened == [(str(host.view_id), str(peer.view_id), 0, 0)]
+    comp = win._comparison()
+    assert comp.displayed("fft") == (str(host.view_id), str(peer.view_id))
+    assert comp.peer_of("fft", peer.view_id) is None
+    assert host.compare["x_linked"] is False
+    assert len(host.panes) == 1 and len(peer.panes) == 1
+
+    win._on_analysis_view_rename("fft", mgr.active, "Alpha")
+    peer_idx = next(i for i, state in enumerate(mgr.views) if state.view_id == peer.view_id)
+    mgr.reorder(peer_idx, 0)
+    assert comp.peer_of("fft", host.view_id) == peer.view_id
+    assert comp.displayed("fft") == (str(host.view_id), str(peer.view_id))
+
+    copy_idx = mgr.duplicate(next(
+        i for i, state in enumerate(mgr.views) if state.view_id == host.view_id
+    ))
+    copied = mgr.get(copy_idx)
+    assert comp.peer_of("fft", copied.view_id) is None
+    assert comp.canvas_for("fft", copied.view_id, 0) is None
+
+    host_idx = next(i for i, state in enumerate(mgr.views) if state.view_id == host.view_id)
+    mgr.set_active(host_idx)
+    third_idx = mgr.new_view(activate=True)
+    assert not comp.is_open("fft")
+    assert calls == []
+    mgr.set_active(host_idx)
+    assert comp.displayed("fft") == (str(host.view_id), str(peer.view_id))
+    assert calls == []
+    assert mgr.get(third_idx).view_id != host.view_id
+
+    page = win._analysis_page("fft")
+    combined = page.export_target(combined=True)
+    assert combined["kind"] == "comparison"
+    assert combined["view_ids"] == [str(host.view_id), str(peer.view_id)]
+    assert combined["label"] == f"{host.name} + {peer.name}"
+    page.mark_comparison_focus(peer.view_id, 0)
+    single = page.export_target(combined=False)
+    assert single["kind"] == "pane"
+    assert single["view_id"] == str(peer.view_id)
+    assert single["pane_index"] == 0
+    assert page.focused_canvas() is page.peer_cards()[0].canvas
+    added = []
+    page.tabbar.add_to_ultraview_requested.connect(
+        lambda section, view_id: added.append((section, view_id))
+    )
+
+    def fake_add(menu, *_args):
+        return next(action for action in menu.actions() if action.text() == "加入总览")
+
+    monkeypatch.setattr("mf4_analyzer.ui.view_tabbar.QMenu.exec_", fake_add)
+    win.resize(1600, 800)
+    QApplication.processEvents()
+    peer_idx = next(i for i, state in enumerate(mgr.views) if state.view_id == peer.view_id)
+    page.tabbar._on_context_menu(_tab_hit(page.tabbar, peer_idx))
+    assert added == [("fft", str(peer.view_id))]
+
+    panes = (len(host.panes), len(peer.panes))
+    view_count = len(mgr.views)
+    ended = []
+    page.tabbar.end_view_comparison_requested.connect(lambda *args: ended.append(args))
+
+    def fake_end(menu, *_args):
+        return next(action for action in menu.actions() if action.text() == "结束 View 对比")
+
+    monkeypatch.setattr("mf4_analyzer.ui.view_tabbar.QMenu.exec_", fake_end)
+    host_idx = next(i for i, state in enumerate(mgr.views) if state.view_id == host.view_id)
+    page.tabbar._on_context_menu(_tab_hit(page.tabbar, host_idx))
+    assert ended == [(str(host.view_id), 0)]
+    assert not comp.is_open("fft")
+    assert comp.peer_of("fft", host.view_id) is None
+    assert len(mgr.views) == view_count
+    assert (len(host.panes), len(peer.panes)) == panes
+    assert calls == []
+
+    assert win.open_comparison("fft", host.view_id, peer.view_id)
+    notes = []
+    win.toast = lambda msg, level="info": notes.append(msg)
+    peer_idx = next(i for i, state in enumerate(mgr.views) if state.view_id == peer.view_id)
+    win._on_analysis_delete("fft", peer_idx)
+    assert comp.peer_of("fft", host.view_id) is None
+    assert any("View 对比已结束" in msg for msg in notes)
+
+    mgr.new_view(activate=False)
+    left = mgr.get(0)
+    right = mgr.get(1)
+    assert win.open_comparison("fft", left.view_id, right.view_id)
+    win._confirm_close_all_views = lambda count: True
+    win._on_analysis_close_all("fft")
+    assert comp.relations_payload("fft") == {}
+    assert comp.running_timers() == []
+    assert win._analysis_page("fft")._peer_host is None
+    assert len(mgr.views) == 1
+    assert calls == []
