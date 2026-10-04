@@ -41,6 +41,10 @@ from ..ui_kit.qt_lifecycle import as_weak_callable
 logger = logging.getLogger(__name__)
 
 _FOCUS_ACCENT = "#2d7ff9"
+# A comparison region narrower than this stacks its own 1–2 panes vertically.
+# The single-view page stays horizontal; the threshold applies only while a
+# cross-view pair is mounted.
+_NARROW_PANE_REGION_PX = 420
 
 
 class AnalysisPageReadiness:
@@ -90,6 +94,203 @@ QToolButton#analysisCompareToggle:disabled { color: #b8bdc6; }
 """
 
 
+def _pane_index_for_object(cards, obj):
+    """Map a card, its canvas, or the canvas viewport back to a pane index."""
+    for i, card in enumerate(cards):
+        if obj is card:
+            return i
+        canvas = getattr(card, "canvas", None)
+        if canvas is not None:
+            if obj is canvas:
+                return i
+            glw = getattr(canvas, "_glw", None)
+            if glw is not None:
+                try:
+                    viewport = glw.viewport()
+                except Exception:
+                    viewport = None
+                if viewport is not None and obj is viewport:
+                    return i
+        if isinstance(obj, QWidget) and card.isAncestorOf(obj):
+            return i
+    return None
+
+
+def _link_canvases(canvas_a, canvas_b, linked):
+    """X-link two panes. Heatmaps (``_img``) also share Y."""
+    vb0 = _primary_vb(canvas_a)
+    vb1 = _primary_vb(canvas_b)
+    if vb0 is None or vb1 is None:
+        return
+    if linked:
+        vb1.setXLink(vb0)
+        if hasattr(canvas_a, "_img") and hasattr(canvas_b, "_img"):
+            vb1.setYLink(vb0)
+        return
+    try:
+        vb1.setXLink(None)
+    except RuntimeError:
+        return
+    try:
+        vb1.setYLink(None)
+    except RuntimeError:
+        return
+
+
+class AnalysisPaneHost(QWidget):
+    """One view's pane stack inside a cross-view comparison.
+
+    The section page keeps the single tab bar. This host is only the peer
+    view's cards and splitter — not a second ``AnalysisSectionPage``.
+    """
+
+    pressed = pyqtSignal(int)
+
+    def __init__(self, page, parent=None):
+        super().__init__(parent)
+        self._page = page
+        self._cards = []
+        self._focused = 0
+        self._linked = False
+        self._levels_locked = False
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        self._split = QSplitter(Qt.Horizontal, self)
+        self._split.setChildrenCollapsible(False)
+        lay.addWidget(self._split)
+
+    def pane_count(self) -> int:
+        return len(self._cards)
+
+    def cards(self):
+        return list(self._cards)
+
+    def card_at(self, idx):
+        if idx < 0 or idx >= len(self._cards):
+            return None
+        return self._cards[idx]
+
+    def canvas_at(self, idx):
+        card = self.card_at(idx)
+        if card is None:
+            return None
+        return getattr(card, "canvas", None)
+
+    def set_pane_count(self, count: int) -> None:
+        count = max(1, min(2, int(count)))
+        while len(self._cards) < count:
+            card = self._page._make_card(event_filter=self)
+            self._cards.append(card)
+            self._split.addWidget(card)
+        while len(self._cards) > count:
+            self._drop_card(self._cards.pop())
+        if self._focused >= len(self._cards):
+            self._focused = 0
+        self.apply_width_orientation()
+        self._apply_focus_style()
+
+    def set_focused_index(self, idx: int) -> None:
+        if not self._cards:
+            return
+        self._focused = max(0, min(int(idx), len(self._cards) - 1))
+        self._apply_focus_style()
+
+    def clear_focus_markers(self) -> None:
+        for card in self._cards:
+            marker = getattr(card, "set_focus_marker", None)
+            if callable(marker):
+                marker(None)
+
+    def set_linked(self, linked: bool) -> None:
+        self._linked = bool(linked)
+        if len(self._cards) < 2:
+            return
+        _link_canvases(
+            self._cards[0].canvas, self._cards[1].canvas, self._linked,
+        )
+
+    def set_levels_locked(self, locked: bool) -> None:
+        """In-view color lock for this region only."""
+        self._levels_locked = bool(locked)
+        canvases = self._heatmap_canvases()
+        for canvas in canvases:
+            try:
+                canvas.levels_changed.disconnect(self._on_locked_levels)
+            except TypeError:
+                pass
+        if not self._levels_locked or len(canvases) < 2:
+            return
+        for canvas in canvases:
+            canvas.levels_changed.connect(self._on_locked_levels)
+
+    def apply_width_orientation(self) -> None:
+        if len(self._cards) < 2:
+            self._split.setOrientation(Qt.Horizontal)
+            return
+        width = self.width()
+        if width <= 0:
+            width = self._split.width()
+        vertical = 0 < width < _NARROW_PANE_REGION_PX
+        self._split.setOrientation(Qt.Vertical if vertical else Qt.Horizontal)
+
+    def teardown(self) -> None:
+        try:
+            self.pressed.disconnect(self._page._on_peer_pane_pressed)
+        except TypeError:
+            pass
+        while self._cards:
+            self._drop_card(self._cards.pop())
+
+    def eventFilter(self, obj, event):  # noqa: N802 - Qt API
+        if event.type() == QEvent.MouseButtonPress:
+            idx = _pane_index_for_object(self._cards, obj)
+            if idx is not None:
+                self.pressed.emit(idx)
+        return super().eventFilter(obj, event)
+
+    def _heatmap_canvases(self):
+        out = []
+        for card in self._cards:
+            canvas = getattr(card, "canvas", None)
+            if canvas is not None and hasattr(canvas, "_img") and hasattr(canvas, "_cbar"):
+                out.append(canvas)
+        return out
+
+    def _on_locked_levels(self, lo, hi) -> None:
+        if not self._levels_locked:
+            return
+        for canvas in self._heatmap_canvases():
+            img = getattr(canvas, "_img", None)
+            if img is None:
+                continue
+            img.setLevels((float(lo), float(hi)))
+
+    def _apply_focus_style(self) -> None:
+        accent = self._page._active_view_focus_accent()
+        for i, card in enumerate(self._cards):
+            marker = getattr(card, "set_focus_marker", None)
+            if callable(marker):
+                marker(accent if i == self._focused else None)
+
+    def _drop_card(self, card) -> None:
+        try:
+            card.removeEventFilter(self)
+        except RuntimeError:
+            pass
+        canvas = getattr(card, "canvas", None)
+        if canvas is not None:
+            try:
+                canvas.removeEventFilter(self)
+            except RuntimeError:
+                pass
+        try:
+            card.setParent(None)
+        except RuntimeError:
+            return
+        card.deleteLater()
+
+
 def _primary_vb(canvas):
     """Return a canvas's MAIN-row ViewBox, tolerant of the two pg canvas shapes.
 
@@ -118,6 +319,9 @@ class AnalysisSectionPage(QWidget):
     compare_toggled = pyqtSignal(str, bool)
     pane_added = pyqtSignal(object)
     pane_removing = pyqtSignal(object)
+    # Cross-view focus. Carries the clicked view id and pane. The page does
+    # not guess whether the user wanted an in-view split.
+    comparison_focus_requested = pyqtSignal(str, int)
 
     def __init__(
         self,
@@ -145,6 +349,17 @@ class AnalysisSectionPage(QWidget):
         self._layout_sync_pending = False
         self._cards = []
         self._toolbar = None
+        self._focused = 0
+        self._previous_focused = 0
+        self._linked = False
+        self._levels_locked = False
+        self._peer_host = None
+        self._view_split = None
+        self._host_view_id = ""
+        self._peer_view_id = ""
+        self._comparison_focus_is_host = True
+        self._suppress_focus_emit = False
+        self._suppress_color_policy_echo = False
         self._split.splitterMoved.connect(self._schedule_heatmap_layout_sync)
         # Lightweight prepare/fail chrome (Task 3). Not a permanent progress bar;
         # cancellable by leaving the section. Never persisted.
@@ -175,11 +390,6 @@ class AnalysisSectionPage(QWidget):
                 self._configure_shared_toolbar()
         lay.addWidget(self._split, stretch=1)
 
-        self._focused = 0
-        self._previous_focused = 0
-        self._linked = False
-        self._levels_locked = False
-        self._suppress_color_policy_echo = False
         self.manager.active_changed.connect(self.refresh_focus_style)
         self.manager.views_changed.connect(self.refresh_focus_style)
         # Swallows the toggled(bool) edge during programmatic
@@ -360,6 +570,7 @@ class AnalysisSectionPage(QWidget):
     def resizeEvent(self, event):  # noqa: N802 - Qt API
         super().resizeEvent(event)
         self._layout_prepare_banner()
+        self._update_comparison_orientation()
 
     def _materialize_primary_card(self) -> None:
         if self._cards:
@@ -405,12 +616,13 @@ class AnalysisSectionPage(QWidget):
         self._toolbar = None
 
     # -- pane management -----------------------------------------------
-    def _make_card(self):
+    def _make_card(self, event_filter=None):
         card = self._card_factory()
         # Keep the card eligible for the shared #chartCard chrome. Focus itself
         # is painted by _ChartCard.set_focus_marker(), matching TimeDomain.
         card.setAttribute(Qt.WA_StyledBackground, True)
-        card.installEventFilter(self)
+        filt = self if event_filter is None else event_filter
+        card.installEventFilter(filt)
         canvas = getattr(card, 'canvas', None)
         if canvas is not None:
             signal = getattr(canvas, 'layout_geometry_changed', None)
@@ -431,7 +643,7 @@ class AnalysisSectionPage(QWidget):
                     colorbar_restored.connect(self._on_colorbar_restored)
                 except Exception:
                     pass
-            canvas.installEventFilter(self)
+            canvas.installEventFilter(filt)
             glw = getattr(canvas, '_glw', None)
             if glw is not None:
                 try:
@@ -439,7 +651,7 @@ class AnalysisSectionPage(QWidget):
                 except Exception:
                     viewport = None
                 if viewport is not None:
-                    viewport.installEventFilter(self)
+                    viewport.installEventFilter(filt)
         return card
 
     def pane_count(self) -> int:
@@ -593,6 +805,10 @@ class AnalysisSectionPage(QWidget):
                     sync_cursor()
 
     def _frequency_cursor_card(self):
+        if self._peer_host is not None and not self._comparison_focus_is_host:
+            card = self._peer_host.card_at(getattr(self._peer_host, "_focused", 0))
+            if card is not None:
+                return card
         return self._cards[getattr(self, '_focused', 0)]
 
     def _focused_nav_delegate(self):
@@ -608,7 +824,16 @@ class AnalysisSectionPage(QWidget):
         return self._cards[idx]
 
     def _annotation_view_token(self):
-        return ("analysis", self.section, self.manager.active)
+        if self._peer_host is not None and not self._comparison_focus_is_host:
+            return ("analysis", self.section, self._peer_view_id)
+        view_id = self.manager.active
+        try:
+            view_id = self.manager.get(self.manager.active).view_id
+        except (AttributeError, IndexError, TypeError):
+            pass
+        if self._peer_host is None:
+            return ("analysis", self.section, self.manager.active)
+        return ("analysis", self.section, view_id)
 
     def _visible_peer_toolbars(self, card):
         """Visible same-page toolbars other than ``card``.
@@ -678,6 +903,10 @@ class AnalysisSectionPage(QWidget):
 
     def focused_canvas(self):
         self.ensure_ready()
+        if self._peer_host is not None and not self._comparison_focus_is_host:
+            canvas = self._peer_host.canvas_at(self._peer_host._focused)
+            if canvas is not None:
+                return canvas
         return self.pane_canvas(self.focused_index())
 
     def exit_split(self) -> None:
@@ -744,7 +973,8 @@ class AnalysisSectionPage(QWidget):
         self._sync_frequency_cursor_control()
         self._sync_shared_nav_highlight()
         self._sync_shared_annotation_button()
-        self.focus_changed.emit(idx)
+        if not self._suppress_focus_emit:
+            self.focus_changed.emit(idx)
 
     def _sync_frequency_cursor_control(self) -> None:
         if not self._cards:
@@ -754,6 +984,17 @@ class AnalysisSectionPage(QWidget):
             sync()
 
     def eventFilter(self, obj, event):
+        if event.type() == QEvent.MouseButtonPress and self._peer_host is not None:
+            idx = self._index_for_object(obj)
+            if idx is not None:
+                # A press on the host while the peer is focused must not emit
+                # focus_changed first: that would capture the peer's sources
+                # into the host pane. The comparison handler captures first.
+                if self._comparison_focus_is_host:
+                    self.set_focused_index(idx)
+                else:
+                    self.comparison_focus_requested.emit(self._host_view_id, idx)
+                return super().eventFilter(obj, event)
         if event.type() == QEvent.MouseButtonPress and len(self._cards) > 1:
             idx = self._index_for_object(obj)
             if idx is not None:
@@ -764,24 +1005,7 @@ class AnalysisSectionPage(QWidget):
         """Map a filtered object (card, its canvas, or canvas viewport) back to
         its pane index, mirroring chart_stack._card_for_object. The
         isAncestorOf fallback catches any deeper child that bubbled a press."""
-        for i, card in enumerate(self._cards):
-            if obj is card:
-                return i
-            canvas = getattr(card, 'canvas', None)
-            if canvas is not None:
-                if obj is canvas:
-                    return i
-                glw = getattr(canvas, '_glw', None)
-                if glw is not None:
-                    try:
-                        viewport = glw.viewport()
-                    except Exception:
-                        viewport = None
-                    if viewport is not None and obj is viewport:
-                        return i
-            if isinstance(obj, QWidget) and card.isAncestorOf(obj):
-                return i
-        return None
+        return _pane_index_for_object(self._cards, obj)
 
     def _active_view_focus_accent(self) -> str:
         try:
@@ -797,8 +1021,13 @@ class AnalysisSectionPage(QWidget):
 
     def _apply_focus_style(self) -> None:
         focus_accent = self._active_view_focus_accent()
+        comparison = self._peer_host is not None
+        host_focused = self._comparison_focus_is_host or not comparison
         for i, card in enumerate(self._cards):
-            focused = i == self._focused and len(self._cards) > 1
+            if comparison:
+                focused = host_focused and i == self._focused
+            else:
+                focused = i == self._focused and len(self._cards) > 1
             marker = getattr(card, 'set_focus_marker', None)
             if callable(marker):
                 marker(focus_accent if focused else None)
@@ -1131,13 +1360,21 @@ class AnalysisSectionPage(QWidget):
     def _on_link_button_toggled(self, on: bool) -> None:
         if self._suppress_compare_edge:
             return
-        self.set_linked(on)
+        region = self._focused_comparison_region()
+        if region is None:
+            self.set_linked(on)
+        else:
+            region.set_linked(on)
         self.compare_toggled.emit('x_linked', bool(on))
 
     def _on_lock_button_toggled(self, on: bool) -> None:
         if self._suppress_compare_edge:
             return
-        self.set_levels_locked(on)
+        region = self._focused_comparison_region()
+        if region is None:
+            self.set_levels_locked(on)
+        else:
+            region.set_levels_locked(on)
         self.compare_toggled.emit('levels_locked', bool(on))
 
     def sync_compare_buttons(self, *, x_linked, levels_locked) -> None:
@@ -1159,9 +1396,126 @@ class AnalysisSectionPage(QWidget):
     def _refresh_compare_buttons(self) -> None:
         """Visibility/enabled state: compare toggles only matter while split.
         锁定色阶 is heatmap-only (line sections have no colorbar)."""
-        split = len(self._cards) > 1
+        if self._peer_host is not None and not self._comparison_focus_is_host:
+            split = self._peer_host.pane_count() > 1
+        else:
+            split = len(self._cards) > 1
         self.btn_link.setVisible(split)
         self.btn_lock_levels.setVisible(split and self._is_heatmap_section())
         fitter = getattr(self, '_ultraview_rail_fitter', None)
         if fitter is not None:
             fitter.schedule()
+
+    # -- cross-view comparison regions ----------------------------------
+    def show_comparison_peer(self, host_view_id, peer_view_id, peer_pane_count) -> None:
+        """Mount a second view region beside this page's panes.
+
+        The existing splitter becomes the host region. One tab bar stays on
+        the page. ``peer_pane_count`` is 1 or 2, never a third page.
+        """
+        self.ensure_ready()
+        self._host_view_id = str(host_view_id)
+        self._peer_view_id = str(peer_view_id)
+        if self._view_split is None:
+            lay = self.layout()
+            index = lay.indexOf(self._split)
+            self._view_split = QSplitter(Qt.Horizontal, self)
+            self._view_split.setObjectName("analysisComparisonSplit")
+            self._view_split.setChildrenCollapsible(False)
+            lay.insertWidget(max(index, 0), self._view_split, 1)
+            self._view_split.addWidget(self._split)
+            self._peer_host = AnalysisPaneHost(self, self._view_split)
+            self._peer_host.setObjectName("analysisComparisonPeer")
+            self._peer_host.pressed.connect(self._on_peer_pane_pressed)
+            self._view_split.addWidget(self._peer_host)
+        self._peer_host.set_pane_count(peer_pane_count)
+        total = max(2, self._view_split.width() or self.width() or 2)
+        half = max(1, total // 2)
+        self._view_split.setSizes([half, max(1, total - half)])
+        self._update_comparison_orientation()
+
+    def hide_comparison_peer(self) -> None:
+        """Return the page to its single-view splitter. Pins are not touched."""
+        if self._view_split is None and self._peer_host is None:
+            self._comparison_focus_is_host = True
+            return
+        host = self._peer_host
+        self._peer_host = None
+        if host is not None:
+            try:
+                host.pressed.disconnect(self._on_peer_pane_pressed)
+            except TypeError:
+                pass
+            host.teardown()
+        view_split = self._view_split
+        self._view_split = None
+        if view_split is not None:
+            lay = self.layout()
+            index = lay.indexOf(view_split)
+            self._split.setParent(self)
+            lay.insertWidget(max(index, 0), self._split, 1)
+            view_split.setParent(None)
+            view_split.deleteLater()
+        self._comparison_focus_is_host = True
+        self._host_view_id = ""
+        self._peer_view_id = ""
+        self._split.setOrientation(Qt.Horizontal)
+        self._apply_focus_style()
+
+    def mark_comparison_focus(self, view_id, pane_index) -> None:
+        pane_index = int(pane_index)
+        if str(view_id) == str(self._host_view_id):
+            self._comparison_focus_is_host = True
+            if self._peer_host is not None:
+                self._peer_host.clear_focus_markers()
+            self._suppress_focus_emit = True
+            try:
+                self.set_focused_index(pane_index)
+            finally:
+                self._suppress_focus_emit = False
+        else:
+            self._comparison_focus_is_host = False
+            if self._peer_host is not None:
+                self._peer_host.set_focused_index(pane_index)
+            self._apply_focus_style()
+        self._refresh_compare_buttons()
+        self._sync_frequency_cursor_control()
+
+    def card_for_view_pane(self, view_id, pane_index):
+        if self._peer_host is not None and str(view_id) == str(self._peer_view_id):
+            return self._peer_host.card_at(int(pane_index))
+        if self._peer_host is not None and str(view_id) != str(self._host_view_id):
+            return None
+        if pane_index < 0 or pane_index >= len(self._cards):
+            return None
+        return self._cards[pane_index]
+
+    def peer_cards(self):
+        if self._peer_host is None:
+            return []
+        return self._peer_host.cards()
+
+    def _focused_comparison_region(self):
+        if self._peer_host is not None and not self._comparison_focus_is_host:
+            return self._peer_host
+        return None
+
+    def _on_peer_pane_pressed(self, idx: int) -> None:
+        self.comparison_focus_requested.emit(self._peer_view_id, int(idx))
+
+    def _update_comparison_orientation(self) -> None:
+        if self._view_split is None:
+            return
+        self._apply_region_orientation(self._split, len(self._cards))
+        if self._peer_host is not None:
+            self._peer_host.apply_width_orientation()
+
+    def _apply_region_orientation(self, splitter, pane_count) -> None:
+        if int(pane_count) < 2:
+            splitter.setOrientation(Qt.Horizontal)
+            return
+        width = splitter.width()
+        if width <= 0:
+            width = splitter.parentWidget().width() if splitter.parentWidget() else 0
+        vertical = 0 < width < _NARROW_PANE_REGION_PX
+        splitter.setOrientation(Qt.Vertical if vertical else Qt.Horizontal)

@@ -32,8 +32,27 @@ from ._state_holders import (
 
 from ...ui_kit.message_box_buttons import fit_message_box_buttons_to_text
 
+
+def _clear_viewbox_link(viewbox) -> None:
+    try:
+        viewbox.setXLink(None)
+    except RuntimeError:
+        return
+    try:
+        viewbox.setYLink(None)
+    except RuntimeError:
+        return
+
+
+def _disconnect_signal(signal, slot) -> None:
+    try:
+        signal.disconnect(slot)
+    except (TypeError, RuntimeError):
+        return
+
 from ... import db_reference
 from ..compute_feedback import summarize_compute
+from .analysis_comparison import AnalysisViewTarget
 from .analysis_context import AnalysisContext
 from .analysis_time_range import (
     display_ranges_equal,
@@ -249,6 +268,20 @@ class AnalysisMixin:
 
     def _on_analysis_switch(self, section, idx):
         mgr = self.analysis_managers[section]
+        comp = self._comparison()
+        if (
+            comp is not None
+            and comp.is_open(section)
+            and 0 <= idx < len(mgr.views)
+            and comp.activation_effect(section, mgr.get(idx).view_id) == "focus"
+        ):
+            clicked = mgr.get(idx)
+            pane = 0
+            current = comp.focused(section)
+            if current is not None and str(current[0]) == str(clicked.view_id):
+                pane = int(current[1])
+            self.focus_comparison(section, clicked.view_id, pane)
+            return
         if idx == mgr.active:
             return
         self._capture_active_analysis_view(section)
@@ -396,6 +429,665 @@ class AnalysisMixin:
         if section == "frf":
             for pane_idx in range(max(1, int(pane_count or 1))):
                 self._frf_coordinator.invalidate_pane(view_id, pane_idx)
+        comp = self._comparison()
+        if comp is not None and comp.forget_view(section, view_id):
+            self._hide_comparison_widgets(section)
+
+    def _comparison(self):
+        ctx = getattr(self, "_analysis_context", None)
+        return getattr(ctx, "comparison", None)
+
+    def _comparison_routes(self, section) -> bool:
+        """True when this section's comparison is on screen and current."""
+        comp = self._comparison()
+        if comp is None or not comp.is_open(section):
+            return False
+        stack = getattr(self, "chart_stack", None)
+        current = getattr(stack, "current_mode", None)
+        mode = current() if callable(current) else None
+        return mode == section
+
+    def _analysis_state_for_dispatch(self, section):
+        """Focused comparison view, or the active view on the single-view path."""
+        if self._comparison_routes(section):
+            comp = self._comparison()
+            focus = comp.focused(section) if comp is not None else None
+            if focus is not None:
+                state = self._analysis_state_by_id(section, focus[0])
+                if state is not None:
+                    return state
+        mgr = self.analysis_managers[section]
+        return mgr.get(mgr.active)
+
+    def _dispatch_focus_index(self, section, state) -> int:
+        panes = getattr(state, "panes", None) or ()
+        if not panes:
+            return 0
+        if self._comparison_routes(section):
+            comp = self._comparison()
+            focus = comp.focused(section) if comp is not None else None
+            if focus is not None and str(focus[0]) == str(state.view_id):
+                return min(int(focus[1]), len(panes) - 1)
+        page = self._analysis_page(section)
+        return min(page.focused_index(), len(panes) - 1)
+
+    def _dispatch_pane_indices(self, section, state):
+        routed = False
+        if self._comparison_routes(section):
+            comp = self._comparison()
+            focus = comp.focused(section) if comp is not None else None
+            routed = focus is not None and str(focus[0]) == str(state.view_id)
+        if routed:
+            count = len(state.panes)
+            if count <= 0:
+                return []
+            if str(section) == "frf":
+                return [self._dispatch_focus_index(section, state)]
+            return list(range(count))
+        page = self._analysis_page(section)
+        count = min(page.pane_count(), len(state.panes))
+        if count <= 0:
+            return []
+        if str(section) == "frf":
+            return [min(page.focused_index(), count - 1)]
+        return list(range(count))
+
+    def _dispatch_time_range(self, section, state, pane_idx):
+        if self._comparison_routes(section):
+            comp = self._comparison()
+            focus = comp.focused(section) if comp is not None else None
+            if focus is not None and str(focus[0]) == str(state.view_id):
+                pane = state.panes[int(pane_idx)]
+                return self._normalize_analysis_time_range(
+                    getattr(pane, "time_range", None),
+                )
+        return self._pane_time_range_for(section, pane_idx)
+
+    def _qt_widget_alive(self, widget) -> bool:
+        if widget is None:
+            return False
+        try:
+            widget.objectName()
+        except RuntimeError:
+            return False
+        return True
+
+    def _canvas_for_view_pane(self, section, state, pane_idx):
+        comp = self._comparison()
+        if comp is not None and state is not None:
+            canvas = comp.canvas_for(section, state.view_id, pane_idx)
+            if canvas is not None and self._qt_widget_alive(canvas):
+                return canvas
+        mgr = (getattr(self, "analysis_managers", None) or {}).get(section)
+        if mgr is None or not getattr(mgr, "views", None) or state is None:
+            return None
+        active = mgr.get(mgr.active)
+        if str(getattr(active, "view_id", "")) != str(getattr(state, "view_id", "")):
+            return None
+        page = self._analysis_page(section)
+        if not (0 <= int(pane_idx) < page.pane_count()):
+            return None
+        return page.pane_canvas(int(pane_idx))
+
+    def _dispatch_canvas(self, section, state, pane_idx):
+        return self._canvas_for_view_pane(section, state, pane_idx)
+
+    def _target_from_sender(self, section):
+        comp = self._comparison()
+        if comp is None:
+            return None
+        sender = self.sender() if hasattr(self, "sender") else None
+        target = comp.target_for_canvas(sender)
+        if target is None or target.section != section:
+            return None
+        return target
+
+    def _analysis_completion_is_visible(self, section, ctx) -> bool:
+        """Draw gate: the active view, or a view currently beside it.
+
+        ``_analysis_ctx_targets_active_view`` stays the active-view check.
+        A late result for a hidden view is still kept, not drawn.
+        """
+        if self._analysis_ctx_targets_active_view(section, ctx):
+            return True
+        comp = self._comparison()
+        if comp is None or not comp.is_open(section):
+            return False
+        pair = comp.displayed(section)
+        if pair is None:
+            return False
+        vid = str(ctx.get("view_id") or "")
+        return vid in {str(pair[0]), str(pair[1])}
+
+    def _completion_updates_focus(self, section, ctx) -> bool:
+        if not self._comparison_routes(section):
+            return True
+        comp = self._comparison()
+        focus = comp.focused(section) if comp is not None else None
+        if focus is None:
+            return False
+        return str(ctx.get("view_id") or "") == str(focus[0])
+
+    def _canvas_for_completion(self, section, view_id, pane_idx):
+        comp = self._comparison()
+        if comp is not None:
+            canvas = comp.canvas_for(section, view_id, pane_idx)
+            if canvas is not None and self._qt_widget_alive(canvas):
+                return canvas
+        state = self._analysis_state_by_id(section, view_id)
+        if state is None:
+            return None
+        return self._canvas_for_view_pane(section, state, pane_idx)
+
+    def _comparison_render_bound(self, section, state) -> bool:
+        comp = self._comparison()
+        if comp is None or not comp.is_open(section) or state is None:
+            return False
+        canvas = comp.canvas_for(section, state.view_id, 0)
+        return canvas is not None and self._qt_widget_alive(canvas)
+
+    def _hide_comparison_widgets(self, section) -> None:
+        page = self._analysis_page(section)
+        hide = getattr(page, "hide_comparison_peer", None)
+        if callable(hide):
+            hide()
+
+    def _on_comparison_focus_requested(self, section, view_id, pane_index):
+        self.focus_comparison(section, view_id, pane_index)
+
+    def open_comparison(self, section, host_id, peer_id) -> bool:
+        """Show ``peer_id`` beside ``host_id``. Does not submit a job."""
+        host = self._analysis_state_by_id(section, host_id)
+        peer = self._analysis_state_by_id(section, peer_id)
+        comp = self._comparison()
+        if host is None or peer is None or comp is None or host is peer:
+            return False
+        if comp.is_open(section):
+            shown = comp.displayed(section)
+            if shown is not None and (
+                str(shown[0]) != str(host.view_id) or str(shown[1]) != str(peer.view_id)
+            ):
+                comp.suspend(section)
+                self._hide_comparison_widgets(section)
+        if not comp.begin(section, host.view_id, peer.view_id):
+            return False
+        mgr = self.analysis_managers[section]
+        host_idx = next(
+            (i for i, state in enumerate(mgr.views) if state.view_id == host.view_id),
+            None,
+        )
+        if host_idx is not None and mgr.active != host_idx:
+            mgr.set_active(host_idx)
+        self._present_comparison(section, host.view_id, peer.view_id)
+        return True
+
+    def close_comparison(self, section) -> None:
+        """Drop the on-screen pair. Cache pins stay with their owning views."""
+        comp = self._comparison()
+        if comp is None:
+            return
+        comp.close(section)
+        self._hide_comparison_widgets(section)
+
+    def focus_comparison(self, section, view_id, pane_index=0) -> bool:
+        """Move inspector, sources, and cursors onto one on-screen pane.
+
+        Opening or moving focus is presentation. It does not submit a job.
+        A pending inspector edit is captured into the view that was focused.
+        """
+        from ..analysis_view_bridge import apply_params_from_state, capture_params_to_state
+
+        comp = self._comparison()
+        if comp is None or not comp.is_open(section):
+            return False
+        state = self._analysis_state_by_id(section, view_id)
+        if state is None or not state.panes:
+            return False
+        pane_index = min(int(pane_index), len(state.panes) - 1)
+        pair = comp.displayed(section)
+        if pair is None or str(state.view_id) not in {str(pair[0]), str(pair[1])}:
+            return False
+        previous = comp.focused(section)
+        same = (
+            previous is not None
+            and str(previous[0]) == str(state.view_id)
+            and int(previous[1]) == pane_index
+        )
+        if previous is not None and not same:
+            old_state = self._analysis_state_by_id(section, previous[0])
+            if old_state is not None and self.chart_stack.current_mode() == section:
+                capture_params_to_state(self._analysis_ctx(section), old_state)
+                self._capture_analysis_sources(
+                    section, old_state, pane_idx=int(previous[1]),
+                )
+                self._capture_analysis_time_range(
+                    section, old_state, pane_idx=int(previous[1]),
+                )
+                self._capture_analysis_xy_viewports(section, old_state)
+        if not comp.focus(section, state.view_id, pane_index):
+            return False
+        self._project_comparison_focus(section, state, pane_index)
+        return True
+
+    def _project_comparison_focus(self, section, state, pane_index) -> None:
+        from ..analysis_view_bridge import apply_params_from_state
+
+        self._applying_analysis_view = True
+        dirty = getattr(self, "_project_dirty", None)
+        if dirty is not None:
+            dirty.begin_restore()
+        try:
+            if self.chart_stack.current_mode() == section:
+                self._project_analysis_attachments(section, state)
+            refresh = getattr(self, "_refresh_analysis_candidates", None)
+            if callable(refresh):
+                refresh(section)
+            apply_params_from_state(self._analysis_ctx(section), state)
+            if section in {"fft", "frf"}:
+                self._apply_frequency_cursor_controls(section, state)
+            self._apply_analysis_sources(section, state)
+            self._apply_analysis_time_range(section, state)
+            page = self._analysis_page(section)
+            marker = getattr(page, "mark_comparison_focus", None)
+            if callable(marker):
+                marker(state.view_id, pane_index)
+            x_linked = bool((state.compare or {}).get("x_linked", True))
+            levels_locked = bool((state.compare or {}).get("levels_locked", True))
+            page.sync_compare_buttons(x_linked=x_linked, levels_locked=levels_locked)
+        finally:
+            self._applying_analysis_view = False
+            if dirty is not None:
+                dirty.end_restore()
+
+    def _present_comparison(self, section, host_id, peer_id) -> None:
+        """Mount both regions and paint cached results. Never submits a job."""
+        comp = self._comparison()
+        host = self._analysis_state_by_id(section, host_id)
+        peer = self._analysis_state_by_id(section, peer_id)
+        if comp is None or host is None or peer is None:
+            return
+        comp.begin(section, host.view_id, peer.view_id)
+        ensure = getattr(self.chart_stack, "ensure_analysis_page_ready", None)
+        if callable(ensure):
+            ensure(section)
+        self._align_host_panes(section, host)
+        page = self._analysis_page(section)
+        page.show_comparison_peer(host.view_id, peer.view_id, len(peer.panes))
+        comp.unbind_section(section)
+        for pane_idx, card in enumerate(page._cards):
+            if pane_idx >= len(host.panes):
+                break
+            comp.bind_canvas(
+                getattr(card, "canvas", None),
+                AnalysisViewTarget(section, host.view_id, pane_idx),
+            )
+        for pane_idx, card in enumerate(page.peer_cards()):
+            if pane_idx >= len(peer.panes):
+                break
+            comp.bind_canvas(
+                getattr(card, "canvas", None),
+                AnalysisViewTarget(section, peer.view_id, pane_idx),
+            )
+            self._wire_peer_card(section, card)
+        page.set_linked(bool((host.compare or {}).get("x_linked", True)))
+        page.set_levels_locked(bool((host.compare or {}).get("levels_locked", True)))
+        peer_host = getattr(page, "_peer_host", None)
+        if peer_host is not None:
+            peer_host.set_linked(bool((peer.compare or {}).get("x_linked", True)))
+            peer_host.set_levels_locked(
+                bool((peer.compare or {}).get("levels_locked", True))
+            )
+        focus = comp.focused(section) or (host.view_id, 0)
+        focus_state = host if str(focus[0]) == str(host.view_id) else peer
+        pane = min(int(focus[1]), len(focus_state.panes) - 1)
+        comp.focus(section, focus_state.view_id, pane)
+        self._project_comparison_focus(section, focus_state, pane)
+        if comp.axis_linked(section):
+            self._link_comparison_cameras(section)
+        else:
+            comp.unlink(section)
+        if comp.levels_locked(section):
+            self._link_comparison_levels(section)
+        self._render_comparison_view(section, host)
+        self._render_comparison_view(section, peer)
+
+    def _align_host_panes(self, section, state) -> None:
+        page = self._analysis_page(section)
+        ensure = getattr(page, "ensure_ready", None)
+        if callable(ensure):
+            ensure()
+        if len(state.panes) >= 2 and page.pane_count() < 2:
+            page.enter_split()
+            self._connect_new_pane(section, page)
+        elif len(state.panes) < 2 and page.pane_count() > 1:
+            page.exit_split()
+
+    def _wire_peer_card(self, section, card) -> None:
+        canvas = getattr(card, "canvas", None)
+        if canvas is None or getattr(canvas, "_comparison_peer_wired", False):
+            return
+        connect = getattr(self.chart_stack, "_connect_analysis_card_signals", None)
+        if callable(connect):
+            connect(card)
+        if section in {"fft", "fft_time", "order"}:
+            signal = getattr(canvas, "viewport_action_committed", None)
+            if signal is not None and not getattr(canvas, "_viewport_intent_wired", False):
+                signal.connect(partial(self._on_bound_viewport_intent, section))
+                canvas._viewport_intent_wired = True
+            self._wire_analysis_chart_appearance(canvas, section, 0)
+        if section in {"fft_time", "order"} and not getattr(canvas, "_levels_echo_wired", False):
+            canvas.levels_changed.connect(partial(self._on_bound_levels, section))
+            restored = getattr(canvas, "colorbar_restored", None)
+            if restored is not None:
+                restored.connect(partial(self._on_bound_levels, section))
+            canvas._levels_echo_wired = True
+        canvas._comparison_peer_wired = True
+
+    def _on_bound_viewport_intent(self, section, action="user", axes=("x", "y")):
+        target = self._target_from_sender(section)
+        if target is None:
+            return
+        state = self._analysis_state_by_id(section, target.view_id)
+        if state is None:
+            return
+        self._commit_analysis_pane_viewport(
+            section, state, target.pane_index, action, axes,
+        )
+
+    def _on_bound_levels(self, section, lo, hi):
+        if self._applying_analysis_view:
+            return
+        target = self._target_from_sender(section)
+        comp = self._comparison()
+        if target is None or comp is None:
+            return
+        focus = comp.focused(section)
+        if focus is None:
+            return
+        if str(focus[0]) != str(target.view_id) or int(focus[1]) != int(target.pane_index):
+            return
+        ctx = self._analysis_ctx(section)
+        ctx.apply_params({
+            "z_auto": False,
+            "z_floor": float(lo),
+            "z_ceiling": float(hi),
+        })
+
+    def _suspend_comparison_display(self, section) -> None:
+        comp = self._comparison()
+        if comp is None or not comp.is_open(section):
+            return
+        comp.suspend(section)
+        self._hide_comparison_widgets(section)
+
+    def set_comparison_axis_linked(self, section, on) -> bool:
+        """Link compatible cameras. Does not write time range or numeric params."""
+        comp = self._comparison()
+        if comp is None or not comp.set_axis_linked(section, bool(on)):
+            return False
+        if on:
+            return self._link_comparison_cameras(section)
+        if comp.levels_locked(section):
+            self._connect_comparison_level_signals(section)
+        return True
+
+    def set_comparison_levels_locked(self, section, on) -> bool:
+        """Lock color scales only for compatible heatmaps."""
+        comp = self._comparison()
+        if comp is None:
+            return False
+        if section not in {"fft_time", "order"}:
+            comp.set_levels_locked(section, False)
+            return False
+        if on and not self._comparison_levels_compatible(section):
+            return False
+        if not comp.set_levels_locked(section, bool(on)):
+            return False
+        if on:
+            self._link_comparison_levels(section)
+            return True
+        if comp.axis_linked(section):
+            self._link_comparison_cameras(section)
+        else:
+            comp.unlink(section)
+        return True
+
+    def _comparison_levels_compatible(self, section) -> bool:
+        comp = self._comparison()
+        pair = comp.displayed(section) if comp is not None else None
+        if pair is None:
+            return False
+        host = self._analysis_state_by_id(section, pair[0])
+        peer = self._analysis_state_by_id(section, pair[1])
+        if host is None or peer is None:
+            return False
+        left = dict(host.params or {})
+        right = dict(peer.params or {})
+        keys = ("amplitude_mode", "weighting", "db_reference", "db_reference_mode")
+        return all(left.get(key) == right.get(key) for key in keys)
+
+    def _link_comparison_cameras(self, section) -> bool:
+        from ..analysis_section_page import _primary_vb
+
+        comp = self._comparison()
+        pair = comp.displayed(section) if comp is not None else None
+        if pair is None:
+            return False
+        comp.unlink(section)
+        host = self._analysis_state_by_id(section, pair[0])
+        peer = self._analysis_state_by_id(section, pair[1])
+        if host is None or peer is None:
+            return False
+        linked = False
+        count = min(len(host.panes), len(peer.panes))
+        for pane_idx in range(count):
+            left = comp.canvas_for(section, host.view_id, pane_idx)
+            right = comp.canvas_for(section, peer.view_id, pane_idx)
+            if left is None or right is None:
+                continue
+            vb0 = _primary_vb(left)
+            vb1 = _primary_vb(right)
+            if vb0 is None or vb1 is None:
+                continue
+            vb1.setXLink(vb0)
+            comp.add_unlink(section, partial(_clear_viewbox_link, vb1))
+            if section in {"fft_time", "order"} and hasattr(left, "_img") and hasattr(right, "_img"):
+                vb1.setYLink(vb0)
+            linked = True
+        if comp.levels_locked(section):
+            self._connect_comparison_level_signals(section)
+        return linked
+
+    def _link_comparison_levels(self, section) -> None:
+        comp = self._comparison()
+        if comp is None or not comp.is_open(section):
+            return
+        if comp.axis_linked(section):
+            self._link_comparison_cameras(section)
+            return
+        comp.unlink(section)
+        self._connect_comparison_level_signals(section)
+
+    def _connect_comparison_level_signals(self, section) -> None:
+        comp = self._comparison()
+        pair = comp.displayed(section) if comp is not None else None
+        if pair is None or section not in {"fft_time", "order"}:
+            return
+        host = self._analysis_state_by_id(section, pair[0])
+        peer = self._analysis_state_by_id(section, pair[1])
+        if host is None or peer is None:
+            return
+        slot = partial(self._on_comparison_levels_propagated, section)
+        count = min(len(host.panes), len(peer.panes))
+        for pane_idx in range(count):
+            for view_id in (host.view_id, peer.view_id):
+                canvas = comp.canvas_for(section, view_id, pane_idx)
+                signal = getattr(canvas, "levels_changed", None) if canvas is not None else None
+                if signal is None or not hasattr(canvas, "_img"):
+                    continue
+                signal.connect(slot)
+                comp.add_unlink(
+                    section, partial(_disconnect_signal, signal, slot),
+                )
+
+    def _on_comparison_levels_propagated(self, section, lo, hi):
+        comp = self._comparison()
+        if comp is None or comp.propagating_levels or not comp.levels_locked(section):
+            return
+        pair = comp.displayed(section)
+        if pair is None:
+            return
+        comp.propagating_levels = True
+        try:
+            for view_id in pair:
+                state = self._analysis_state_by_id(section, view_id)
+                if state is None:
+                    continue
+                for pane_idx in range(len(state.panes)):
+                    canvas = comp.canvas_for(section, view_id, pane_idx)
+                    img = getattr(canvas, "_img", None) if canvas is not None else None
+                    if img is None:
+                        continue
+                    img.setLevels((float(lo), float(hi)))
+        finally:
+            comp.propagating_levels = False
+
+    def _render_comparison_view(self, section, state):
+        """Paint one view from its own cache entry onto its bound canvases.
+
+        Misses stay empty. This path does not arm project restore and does
+        not copy result arrays into the other region.
+        """
+        comp = self._comparison()
+        if comp is None or state is None:
+            return False
+        focus = comp.focused(section)
+        is_focus = focus is not None and str(focus[0]) == str(state.view_id)
+        if section == "frf":
+            self._render_frf_comparison_view(state, sync_facts=is_focus)
+            return bool(is_focus)
+        any_missing = False
+        for pane_idx, pane in enumerate(state.panes):
+            canvas = comp.canvas_for(section, state.view_id, pane_idx)
+            if canvas is None:
+                continue
+            cache = self.analysis_caches[section]
+            if section == "fft":
+                entries = []
+                pane_keys = []
+                colors = self._analysis_channel_color_map()
+                for fid, ch in pane.sources:
+                    key = self._analysis_cache_key_for_view_source(
+                        section, state, pane, pane_idx, fid, ch,
+                    )
+                    pane_keys.append(key)
+                    result = cache.get(key)
+                    if result is None:
+                        any_missing = True
+                        continue
+                    entries.append(self._fft_entry_from_cache(
+                        result, fid, ch, colors.get((fid, ch)),
+                        time_range=self._normalize_analysis_time_range(pane.time_range),
+                    ))
+                self._replace_analysis_pane_pins(
+                    section, state.view_id, pane_idx, pane_keys,
+                )
+                self._publish_line_chart_appearance(canvas, pane)
+                if entries:
+                    self._plot_fft_entries(entries, canvas)
+                else:
+                    self._clear_analysis_canvas(canvas)
+                    self._rebind_pane_overlay(canvas, pane)
+                    if pane.sources:
+                        self._show_analysis_empty_hint(canvas)
+                self._restore_analysis_pane_viewport(
+                    section, state, pane_idx, canvas,
+                )
+                continue
+            if not pane.sources:
+                self._clear_analysis_canvas(canvas)
+                self._project_heatmap_pane_appearance(section, canvas, pane)
+                self._rebind_pane_overlay(canvas, pane)
+                self._replace_analysis_pane_pins(
+                    section, state.view_id, pane_idx, (),
+                )
+                continue
+            fid, ch = pane.sources[0]
+            key = self._analysis_cache_key_for_view_source(
+                section, state, pane, pane_idx, fid, ch,
+            )
+            self._replace_analysis_pane_pins(
+                section, state.view_id, pane_idx, (key,),
+            )
+            result = cache.get(key)
+            if result is None:
+                any_missing = True
+                self._clear_analysis_canvas(canvas)
+                self._project_heatmap_pane_appearance(section, canvas, pane)
+                self._rebind_pane_overlay(canvas, pane)
+                self._show_analysis_empty_hint(canvas)
+            else:
+                self._render_cached_heatmap(
+                    section, canvas, result, source=(fid, ch),
+                )
+                self._restore_analysis_pane_viewport(
+                    section, state, pane_idx, canvas,
+                )
+        if is_focus and any_missing:
+            self.statusBar.showMessage("参数/源已就绪，点击计算")
+        if is_focus:
+            self._sync_section_effective_facts(section, state)
+        return bool(is_focus)
+
+    def _render_frf_comparison_view(self, state, *, sync_facts) -> None:
+        comp = self._comparison()
+        missing = False
+        for pane_idx, pane in enumerate(state.panes):
+            canvas = comp.canvas_for("frf", state.view_id, pane_idx)
+            if canvas is None:
+                continue
+            key = self._frf_cache_key_for_pane(state, pane)
+            if key is None:
+                canvas.full_reset()
+                self._rebind_pane_overlay(canvas, pane)
+                self._replace_analysis_pane_pins("frf", state.view_id, pane_idx, ())
+                if pane.input_source is not None or pane.output_source is not None:
+                    missing = True
+                    canvas.show_empty_hint("点击『计算频响』生成")
+                continue
+            self._replace_analysis_pane_pins("frf", state.view_id, pane_idx, (key,))
+            result = self.analysis_caches["frf"].get(key)
+            if result is None:
+                missing = True
+                canvas.full_reset()
+                self._rebind_pane_overlay(canvas, pane)
+                canvas.show_empty_hint("点击『计算频响』生成")
+                continue
+            canvas.set_result(
+                result,
+                display_params=self._frf_display_params_for_state(state),
+                context=self._frf_render_context_for_pane(pane),
+            )
+            self._restore_frf_canvas_ranges(canvas, pane)
+        if sync_facts:
+            self._sync_frf_effective_facts(state)
+            if missing:
+                self.statusBar.showMessage("参数/输入输出已就绪，点击计算频响")
+
+    def _teardown_comparison_display(self) -> None:
+        comp = self._comparison()
+        if comp is None:
+            return
+        sections = list(getattr(self, "analysis_managers", {}) or {})
+        comp.teardown()
+        for section in sections:
+            page_get = getattr(self, "_analysis_page", None)
+            if not callable(page_get):
+                continue
+            page = page_get(section)
+            hide = getattr(page, "hide_comparison_peer", None)
+            if callable(hide):
+                hide()
 
     def _on_analysis_close_others(self, section, keep_view_id):
         mgr = self.analysis_managers[section]
@@ -589,10 +1281,12 @@ class AnalysisMixin:
             self._commit_analysis_pane_viewport(section, state, sibling, action, ("x",))
 
     def _commit_analysis_pane_viewport(self, section, state, pane_idx, action=None, axes=("x", "y")):
-        page = self._analysis_page(section)
-        if pane_idx >= page.pane_count() or pane_idx >= len(state.panes):
+        if pane_idx >= len(state.panes):
             return
-        captured = page.pane_canvas(pane_idx).capture_xy_viewport()
+        canvas = self._canvas_for_view_pane(section, state, pane_idx)
+        if canvas is None or not hasattr(canvas, "capture_xy_viewport"):
+            return
+        captured = canvas.capture_xy_viewport()
         if captured is None:
             return
         pane = state.panes[pane_idx]
@@ -604,8 +1298,7 @@ class AnalysisMixin:
 
     def _capture_analysis_xy_viewports(self, section, state):
         if section in {"fft", "fft_time", "order"}:
-            page = self._analysis_page(section)
-            for pane_idx in range(min(page.pane_count(), len(state.panes))):
+            for pane_idx in range(len(state.panes)):
                 self._commit_analysis_pane_viewport(section, state, pane_idx)
 
     def _restore_analysis_pane_viewport(self, section, state, pane_idx, canvas):
@@ -643,6 +1336,16 @@ class AnalysisMixin:
         mgr = managers.get(section)
         if mgr is None or not mgr.views or canvas is None:
             return
+        comp = self._comparison()
+        if comp is not None:
+            target = comp.target_for_canvas(canvas)
+            if target is not None and target.section == section:
+                state = self._analysis_state_by_id(section, target.view_id)
+                if state is not None:
+                    self._restore_analysis_pane_viewport(
+                        section, state, target.pane_index, canvas,
+                    )
+                    return
         page = self._analysis_page(section)
         state = mgr.get(mgr.active)
         for pane_idx in range(min(page.pane_count(), len(state.panes))):
@@ -665,8 +1368,11 @@ class AnalysisMixin:
     def _capture_active_analysis_view(self, section, *, capture_sources=True):
         from ..analysis_view_bridge import capture_params_to_state
         mgr = self.analysis_managers[section]
-        state = mgr.get(mgr.active)
+        state = self._analysis_state_for_dispatch(section)
         capture_params_to_state(self._analysis_ctx(section), state)
+        routed_pane = None
+        if self._comparison_routes(section):
+            routed_pane = self._dispatch_focus_index(section, state)
         if section == 'frf':
             self._capture_frf_canvas_ranges(state)
         elif section in {'fft', 'fft_time', 'order'}:
@@ -676,12 +1382,12 @@ class AnalysisMixin:
         # inactive section would overwrite that section's retained range with
         # whichever mode happens to be on screen.
         if self.chart_stack.current_mode() == section:
-            self._capture_analysis_time_range(section, state)
+            self._capture_analysis_time_range(section, state, pane_idx=routed_pane)
         if section in {'fft', 'frf'}:
             self._capture_frequency_cursor_controls(section, state)
         self._capture_analysis_overlay(section, state)
         if capture_sources:
-            self._capture_analysis_sources(section, state)
+            self._capture_analysis_sources(section, state, pane_idx=routed_pane)
 
     def _capture_analysis_overlay(self, section, state):
         from ..analysis_view_bridge import capture_overlay_from_canvas
@@ -689,9 +1395,12 @@ class AnalysisMixin:
         page = self._analysis_page(section)
         if not getattr(page, "_overlay_session_bound", False):
             return
-        for pane_idx in range(min(page.pane_count(), len(state.panes))):
+        for pane_idx in range(len(state.panes)):
+            canvas = self._canvas_for_view_pane(section, state, pane_idx)
+            if canvas is None:
+                continue
             capture_overlay_from_canvas(
-                page.pane_canvas(pane_idx), state.panes[pane_idx],
+                canvas, state.panes[pane_idx],
                 chart_stack=self.chart_stack,
             )
 
@@ -738,7 +1447,7 @@ class AnalysisMixin:
         if not mgr.views:
             return None
         params_getter = getattr(ctx, 'current_params', ctx.get_params)
-        state = mgr.get(mgr.active)
+        state = self._analysis_state_for_dispatch(section)
         state.params = dict(params_getter())
         holder = getattr(self, "_project_dirty", None)
         if holder is not None:
@@ -765,7 +1474,10 @@ class AnalysisMixin:
         mgr = (getattr(self, 'analysis_managers', None) or {}).get(section)
         if mgr is None or not getattr(mgr, 'views', None):
             return
-        state = mgr.get(mgr.active)
+        if self._comparison_routes(section):
+            state = self._analysis_state_for_dispatch(section)
+        else:
+            state = mgr.get(mgr.active)
         before_params = dict(state.params or {})
         sync(section, state)
         holder = getattr(self, '_project_dirty', None)
@@ -1063,7 +1775,9 @@ class AnalysisMixin:
         if section in {"fft", "fft_time", "order"} and not self._applying_analysis_view and self.chart_stack.current_mode() == section:
             mgr = self.analysis_managers.get(section)
             if mgr is not None and mgr.views:
-                axes = self._analysis_changed_range_axes(mgr.get(mgr.active).params, _params, section)
+                axes = self._analysis_changed_range_axes(
+                    self._analysis_state_for_dispatch(section).params, _params, section,
+                )
         state = self._sync_active_analysis_params(section)
         if state is not None and axes:
             self._clear_analysis_view_viewports(state, axes)
@@ -1086,10 +1800,34 @@ class AnalysisMixin:
         destination View.
         """
         from ..analysis_view_bridge import apply_params_from_state
+        comp = self._comparison()
+        if comp is not None and comp.hold_switch:
+            return
         mgr = self.analysis_managers[section]
         if not (0 <= idx < len(mgr.views)):
             return
         state = mgr.get(idx)
+        if comp is not None and comp.is_open(section):
+            pair = comp.displayed(section)
+            if (
+                pair is not None
+                and str(state.view_id) == str(pair[1])
+                and str(state.view_id) != str(pair[0])
+            ):
+                self.focus_comparison(section, state.view_id, 0)
+                host_idx = next(
+                    (i for i, item in enumerate(mgr.views) if item.view_id == pair[0]),
+                    None,
+                )
+                if host_idx is not None and host_idx != mgr.active:
+                    comp.hold_switch = True
+                    try:
+                        mgr.set_active(host_idx)
+                    finally:
+                        comp.hold_switch = False
+                return
+            if pair is not None and str(state.view_id) not in {str(pair[0]), str(pair[1])}:
+                self._suspend_comparison_display(section)
         page = self._analysis_page(section)
         self._applying_analysis_view = True
         dirty = getattr(self, "_project_dirty", None)
@@ -1152,6 +1890,10 @@ class AnalysisMixin:
             self._sync_section_effective_facts(section, state)
         else:
             self._request_analysis_page_transition_ready(section, state)
+        comp = self._comparison()
+        peer_id = comp.peer_of(section, state.view_id) if comp is not None else None
+        if peer_id and str(mgr.get(mgr.active).view_id) == str(state.view_id):
+            self._present_comparison(section, state.view_id, peer_id)
 
     def _project_analysis_attachments(self, section, state):
         """Project one analysis View's file range onto the shared navigator."""
@@ -1195,6 +1937,16 @@ class AnalysisMixin:
         source back into the inspector / navigator."""
         if self._applying_analysis_view:
             return
+        if self._comparison_routes(section):
+            comp = self._comparison()
+            focus = comp.focused(section) if comp is not None else None
+            host = self.analysis_managers[section].get(
+                self.analysis_managers[section].active
+            )
+            if focus is None or str(focus[0]) != str(host.view_id):
+                return
+            self.focus_comparison(section, host.view_id, idx)
+            return
         mgr = self.analysis_managers[section]
         state = mgr.get(mgr.active)
         page = self._analysis_page(section)
@@ -1215,7 +1967,7 @@ class AnalysisMixin:
         if self._applying_analysis_view:
             return
         mgr = self.analysis_managers[section]
-        state = mgr.get(mgr.active)
+        state = self._analysis_state_for_dispatch(section)
         state.compare[key] = bool(on)
         holder = getattr(self, "_project_dirty", None)
         if holder is not None:
@@ -1266,8 +2018,13 @@ class AnalysisMixin:
         mgr = self.analysis_managers.get(section)
         if mgr is None or not mgr.views:
             return
-        state = mgr.get(mgr.active)
-        if pane_idx >= len(state.panes):
+        target = self._target_from_sender(section)
+        if target is not None:
+            state = self._analysis_state_by_id(section, target.view_id)
+            pane_idx = target.pane_index
+        else:
+            state = mgr.get(mgr.active)
+        if state is None or pane_idx >= len(state.panes):
             return
         from ..analysis_view_state import normalize_pane_chart_appearances
 
@@ -1623,13 +2380,7 @@ class AnalysisMixin:
         return "cancel"
 
     def _iter_analysis_compute_pane_indices(self, section, state):
-        page = self._analysis_page(section)
-        count = min(page.pane_count(), len(state.panes))
-        if count <= 0:
-            return []
-        if str(section) == "frf":
-            return [min(page.focused_index(), count - 1)]
-        return list(range(count))
+        return self._dispatch_pane_indices(section, state)
 
     @staticmethod
     def _pane_has_compute_source(section, pane):
@@ -1689,7 +2440,7 @@ class AnalysisMixin:
         mgr = self.analysis_managers.get(section)
         if mgr is None or not mgr.views:
             return None
-        state = mgr.get(mgr.active)
+        state = self._analysis_state_for_dispatch(section)
         ctrl = self._analysis_context.time_range
         targets = []
         for idx in self._iter_analysis_compute_pane_indices(section, state):
@@ -1961,10 +2712,9 @@ class AnalysisMixin:
     def _analysis_range_target(self, section, state=None, pane_idx=None):
         mgr = self.analysis_managers[section]
         if state is None:
-            state = mgr.get(mgr.active)
-        page = self._analysis_page(section)
+            state = self._analysis_state_for_dispatch(section)
         if pane_idx is None:
-            pane_idx = page.focused_index()
+            pane_idx = self._dispatch_focus_index(section, state)
         idx = min(int(pane_idx), max(len(state.panes) - 1, 0))
         return state, idx
 
@@ -2337,8 +3087,7 @@ class AnalysisMixin:
         if ctrl is None or not getattr(state, "panes", None):
             return None
         if pane_idx is None:
-            page = self._analysis_page(section)
-            pane_idx = page.focused_index()
+            pane_idx = self._dispatch_focus_index(section, state)
         idx = min(int(pane_idx), len(state.panes) - 1)
         pane = state.panes[idx]
         signature = self._analysis_source_signature_for_pane(section, pane, state)
@@ -2353,8 +3102,7 @@ class AnalysisMixin:
             return intent
         if self.chart_stack.current_mode() != section:
             return intent
-        page = self._analysis_page(section)
-        focused = min(page.focused_index(), len(state.panes) - 1)
+        focused = self._dispatch_focus_index(section, state)
         if idx != focused:
             return intent
         self._project_top_from_time_range_intent(
@@ -2378,7 +3126,11 @@ class AnalysisMixin:
         if not mgr.views:
             return
         if state is None:
-            state = mgr.get(mgr.active)
+            state = self._analysis_state_for_dispatch(section)
+        if pane_idx is None and self._comparison_routes(section):
+            focus = self._comparison().focused(section)
+            if focus is not None and str(focus[0]) == str(state.view_id):
+                pane_idx = int(focus[1])
         self._capture_analysis_sources(section, state, pane_idx=pane_idx)
         self._apply_analysis_time_range(section, state)
 
@@ -2492,12 +3244,11 @@ class AnalysisMixin:
 
     def _apply_analysis_sources(self, section, state, *,
                                 sync_effective_facts=True):
-        page = self._analysis_page(section)
-        idx = min(page.focused_index(), len(state.panes) - 1)
+        idx = self._dispatch_focus_index(section, state)
         pane = state.panes[idx]
         if section == 'frf':
             self._apply_frf_sources(
-                state, sync_effective_facts=sync_effective_facts,
+                state, pane_idx=idx, sync_effective_facts=sync_effective_facts,
             )
             return
         if section == 'fft':
@@ -3118,6 +3869,8 @@ class AnalysisMixin:
                         self._recompute_restored_analysis_view(s, v),
                     )
                     return
+        if self._comparison_render_bound(section, state):
+            return self._render_comparison_view(section, state)
         if section == 'frf':
             self._render_frf_view_from_cache(state)
             return True

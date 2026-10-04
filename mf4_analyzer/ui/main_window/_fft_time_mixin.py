@@ -354,10 +354,8 @@ class FFTTimeMixin:
             )
             return
         self._fft_time_outcome = None
-        mgr = self.analysis_managers['fft_time']
-        state = mgr.get(mgr.active)
+        state = self._analysis_state_for_dispatch('fft_time')
         self._clear_analysis_view_viewports(state)
-        page = self._analysis_page('fft_time')
         ctx = self.inspector.fft_time_ctx
         compute_getter = getattr(ctx, 'compute_params', None)
         compute_p = (
@@ -368,9 +366,9 @@ class FFTTimeMixin:
             display_getter() if callable(display_getter) else ctx.get_params()
         )
 
-        focus = page.focused_index()
+        focus = self._dispatch_focus_index('fft_time', state)
         pane_order = sorted(
-            range(min(page.pane_count(), len(state.panes))),
+            self._dispatch_pane_indices('fft_time', state),
             key=lambda i: (i != focus, i),
         )
         candidates = []
@@ -384,7 +382,7 @@ class FFTTimeMixin:
             any_source = True
             fid, ch = sources[0]
             render_p = {**compute_p, **display_p}
-            time_range = self._pane_time_range_for('fft_time', pane_idx)
+            time_range = self._dispatch_time_range('fft_time', state, pane_idx)
             prepared = self._fft_time_effective_params_for_source(
                 compute_p, fid, ch, time_range)
             if prepared is None:
@@ -895,16 +893,22 @@ class FFTTimeMixin:
         source = ctx.get('source')
         p = self._fft_time_completion_display_params(state, ctx)
         self._cancel_fft_time_page_transition_cover(ctx.get('view_id'))
-        page = self._analysis_page('fft_time')
         try:
             pane_idx = int(pane_idx)
         except (TypeError, ValueError):
             pane_idx = 0
-        if page is not None and 0 <= pane_idx < page.pane_count():
-            self._render_fft_time_on(
-                page.pane_canvas(pane_idx), result, p, source=source)
-        else:
-            self._render_fft_time(result, p, source=source)
+        canvas = self._canvas_for_completion('fft_time', state.view_id, pane_idx)
+        if canvas is not None:
+            self._render_fft_time_on(canvas, result, p, source=source)
+        elif not self._comparison_routes('fft_time'):
+            page = self._analysis_page('fft_time')
+            if page is not None and 0 <= pane_idx < page.pane_count():
+                self._render_fft_time_on(
+                    page.pane_canvas(pane_idx), result, p, source=source)
+            else:
+                self._render_fft_time(result, p, source=source)
+        if not self._completion_updates_focus('fft_time', ctx):
+            return
         nfft = getattr(getattr(result, 'params', None), 'nfft', None)
         suffix = f" · NFFT {int(nfft)}" if nfft is not None else ""
         if cache_hit:
@@ -917,14 +921,14 @@ class FFTTimeMixin:
                 f"FFT vs Time 完成 · {result.metadata.get('frames', 0)} frames"
                 f"{suffix}"
             )
-        self._sync_fft_time_effective_facts()
+        self._sync_fft_time_effective_facts(state)
 
     def _fft_time_completion_decision(self, ctx) -> str:
         """``draw``, ``keep`` (inactive A7), or ``reject`` (not the current request)."""
         state = self._analysis_state_by_id('fft_time', ctx.get('view_id'))
         if state is None:
             return 'reject'
-        if not self._analysis_ctx_targets_active_view('fft_time', ctx):
+        if not self._analysis_completion_is_visible('fft_time', ctx):
             return 'keep'
         try:
             pane_idx = int(ctx.get('pane_idx', 0))
@@ -1034,6 +1038,11 @@ class FFTTimeMixin:
             state = mgr.get(mgr.active)
         page = self._analysis_page('fft_time')
         idx = page.focused_index()
+        if self._comparison_routes('fft_time'):
+            comp = self._comparison()
+            focus = comp.focused('fft_time') if comp is not None else None
+            if focus is not None and str(focus[0]) == str(getattr(state, 'view_id', '')):
+                idx = int(focus[1])
         if state is None or not (0 <= idx < len(state.panes)):
             ctx.clear_effective_facts()
             return
@@ -1043,7 +1052,7 @@ class FFTTimeMixin:
             ctx.clear_effective_facts()
             return
         fid, ch = sources[0]
-        time_range = self._pane_time_range_for('fft_time', idx)
+        time_range = self._dispatch_time_range('fft_time', state, idx)
         prepared = self._fft_time_effective_params_for_source(
             self.inspector.fft_time_ctx.compute_params()
             if hasattr(self.inspector.fft_time_ctx, 'compute_params')

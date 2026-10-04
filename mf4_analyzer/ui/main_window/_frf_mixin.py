@@ -44,6 +44,11 @@ class FrfMixin:
 
     def _active_frf_state(self):
         manager = self.analysis_managers["frf"]
+        if self._comparison_routes("frf"):
+            state = self._analysis_state_for_dispatch("frf")
+            page = self._analysis_page("frf")
+            pane_idx = self._dispatch_focus_index("frf", state)
+            return manager, state, page, pane_idx, state.panes[pane_idx]
         state = manager.get(manager.active)
         page = self._analysis_page("frf")
         pane_idx = min(page.focused_index(), len(state.panes) - 1)
@@ -60,9 +65,11 @@ class FrfMixin:
         pane.input_source = tuple(input_source) if input_source else None
         pane.output_source = tuple(output_source) if output_source else None
 
-    def _apply_frf_sources(self, state, *, sync_effective_facts=True):
+    def _apply_frf_sources(self, state, *, pane_idx=None, sync_effective_facts=True):
         page = self._analysis_page("frf")
-        idx = min(page.focused_index(), len(state.panes) - 1)
+        if pane_idx is None:
+            pane_idx = page.focused_index()
+        idx = min(int(pane_idx), len(state.panes) - 1)
         pane = state.panes[idx]
         ctx = self.inspector.frf_ctx
         old_input = ctx.combo_input.blockSignals(True)
@@ -82,6 +89,15 @@ class FrfMixin:
 
     def _frf_focused_pane_index(self, state):
         """Focused pane index while ``state`` is the one on screen, else None."""
+        if self._comparison_routes("frf"):
+            comp = self._comparison()
+            focus = comp.focused("frf") if comp is not None else None
+            if focus is None or str(focus[0]) != str(state.view_id):
+                return None
+            idx = int(focus[1])
+            if not (0 <= idx < len(state.panes)):
+                return None
+            return idx
         manager = self.analysis_managers["frf"]
         if manager.get(manager.active) is not state:
             return None
@@ -156,11 +172,25 @@ class FrfMixin:
             }
             pane.ylim = pane.ylims.get("magnitude")
 
+    def _cursor_cards_for_state(self, section, state):
+        page = self._analysis_page(section)
+        comp = self._comparison()
+        if comp is not None and comp.is_open(section):
+            cards = []
+            for pane_idx in range(len(state.panes)):
+                card = page.card_for_view_pane(state.view_id, pane_idx)
+                if card is not None:
+                    cards.append((pane_idx, card))
+            if cards:
+                return cards
+        return [
+            (pane_idx, page._cards[pane_idx])
+            for pane_idx in range(min(page.pane_count(), len(state.panes)))
+        ]
+
     def _capture_frequency_cursor_controls(self, section, state):
         """Capture the shared off/single/dual cursor state for FFT or FRF."""
-        page = self._analysis_page(section)
-        for pane_idx in range(min(page.pane_count(), len(state.panes))):
-            card = page._cards[pane_idx]
+        for pane_idx, card in self._cursor_cards_for_state(section, state):
             getter = getattr(card, "cursor_mode", None)
             if callable(getter):
                 state.panes[pane_idx].cursor_mode = getter()
@@ -168,8 +198,7 @@ class FrfMixin:
     def _apply_frequency_cursor_controls(self, section, state):
         """Restore FFT/FRF pane cursor states without emitting a user edge."""
         page = self._analysis_page(section)
-        for pane_idx in range(min(page.pane_count(), len(state.panes))):
-            card = page._cards[pane_idx]
+        for pane_idx, card in self._cursor_cards_for_state(section, state):
             setter = getattr(card, "set_cursor_mode", None)
             if callable(setter):
                 setter(
@@ -184,6 +213,14 @@ class FrfMixin:
         """Persist a frequency cursor selection onto exactly its owning pane."""
         if section not in {"fft", "frf"}:
             return
+        comp = self._comparison()
+        if comp is not None:
+            target = comp.target_for_canvas(canvas)
+            if target is not None and target.section == section:
+                state = self._analysis_state_by_id(section, target.view_id)
+                if state is not None and 0 <= target.pane_index < len(state.panes):
+                    state.panes[target.pane_index].cursor_mode = mode
+                    return
         manager = self.analysis_managers[section]
         state = manager.get(manager.active)
         page = self._analysis_page(section)
@@ -705,7 +742,9 @@ class FrfMixin:
             return False
         self.inspector.frf_ctx.set_validation_message("")
         self._cancel_frf_page_transition_cover(state.view_id)
-        page.pane_canvas(pane_idx).show_progress()
+        canvas = self._dispatch_canvas("frf", state, pane_idx)
+        if canvas is not None:
+            canvas.show_progress()
         return self._frf_coordinator.request(candidate)
 
     def _recompute_restored_frf_view(self, view_id):
@@ -813,11 +852,10 @@ class FrfMixin:
             float(result.effective.time_start),
             float(result.effective.time_end),
         )
-        manager = self.analysis_managers["frf"]
-        if manager.get(manager.active) is not state:
+        if not self._analysis_completion_is_visible("frf", context):
             return
-        page = self._analysis_page("frf")
-        if pane_idx >= page.pane_count():
+        canvas = self._canvas_for_completion("frf", state.view_id, pane_idx)
+        if canvas is None:
             return
         render_context = self._frf_render_context_for_pane(pane)
         render_context.update({
@@ -827,7 +865,6 @@ class FrfMixin:
             )
             if key in context
         })
-        canvas = page.pane_canvas(pane_idx)
         self._cancel_frf_page_transition_cover(state.view_id)
         canvas.set_result(
             result,
@@ -839,32 +876,42 @@ class FrfMixin:
         )
         self._restore_frf_canvas_ranges(canvas, pane)
         notify_ultraview_plot(self, "frf", "frf-plot")
-        if pane_idx == page.focused_index():
+        focus_pane = (
+            self._dispatch_focus_index("frf", state)
+            if self._comparison_routes("frf")
+            else self._analysis_page("frf").focused_index()
+        )
+        if pane_idx == focus_pane and self._completion_updates_focus("frf", context):
             self.inspector.frf_ctx.set_validation_message("")
             # Both the worker completion and the synchronous cache hit land
             # here, so the resident facts are filled exactly once per render.
             self._publish_frf_effective_facts(result)
-        suffix = "（缓存）" if cache_hit else ""
-        self.statusBar.showMessage(
-            f"频响完成{suffix} · {result.effective.segments} 段 · "
-            f"df {result.effective.df:g} Hz"
-        )
+        if self._completion_updates_focus("frf", context):
+            suffix = "（缓存）" if cache_hit else ""
+            self.statusBar.showMessage(
+                f"频响完成{suffix} · {result.effective.segments} 段 · "
+                f"df {result.effective.df:g} Hz"
+            )
 
     def _on_frf_failed(self, context, issue):
         message = str(issue)
         state = self._frf_state_by_id(context.get("view_id"))
-        if state is not None:
-            manager = self.analysis_managers["frf"]
+        if state is not None and self._analysis_completion_is_visible("frf", context):
             pane_idx = int(context.get("pane_idx", 0))
-            if manager.get(manager.active) is state:
-                page = self._analysis_page("frf")
-                if 0 <= pane_idx < page.pane_count():
-                    self._cancel_frf_page_transition_cover(state.view_id)
-                    page.pane_canvas(pane_idx).show_error(message)
-                if pane_idx == page.focused_index():
-                    self.inspector.frf_ctx.set_validation_message(message)
-        self.statusBar.showMessage(f"频响错误: {message}")
-        self.toast(message, "error")
+            canvas = self._canvas_for_completion("frf", state.view_id, pane_idx)
+            if canvas is not None:
+                self._cancel_frf_page_transition_cover(state.view_id)
+                canvas.show_error(message)
+            focus_pane = (
+                self._dispatch_focus_index("frf", state)
+                if self._comparison_routes("frf")
+                else self._analysis_page("frf").focused_index()
+            )
+            if pane_idx == focus_pane and self._completion_updates_focus("frf", context):
+                self.inspector.frf_ctx.set_validation_message(message)
+        if self._completion_updates_focus("frf", context):
+            self.statusBar.showMessage(f"频响错误: {message}")
+            self.toast(message, "error")
 
     def _frf_cache_key_for_pane(self, state, pane):
         """Same key the job stored: analysis Fs plus the prepared span.

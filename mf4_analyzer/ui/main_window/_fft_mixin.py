@@ -352,6 +352,11 @@ class FFTMixin:
             state = mgr.get(mgr.active)
         page = self._analysis_page('fft')
         idx = page.focused_index()
+        if self._comparison_routes('fft'):
+            comp = self._comparison()
+            focus = comp.focused('fft') if comp is not None else None
+            if focus is not None and str(focus[0]) == str(getattr(state, 'view_id', '')):
+                idx = int(focus[1])
         if state is None or not (0 <= idx < len(state.panes)):
             ctx.clear_effective_facts()
             return
@@ -360,7 +365,7 @@ class FFTMixin:
         if not sources:
             ctx.clear_effective_facts()
             return
-        time_range = self._pane_time_range_for('fft', idx)
+        time_range = self._dispatch_time_range('fft', state, idx)
         fft_params = self.inspector.fft_ctx.compute_params()
         groups = []
         extra_warnings = []
@@ -634,25 +639,21 @@ class FFTMixin:
         if not self._offer_analysis_time_range_before_compute('fft'):
             return
         self._capture_active_analysis_view('fft')
-        mgr = self.analysis_managers['fft']
-        state = mgr.get(mgr.active)
+        state = self._analysis_state_for_dispatch('fft')
         self._clear_analysis_view_viewports(state)
-        page = self.chart_stack.page_fft
         fft_params = self.inspector.fft_ctx.compute_params()
         cache = self.analysis_caches['fft']
         colors = self._analysis_channel_color_map()
 
         any_multi = False
         outcome = ComputeOutcome()
-        for pane_idx in range(page.pane_count()):
-            if pane_idx >= len(state.panes):
-                break
+        for pane_idx in self._dispatch_pane_indices('fft', state):
             sources = state.panes[pane_idx].sources
             if not sources:
                 continue
             any_multi = True
             entries = []
-            time_range = self._pane_time_range_for('fft', pane_idx)
+            time_range = self._dispatch_time_range('fft', state, pane_idx)
             for fid, ch in sources:
                 fd = self.files.get(fid)
                 if not self._check_uniform_or_prompt(fd, 'fft'):
@@ -696,8 +697,9 @@ class FFTMixin:
                 entries.append(self._fft_entry_from_cache(
                     result, fid, ch, colors.get((fid, ch)),
                     time_range=time_range))
-            if entries:
-                self._plot_fft_entries(entries, page.pane_canvas(pane_idx))
+            canvas = self._dispatch_canvas('fft', state, pane_idx)
+            if entries and canvas is not None:
+                self._plot_fft_entries(entries, canvas)
                 notify_ultraview_plot(self, "fft", "fft-plot")
         self._sync_fft_effective_facts(state)
 

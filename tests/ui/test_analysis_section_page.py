@@ -4,9 +4,13 @@ import pytest
 
 from PyQt5.QtCore import QEvent, QPointF, Qt
 from PyQt5.QtGui import QMouseEvent
-from PyQt5.QtWidgets import QAbstractButton, QPushButton, QVBoxLayout
+from PyQt5.QtWidgets import QAbstractButton, QPushButton, QSplitter, QVBoxLayout
 
-from mf4_analyzer.ui.analysis_section_page import AnalysisSectionPage, _FOCUS_ACCENT
+from mf4_analyzer.ui.analysis_section_page import (
+    AnalysisPaneHost,
+    AnalysisSectionPage,
+    _FOCUS_ACCENT,
+)
 from mf4_analyzer.ui.pg_canvas.heatmap_canvas import PgHeatmapCanvas
 from mf4_analyzer.ui.pg_canvas.line_canvas import PgLineCanvas
 from mf4_analyzer.ui.pg_canvas.frf_canvas import PgFrfCanvas
@@ -976,3 +980,68 @@ def test_heatmap_set_linked_does_not_emit_levels_changed(page):
     page.set_linked(False)
 
     assert seen == []
+
+
+def _press(widget):
+    return QMouseEvent(
+        QEvent.MouseButtonPress,
+        QPointF(4, 4),
+        Qt.LeftButton,
+        Qt.LeftButton,
+        Qt.NoModifier,
+    )
+
+
+def test_comparison_peer_is_a_second_region_with_one_tabbar(page, qapp):
+    """Cross-view compare mounts a peer host beside the page panes.
+
+    The page keeps its single tab bar and the active-pane split action.
+    A narrow peer region stacks its own two panes; hiding the peer puts
+    the original splitter back and does not change the host pane count.
+    """
+    from mf4_analyzer.ui.view_tabbar import ViewTabBar
+
+    page.enter_split()
+    assert page._split.orientation() == Qt.Horizontal
+    assert page.tabbar.split_action_mode() == "active_pane"
+    page.show_comparison_peer("host-view", "peer-view", 2)
+    qapp.processEvents()
+
+    assert len(page.findChildren(ViewTabBar)) == 1
+    view_split = page.findChild(QSplitter, "analysisComparisonSplit")
+    peer = page.findChild(AnalysisPaneHost, "analysisComparisonPeer")
+    assert view_split is not None and view_split.orientation() == Qt.Horizontal
+    assert view_split.count() == 2
+    assert peer is not None and peer.pane_count() == 2
+    assert page.pane_count() == 2
+    assert page.tabbar.split_action_mode() == "active_pane"
+
+    peer.resize(300, 420)
+    peer.apply_width_orientation()
+    assert peer._split.orientation() == Qt.Vertical
+    peer.resize(700, 420)
+    peer.apply_width_orientation()
+    assert peer._split.orientation() == Qt.Horizontal
+
+    focused = []
+    page.focus_changed.connect(focused.append)
+    pressed = []
+    page.comparison_focus_requested.connect(
+        lambda view_id, pane: pressed.append((view_id, pane))
+    )
+    page.mark_comparison_focus("peer-view", 0)
+    page.eventFilter(page._cards[0], _press(page._cards[0]))
+    assert pressed == [("host-view", 0)]
+    assert focused == []
+
+    peer.eventFilter(peer.cards()[1], _press(peer.cards()[1]))
+    assert pressed[-1] == ("peer-view", 1)
+
+    host_count = page.pane_count()
+    page.hide_comparison_peer()
+    qapp.processEvents()
+    assert page.pane_count() == host_count
+    assert page._peer_host is None
+    assert page.findChild(QSplitter, "analysisComparisonSplit") is None
+    assert page.layout().indexOf(page._split) >= 0
+    page.hide_comparison_peer()

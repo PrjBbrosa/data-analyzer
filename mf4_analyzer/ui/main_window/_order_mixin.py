@@ -408,15 +408,14 @@ class OrderMixin:
             )
             return
         self._order_outcome = None
-        mgr = self.analysis_managers['order']
-        state = mgr.get(mgr.active)
+        state = self._analysis_state_for_dispatch('order')
         self._clear_analysis_view_viewports(state)
-        page = self._analysis_page('order')
         cache = self.analysis_caches['order']
+        routed = self._comparison_routes('order')
 
-        focus = page.focused_index()
+        focus = self._dispatch_focus_index('order', state)
         pane_order = sorted(
-            range(min(page.pane_count(), len(state.panes))),
+            self._dispatch_pane_indices('order', state),
             key=lambda i: (i != focus, i),
         )
         jobs = []
@@ -430,19 +429,29 @@ class OrderMixin:
             any_source = True
             fid, ch = sources[0]
             rpm_source = state.panes[pane_idx].rpm_source
-            analysis_key = self._analysis_cache_key(
-                'order', fid, ch,
-                rpm_source=tuple(rpm_source) if rpm_source else None,
-                pane_idx=pane_idx)
+            pane = state.panes[pane_idx]
+            if routed:
+                analysis_key = self._analysis_cache_key_for_view_source(
+                    'order', state, pane, pane_idx, fid, ch,
+                )
+            else:
+                analysis_key = self._analysis_cache_key(
+                    'order', fid, ch,
+                    rpm_source=tuple(rpm_source) if rpm_source else None,
+                    pane_idx=pane_idx)
             cached = cache.get(analysis_key)
             if cached is not None:
                 self._store_analysis_result(
                     'order', state.view_id, pane_idx, analysis_key, cached)
-                self._render_order_on(
-                    page.pane_canvas(pane_idx), cached, source=(fid, ch))
+                canvas = self._dispatch_canvas('order', state, pane_idx)
+                if canvas is not None:
+                    self._render_order_on(canvas, cached, source=(fid, ch))
                 outcome.cached += 1
             else:
-                built = self._build_order_job(pane_idx, fid, ch, rpm_source)
+                built = self._build_order_job(
+                    pane_idx, fid, ch, rpm_source,
+                    state=state if routed else None,
+                )
                 jobs.append(built if built is not None else (None, {'pane_idx': pane_idx}))
 
         if not jobs:
@@ -863,13 +872,26 @@ class OrderMixin:
         commit = getattr(self, "_commit_heatmap_reveal", None)
         if callable(commit):
             commit("order", canvas, inputs, result)
-        page = self._analysis_page("order")
-        focused = (
-            page.peek_pane_canvas(page.focused_index())
-            if page is not None else None
-        )
-        if focused is not None and canvas is focused:
-            self._sync_order_effective_facts()
+        if self._comparison_routes("order"):
+            comp = self._comparison()
+            focus = comp.focused("order") if comp is not None else None
+            target = comp.target_for_canvas(canvas) if comp is not None else None
+            if (
+                focus is not None
+                and target is not None
+                and str(focus[0]) == str(target.view_id)
+                and int(focus[1]) == int(target.pane_index)
+            ):
+                focused_state = self._analysis_state_by_id("order", target.view_id)
+                self._sync_order_effective_facts(focused_state)
+        else:
+            page = self._analysis_page("order")
+            focused = (
+                page.peek_pane_canvas(page.focused_index())
+                if page is not None else None
+            )
+            if focused is not None and canvas is focused:
+                self._sync_order_effective_facts()
 
     def _render_order_time(self, result, *, emit_feedback=True, source=None):
         # Wave 3 / Task 3.2: pull HEAD-parity display knobs from the
@@ -924,9 +946,25 @@ class OrderMixin:
         # V7b: render onto the SPECIFIC pane this job was computed for.
         # ``_render_order_time`` (preset + status + toast side-effects) runs
         # only for the primary pane (0); compare panes get a pure canvas draw.
-        page = self._analysis_page('order')
+        # A comparison paints the bound canvas for the dispatching view.
         pane_idx = ctx.get('pane_idx', 0)
         source = ctx.get('source')
+        try:
+            pane_idx = int(pane_idx)
+        except (TypeError, ValueError):
+            pane_idx = 0
+        if self._comparison_routes('order'):
+            canvas = self._canvas_for_completion(
+                'order', ctx.get('view_id'), pane_idx,
+            )
+            if canvas is not None:
+                self._render_order_on(canvas, result, source=source)
+            if self._completion_updates_focus('order', ctx):
+                self.statusBar.showMessage(
+                    f'完成 | {len(result.times)} 时间点 × {len(result.orders)} 阶次'
+                )
+            return
+        page = self._analysis_page('order')
         if pane_idx == 0:
             self._render_order_time(
                 result, emit_feedback=outcome is None, source=source)
@@ -942,7 +980,7 @@ class OrderMixin:
         state = self._analysis_state_by_id('order', ctx.get('view_id'))
         if state is None:
             return 'reject'
-        if not self._analysis_ctx_targets_active_view('order', ctx):
+        if not self._analysis_completion_is_visible('order', ctx):
             return 'keep'
         try:
             pane_idx = int(ctx.get('pane_idx', 0))
@@ -1011,6 +1049,11 @@ class OrderMixin:
             state = mgr.get(mgr.active)
         page = self._analysis_page('order')
         idx = page.focused_index()
+        if self._comparison_routes('order'):
+            comp = self._comparison()
+            focus = comp.focused('order') if comp is not None else None
+            if focus is not None and str(focus[0]) == str(getattr(state, 'view_id', '')):
+                idx = int(focus[1])
         if state is None or not (0 <= idx < len(state.panes)):
             ctx.clear_effective_facts()
             return
@@ -1020,7 +1063,7 @@ class OrderMixin:
             ctx.clear_effective_facts()
             return
         fid, ch = sources[0]
-        time_range = self._pane_time_range_for('order', idx)
+        time_range = self._dispatch_time_range('order', state, idx)
         rpm_source = pane.rpm_source
         params = self.inspector.order_ctx.compute_params()
         effective = self._order_effective_params_for_source(

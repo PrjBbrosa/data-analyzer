@@ -1510,6 +1510,8 @@ class MainWindow(
             page.compare_toggled.connect(
                 lambda key, on, s=sec: self._on_analysis_compare_toggled(
                     s, key, on))
+            page.comparison_focus_requested.connect(
+                partial(self._on_comparison_focus_requested, sec))
             # Canvas-level wiring (levels echo / preview range / viewport
             # intent / markup) runs from _on_analysis_page_ready when the
             # deferred chart is first prepared — not here, or blank startup
@@ -1766,12 +1768,16 @@ class MainWindow(
         """
         if self.chart_stack.current_mode() != 'fft' or not self.files:
             return
-        mgr = self.analysis_managers['fft']
-        state = mgr.get(mgr.active)
+        state = self._analysis_state_for_dispatch('fft')
         # Sync navigator checkbox → focused pane sources only. Params / range
         # stay owned by the state that was just applied on mode entry.
+        # A deferred entry can run after comparison focus has moved, so the
+        # checkbox write follows that pane rather than the host tab.
         if not self._analysis_restore_pending:
-            self._capture_analysis_sources('fft', state)
+            pane_idx = None
+            if self._comparison_routes('fft'):
+                pane_idx = self._dispatch_focus_index('fft', state)
+            self._capture_analysis_sources('fft', state, pane_idx=pane_idx)
             self._apply_analysis_time_range('fft', state)
         # 进入 FFT 时按当前勾选的焦点源刷新 Auto 的 dB reference。
         # rerender=False：只刷识别不重算；Manual View 在 helper 内 no-op。
@@ -1787,8 +1793,13 @@ class MainWindow(
         if self._fft_any_source_cached(state):
             self._render_analysis_view_from_cache('fft', state)
         else:
-            page = self.chart_stack.page_fft
-            canvas = page.pane_canvas(page.focused_index())
+            if self._comparison_routes('fft'):
+                canvas = self._dispatch_canvas(
+                    'fft', state, self._dispatch_focus_index('fft', state),
+                )
+            else:
+                page = self.chart_stack.page_fft
+                canvas = page.pane_canvas(page.focused_index())
             if getattr(canvas, 'has_result', lambda: False)():
                 self._refresh_fft_time_preview(clear_spectrum=False)
             else:
@@ -3637,7 +3648,12 @@ class MainWindow(
         mgr = self.analysis_managers[section]
         if not mgr.views:
             return list(self.files)
-        return analysis_scope_fids(mgr.get(mgr.active), self.files)
+        state = mgr.get(mgr.active)
+        if self._comparison_routes(section):
+            focused = self._analysis_state_for_dispatch(section)
+            if focused is not None:
+                state = focused
+        return analysis_scope_fids(state, self.files)
 
     def _candidate_rows_for_fids(self, fids):
         sig_cands = []
@@ -3655,7 +3671,15 @@ class MainWindow(
         manager = self.analysis_managers[section]
         state = manager.get(manager.active)
         page = self._analysis_page(section)
-        pane_idx = min(page.focused_index(), len(state.panes) - 1)
+        if self._comparison_routes(section):
+            focused = self._analysis_state_for_dispatch(section)
+            if focused is not None:
+                state = focused
+                pane_idx = self._dispatch_focus_index(section, state)
+            else:
+                pane_idx = min(page.focused_index(), len(state.panes) - 1)
+        else:
+            pane_idx = min(page.focused_index(), len(state.panes) - 1)
         pane = state.panes[pane_idx]
         if section == 'frf':
             return pane.input_source, pane.output_source
@@ -3846,9 +3870,9 @@ class MainWindow(
             # emissions so they cannot write Time or Analysis state.
             return
         if role == "fft_sources":
-            mgr = self.analysis_managers["fft"]
-            state = mgr.get(mgr.active)
-            self._commit_live_analysis_sources("fft", state)
+            if getattr(self, "_applying_analysis_view", False):
+                return
+            self._commit_live_analysis_sources("fft")
             self._sync_fft_source_summary()
             self._resolve_and_apply_db_reference("fft")
             self._refresh_fft_time_preview(clear_spectrum=False)
@@ -5840,6 +5864,9 @@ class MainWindow(
                 gone = True
             if not gone:
                 stack.cancel_page_transition("window-closing")
+        teardown_comparison = getattr(self, "_teardown_comparison_display", None)
+        if callable(teardown_comparison):
+            teardown_comparison()
 
         batch = getattr(self, "_batch_sheet", None)
         if batch is not None:

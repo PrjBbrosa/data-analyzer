@@ -917,3 +917,28 @@ def test_remove_analysis_channel_clears_only_affected_viewport():
     ChannelScopeMixin._remove_channels_from_all_analysis_views(owner, 'f1', ['a'])
     assert pane.viewport_origin == {'x': 'auto', 'y': 'auto'}
     assert pane.xlim is None
+
+
+def test_comparison_focus_projects_that_views_sources(win_two):
+    """Source scope follows the focused comparison view, not the host tab."""
+    win, fid_a, fid_b = win_two
+    win.toolbar._set_mode("fft")
+    mgr = win.analysis_managers["fft"]
+    mgr.new_view(activate=False)
+    host, peer = mgr.get(0), mgr.get(1)
+    host.attached_file_ids = [fid_a]
+    peer.attached_file_ids = [fid_b]
+    host.panes[0].sources = [(fid_a, "sig")]
+    peer.panes[0].sources = [(fid_b, "rpm")]
+
+    assert win.open_comparison("fft", host.view_id, peer.view_id)
+
+    def checked():
+        return {(row[0], row[1]) for row in win.navigator.get_checked_channels()}
+
+    assert checked() == {(fid_a, "sig")}
+    assert win.focus_comparison("fft", peer.view_id, 0)
+    assert checked() == {(fid_b, "rpm")}
+    assert win.focus_comparison("fft", host.view_id, 0)
+    assert checked() == {(fid_a, "sig")}
+    win.close_comparison("fft")

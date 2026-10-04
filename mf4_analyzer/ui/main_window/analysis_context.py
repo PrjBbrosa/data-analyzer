@@ -33,6 +33,7 @@ from __future__ import annotations
 import numpy as np
 
 from ... import db_reference
+from .analysis_comparison import AnalysisComparisonDisplay
 from .analysis_time_range import (
     AnalysisTimeRangeController,
     SourceBounds,
@@ -83,6 +84,9 @@ class AnalysisContext:
             bounds_provider=self._source_bounds_from_files,
             enabled_range_provider=self._raw_pane_time_range,
         )
+        # Cross-view comparison display. One owner, not a cluster of window
+        # fields. View/pane state remains the intent; canvases only project.
+        self.comparison = AnalysisComparisonDisplay()
 
     # -- section routing ----------------------------------------------------
 

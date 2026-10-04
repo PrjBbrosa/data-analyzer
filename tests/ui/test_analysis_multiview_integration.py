@@ -3523,3 +3523,29 @@ def test_color_policy_commit_keeps_auto_distinct_from_colorbar_drag(two_file_win
     assert params["z_auto"] is False
     assert params["z_floor"] == pytest.approx(-20.0)
     assert params["z_ceiling"] == pytest.approx(-4.0)
+
+
+def test_cross_view_comparison_stays_distinct_from_in_view_split(two_file_win):
+    """Opening a peer view does not append panes. The split action still does."""
+    from mf4_analyzer.ui.analysis_view_state import MAX_PANES
+
+    win = two_file_win
+    win.toolbar._set_mode("fft")
+    mgr = win.analysis_managers["fft"]
+    mgr.new_view(activate=False)
+    host, peer = mgr.get(0), mgr.get(1)
+    assert len(host.panes) == 1 and len(peer.panes) == 1
+
+    assert win.open_comparison("fft", host.view_id, peer.view_id)
+    page = win.chart_stack.page_fft
+    assert len(host.panes) == 1 and len(peer.panes) == 1
+    assert page.pane_count() == 1
+    assert page._peer_host is not None and page._peer_host.pane_count() == 1
+    assert page.tabbar.split_action_mode() == "active_pane"
+    assert MAX_PANES == 2
+    win.close_comparison("fft")
+
+    win._on_analysis_split("fft", True)
+    assert len(host.panes) == 2
+    assert len(peer.panes) == 1
+    assert page.pane_count() == 2
