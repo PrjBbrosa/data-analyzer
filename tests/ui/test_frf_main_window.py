@@ -94,6 +94,30 @@ def _seed_frf_cache(win, state, pane_idx, result):
     return key
 
 
+def _ensure_frf_charts(win):
+    """Materialize deferred FRF cards before a test reads a canvas or facts."""
+    win.chart_stack.page_frf.ensure_ready()
+
+
+def _complete_real_frf_job(win, state):
+    """Run one production candidate and cache it under the coordinator key.
+
+    The key is the job context, not ``_frf_cache_key_for_pane``. Seeding the
+    restore key cannot prove that lookup and dispatch name the same result.
+    """
+    candidate = win._build_frf_candidate(state, 0)
+    context = win._frf_coordinator._build_context(candidate)
+    result = candidate["job"](SimpleNamespace(
+        cancelled=lambda: False,
+        progress=SimpleNamespace(emit=lambda *_args: None),
+    ))
+    win._store_analysis_result(
+        "frf", state.view_id, 0, context["analysis_key"], result,
+    )
+    win._on_frf_render_requested(context, result, False)
+    return candidate, context, result
+
+
 def test_main_window_builds_directional_frf_cache_and_coordinator(qtbot):
     win = MainWindow()
     qtbot.addWidget(win)
@@ -107,6 +131,7 @@ def test_global_tick_density_updates_all_frf_panes(qtbot, monkeypatch):
     win = MainWindow()
     qtbot.addWidget(win)
     page = win.chart_stack.page_frf
+    _ensure_frf_charts(win)
     calls = []
     monkeypatch.setattr(
         page.pane_canvas(0), "set_tick_density",
@@ -305,6 +330,7 @@ def test_main_window_loaded_source_ids_are_canonical_strings(qtbot, tmp_path):
 
 def test_frf_capture_keeps_directional_roles_and_three_y_ranges(qtbot):
     win, fid, state, _time = _window_with_pair(qtbot)
+    _ensure_frf_charts(win)
     canvas = win.chart_stack.page_frf.pane_canvas(0)
     result = _result(np.arange(2000) / 1000.0, 1000.0)
     canvas.set_result(result)
@@ -326,6 +352,9 @@ def test_frf_capture_keeps_directional_roles_and_three_y_ranges(qtbot):
 def test_frf_cursor_mode_is_pane_local_and_restores_across_view_switches(qtbot):
     """The shared frequency toolbar must not leak A/B mode by focus or View."""
     win, _fid, state, _time = _window_with_pair(qtbot)
+    # Card cursor signals bind only when the stack prepares the page.
+    # page.ensure_ready() / enter_split() build the widgets without that bind.
+    win.chart_stack.ensure_analysis_page_ready("frf")
     page = win.chart_stack.page_frf
     assert state.add_pane() is True
     page.enter_split()
@@ -354,6 +383,7 @@ def test_frf_cursor_mode_is_pane_local_and_restores_across_view_switches(qtbot):
 
 def test_frf_main_window_runs_shared_worker_and_renders_result(qtbot):
     win, _fid, _state, _time = _window_with_pair(qtbot, n=4000)
+    win.toolbar._set_mode("frf")
     win.inspector.frf_ctx.spin_t_win.setValue(0.5)
 
     assert win.do_frf() is True
@@ -419,6 +449,7 @@ def test_display_change_does_not_invalidate_and_completion_uses_latest_params(
     qtbot, monkeypatch
 ):
     win, _fid, state, time = _window_with_pair(qtbot)
+    _ensure_frf_charts(win)
     canvas = win.chart_stack.page_frf.pane_canvas(0)
     invalidated = []
     rendered = []
@@ -637,6 +668,8 @@ def test_project_restore_recomputes_directional_frf_pair(
     pane.output_source = (old_fid, "output")
     # Use the real toolbar/card path: saving captures live controls back to
     # state, so a bare field assignment would intentionally be overwritten.
+    # Stay off the FRF mode so capture_sources does not replace the pair.
+    source.chart_stack.page_frf.ensure_ready()
     source.chart_stack.page_frf._cards[0].set_cursor_mode("single")
     source.save_project(project)
 
@@ -811,6 +844,7 @@ def test_frf_completion_publishes_resident_effective_facts_and_warnings(qtbot):
 
 def test_frf_fresh_and_cached_renders_both_fill_the_inspector_facts(qtbot):
     win, _fid, state, time = _window_with_pair(qtbot)
+    _ensure_frf_charts(win)
     ctx = win.inspector.frf_ctx
 
     for cache_hit in (False, True):
@@ -854,6 +888,7 @@ def test_frf_view_switch_syncs_effective_facts_once_after_cache_restore(
 
 def test_frf_display_only_change_leaves_the_effective_facts_untouched(qtbot):
     win, _fid, state, time = _window_with_pair(qtbot)
+    _ensure_frf_charts(win)
     ctx = win.inspector.frf_ctx
     win._on_frf_render_requested(
         {"view_id": state.view_id, "pane_idx": 0}, _result(time, 1000.0), False
@@ -869,6 +904,7 @@ def test_frf_display_only_change_leaves_the_effective_facts_untouched(qtbot):
 
 def test_frf_compute_param_change_marks_the_effective_facts_stale(qtbot):
     win, _fid, state, time = _window_with_pair(qtbot)
+    _ensure_frf_charts(win)
     ctx = win.inspector.frf_ctx
     win._on_frf_render_requested(
         {"view_id": state.view_id, "pane_idx": 0}, _result(time, 1000.0), False
@@ -905,6 +941,7 @@ def test_frf_focus_switch_follows_each_panes_effective_facts(qtbot):
 
 def test_switching_to_a_frf_view_without_results_clears_the_facts_card(qtbot):
     win, _fid, state, time = _window_with_pair(qtbot)
+    _ensure_frf_charts(win)
     ctx = win.inspector.frf_ctx
     win._on_frf_render_requested(
         {"view_id": state.view_id, "pane_idx": 0}, _result(time, 1000.0), False
@@ -982,3 +1019,100 @@ def test_frf_full_choice_still_runs_pair_preflight(qtbot, monkeypatch):
         routed[0].get("preflight_error"), FrfPreflightError
     )
     assert "采样率" in str(routed[0]["preflight_error"])
+
+
+def _frf_section_with_real_job(qtbot):
+    """Enter FRF, run one real job, and require a current facts card."""
+    win, fid, state, time = _window_with_pair(qtbot, n=5000)
+    win.toolbar._set_mode("frf")
+    ctx = win.inspector.frf_ctx
+    ctx.spin_t_win.setValue(0.3)
+    state.params = ctx.current_params()
+    _candidate, context, result = _complete_real_frf_job(win, state)
+    assert win.canvas_frf.has_result()
+    assert ctx.effective_facts_text()
+    assert not ctx.effective_facts_is_stale()
+    return win, fid, state, time, ctx, context, result
+
+
+@pytest.mark.parametrize(
+    "kind",
+    ("uniform-full", "uniform-range", "nonuniform-full", "nonuniform-range"),
+)
+def test_real_frf_job_restores_after_leaving_the_view(qtbot, kind):
+    """Job key, cache, and View restore must name the same completed result."""
+    win, fid, state, time = _window_with_pair(qtbot, n=5000)
+    if kind.startswith("nonuniform"):
+        axis = np.arange(len(time), dtype=float) / 1000.03
+        axis[1700:] += 0.01
+        win.files[fid].time_array = axis
+        win.files[fid]._time_source = "column"
+    original = np.array(win.files[fid].time_array, copy=True)
+    original_fs = float(win.files[fid].fs)
+    win.toolbar._set_mode("frf")
+    win.inspector.frf_ctx.spin_t_win.setValue(0.3)
+    state.params = win.inspector.frf_ctx.current_params()
+    requested = (0.1, 3.8) if kind.endswith("range") else None
+    if requested is not None:
+        state.panes[0].time_range = requested
+    win._apply_analysis_time_range("frf", state)
+    _candidate, context, result = _complete_real_frf_job(win, state)
+    assert win.canvas_frf.has_result()
+
+    win._on_analysis_new("frf")
+    win._on_analysis_switch("frf", 0)
+
+    np.testing.assert_array_equal(win.files[fid].time_array, original)
+    assert float(win.files[fid].fs) == original_fs
+    assert state.panes[0].time_range == requested
+    assert win.analysis_caches["frf"].get(context["analysis_key"]) is result
+    restore_key = win._frf_cache_key_for_pane(state, state.panes[0])
+    assert context["analysis_key"] == restore_key
+    assert win.canvas_frf.has_result(), (
+        "unchanged View must restore the completed real FRF job"
+    )
+
+
+def test_direct_magnitude_edit_keeps_frf_cache_and_current_facts(qtbot):
+    win, _fid, state, _time, ctx, _context, result = _frf_section_with_real_job(
+        qtbot
+    )
+    ctx.apply_params({"magnitude_scale": "linear"}, emit_changes=True)
+
+    assert win._frf_cached_result_for_pane(state, state.panes[0]) is result
+    assert ctx.display_params()["magnitude_scale"] == "linear"
+    assert not ctx.effective_facts_is_stale()
+
+
+def test_display_only_preset_keeps_frf_cache_and_current_facts(qtbot):
+    """Loading a display-only preset must not mark the computed facts stale."""
+    win, _fid, state, _time, ctx, _context, result = _frf_section_with_real_job(
+        qtbot
+    )
+    payload = dict(ctx.current_params(), magnitude_scale="linear")
+    ctx.preset_bar._write(4, "Display only", payload)
+    ctx.preset_bar._load(4)
+
+    assert win._frf_cached_result_for_pane(state, state.panes[0]) is result
+    assert ctx.display_params()["magnitude_scale"] == "linear"
+    assert not ctx.effective_facts_is_stale(), (
+        "display only should not stale compute facts"
+    )
+
+
+def test_frf_compute_param_revert_restores_current_facts(qtbot):
+    """0.3 → 0.4 → 0.3 must hit the cached job and clear the stale mark."""
+    win, _fid, state, _time, ctx, _context, result = _frf_section_with_real_job(
+        qtbot
+    )
+    ctx.spin_t_win.setValue(0.4)
+
+    assert win._frf_cached_result_for_pane(state, state.panes[0]) is None
+    assert ctx.effective_facts_is_stale()
+    assert state.params["t_win_s"] == pytest.approx(0.4)
+
+    ctx.spin_t_win.setValue(0.3)
+
+    assert win._frf_cached_result_for_pane(state, state.panes[0]) is result
+    assert state.params["t_win_s"] == pytest.approx(0.3)
+    assert not ctx.effective_facts_is_stale()

@@ -106,6 +106,47 @@ def test_order_effective_params_use_local_time_axis_frequency(source_window, mon
     assert_original(fd, original_t, original_y)
 
 
+def test_obsolete_fft_time_completion_does_not_render_current_request(
+    source_window, monkeypatch,
+):
+    """A 0.5 s job must not paint once the live request is already 1.0 s.
+
+    ``tests/ui/test_fft_time_coordinator.py`` drops a finished job only after
+    ``request_batch(replace=True)`` bumps the coordinator generation. Editing
+    the window without submitting a new batch never enters that gate. Admission
+    belongs to ``MainWindow._on_fft_time_render_requested``.
+    """
+    win, fd, original_t, original_y = source_window
+    state = win.analysis_managers['fft_time'].get(0)
+    state.attached_file_ids = ['f1']
+    state.panes[0].sources = [('f1', 'sig')]
+    win.toolbar._set_mode('fft_time')
+    ctx = win.inspector.fft_time_ctx
+    ctx.apply_params({'nfft': None, 'nfft_mode': 'auto', 't_win_s': 0.5})
+    state.params = ctx.current_params()
+    built = win._build_fft_time_job(
+        0, 'f1', 'sig', ctx.compute_params(), time_range=None,
+    )
+    assert built is not None
+    job, old = built
+    old['view_id'] = state.view_id
+    result = job(SimpleNamespace(
+        progress=SimpleNamespace(emit=lambda *_args: None),
+        cancelled=lambda: False,
+    ))
+    ctx.apply_params({'nfft': None, 'nfft_mode': 'auto', 't_win_s': 1.0})
+    win._on_analysis_compute_params_changed('fft_time', ctx.compute_params())
+    assert old['params']['t_win_s'] != ctx.compute_params()['t_win_s']
+    assert_original(fd, original_t, original_y)
+    rendered = []
+    monkeypatch.setattr(
+        win, '_render_fft_time_on',
+        lambda *args, **kwargs: rendered.append(args),
+    )
+    win._on_fft_time_render_requested(old, result, False)
+    assert not rendered, 'obsolete compute completion must not render as current'
+
+
 def test_frf_job_reports_processing_without_touching_either_source_signal(source_window):
     win, fd, original_t, original_y = source_window
     manager = win.analysis_managers['frf']
