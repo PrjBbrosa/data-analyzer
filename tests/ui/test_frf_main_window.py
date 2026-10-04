@@ -99,23 +99,53 @@ def _ensure_frf_charts(win):
     win.chart_stack.page_frf.ensure_ready()
 
 
-def _complete_real_frf_job(win, state):
+def _complete_real_frf_job(win, state, pane_idx=0):
     """Run one production candidate and cache it under the coordinator key.
 
     The key is the job context, not ``_frf_cache_key_for_pane``. Seeding the
     restore key cannot prove that lookup and dispatch name the same result.
     """
-    candidate = win._build_frf_candidate(state, 0)
+    candidate = win._build_frf_candidate(state, pane_idx)
     context = win._frf_coordinator._build_context(candidate)
     result = candidate["job"](SimpleNamespace(
         cancelled=lambda: False,
         progress=SimpleNamespace(emit=lambda *_args: None),
     ))
     win._store_analysis_result(
-        "frf", state.view_id, 0, context["analysis_key"], result,
+        "frf", state.view_id, pane_idx, context["analysis_key"], result,
     )
     win._on_frf_render_requested(context, result, False)
     return candidate, context, result
+
+
+def _set_nonuniform_time(win, fid):
+    """Same bent axis the restore cases use. Does not change FileData.fs."""
+    time = np.asarray(win.files[fid].time_array, dtype=float)
+    axis = np.arange(len(time), dtype=float) / 1000.03
+    axis[1700:] += 0.01
+    win.files[fid].time_array = axis
+    win.files[fid]._time_source = "column"
+    return axis
+
+
+def _watch_frf_dispatch(monkeypatch, win):
+    """Record coordinator requests and job-service submits. No product counter."""
+    submitted = []
+    requested = []
+    real_submit = win._analysis_jobs.submit
+    real_request = win._frf_coordinator.request
+
+    def submit(section, job, ctx=None, *, replace=False):
+        submitted.append(section)
+        return real_submit(section, job, ctx, replace=replace)
+
+    def request(candidate):
+        requested.append(candidate)
+        return real_request(candidate)
+
+    monkeypatch.setattr(win._analysis_jobs, "submit", submit)
+    monkeypatch.setattr(win._frf_coordinator, "request", request)
+    return submitted, requested
 
 
 def test_main_window_builds_directional_frf_cache_and_coordinator(qtbot):
@@ -1071,6 +1101,11 @@ def test_real_frf_job_restores_after_leaving_the_view(qtbot, kind):
     assert win.canvas_frf.has_result(), (
         "unchanged View must restore the completed real FRF job"
     )
+    assert context["analysis_key"] in win._pinned_keys_for_section("frf")
+    facts = win.inspector.frf_ctx.effective_facts_text()
+    assert facts
+    assert "完整段数" in facts
+    assert not win.inspector.frf_ctx.effective_facts_is_stale()
 
 
 def test_direct_magnitude_edit_keeps_frf_cache_and_current_facts(qtbot):
@@ -1116,3 +1151,168 @@ def test_frf_compute_param_revert_restores_current_facts(qtbot):
     assert win._frf_cached_result_for_pane(state, state.panes[0]) is result
     assert state.params["t_win_s"] == pytest.approx(0.3)
     assert not ctx.effective_facts_is_stale()
+
+
+def _prepare_nonuniform_frf_job(qtbot, *, requested=None):
+    win, fid, state, _time = _window_with_pair(qtbot, n=5000)
+    original = _set_nonuniform_time(win, fid)
+    original_fs = float(win.files[fid].fs)
+    win.toolbar._set_mode("frf")
+    win.inspector.frf_ctx.spin_t_win.setValue(0.3)
+    state.params = win.inspector.frf_ctx.current_params()
+    if requested is not None:
+        state.panes[0].time_range = requested
+    win._apply_analysis_time_range("frf", state)
+    _candidate, context, result = _complete_real_frf_job(win, state)
+    assert win.canvas_frf.has_result()
+    return win, fid, state, original, original_fs, context, result
+
+
+def test_cached_nonuniform_frf_round_trip_submits_no_job(qtbot, monkeypatch):
+    """A/B/A and leaving the section must restore the cached job, not recompute."""
+    win, fid, state, original, original_fs, context, result = (
+        _prepare_nonuniform_frf_job(qtbot)
+    )
+    submitted, requested = _watch_frf_dispatch(monkeypatch, win)
+
+    win._on_analysis_new("frf")
+    win._on_analysis_switch("frf", 0)
+    win.toolbar._set_mode("fft")
+    win.toolbar._set_mode("frf")
+
+    assert submitted == []
+    assert requested == []
+    assert context["analysis_key"] == win._frf_cache_key_for_pane(
+        state, state.panes[0]
+    )
+    assert win.analysis_caches["frf"].get(context["analysis_key"]) is result
+    assert win.canvas_frf.has_result()
+    assert win.inspector.frf_ctx.effective_facts_text()
+    assert "完整段数" in win.inspector.frf_ctx.effective_facts_text()
+    assert not win.inspector.frf_ctx.effective_facts_is_stale()
+    np.testing.assert_array_equal(win.files[fid].time_array, original)
+    assert float(win.files[fid].fs) == original_fs
+
+
+def test_cached_nonuniform_frf_dual_pane_copy_and_tour_submit_no_job(
+    qtbot, monkeypatch,
+):
+    """Split, copy, and a full analysis-view tour reuse the cached results."""
+    from mf4_analyzer.ui.view_state import MAX_VIEWS
+
+    win, fid, state, original, original_fs, context, result = (
+        _prepare_nonuniform_frf_job(qtbot, requested=(0.1, 3.8))
+    )
+    assert win._on_analysis_split("frf", True) is None
+    state.panes[1].input_source = state.panes[0].input_source
+    state.panes[1].output_source = state.panes[0].output_source
+    state.panes[1].time_range = None
+    _candidate_b, context_b, result_b = _complete_real_frf_job(win, state, 1)
+    assert context_b["analysis_key"] != context["analysis_key"]
+    submitted, requested = _watch_frf_dispatch(monkeypatch, win)
+    page = win.chart_stack.page_frf
+    page.set_focused_index(1)
+    page.set_focused_index(0)
+
+    manager = win.analysis_managers["frf"]
+    assert manager.max_views == MAX_VIEWS
+    copied = manager.duplicate(0)
+    assert copied > 0
+    while len(manager.views) < manager.max_views:
+        assert manager.duplicate(0) >= 0
+    assert len(manager.views) == manager.max_views
+    order = list(range(manager.max_views)) + list(range(manager.max_views - 1, -1, -1))
+    for idx in order:
+        if manager.active != idx:
+            win._on_analysis_switch("frf", idx)
+        viewed = manager.get(idx)
+        assert page.pane_count() == 2
+        assert page.pane_canvas(0).has_result()
+        assert page.pane_canvas(1).has_result()
+        assert win._frf_cache_key_for_pane(viewed, viewed.panes[0]) == (
+            context["analysis_key"]
+        )
+        assert win._frf_cache_key_for_pane(viewed, viewed.panes[1]) == (
+            context_b["analysis_key"]
+        )
+
+    assert submitted == []
+    assert requested == []
+    assert win.analysis_caches["frf"].get(context["analysis_key"]) is result
+    assert win.analysis_caches["frf"].get(context_b["analysis_key"]) is result_b
+    assert win.inspector.frf_ctx.effective_facts_text()
+    assert not win.inspector.frf_ctx.effective_facts_is_stale()
+    np.testing.assert_array_equal(win.files[fid].time_array, original)
+    assert float(win.files[fid].fs) == original_fs
+
+
+def test_real_nonuniform_frf_result_stays_pinned_under_cache_pressure(qtbot):
+    """The residency harness pins synthetic keys, so the real job key is checked here."""
+    win, _fid, state, _original, _original_fs, context, result = (
+        _prepare_nonuniform_frf_job(qtbot)
+    )
+    win._on_analysis_new("frf")
+    win._on_analysis_switch("frf", 0)
+    key = context["analysis_key"]
+    assert key == win._frf_cache_key_for_pane(state, state.panes[0])
+    assert key in win._pinned_keys_for_section("frf")
+    cache = win.analysis_caches["frf"]
+    for index in range(cache._capacity + 2):
+        cache.put(
+            cache.make_key(
+                ("storm", f"in-{index}"),
+                ("storm", f"out-{index}"),
+                {"fs": float(index + 1), "t_win_s": 0.2},
+                (0.0, 1.0),
+            ),
+            _result(np.arange(4), 1000.0),
+        )
+    assert cache.get(key) is result
+    assert win.canvas_frf.has_result()
+
+
+def test_frf_cache_lookup_does_not_copy_signals_or_allocate_the_grid(
+    qtbot, monkeypatch,
+):
+    """Lookup plans Fs with materialize=False and does not read pair samples."""
+    import pandas as pd
+
+    import mf4_analyzer.analysis_time_axis as axis_mod
+
+    win, _fid, state, _original, _original_fs, context, _result_obj = (
+        _prepare_nonuniform_frf_job(qtbot, requested=(0.1, 3.8))
+    )
+    signal_reads = []
+    real_to_numpy = pd.Series.to_numpy
+    real_source_arrays = win._frf_source_arrays
+    real_prepare = axis_mod.prepare_analysis_time_axis
+    real_arange = axis_mod.np.arange
+    prepared = []
+
+    def to_numpy(series, *args, **kwargs):
+        signal_reads.append(getattr(series, "name", None))
+        return real_to_numpy(series, *args, **kwargs)
+
+    def source_arrays(*args, **kwargs):
+        signal_reads.append("source-arrays")
+        return real_source_arrays(*args, **kwargs)
+
+    def prepare(time, fs, **kwargs):
+        prepared.append(kwargs.get("materialize", True))
+        axis, rate, facts = real_prepare(time, fs, **kwargs)
+        assert np.shares_memory(axis, np.asarray(time))
+        return axis, rate, facts
+
+    def arange(*args, **kwargs):
+        raise AssertionError("lookup must not allocate the rebuilt time grid")
+
+    monkeypatch.setattr(pd.Series, "to_numpy", to_numpy)
+    monkeypatch.setattr(win, "_frf_source_arrays", source_arrays)
+    monkeypatch.setattr(axis_mod, "prepare_analysis_time_axis", prepare)
+    monkeypatch.setattr(axis_mod.np, "arange", arange)
+
+    restore_key = win._frf_cache_key_for_pane(state, state.panes[0])
+
+    assert restore_key == context["analysis_key"]
+    assert prepared == [False]
+    assert signal_reads == []

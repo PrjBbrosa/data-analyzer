@@ -300,7 +300,8 @@ class FrfMixin:
         nominal_dt = 1.0 / sample_rate
         return float(np.max(np.abs(differences - nominal_dt)) / nominal_dt)
 
-    def _frf_source_arrays(self, source, role):
+    def _frf_source_time(self, source, role):
+        """Time, file Fs, and unit for one endpoint. Does not read samples."""
         if source is None:
             raise FrfPreflightError(f"请选择{role}通道")
         fid, channel = (str(source[0]), str(source[1]))
@@ -324,6 +325,14 @@ class FrfMixin:
             time = np.asarray(time_values, dtype=np.float64)
         except (TypeError, ValueError) as exc:
             raise FrfPreflightError(f"{role}真实时间轴必须是一维数值数组") from exc
+        if getattr(time, "ndim", None) != 1:
+            raise FrfPreflightError(f"{role}通道与时间轴必须是一维数组")
+        unit = str((getattr(fd, "channel_units", None) or {}).get(channel, "") or "")
+        return (fid, channel), fd, time, fs, unit
+
+    def _frf_source_arrays(self, source, role):
+        key, fd, time, fs, unit = self._frf_source_time(source, role)
+        _fid, channel = key
         raw_signal = fd.data[channel].to_numpy(copy=False)
         if np.iscomplexobj(raw_signal) or np.issubdtype(raw_signal.dtype, np.bool_):
             raise FrfPreflightError(f"{role}通道必须是实数数值")
@@ -332,25 +341,68 @@ class FrfMixin:
         except (TypeError, ValueError) as exc:
             raise FrfPreflightError(f"{role}通道必须是实数数值") from exc
         self._frf_validate_array_shapes(time, signal, role)
-        unit = str((getattr(fd, "channel_units", None) or {}).get(channel, "") or "")
-        return (fid, channel), fd, time, signal, fs, unit
+        return key, fd, time, signal, fs, unit
+
+    def _frf_requested_range_for_pane(self, state, pane):
+        """Requested range for this pane, never another view's Inspector."""
+        try:
+            pane_idx = state.panes.index(pane)
+        except ValueError:
+            # Defensive path for a detached pane supplied by a narrow caller.
+            # Normal candidate construction always owns a pane in ``state``.
+            return self._normalize_analysis_time_range(pane.time_range)
+        active_state = self.analysis_managers["frf"].get(
+            self.analysis_managers["frf"].active
+        )
+        if active_state is state:
+            return self._pane_time_range_for("frf", pane_idx)
+        # The shared helper intentionally addresses the active view;
+        # an inactive restore candidate must use its own pane instead.
+        return self._normalize_analysis_time_range(pane.time_range)
+
+    @staticmethod
+    def _frf_rebuilt_span(cropped_time, analysis_fs):
+        """Endpoints of the analysis grid without allocating ``arange(n)``.
+
+        ``prepare_analysis_time_axis`` builds ``origin + arange(n) / fs`` only
+        when materializing. The last sample of that grid is this scalar, which
+        is what the job stores in the cache key.
+        """
+        count = int(getattr(cropped_time, "size", 0) or 0)
+        origin = float(cropped_time[0]) if count else 0.0
+        if count <= 1:
+            return (origin, origin)
+        end = float(origin + np.float64(count - 1) / np.float64(analysis_fs))
+        return (origin, end)
 
     def _frf_prepare_pair_samples(
         self, state, pane, *, validate_selected=True, _auto_rebuilt=False,
+        materialize=True,
     ):
-        """Read and validate the directional pair on one common time crop.
+        """Crop on original time and describe this analysis request.
 
-        Crop both signals on original physical time first. If that selection
-        is non-uniform, validate pair alignment and prepare one analysis-only
-        grid. Imported sources remain unchanged.
+        ``materialize=False`` is the lookup description: same crop, alignment,
+        and planned rate as the job, but no signal copies and no rebuilt grid.
+        The job path keeps ``materialize=True``. Imported sources stay unchanged.
         """
 
-        input_key, input_fd, input_time, input_values, input_fs, input_unit = (
-            self._frf_source_arrays(pane.input_source, "输入")
-        )
-        output_key, output_fd, output_time, output_values, output_fs, output_unit = (
-            self._frf_source_arrays(pane.output_source, "输出")
-        )
+        if materialize:
+            input_key, input_fd, input_time, input_values, input_fs, input_unit = (
+                self._frf_source_arrays(pane.input_source, "输入")
+            )
+            (
+                output_key, output_fd, output_time, output_values, output_fs,
+                output_unit,
+            ) = self._frf_source_arrays(pane.output_source, "输出")
+        else:
+            input_key, input_fd, input_time, input_fs, input_unit = (
+                self._frf_source_time(pane.input_source, "输入")
+            )
+            output_key, output_fd, output_time, output_fs, output_unit = (
+                self._frf_source_time(pane.output_source, "输出")
+            )
+            input_values = None
+            output_values = None
         if input_key == output_key:
             raise FrfPreflightError("输入和输出不能是同一通道")
         if input_key[0] != output_key[0]:
@@ -360,26 +412,7 @@ class FrfMixin:
         if len(input_time) == 0 or len(output_time) == 0:
             raise FrfPreflightError("输入和输出没有共同的物理时间样本")
 
-        try:
-            pane_idx = state.panes.index(pane)
-        except ValueError:
-            # Defensive path for a detached pane supplied by a narrow caller.
-            # Normal candidate construction always owns a pane in ``state``.
-            requested_range = self._normalize_analysis_time_range(
-                pane.time_range
-            )
-        else:
-            active_state = self.analysis_managers["frf"].get(
-                self.analysis_managers["frf"].active
-            )
-            if active_state is state:
-                requested_range = self._pane_time_range_for("frf", pane_idx)
-            else:
-                # The shared helper intentionally addresses the active view;
-                # an inactive restore candidate must use its own pane instead.
-                requested_range = self._normalize_analysis_time_range(
-                    pane.time_range
-                )
+        requested_range = self._frf_requested_range_for_pane(state, pane)
         common_lo = max(float(input_time[0]), float(output_time[0]))
         common_hi = min(float(input_time[-1]), float(output_time[-1]))
         if requested_range is not None:
@@ -391,24 +424,35 @@ class FrfMixin:
         input_mask = (input_time >= common_lo) & (input_time <= common_hi)
         output_mask = (output_time >= common_lo) & (output_time <= common_hi)
         input_time = input_time[input_mask]
-        input_values = input_values[input_mask]
         output_time = output_time[output_mask]
-        output_values = output_values[output_mask]
+        if materialize:
+            input_values = input_values[input_mask]
+            output_values = output_values[output_mask]
         if len(input_time) == 0 or len(output_time) == 0:
             raise FrfPreflightError("输入和输出在当前范围内没有共同的物理时间样本")
 
         time_facts = None
+        cropped_input_time = input_time
         if validate_selected:
             # Selected-data validation intentionally follows the common
             # physical mask so jitter outside an explicitly requested range
-            # stays irrelevant.
+            # stays irrelevant. Lookup passes the time crop in the signal
+            # slot so the same jitter gate runs without reading samples.
             try:
-                self._frf_validate_time_axis(
-                    input_time, input_values, input_fs, "输入"
-                )
-                self._frf_validate_time_axis(
-                    output_time, output_values, output_fs, "输出"
-                )
+                if materialize:
+                    self._frf_validate_time_axis(
+                        input_time, input_values, input_fs, "输入"
+                    )
+                    self._frf_validate_time_axis(
+                        output_time, output_values, output_fs, "输出"
+                    )
+                else:
+                    self._frf_validate_time_axis(
+                        input_time, input_time, input_fs, "输入"
+                    )
+                    self._frf_validate_time_axis(
+                        output_time, output_time, output_fs, "输出"
+                    )
             except FrfPreflightError as issue:
                 if (
                     issue.code != FrfPreflightError.CODE_NONUNIFORM_TIME_AXIS
@@ -423,23 +467,34 @@ class FrfMixin:
                 ):
                     raise FrfPreflightError("输入和输出真实时间轴未逐点对齐")
                 from ...analysis_time_axis import prepare_analysis_time_axis
-                input_time, input_fs, time_facts = prepare_analysis_time_axis(
+                prepared_time, input_fs, time_facts = prepare_analysis_time_axis(
                     input_time, input_fs,
-                    time_source=getattr(input_fd, '_time_source', 'column'),
+                    time_source=getattr(input_fd, "_time_source", "column"),
+                    materialize=materialize,
                 )
-                output_time = input_time.copy()
-                self._frf_validate_time_axis(input_time, input_values, input_fs, "输入")
-                self._frf_validate_time_axis(output_time, output_values, input_fs, "输出")
-            if len(input_time) != len(output_time):
-                raise FrfPreflightError(
-                    "应用同一物理范围后输入和输出样本数不一致"
-                )
-            alignment_tolerance = DEFAULT_TIME_JITTER_TOLERANCE / input_fs
-            max_difference = float(np.max(np.abs(input_time - output_time)))
-            if max_difference > alignment_tolerance:
-                raise FrfPreflightError("输入和输出真实时间轴未逐点对齐")
+                if materialize:
+                    input_time = prepared_time
+                    output_time = input_time.copy()
+                    self._frf_validate_time_axis(
+                        input_time, input_values, input_fs, "输入"
+                    )
+                    self._frf_validate_time_axis(
+                        output_time, output_values, input_fs, "输出"
+                    )
+            if materialize or time_facts is None:
+                if len(input_time) != len(output_time):
+                    raise FrfPreflightError(
+                        "应用同一物理范围后输入和输出样本数不一致"
+                    )
+                alignment_tolerance = DEFAULT_TIME_JITTER_TOLERANCE / input_fs
+                max_difference = float(np.max(np.abs(input_time - output_time)))
+                if max_difference > alignment_tolerance:
+                    raise FrfPreflightError("输入和输出真实时间轴未逐点对齐")
 
-        effective_range = (float(input_time[0]), float(input_time[-1]))
+        if time_facts is None or materialize:
+            effective_range = (float(input_time[0]), float(input_time[-1]))
+        else:
+            effective_range = self._frf_rebuilt_span(cropped_input_time, input_fs)
         return {
             "input_key": input_key,
             "output_key": output_key,
@@ -466,6 +521,40 @@ class FrfMixin:
         })
         return values
 
+    def _frf_compute_values_for_state(self, state):
+        """Compute fields for this view. Inactive views do not read Inspector."""
+        stored = getattr(state, "params", None) or {}
+        manager = self.analysis_managers["frf"]
+        active = manager.get(manager.active) if manager.views else None
+        if active is state:
+            values = self.inspector.frf_ctx.compute_params()
+        else:
+            defaults = FrfParams()
+            values = {
+                "estimator": defaults.estimator,
+                "t_win_s": defaults.t_win_s,
+                "overlap": defaults.overlap,
+                "nfft_mode": defaults.nfft_mode,
+                "nfft": defaults.nfft,
+                "window": defaults.window,
+                "periodic_window": defaults.periodic_window,
+                "detrend": defaults.detrend,
+            }
+        values.update({
+            key: stored[key]
+            for key in values
+            if key in stored
+        })
+        return values
+
+    def _frf_canonical_params(self, state, analysis_fs):
+        """Normalized compute params plus the analysis Fs the job will store."""
+        try:
+            params = FrfParams(**self._frf_compute_values_for_state(state))
+        except ValueError as exc:
+            raise FrfPreflightError(str(exc)) from exc
+        return params, {"fs": float(analysis_fs), **params.__dict__}
+
     def _build_frf_candidate(self, state, pane_idx, *, force=False):
         idx = min(int(pane_idx), len(state.panes) - 1)
         pane = state.panes[idx]
@@ -482,16 +571,7 @@ class FrfMixin:
         input_unit = prepared["input_unit"]
         output_unit = prepared["output_unit"]
 
-        compute_values = self.inspector.frf_ctx.compute_params()
-        compute_values.update({
-            key: state.params[key]
-            for key in compute_values
-            if key in state.params
-        })
-        try:
-            params = FrfParams(**compute_values)
-        except ValueError as exc:
-            raise FrfPreflightError(str(exc)) from exc
+        params, canonical = self._frf_canonical_params(state, input_fs)
         # Single source of truth for nperseg/noverlap/hop/segments shape and
         # its viability gates: ``plan_frf_request`` (compute_frf runs the
         # same call again once the job actually dispatches). Do not
@@ -557,7 +637,7 @@ class FrfMixin:
             "pane_idx": idx,
             "input_source": input_key,
             "output_source": output_key,
-            "params": {"fs": input_fs, **params.__dict__},
+            "params": canonical,
             "time_range": effective_range,
             "render_params": render_params,
             "input_unit": input_unit,
@@ -746,22 +826,32 @@ class FrfMixin:
         self.toast(message, "error")
 
     def _frf_cache_key_for_pane(self, state, pane):
+        """Same key the job stored: analysis Fs plus the prepared span.
+
+        ``pane.effective_time_range`` only means a run finished. It is not the
+        cache identity. Lookup uses the light time description, so it does not
+        copy either signal or allocate the rebuilt grid.
+        """
         if (
             pane.input_source is None
             or pane.output_source is None
             or pane.effective_time_range is None
         ):
             return None
-        input_fd = self.files.get(pane.input_source[0])
-        if input_fd is None:
+        try:
+            described = self._frf_prepare_pair_samples(
+                state, pane, materialize=False,
+            )
+            _params, canonical = self._frf_canonical_params(
+                state, described["input_fs"],
+            )
+        except FrfPreflightError:
             return None
-        params = dict(state.params)
-        params["fs"] = float(input_fd.fs)
         return self.analysis_caches["frf"].make_key(
-            pane.input_source,
-            pane.output_source,
-            frf_compute_cache_params(params),
-            pane.effective_time_range,
+            described["input_key"],
+            described["output_key"],
+            frf_compute_cache_params(canonical),
+            described["effective_range"],
         )
 
     def _render_frf_view_from_cache(self, state):
