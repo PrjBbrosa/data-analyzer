@@ -1236,6 +1236,7 @@ class AnalysisSectionPage(QWidget):
 
             metrics = [c.heatmap_layout_metrics() for c in canvases]
             left_width = max(m.get('left_axis_width', 0.0) for m in metrics)
+            colorbar_width = max(m.get('colorbar_axis_width', 0.0) for m in metrics)
             main_bottom_height = max(
                 m.get('main_bottom_axis_height', 0.0) for m in metrics)
             slice_bottom_height = max(
@@ -1246,6 +1247,7 @@ class AnalysisSectionPage(QWidget):
                     left_axis_width=left_width,
                     main_bottom_axis_height=main_bottom_height,
                     slice_bottom_axis_height=slice_bottom_height,
+                    colorbar_axis_width=colorbar_width,
                 )
 
             metrics = [c.heatmap_layout_metrics() for c in canvases]
@@ -1257,6 +1259,7 @@ class AnalysisSectionPage(QWidget):
                     main_bottom_axis_height=main_bottom_height,
                     slice_bottom_axis_height=slice_bottom_height,
                     slice_right_reserve=slice_right_reserve,
+                    colorbar_axis_width=colorbar_width,
                 )
 
         line_canvases = [

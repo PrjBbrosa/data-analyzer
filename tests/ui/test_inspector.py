@@ -4210,7 +4210,7 @@ def test_fft_contextual_source_summary_replaces_signal_combo_for_checked_sources
     assert w.combo_sig.isHidden() is False
 
 
-def test_fft_auto_xlim_keeps_low_frequency_spectrum_tight():
+def test_fft_auto_xlim_keeps_full_frequency_extent_for_narrow_signal():
     import numpy as np
     from mf4_analyzer.ui.main_window import MainWindow
 
@@ -4221,7 +4221,7 @@ def test_fft_auto_xlim_keeps_low_frequency_spectrum_tight():
     xmax = MainWindow._fft_auto_xlim(freq, amp)
 
     assert xmax >= 2.0
-    assert xmax == 5.0
+    assert xmax == freq[-1]
     assert xmax <= freq[-1]
 
 
@@ -4259,11 +4259,11 @@ def test_plot_fft_entries_auto_xlim_includes_all_overlay_sources(qtbot):
     win._plot_fft_entries(entries, canvas)
 
     xmax = canvas.plot_kwargs["xlim"][1]
-    assert xmax == 20.0
+    assert xmax == freq[-1]
     assert xmax <= freq[-1]
 
 
-def test_plot_fft_entries_auto_xlim_uses_raw_amp_in_db_mode(qtbot):
+def test_plot_fft_entries_auto_xlim_is_amplitude_independent_in_db_mode(qtbot):
     import numpy as np
     from mf4_analyzer.ui.main_window import MainWindow
 
@@ -4300,7 +4300,7 @@ def test_plot_fft_entries_auto_xlim_uses_raw_amp_in_db_mode(qtbot):
     win._plot_fft_entries(entries, canvas)
 
     xmax = canvas.plot_kwargs["xlim"][1]
-    assert xmax == 5.0
+    assert xmax == freq[-1]
 
 
 def test_fft_render_honors_amplitude_axis_toggle(qtbot):
@@ -6524,24 +6524,24 @@ def test_builtin_preset_second_left_click_reapplies_or_noops(qapp):
     from mf4_analyzer.ui.inspector_sections import PresetBar
 
     applied = []
-    live = {'mode': 'current'}
+    live = {'window': 'hanning'}
     bar = PresetBar(
-        'test_kind_builtin_toggle',
+        'fft',
         lambda: dict(live),
-        lambda d: applied.append(dict(d)),
+        lambda d: (live.update(d), applied.append(dict(d))),
         builtin_defaults={
-            1: {'display_name': '频率', 'params': {'mode': 'frequency'}},
+            1: {'display_name': '频率', 'params': {'window': 'hamming'}},
         },
-        default_params={'mode': 'default'},
+        default_params={'window': 'hanning'},
     )
 
     bar._on_left_click(1)
-    assert applied[-1] == {'mode': 'frequency'}
+    assert applied[-1] == {'window': 'hamming'}
     assert bar._load_btns[1].property('applied') == 'true'
     assert bar._load_btns[1].property('recommended') == 'false'
 
     bar._on_left_click(1)
-    assert applied[-1] == {'mode': 'frequency'}
+    assert applied[-1] == {'window': 'hamming'}
     assert len(applied) == 1
     assert bar._load_btns[1].property('applied') == 'true'
 
@@ -6551,20 +6551,21 @@ def test_recommended_only_builtin_click_still_loads_preset(qapp):
     from mf4_analyzer.ui.inspector_sections import PresetBar
 
     applied = []
+    live = {'window': 'hanning'}
     bar = PresetBar(
-        'test_kind_builtin_recommend_only',
-        lambda: {'mode': 'current'},
-        lambda d: applied.append(dict(d)),
+        'fft',
+        lambda: dict(live),
+        lambda d: (live.update(d), applied.append(dict(d))),
         builtin_defaults={
-            1: {'display_name': '频率', 'params': {'mode': 'frequency'}},
+            1: {'display_name': '频率', 'params': {'window': 'hamming'}},
         },
-        default_params={'mode': 'default'},
+        default_params={'window': 'hanning'},
     )
 
     bar.set_recommended(1)
     bar._on_left_click(1)
 
-    assert applied[-1] == {'mode': 'frequency'}
+    assert applied[-1] == {'window': 'hamming'}
     assert bar._load_btns[1].property('recommended') == 'false'
     assert bar._recommend_badges[1].isHidden()
     assert bar._load_btns[1].property('applied') == 'true'
@@ -6575,16 +6576,16 @@ def test_recommendation_change_does_not_clear_baseline_selection(qapp):
     from mf4_analyzer.ui.inspector_sections import PresetBar
 
     applied = []
-    live = {'mode': 'current'}
+    live = {'window': 'hanning'}
     bar = PresetBar(
-        'test_kind_builtin_recommendation_change',
+        'fft',
         lambda: dict(live),
-        lambda d: applied.append(dict(d)),
+        lambda d: (live.update(d), applied.append(dict(d))),
         builtin_defaults={
-            1: {'display_name': '频率', 'params': {'mode': 'frequency'}},
-            2: {'display_name': '均衡', 'params': {'mode': 'balanced'}},
+            1: {'display_name': '频率', 'params': {'window': 'hamming'}},
+            2: {'display_name': '均衡', 'params': {'window': 'blackman'}},
         },
-        default_params={'mode': 'default'},
+        default_params={'window': 'hanning'},
     )
 
     bar._on_left_click(1)
@@ -6594,7 +6595,7 @@ def test_recommendation_change_does_not_clear_baseline_selection(qapp):
     assert not bar._recommend_badges[2].isHidden()
 
     bar._on_left_click(1)
-    assert applied[-1] == {'mode': 'frequency'}
+    assert applied[-1] == {'window': 'hamming'}
     assert bar._load_btns[1].property('applied') == 'true'
     assert bar._load_btns[2].property('recommended') == 'true'
 

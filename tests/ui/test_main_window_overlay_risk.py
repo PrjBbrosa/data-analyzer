@@ -295,23 +295,11 @@ def test_estimate_overlay_risk_uses_checked_range_and_effective_filter(
     monkeypatch.setattr(w.inspector.top, "range_enabled", lambda: True)
     monkeypatch.setattr(w.inspector.top, "range_values", lambda: (1.25, 3.5))
 
-    fp = w.inspector.filter_panel
-    monkeypatch.setattr(fp, "is_enabled", lambda: True)
-    monkeypatch.setattr(fp, "show_original", lambda: True)
-    monkeypatch.setattr(fp, "show_filtered", lambda: True)
-    monkeypatch.setattr(
-        fp,
-        "filter_spec",
-        lambda: SimpleNamespace(cutoff=0.0, cutoff_lo=0.0, cutoff_hi=0.0),
-    )
-
+    config = {"enabled": True, "show_original": True, "show_filtered": True,
+              "spec": {"kind": "low", "cutoff": 0.0}}
+    monkeypatch.setattr(w, "_time_filter_config_for_view", lambda _idx: config)
     w._estimate_current_time_overlay_risk("overlay", checked)
-
-    monkeypatch.setattr(
-        fp,
-        "filter_spec",
-        lambda: SimpleNamespace(cutoff=12.5, cutoff_lo=0.0, cutoff_hi=0.0),
-    )
+    config["spec"]["cutoff"] = 12.5
     w._estimate_current_time_overlay_risk("overlay", checked)
 
     assert captured[0]["checked"] is checked

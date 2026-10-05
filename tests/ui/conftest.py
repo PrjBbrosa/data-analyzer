@@ -127,6 +127,7 @@ def pytest_runtest_teardown(item):
         _PINNED_TOPLEVELS.clear()
         app = QApplication.instance()
         if app is not None:
+            _release_test_mouse_buttons(app)
             # pytest-qt and fixture finalizers queue ``deleteLater`` while
             # the top-level paint pin is held.  Release that pin only after
             # their work, then deliver precisely DeferredDelete events before
@@ -145,6 +146,30 @@ def pytest_runtest_teardown(item):
             _restore_item_app_style(item)
             _restore_qsettings_default_format(item)
             gc.collect()
+
+
+def _release_test_mouse_buttons(app) -> None:
+    """QTest keeps process-wide button state even after its widget is deleted.
+
+    Release on a private sink, never on a surviving product widget where the
+    release might activate a button. This also runs after failed assertions.
+    """
+    from PyQt5.QtCore import Qt
+
+    pressed = int(app.mouseButtons())
+    if not pressed:
+        return
+    from PyQt5.QtTest import QTest
+    from PyQt5.QtWidgets import QWidget
+
+    sink = QWidget()
+    try:
+        for bit in range(27):  # Qt.LeftButton through Qt.ExtraButton24.
+            button = 1 << bit
+            if pressed & button:
+                QTest.mouseRelease(sink, Qt.MouseButton(button))
+    finally:
+        sip.delete(sink)
 
 
 def _qt_wrapper_alive(obj) -> bool:

@@ -68,6 +68,7 @@ _FFT_TIME_EXTERNAL = {
     'fid',          # which file
     'channel',      # which channel
     'time_range',   # selected time window mask
+    'nfft_facts_signature',  # resolved source-axis provenance, not DSP input
     # nfft_effective is the RESOLVED nfft (auto -> int); it is read as the
     # key's nfft value and maps onto the dataclass 'nfft' field.
     'nfft_effective',

@@ -329,6 +329,7 @@ FROZEN_COORDINATOR_PUBLIC_METHODS = (
     "page",
     "attach",
     "capture_leaving_source",
+    "capture_before_section_hidden",
     "open_unplaced_tray",
     "add_from_source_tab",
     "open_source",
@@ -861,7 +862,7 @@ def test_interaction_facts_keys_are_frozen():
 def test_coordinator_public_methods_are_frozen():
     names = _coordinator_public_methods()
     assert names == FROZEN_COORDINATOR_PUBLIC_METHODS
-    assert len(names) == 39
+    assert len(names) == 40
     for required in ("shutdown", "reset_project_state", "clear"):
         assert required in names
 

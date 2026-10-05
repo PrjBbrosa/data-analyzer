@@ -1,7 +1,7 @@
 """Behavioral contract tests for ``MainWindow._fft_fetch_signal``.
 
-This helper fetches a single FFT source's signal and, when the inspector's
-range gate is enabled, masks the signal to ``lo <= t <= hi`` before
+This helper fetches a single FFT source's signal and, when the focused pane has a
+committed time range, masks the signal to ``lo <= t <= hi`` before
 returning ``(sig, fs)``. It does NOT return the time axis.
 
 These tests lock the return contract so that removing the dead
@@ -65,6 +65,7 @@ def test_range_enabled_masks_signal_inclusive(win_with_source, monkeypatch):
     monkeypatch.setattr(w.inspector.top, 'range_enabled', lambda: True)
     monkeypatch.setattr(w.inspector.top, 'range_values', lambda: (0.25, 0.75))
 
+    w.analysis_managers['fft'].get(0).panes[0].time_range = (0.25, 0.75)
     sig, fs = w._fft_fetch_signal(0, 'sig')
 
     np.testing.assert_array_equal(sig, np.array([30.0, 40.0, 50.0, 60.0, 70.0]))
@@ -87,6 +88,7 @@ def test_range_bounds_are_inclusive(win_with_source, monkeypatch):
     monkeypatch.setattr(w.inspector.top, 'range_enabled', lambda: True)
     monkeypatch.setattr(w.inspector.top, 'range_values', lambda: (0.2, 0.4))
 
+    w.analysis_managers['fft'].get(0).panes[0].time_range = (0.2, 0.4)
     sig, _ = w._fft_fetch_signal(0, 'sig')
 
     np.testing.assert_array_equal(sig, np.array([20.0, 30.0, 40.0]))

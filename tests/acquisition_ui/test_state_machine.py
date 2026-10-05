@@ -393,8 +393,6 @@ def test_dropped_frames_prompt_shown_over_threshold(qapp):
 
     Stage 4 verifies the prompt shows. Full Stop wiring is Stage 5.
     """
-    from PyQt5.QtCore import QTimer
-
     window = CockpitMainWindow()
     # Walk to Recording state.
     window.state_machine.request_connect(
@@ -405,15 +403,6 @@ def test_dropped_frames_prompt_shown_over_threshold(qapp):
     window.state_machine.request_start_recording()
     # Force the ring buffer's dropped count above the prompt threshold.
     window._ring._dropped_frames = thresholds.DROPPED_FRAMES_PROMPT_TOTAL + 1
-    # Schedule the prompt to be auto-closed so the test doesn't block.
-    closed = []
-
-    def _close_prompt():
-        if getattr(window, "_dropped_prompt", None) is not None:
-            window._dropped_prompt.done(0)
-            closed.append(True)
-
-    QTimer.singleShot(50, _close_prompt)
     window._poll_live()
     qapp.processEvents()
     # B5 follow-up: the single-shot ``_dropped_prompt_shown`` latch was
@@ -424,6 +413,7 @@ def test_dropped_frames_prompt_shown_over_threshold(qapp):
     assert window._dropped_prompt_last_ts is not None
     # Prompt object exists.
     assert getattr(window, "_dropped_prompt", None) is not None
+    window._dropped_prompt.done(0)
     window.close()
 
 

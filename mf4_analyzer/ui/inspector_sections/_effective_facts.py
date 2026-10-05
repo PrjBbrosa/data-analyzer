@@ -271,14 +271,21 @@ def attach_effective_facts_card(
     objectNames: ``{prefix}FactsCard``, ``{prefix}FactsPlaceholder``,
     ``{prefix}EffectiveFacts``, ``{prefix}EffectiveWarnings``.
     """
+    # Explicit skin contract: keep shared card construction discoverable by
+    # stylesheet liveness checks, rather than hiding names in f-strings.
+    names = {
+        "fft": ("fftFactsCard", "fftFactsPlaceholder", "fftEffectiveFacts"),
+        "fftTime": ("fftTimeFactsCard", "fftTimeFactsPlaceholder", "fftTimeEffectiveFacts"),
+        "order": ("orderFactsCard", "orderFactsPlaceholder", "orderEffectiveFacts"),
+    }[prefix]
     facts_card = QFrame(host)
-    facts_card.setObjectName(f"{prefix}FactsCard")
+    facts_card.setObjectName(names[0])
     facts_layout = QVBoxLayout(facts_card)
     facts_layout.setContentsMargins(11, 8, 11, 10)
     facts_layout.setSpacing(6)
     facts_layout.addWidget(_make_group_header("有效事实", parent=facts_card))
     lbl_placeholder = QLabel(placeholder, facts_card)
-    lbl_placeholder.setObjectName(f"{prefix}FactsPlaceholder")
+    lbl_placeholder.setObjectName(names[1])
     lbl_placeholder.setWordWrap(True)
     # Inspector stacked pages do not pass height-for-width; pin two lines
     # of placeholder so first-open sizeHint does not collapse the card.
@@ -287,7 +294,7 @@ def attach_effective_facts_card(
     )
     facts_layout.addWidget(lbl_placeholder)
     lbl_facts = QLabel("", facts_card)
-    lbl_facts.setObjectName(f"{prefix}EffectiveFacts")
+    lbl_facts.setObjectName(names[2])
     lbl_facts.setWordWrap(True)
     lbl_facts.setTextInteractionFlags(
         Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard

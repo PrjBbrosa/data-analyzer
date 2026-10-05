@@ -117,10 +117,12 @@ def build_import_samples(directory: Path) -> tuple[Path, Path, Path]:
     zfd = directory / "generated-help-import.zfd"
     travel = np.linspace(-25.0, 25.0, n, dtype=np.float32)
     zfd.write_bytes(
-        b"ZFGE2\nTraceLab generated ZFD\nHelp import sample\n"
-        + struct.pack("<dHHH", 0.01, 4, n, 0)
-        + b"E1: travel\nmm\n\0\0"
-        + struct.pack("<dd", float(travel.min()), float(travel.max()))
+        b"ZFGE2\nTraceLab generated ZFD\nHelp import sample\n" + b"\n" * 8
+        + struct.pack("<hb", 0, 2)
+        + struct.pack("<hbi", 0, 0, n) + b"Time\ns\n"
+        + struct.pack("<dd", 0.0, 0.01)
+        + struct.pack("<hi", 4, n) + b"E1: travel\nmm\n"
+        + struct.pack("<bbdd", 0, 0, float(travel.min()), float(travel.max()))
         + travel.astype("<f4", copy=False).tobytes()
     )
 

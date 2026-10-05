@@ -388,7 +388,9 @@ def test_view_compact_tabs_ranks_between_coaxis_custom_action_and_batch_export()
         "batch.fft_single_frame",
         "toolbar.save_as_menu",
         "toolbar.recent_menu",
+        "replay.mf4_alignment",
         "batch.data_only_preview",
+        "batch.data_export_opt_in",
         "batch.count_pending",
         "time.view_fade",
         "batch.disabled_keeps_value",
@@ -398,6 +400,10 @@ def test_view_compact_tabs_ranks_between_coaxis_custom_action_and_batch_export()
         "preset.target_axis_dot",
         "preset.slot_source_note",
         "time.time_range_mode",
+        "startup.splash_panel",
+        "chart_options.empty_title",
+        "chart_options.reset_open",
+        "chart_options.shared_axis",
     ]
 
 

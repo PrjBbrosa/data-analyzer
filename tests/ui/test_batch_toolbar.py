@@ -118,6 +118,7 @@ def test_run_click_uses_real_group_preview_artifact_count(
     sheet.apply_method("time")
     if group_by != "none":
         sheet.apply_params({"render_group_by": group_by})
+    sheet._output_panel._chk_data.setChecked(True)
     sheet._output_panel.apply_directory(str(tmp_path / f"out-{group_by}"))
     sheet._resume_manifest_path = str(tmp_path / "runtime-only.json")
 

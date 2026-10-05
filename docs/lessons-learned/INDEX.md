@@ -290,6 +290,7 @@ lesson by default.
 | [Chart Options Restore Commits The Opening Snapshot](pyqt-ui/2026-09-25-chart-options-restore-commits-opening-snapshot.md) | Changing ChartOptionsDialog reset, apply, axis range, or color-scale commit. | See lesson |
 | [FRF Faded Strokes Need Native Paint Profiling](frf-faded-strokes-need-native-paint-profiling.md) | FRF cursor or zoom stalls although curve antialiasing is already off. | See lesson |
 | [Time Range Editors Preserve Unedited Physical Endpoints](time-range-editors-preserve-unedited-physical-endpoints.md) | Editing, restoring or validating physical time endpoints through rounded numeric widgets. | See lesson |
+| [Qt Test Input State Survives Failed Widget Tests](qt-test-input-state-survives-failed-widget-tests.md) | Hover or pin tests pass alone but fail later in a shared QApplication. | See lesson |
 
 ## Selection Rules
 

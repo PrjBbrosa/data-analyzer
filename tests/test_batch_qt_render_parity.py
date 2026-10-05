@@ -329,8 +329,8 @@ def test_text_overlap_guard_measures_ink_not_layout_boxes(qapp):
 
     On the 8-panel page the left-axis label boxes intersect by a few pixels of
     QTextDocument margin while the glyphs keep a clear gap, so the box-level
-    screen alone reports overlaps the render does not have. Grow the label font
-    far enough and the ink really does collide — the guard must still say so.
+    screen alone reports overlaps the render does not have. Move two labels onto
+    each other after layout — the ink guard must still detect the collision.
     """
 
     case = next(item for item in _cases() if item.name == "time-subplot8")
@@ -345,11 +345,11 @@ def test_text_overlap_guard_measures_ink_not_layout_boxes(qapp):
         assert len(scene.plots) == 8
         assert _visible_text_collisions(scene) == []
 
-        for plot in scene.plots:
-            plot.getAxis("left").label.setFont(
-                chart_font(scene.theme.axis_font_pt * 2.4)
-            )
-        render_scene_image(scene)
+        # Export now fits long labels to each row. Inject a geometric collision
+        # AFTER layout instead of relying on an oversized font surviving export.
+        upper = scene.plots[0].getAxis("left").label
+        lower = scene.plots[1].getAxis("left").label
+        lower.setPos(lower.parentItem().mapFromScene(upper.scenePos()))
         assert _visible_text_collisions(scene) != []
     finally:
         scene.close()

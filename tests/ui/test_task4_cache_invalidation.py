@@ -359,7 +359,9 @@ class TestFallbackKeyAlignsPrimaryKey:
             def showMessage(_message):
                 pass
 
-        class _Probe(FFTTimeMixin):
+        from mf4_analyzer.ui.main_window._analysis_mixin import AnalysisMixin
+
+        class _Probe(FFTTimeMixin, AnalysisMixin):
             def __init__(self_):
                 cache = _RecordingCache()
                 self_.analysis_caches = {'fft_time': cache}

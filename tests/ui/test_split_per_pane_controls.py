@@ -493,22 +493,19 @@ def test_shared_nav_back_forward_runs_each_pane_toolbar(qtbot, qapp, loaded_csv)
     _enter_split(w, qapp)
     shared = cs._time_toolbar
     secondary_tb = cs._secondary_card.toolbar
-    calls = []
-
-    shared.back = lambda: calls.append("primary-back")
-    secondary_tb.back = lambda: calls.append("secondary-back")
-    shared.forward = lambda: calls.append("primary-forward")
-    secondary_tb.forward = lambda: calls.append("secondary-forward")
-
+    for toolbar in (shared, secondary_tb):
+        toolbar._commit_pending_view()
+        plot = toolbar._primary_view_box()
+        plot.setXRange(0.2, 0.6, padding=0)
+        toolbar._commit_pending_view()
+    before = [tb._view_pointer for tb in (shared, secondary_tb)]
+    assert all(pointer > 0 for pointer in before)
+    assert shared._actions_by_key["back"].isEnabled()
     shared._actions_by_key["back"].trigger()
+    assert [tb._view_pointer for tb in (shared, secondary_tb)] == [p - 1 for p in before]
+    assert shared._actions_by_key["forward"].isEnabled()
     shared._actions_by_key["forward"].trigger()
-
-    assert calls == [
-        "primary-back",
-        "secondary-back",
-        "primary-forward",
-        "secondary-forward",
-    ]
+    assert [tb._view_pointer for tb in (shared, secondary_tb)] == before
 
 
 def test_shared_nav_highlight_reflects_broadcast_mode(qtbot, qapp, loaded_csv):

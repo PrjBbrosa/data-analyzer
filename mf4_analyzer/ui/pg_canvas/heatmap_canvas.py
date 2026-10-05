@@ -108,6 +108,7 @@ from mf4_analyzer.ui.pg_canvas.viewbox import (
     _WheelDeltaGraphicsLayoutWidget,
 )
 from mf4_analyzer.ui_kit.axis_metrics import (
+    activate_item_layouts,
     left_axis_width_for_ticks,
     pin_value_axis_to_tick_need,
 )
@@ -2224,6 +2225,10 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
                 pass
         metrics = {
             'left_axis_width': max(left_widths) if left_widths else 0.0,
+            'colorbar_axis_width': (
+                float(left_axis_width_for_ticks(self._cbar.axis))
+                if self._cbar is not None else 0.0
+            ),
             'main_bottom_axis_height': (
                 bottom_heights[0] if bottom_heights else 0.0
             ),
@@ -2273,8 +2278,12 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         main_bottom_axis_height: float | None = None,
         slice_bottom_axis_height: float | None = None,
         slice_right_reserve: float | None = None,
+        colorbar_axis_width: float | None = None,
     ) -> None:
         self._split_aligned = True
+        if colorbar_axis_width is not None and self._cbar is not None:
+            self._cbar.axis.setWidth(float(colorbar_axis_width))
+            activate_item_layouts((self._cbar,))
         self._pin_split_left_axes(left_axis_width)
         self._pin_split_bottom_heights((
             (self._plot, main_bottom_axis_height),

@@ -100,6 +100,9 @@ class FrfStackedPlotHost:
         return {"left_axis_width": max(widths) if widths else 0.0}
 
     def apply_alignment(self, *, left_axis_width: float) -> None:
+        # A queued local settle must not overwrite the page's cross-pane pin.
+        self._alignment_timer.stop()
+        self._alignment_pending = False
         for axis in self._left_axes():
             try:
                 axis.setWidth(float(left_axis_width))

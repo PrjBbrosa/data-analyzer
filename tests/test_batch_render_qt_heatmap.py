@@ -214,7 +214,7 @@ def test_heatmap_auto_levels_are_exact(qapp, kind, params, expected):
             _spectro().matrix.T, reference=1.0
         )
         ceiling = float(np.percentile(matrix[np.isfinite(matrix)], 99.0))
-        expected = (ceiling - 30.0, ceiling)
+        expected = (ceiling - 30.0, min(ceiling + 5.0, float(np.max(matrix))))
     scene = _open_scene(qapp, kind, params=params)
     try:
         assert tuple(scene.heatmap_levels) == pytest.approx(expected)

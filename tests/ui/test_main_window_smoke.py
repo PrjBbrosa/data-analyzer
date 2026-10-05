@@ -211,7 +211,7 @@ def test_fft_time_dispatch_uses_effective_auto_nfft(qapp, qtbot, monkeypatch):
     }
 
 
-def test_fft_time_render_auto_frequency_range_uses_energy_band(qapp, qtbot):
+def test_fft_time_render_auto_frequency_range_uses_full_result(qapp, qtbot):
     from types import SimpleNamespace
 
     import numpy as np
@@ -252,7 +252,7 @@ def test_fft_time_render_auto_frequency_range_uses_energy_band(qapp, qtbot):
 
     w._render_fft_time_on(canvas, result, p)
 
-    assert canvas.kwargs["freq_range"] == (0.0, 5.0)
+    assert canvas.kwargs["freq_range"] is None  # Canvas uses all result bins.
 
 
 def test_fft_time_render_manual_frequency_range_is_preserved(qapp, qtbot):
@@ -490,12 +490,10 @@ def test_fft_cache_key_separates_same_effective_nfft_different_intent(qapp, qtbo
         FFTMixin._fft_compute_cache_params(fixed_4096)
 
 
-def test_plot_fft_entries_auto_xlim_uses_energy_band_and_manual_stays_fixed(
+def test_plot_fft_entries_auto_xlim_uses_full_result_and_manual_stays_fixed(
     qapp, qtbot, monkeypatch
 ):
     import numpy as np
-
-    from mf4_analyzer.signal import energy_band_fmax
 
     class _Canvas:
         def __init__(self):
@@ -526,8 +524,7 @@ def test_plot_fft_entries_auto_xlim_uses_energy_band_and_manual_stays_fixed(
     w._plot_fft_entries([entry], auto_canvas)
 
     auto_xmax = auto_canvas.plot_kwargs["xlim"][1]
-    assert auto_xmax == energy_band_fmax(freq, amp)
-    assert 2.0 <= auto_xmax < freq[-1] * 0.25
+    assert auto_xmax == freq[-1]
 
     params = w.inspector.fft_ctx.current_params()
     monkeypatch.setattr(
@@ -3180,10 +3177,9 @@ def test_render_order_on_uses_time_coverage_extent(qtbot):
     assert canvas.kwargs["cmap"] == "plasma"
 
 
-def test_render_fft_time_on_auto_freq_range_uses_energy_band(qtbot):
+def test_render_fft_time_on_auto_freq_range_uses_full_result(qtbot):
     import numpy as np
 
-    from mf4_analyzer.signal import energy_band_fmax
     from mf4_analyzer.signal.spectrogram import SpectrogramParams, SpectrogramResult
     from mf4_analyzer.ui.main_window import MainWindow
 
@@ -3215,10 +3211,7 @@ def test_render_fft_time_on_auto_freq_range_uses_energy_band(qtbot):
     canvas = _CaptureCanvas()
     win._render_fft_time_on(canvas, result, _fft_time_base_params())
 
-    representative_amp = np.nanmax(amp, axis=1)
-    expected = energy_band_fmax(freq, representative_amp)
-    assert canvas.kwargs["freq_range"] == (0.0, expected)
-    assert 2.0 <= expected < freq[-1] * 0.25
+    assert canvas.kwargs["freq_range"] is None  # Full result, no energy crop.
 
 
 def test_render_fft_time_on_manual_freq_range_is_preserved(qtbot):
@@ -3260,6 +3253,24 @@ def test_render_fft_time_on_manual_freq_range_is_preserved(qtbot):
     assert canvas.kwargs["freq_range"] == (3.0, 17.0)
 
 
+def _seed_fft_time_cache_request(win, monkeypatch, params):
+    """Register a real source and pane intent before testing cache publication."""
+    import numpy as np
+    import pandas as pd
+    from mf4_analyzer.io import FileData
+
+    fd = FileData("cache-source.csv", pd.DataFrame({
+        "Time": np.arange(16) / 100.0, "ch": np.ones(16),
+    }), ["Time", "ch"], {}, idx=0)
+    win.files["f1"] = fd
+    state = win.analysis_managers["fft_time"].get(0)
+    state.panes[0].sources = [("f1", "ch")]
+    state.params.update(params)
+    monkeypatch.setattr(win, "_capture_active_analysis_view", lambda _section: None)
+    effective, _ = win._fft_time_effective_params_for_source(params, "f1", "ch", None)
+    return fd, win._fft_time_analysis_cache_key("f1", "ch", effective, None)
+
+
 def test_fft_time_analysis_cache_hit_status(qtbot, monkeypatch):
     import numpy as np
     from mf4_analyzer.signal.spectrogram import SpectrogramParams, SpectrogramResult
@@ -3267,6 +3278,7 @@ def test_fft_time_analysis_cache_hit_status(qtbot, monkeypatch):
 
     win = MainWindow()
     qtbot.addWidget(win)
+    win.toolbar._set_mode("fft_time")
 
     fake = SpectrogramResult(
         times=np.array([0.0, 0.1]),
@@ -3283,16 +3295,10 @@ def test_fft_time_analysis_cache_hit_status(qtbot, monkeypatch):
         freq_auto=True, freq_min=0.0, freq_max=0.0,
         time_range=(0.0, 0.1),
     )
-    resolved = win._resolve_fft_time_effective_params(p, n_samples=2)
-    key = win._fft_time_analysis_cache_key('f1', 'ch', resolved, 0)
+    fd, key = _seed_fft_time_cache_request(win, monkeypatch, p)
     win.analysis_caches['fft_time'].put(key, fake)
 
-    # Stub _get_fft_time_signal and inspector.get_params so do_fft_time
-    # hits the cache branch.
-    monkeypatch.setattr(
-            win, '_get_fft_time_signal',
-            lambda: ('f1', 'ch', np.array([0.0, 0.01]), np.ones(2), object()),
-        )
+    # Use the captured pane request and the unchanged compute parameters.
     monkeypatch.setattr(win.inspector.fft_time_ctx, 'get_params', lambda: p)
     monkeypatch.setattr(win.inspector.fft_time_ctx, 'compute_params', lambda: p)
     monkeypatch.setattr(win.inspector.top, 'range_enabled', lambda: False)
@@ -3303,7 +3309,7 @@ def test_fft_time_analysis_cache_hit_status(qtbot, monkeypatch):
     # not the QMainWindow accessor method. The plan example used
     # ``statusBar()`` which is incorrect here; the codebase convention
     # (verified in T5 report) is attribute access.
-    assert "使用缓存结果" in win.statusBar.currentMessage()
+    assert "缓存结果" in win.statusBar.currentMessage()
 
 
 def test_fft_time_primary_hit_skips_nonuniform_preflight_and_service(
@@ -3316,6 +3322,7 @@ def test_fft_time_primary_hit_skips_nonuniform_preflight_and_service(
 
     win = MainWindow()
     qtbot.addWidget(win)
+    win.toolbar._set_mode("fft_time")
     p = {
         "fs": 100.0,
         "nfft": 8,
@@ -3329,23 +3336,15 @@ def test_fft_time_primary_hit_skips_nonuniform_preflight_and_service(
     result = SimpleNamespace(
         metadata={"frames": 2}, params=SimpleNamespace(nfft=8),
     )
-    resolved = win._resolve_fft_time_effective_params(p, n_samples=2)
-    key = win._fft_time_analysis_cache_key("f1", "ch", resolved, 0)
+    fd, key = _seed_fft_time_cache_request(win, monkeypatch, p)
     win.analysis_caches["fft_time"].put(key, result)
     rendered = []
     submitted = []
-    nonuniform_fd = SimpleNamespace(
-        is_time_axis_uniform=lambda: False,
-        rebuild_time_axis=lambda _fs: (_ for _ in ()).throw(
-            AssertionError("cache hit must not rebuild")
-        ),
-    )
+    monkeypatch.setattr(fd, "is_time_axis_uniform", lambda: False)
+    monkeypatch.setattr(fd, "rebuild_time_axis", lambda _fs: (_ for _ in ()).throw(
+        AssertionError("cache hit must not rebuild")
+    ))
 
-    monkeypatch.setattr(
-        win,
-        "_get_fft_time_signal",
-        lambda: ("f1", "ch", np.array([0.0, 0.01]), np.ones(2), nonuniform_fd),
-    )
     monkeypatch.setattr(win.inspector.fft_time_ctx, "get_params", lambda: p)
     monkeypatch.setattr(win.inspector.fft_time_ctx, "compute_params", lambda: p)
     monkeypatch.setattr(win.inspector.top, "range_enabled", lambda: False)
@@ -4354,7 +4353,9 @@ def test_fft_panel_keeps_signal_selection_across_channel_edit(
     idx_order, target_order = _first_data_for_fid(order_combo, fid_second)
     assert idx_fft >= 0, "file B has no FFT signal candidate"
     assert idx_order >= 0, "file B has no Order signal candidate"
+    w.toolbar._set_mode("fft")
     fft_combo.setCurrentIndex(idx_fft)
+    w.toolbar._set_mode("order")
     order_combo.setCurrentIndex(idx_order)
 
     # Edit channels on file 1 — would have reset the dropdowns prior to fix.

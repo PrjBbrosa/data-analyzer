@@ -165,6 +165,7 @@ def test_close_all_clears_pins_while_restoring_project(qapp, qtbot, tmp_path):
     """F-P0-2: close_all must wipe pins even under ``_restoring_project``."""
     win, fid_a, _fid_b = _load_two(qtbot, tmp_path)
     page = win.chart_stack.page_fft
+    page.ensure_ready()
     canvas = page.pane_canvas(0)
     pins = _pinned(fid_a)
     win.chart_stack.set_pinned_cursors_for_canvas(canvas, pins)

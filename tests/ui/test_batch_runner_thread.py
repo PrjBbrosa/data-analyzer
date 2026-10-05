@@ -16,7 +16,7 @@ def test_runner_thread_marshals_real_render_to_gui_and_returns_complete_result(
     import pandas as pd
     from PyQt5.QtCore import QThread
     from mf4_analyzer.batch import (
-        AnalysisPreset, BatchRunner,
+        AnalysisPreset, BatchRunner, BatchOutput,
     )
     from mf4_analyzer.batch_manifest import load_batch_manifest
     import mf4_analyzer.batch_render_qt as qt_renderer
@@ -48,6 +48,7 @@ def test_runner_thread_marshals_real_render_to_gui_and_returns_complete_result(
     fd = FileData(tmp_path / "x.csv", df, list(df.columns), {}, idx=0)
     preset = AnalysisPreset.from_current_single(
         name="t", method="fft", signal=(0, "sig"),
+        outputs=BatchOutput(export_data=True, export_image=True),
         params={"fs": 512.0, "window": "hanning", "nfft": 512},
     )
     runner = BatchRunner({0: fd})

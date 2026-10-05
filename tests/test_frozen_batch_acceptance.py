@@ -616,3 +616,26 @@ def test_application_entry_does_not_abbreviate_hidden_mode_flags(
     assert calls == ["gui"]
     assert not output_dir.exists()
     assert not result_json.exists()
+
+
+@pytest.mark.parametrize("warning,record_alignment", [
+    ("render-warning", True),
+    ("alignment-without-evidence", False),
+])
+def test_acceptance_rejects_warnings_beyond_documented_source_alignment(
+    tmp_path, warning, record_alignment,
+):
+    from mf4_analyzer.batch import _LOAD_ALIGNMENT_NOTICE
+    from mf4_analyzer.batch_types import BatchItemResult, BatchRunResult
+    from mf4_analyzer.frozen_batch_acceptance import _verify_result
+
+    item = BatchItemResult("time", "f1", "source", "sig", "done")
+    if record_alignment:
+        item.effective_params["source_diagnostics"] = {"f1": {
+            "mf4_alignment": {"policy": "shared"},
+            "warnings": [_LOAD_ALIGNMENT_NOTICE],
+        }}
+    actual_warning = warning if record_alignment else _LOAD_ALIGNMENT_NOTICE
+    result = BatchRunResult("done", items=[item], warnings=[actual_warning])
+    with pytest.raises(RuntimeError, match="degraded unexpectedly"):
+        _verify_result(result, tmp_path, (), "sig", {})

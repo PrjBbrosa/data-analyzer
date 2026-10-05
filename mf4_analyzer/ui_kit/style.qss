@@ -1,6 +1,6 @@
 /* ==== MF4 Analyzer — Precision Light visual system (tray/floating-panels) ====
  * Tray / panel depth:
- *   tray  #f2f4f7   backdrop (QMainWindow base, central tray, splitter gaps)
+ *   tray  {{SURFACE_DISABLED_BG}}   backdrop (QMainWindow base, central tray, splitter gaps)
  *   panel/card #ffffff   floating blocks (FileNavigator, ChartStack, Inspector) + cards, inputs, tree, menus
  *   divider    #d3dbe6   splitter line, panel seams, frame seams, card edges (stronger)
  *   hairline   #eef2f7   within-card sub-section separators (soft)
@@ -12,7 +12,7 @@
  *   numeric badge      11px / 600   #475569  (no fill)
  */
 
-QMainWindow { background-color: #f2f4f7; }
+QMainWindow { background-color: {{SURFACE_DISABLED_BG}}; }
 
 QWidget {
     background-color: #ffffff;
@@ -37,7 +37,7 @@ QLabel {
 }
 
 /* Splitter — tray color fills the gap so the panels float apart */
-QSplitter::handle { margin: 0; background-color: #f2f4f7; }
+QSplitter::handle { margin: 0; background-color: {{SURFACE_DISABLED_BG}}; }
 QSplitter::handle:horizontal { width: 3px; margin: 0; }
 QSplitter::handle:vertical { height: 3px; margin: 0; }
 QSplitter::handle:hover { background-color: #cbd5e1; }
@@ -46,7 +46,7 @@ QSplitter::handle:hover { background-color: #cbd5e1; }
 QScrollArea { border: none; background: transparent; }
 
 QScrollBar:vertical { width: 8px; margin: 1px; border: none; background: transparent; }
-QScrollBar::handle:vertical { min-height: 28px; border-radius: 4px; background: #d7dee8; }
+QScrollBar::handle:vertical { min-height: 28px; border-radius: 4px; background: {{SURFACE_MUTED_BORDER}}; }
 QScrollBar::handle:vertical:hover { background: #aeb9c8; }
 QScrollBar::add-line:vertical,
 QScrollBar::sub-line:vertical,
@@ -54,7 +54,7 @@ QScrollBar::add-page:vertical,
 QScrollBar::sub-page:vertical { height: 0; background: transparent; }
 
 QScrollBar:horizontal { height: 8px; margin: 1px; border: none; background: transparent; }
-QScrollBar::handle:horizontal { min-width: 28px; border-radius: 4px; background: #d7dee8; }
+QScrollBar::handle:horizontal { min-width: 28px; border-radius: 4px; background: {{SURFACE_MUTED_BORDER}}; }
 QScrollBar::handle:horizontal:hover { background: #aeb9c8; }
 QScrollBar::add-line:horizontal,
 QScrollBar::sub-line:horizontal,
@@ -345,9 +345,9 @@ QPushButton#BatchAnalysisPresetCard:hover {
     background-color: {{CONTROL_ACCENT_WASH}};
 }
 QPushButton#BatchAnalysisPresetCard:checked {
-    border-color: #0b73e7;
-    background-color: #e8f1ff;
-    color: #0b73e7;
+    border-color: {{SURFACE_ACTION_BLUE}};
+    background-color: {{SURFACE_SELECTED_PALE_BLUE}};
+    color: {{SURFACE_ACTION_BLUE}};
 }
 QPushButton#BatchAnalysisPresetCard:disabled {
     color: {{CONTROL_TEXT_MUTED}};
@@ -371,11 +371,11 @@ QLabel#BatchPresetState {
     color: #64748b;
     font-size: 10px;
 }
-QLabel#BatchPresetState[modified="true"] { color: #b45309; }
+QLabel#BatchPresetState[modified="true"] { color: {{SURFACE_WARNING_TEXT}}; }
 QPushButton#BatchGroupingCard {
     min-height: 132px;
     padding: 0;
-    border: 1px solid #d7e2f0;
+    border: 1px solid {{SURFACE_BLUE_GREY_BORDER}};
     border-radius: 9px;
     background-color: #ffffff;
     color: #334155;
@@ -403,11 +403,11 @@ QPushButton#BatchGroupingCard:checked:disabled {
     color: {{CONTROL_TEXT_ON_SELECT}};
 }
 QFrame#BatchInlineFileManager {
-    border: 1px solid #d7e2f0;
+    border: 1px solid {{SURFACE_BLUE_GREY_BORDER}};
     border-radius: 9px;
     background-color: #ffffff;
 }
-QLabel#BatchSectionTitle { color: #26344a; font-size: 12px; font-weight: 700; }
+QLabel#BatchSectionTitle { color: {{SURFACE_STRONG_TEXT}}; font-size: 12px; font-weight: 700; }
 QLabel#BatchSectionNote { color: #94a3b8; font-size: 10px; }
 QLabel#BatchFileFacts { color: #64748b; font-size: 9px; }
 QLabel#BatchFileReadyPill {
@@ -423,8 +423,8 @@ QLabel#BatchFileReadyPill[status="ready"] {
     background-color: #e9f8f2;
 }
 QLabel#BatchFileReadyPill[status="error"] {
-    color: #b42335;
-    background-color: #fff0f2;
+    color: {{CONTROL_DANGER}};
+    background-color: {{SURFACE_DANGER_BG}};
 }
 /* The outer frame exclusively paints this rounded surface.  Its touching
  * children remain transparent so they cannot square off the parent's arc. */
@@ -436,8 +436,7 @@ QWidget#BatchFileRowCopy,
 QLabel#BatchFileEmptyState {
     background-color: transparent;
 }
-QPushButton#BatchFileAddLoaded,
-QPushButton#BatchFileAddDisk {
+QPushButton#BatchFileAddLoaded {
     min-height: 24px;
     padding: 3px 8px;
 }
@@ -445,6 +444,8 @@ QWidget#BatchFileDiskSplit {
     background-color: transparent;
 }
 QPushButton#BatchFileAddDisk {
+    min-height: 24px;
+    padding: 3px 8px;
     border-top-right-radius: 0;
     border-bottom-right-radius: 0;
     border-right-width: 0;
@@ -470,39 +471,39 @@ QPushButton#BatchFileRowRemove {
 }
 QPushButton#BatchFileRowRemove { background-color: transparent; }
 QPushButton#BatchFileRowRemove:hover {
-    color: #dc3f52;
-    background-color: #fff0f2;
+    color: {{SURFACE_DANGER_ACTIVE}};
+    background-color: {{SURFACE_DANGER_BG}};
 }
 QListWidget#BatchFileList {
     border: none;
-    border-top: 1px solid #edf1f6;
+    border-top: 1px solid {{SURFACE_COOL_BG}};
     border-radius: 0;
     outline: none;
     padding: 4px;
 }
 QLabel#BatchFileEmptyState {
-    border-top: 1px solid #edf1f6;
+    border-top: 1px solid {{SURFACE_COOL_BG}};
     color: #64748b;
     font-size: 10px;
 }
 QWidget#BatchStructuredFileRow {
-    border-bottom: 1px solid #edf1f6;
+    border-bottom: 1px solid {{SURFACE_COOL_BG}};
 }
 QLabel#BatchFileStateDot { border-radius: 4px; background-color: #f0a100; }
 QLabel#BatchFileStateDot[ready="true"] { background-color: #0ea875; }
-QLabel#BatchFileStateDot[failed="true"] { background-color: #dc3f52; }
-QLabel#BatchFileRowName { color: #26344a; font-size: 10px; font-weight: 700; }
+QLabel#BatchFileStateDot[failed="true"] { background-color: {{SURFACE_DANGER_ACTIVE}}; }
+QLabel#BatchFileRowName { color: {{SURFACE_STRONG_TEXT}}; font-size: 10px; font-weight: 700; }
 QLabel#BatchFileRowPath { color: #64748b; font-size: 8px; }
 QLabel#BatchFileRowState { color: #9a6800; font-size: 9px; }
 QLabel#BatchFileRowState[ready="true"] { color: #087453; }
-QLabel#BatchFileRowState[failed="true"] { color: #b42335; }
+QLabel#BatchFileRowState[failed="true"] { color: {{CONTROL_DANGER}}; }
 QWidget#BatchFilterSummary {
-    border: 1px solid #dbe4ef;
+    border: 1px solid {{SURFACE_COOL_BORDER}};
     border-radius: 8px;
     background-color: #fafbfd;
 }
 QLabel#BatchFilterSummaryTitle {
-    color: #26344a;
+    color: {{SURFACE_STRONG_TEXT}};
     font-size: 11px;
     font-weight: 700;
 }
@@ -552,7 +553,7 @@ QWidget#BatchChartStatistics QCheckBox#BatchChartStatisticsMetric {
     max-height: 26px;
     spacing: 5px;
     padding: 0 9px 0 7px;
-    border: 1px solid #dbe4ef;
+    border: 1px solid {{SURFACE_COOL_BORDER}};
     border-radius: 999px;
     background-color: #ffffff;
     color: #64748b;
@@ -565,7 +566,7 @@ QWidget#BatchChartStatistics QCheckBox#BatchChartStatisticsMetric:hover {
 }
 QWidget#BatchChartStatistics QCheckBox#BatchChartStatisticsMetric:checked {
     border-color: #cfe0f8;
-    background-color: #eaf2ff;
+    background-color: {{SURFACE_ACCENT_PALE_BG}};
     color: #0f56bd;
     font-weight: 700;
 }
@@ -605,7 +606,7 @@ QLabel#BatchChartStatisticsRangeSummary {
 }
 QWidget#BatchChartStatisticsContextField {
     min-height: 28px;
-    border: 1px solid #dbe4ef;
+    border: 1px solid {{SURFACE_COOL_BORDER}};
     border-radius: 7px;
     background-color: #ffffff;
 }
@@ -616,7 +617,7 @@ QLabel#BatchChartStatisticsContextPrefix {
     background-color: transparent;
 }
 QLabel#BatchChartStatisticsContext {
-    color: #26344a;
+    color: {{SURFACE_STRONG_TEXT}};
     font-size: 10px;
     background-color: transparent;
 }
@@ -640,10 +641,10 @@ QDialog#BatchPreviewDialog QPushButton {
  * （见 cockpitRecIndicator[recState="warn"] / rightVerdictBanner[verdict="warn"]）。
  * 只在 result.warnings 非空时显示，空时整块隐藏、不占位。 */
 QLabel#batchPreviewWarnings {
-    background-color: #fffbeb;
-    border: 1px solid #fde68a;
+    background-color: {{SURFACE_WARNING_BG}};
+    border: 1px solid {{SURFACE_WARNING_BORDER}};
     border-radius: 6px;
-    color: #92400e;
+    color: {{SURFACE_WARNING_DARK_TEXT}};
     padding: 6px 10px;
     font-size: 12px;
 }
@@ -662,12 +663,12 @@ QWidget#BatchCompactToolbar QPushButton {
     color: #475569;
 }
 QWidget#BatchCompactToolbar QPushButton:hover {
-    background-color: #f1f4f8;
-    color: #1e293b;
+    background-color: {{BATCH_TOOLBAR_HOVER_BG}};
+    color: {{SURFACE_DARK_TEXT}};
 }
 QWidget#BatchCompactToolbar QPushButton:pressed {
     background-color: #e2e8f0;
-    color: #0f172a;
+    color: {{BATCH_TOOLBAR_PRESSED_TEXT}};
 }
 QWidget#BatchCompactToolbar QPushButton:focus {
     border-color: {{CONTROL_ACCENT}};
@@ -677,7 +678,7 @@ QWidget#BatchCompactToolbar QPushButton:disabled {
     border-color: transparent;
     color: #94a3b8;
 }
-QLabel#BatchToolbarTitle { color: #1e293b; font-size: 13px; font-weight: 700; }
+QLabel#BatchToolbarTitle { color: {{SURFACE_DARK_TEXT}}; font-size: 13px; font-weight: 700; }
 QWidget#BatchMethodRow {
     background-color: #e3efff;
     border-top: 1px solid #cbd5e1;
@@ -704,7 +705,7 @@ QLabel#BatchMethodStepNumber {
 }
 QLabel#BatchMethodStepLabel {
     background-color: transparent;
-    color: #164d91;
+    color: {{BATCH_METHOD_HOVER_TEXT}};
     font-size: 12px;
     font-weight: 600;
 }
@@ -761,7 +762,7 @@ QWidget#BatchCompactFooter QPushButton#BatchFooterLocate {
     padding: 0 4px;
     border: none;
     background-color: transparent;
-    color: #086dda;
+    color: {{BATCH_FOOTER_LINK}};
     font-size: 12px;
     font-weight: 500;
 }
@@ -775,7 +776,7 @@ QLabel#BatchFooterStateDot {
 }
 QLabel#BatchFooterStateDot[state="blocked"] { background-color: #ef8c00; }
 QLabel#BatchFooterStateDot[state="running"] { background-color: {{CONTROL_ACCENT}}; }
-QLabel#BatchFooterStateDot[state="cancelling"] { background-color: #dc3f52; }
+QLabel#BatchFooterStateDot[state="cancelling"] { background-color: {{SURFACE_DANGER_ACTIVE}}; }
 QLabel#BatchFooterStateDot[state="partial"] { background-color: #ef8c00; }
 QLabel#BatchFooterStateDot[state="cancelled"] { background-color: #64748b; }
 QLabel#BatchFooterStatus { color: #334155; font-size: 11px; font-weight: 700; }
@@ -797,7 +798,7 @@ QWidget#BatchCompactFooter QPushButton#BatchResultDetailsEntry {
     padding: 0 4px;
     border: none;
     background-color: transparent;
-    color: #086dda;
+    color: {{BATCH_FOOTER_LINK}};
     font-size: 12px;
     font-weight: 500;
 }
@@ -816,7 +817,7 @@ QWidget#BatchResultDetails {
     border-top-color: #bccfe8;
 }
 QLabel#BatchResultDetailsTitle {
-    color: #1e293b;
+    color: {{SURFACE_DARK_TEXT}};
     font-size: 13px;
     font-weight: 700;
     background-color: transparent;
@@ -832,9 +833,9 @@ QListWidget#BatchResultDetailsList {
     outline: none;
     border-width: 1px;
     border-style: solid;
-    border-color: #dce7f5;
+    border-color: {{BATCH_RESULT_LIST_BORDER}};
     border-radius: 6px;
-    selection-background-color: #e9f2ff;
+    selection-background-color: {{BATCH_RESULT_SELECTED_BG}};
     selection-color: #111827;
 }
 QListWidget#BatchResultDetailsList::item {
@@ -845,8 +846,8 @@ QListWidget#BatchResultDetailsList::item {
 QListWidget#BatchResultDetailsList::item:hover,
 QListWidget#BatchResultDetailsList::item:selected,
 QListWidget#BatchResultDetailsList::item:selected:active {
-    background-color: #e9f2ff;
-    color: #225b9c;
+    background-color: {{BATCH_RESULT_SELECTED_BG}};
+    color: {{BATCH_RESULT_SELECTED_TEXT}};
     border-radius: 4px;
 }
 QLabel#BatchResultDetailsStatus {
@@ -854,24 +855,24 @@ QLabel#BatchResultDetailsStatus {
     font-weight: 700;
     background-color: transparent;
 }
-QLabel#BatchResultDetailsStatus[tone="error"] { color: #a44541; }
-QLabel#BatchResultDetailsStatus[tone="skip"] { color: #94641b; }
-QLabel#BatchResultDetailsStatus[tone="success"] { color: #168065; }
+QLabel#BatchResultDetailsStatus[tone="error"] { color: {{BATCH_RESULT_ERROR}}; }
+QLabel#BatchResultDetailsStatus[tone="skip"] { color: {{BATCH_RESULT_WARNING}}; }
+QLabel#BatchResultDetailsStatus[tone="success"] { color: {{BATCH_RESULT_SUCCESS}}; }
 QLabel#BatchResultDetailsMessage,
-QLabel#BatchResultDetailsWarnings,
 QLabel#BatchResultDetailsSource,
-QLabel#BatchResultDetailsIO,
-QLabel#BatchResultDetailsFrfReason {
+QLabel#BatchResultDetailsIO {
     color: #334155;
     font-size: 11px;
     background-color: transparent;
 }
-QLabel#BatchResultDetailsMessage[tone="error"] { color: #a44541; }
-QLabel#BatchResultDetailsMessage[tone="skip"] { color: #94641b; }
-QLabel#BatchResultDetailsMessage[tone="success"] { color: #168065; }
+QLabel#BatchResultDetailsMessage[tone="error"] { color: {{BATCH_RESULT_ERROR}}; }
+QLabel#BatchResultDetailsMessage[tone="skip"] { color: {{BATCH_RESULT_WARNING}}; }
+QLabel#BatchResultDetailsMessage[tone="success"] { color: {{BATCH_RESULT_SUCCESS}}; }
 QLabel#BatchResultDetailsWarnings,
 QLabel#BatchResultDetailsFrfReason {
-    color: #94641b;
+    font-size: 11px;
+    background-color: transparent;
+    color: {{BATCH_RESULT_WARNING}};
 }
 QWidget#BatchResultDetailsActions {
     background-color: transparent;
@@ -1222,8 +1223,8 @@ QMessageBox QPushButton[messageBoxRole="warning"] {
     color: #ffffff;
 }
 QMessageBox QPushButton[messageBoxRole="warning"]:hover {
-    background-color: #b45309;
-    border-color: #b45309;
+    background-color: {{SURFACE_WARNING_TEXT}};
+    border-color: {{SURFACE_WARNING_TEXT}};
 }
 QMessageBox QPushButton[messageBoxRole="danger"] {
     background-color: {{CONTROL_DANGER}};
@@ -1275,8 +1276,8 @@ QDialog#appMessageDialog QPushButton[messageBoxRole="warning"] {
     color: #ffffff;
 }
 QDialog#appMessageDialog QPushButton[messageBoxRole="warning"]:hover {
-    background-color: #b45309;
-    border-color: #b45309;
+    background-color: {{SURFACE_WARNING_TEXT}};
+    border-color: {{SURFACE_WARNING_TEXT}};
 }
 QDialog#appMessageDialog QPushButton[messageBoxRole="danger"] {
     background-color: {{CONTROL_DANGER}};
@@ -1525,13 +1526,13 @@ QWidget#BatchMethodGroup QPushButton[batchMethod] {
     border: 1px solid transparent;
     border-radius: 5px;
     background-color: transparent;
-    color: #335780;
+    color: {{BATCH_METHOD_TEXT}};
     font-size: 13px;
     font-weight: 500;
 }
 QWidget#BatchMethodGroup QPushButton[batchMethod]:hover {
-    background-color: #d0e4ff;
-    color: #164d91;
+    background-color: {{BATCH_METHOD_HOVER_BG}};
+    color: {{BATCH_METHOD_HOVER_TEXT}};
 }
 QWidget#BatchMethodGroup QPushButton[batchMethod]:checked {
     background-color: qlineargradient(
@@ -1550,7 +1551,7 @@ QWidget#BatchMethodGroup QPushButton[batchMethod]:checked:hover {
 }
 QWidget#BatchMethodGroup QPushButton[batchMethod]:pressed,
 QWidget#BatchMethodGroup QPushButton[batchMethod]:checked:pressed {
-    background-color: #0f4ea9;
+    background-color: {{BATCH_METHOD_PRESSED}};
     color: #ffffff;
 }
 QWidget#BatchMethodGroup QPushButton[batchMethod]:focus {
@@ -1643,9 +1644,9 @@ QLabel#cockpitTransportStatusChip {
     font-weight: 700;
 }
 QLabel#cockpitTransportStatusChip[transportState="unconfigured"] {
-    background-color: #fffbeb;
-    border-color: #fde68a;
-    color: #92400e;
+    background-color: {{SURFACE_WARNING_BG}};
+    border-color: {{SURFACE_WARNING_BORDER}};
+    color: {{SURFACE_WARNING_DARK_TEXT}};
 }
 QLabel#cockpitTransportStatusChip[transportState="configured"] {
     background-color: #e9fbf3;
@@ -1755,9 +1756,9 @@ QLabel#cockpitRecIndicator[recState="recording"] {
     color: #b91c1c;
 }
 QLabel#cockpitRecIndicator[recState="warn"] {
-    background-color: #fffbeb;
-    border-color: #fde68a;
-    color: #92400e;
+    background-color: {{SURFACE_WARNING_BG}};
+    border-color: {{SURFACE_WARNING_BORDER}};
+    color: {{SURFACE_WARNING_DARK_TEXT}};
 }
 QLabel#cockpitRecIndicator[recState="error"] {
     background-color: #fee2e2;
@@ -1783,8 +1784,8 @@ QFrame#healthChip[level="green"] {
     background-color: #f0fdf4;
 }
 QFrame#healthChip[level="yellow"] {
-    border-color: #fde68a;
-    background-color: #fffbeb;
+    border-color: {{SURFACE_WARNING_BORDER}};
+    background-color: {{SURFACE_WARNING_BG}};
 }
 QFrame#healthChip[level="red"] {
     border-color: #fecaca;
@@ -1994,7 +1995,7 @@ QPushButton#liveFocusCollapseButton {
 }
 QPushButton#liveFocusCollapseButton {
     color: #475569;
-    border-color: #d7dee8;
+    border-color: {{SURFACE_MUTED_BORDER}};
 }
 
 /* Live monitor pinned-count bar (2026-07-08 §G6). */
@@ -2053,11 +2054,11 @@ QFrame#rightVerdictBanner[verdict="ready"] QLabel {
     color: #166534;
 }
 QFrame#rightVerdictBanner[verdict="warn"] {
-    background-color: #fffbeb;
-    border-color: #fde68a;
+    background-color: {{SURFACE_WARNING_BG}};
+    border-color: {{SURFACE_WARNING_BORDER}};
 }
 QFrame#rightVerdictBanner[verdict="warn"] QLabel {
-    color: #92400e;
+    color: {{SURFACE_WARNING_DARK_TEXT}};
 }
 QFrame#rightVerdictBanner[verdict="error"] {
     background-color: #fef2f2;
@@ -2448,10 +2449,10 @@ Inspector QFrame#frfFactsCard QLabel[factsRole="warning"],
 Inspector QFrame#fftFactsCard QLabel[factsRole="warning"],
 Inspector QFrame#fftTimeFactsCard QLabel[factsRole="warning"],
 Inspector QFrame#orderFactsCard QLabel[factsRole="warning"] {
-    background-color: #fffbeb;
-    border: 1px solid #fde68a;
+    background-color: {{SURFACE_WARNING_BG}};
+    border: 1px solid {{SURFACE_WARNING_BORDER}};
     border-radius: 6px;
-    color: #92400e;
+    color: {{SURFACE_WARNING_DARK_TEXT}};
     padding: 6px 10px;
     font-size: 11px;
 }
@@ -2719,9 +2720,9 @@ QPushButton[role="preset-load"][filled="true"] {
     color: {{CONTROL_ACCENT_INK}};
 }
 QPushButton[role="preset-load"][applied="true"] {
-    color: #0b73e7;
-    background-color: #e8f1ff;
-    border-color: #0b73e7;
+    color: {{SURFACE_ACTION_BLUE}};
+    background-color: {{SURFACE_SELECTED_PALE_BLUE}};
+    border-color: {{SURFACE_ACTION_BLUE}};
     font-weight: 700;
 }
 QPushButton[role="preset-load"][applied="true"]:hover {
@@ -2918,25 +2919,25 @@ QScrollArea#chartToolbarScrollHost {
 }
 QToolButton#chartToolbarEdgeButton {
     padding: 0;
-    border: 1px solid #d5e0ec;
+    border: 1px solid {{CHART_EDGE_BORDER}};
     border-radius: 7px;
     background-color: #f8fbff;
-    color: #58708f;
+    color: {{CHART_EDGE_TEXT}};
     font-size: 17px;
     font-weight: 700;
 }
 QToolButton#chartToolbarEdgeButton:hover {
-    border-color: #a9c5ea;
-    background-color: #edf5ff;
-    color: #175db5;
+    border-color: {{CHART_EDGE_HOVER_BORDER}};
+    background-color: {{CONTROL_ACCENT_WASH}};
+    color: {{CHART_EDGE_HOVER_TEXT}};
 }
 QToolButton#chartToolbarEdgeButton:pressed {
-    background-color: #dfeeff;
+    background-color: {{CHART_EDGE_PRESSED_BG}};
 }
 QToolButton#chartToolbarEdgeButton:disabled {
     border-color: transparent;
     background-color: transparent;
-    color: #c4ceda;
+    color: {{CHART_EDGE_DISABLED_TEXT}};
 }
 QToolBar#chartToolbar,
 QWidget#chartToolbar {
@@ -2967,7 +2968,7 @@ QWidget#chartToolbar QToolButton#chartTickDensityButton {
 QWidget#chartToolbar QToolButton#chartTickDensityButton:hover {
     color: #0b7af3;
     border-color: #0b7af3;
-    background-color: #e8f1ff;
+    background-color: {{SURFACE_SELECTED_PALE_BLUE}};
 }
 QWidget#chartToolbar QToolButton#chartTickDensityButton:pressed,
 QWidget#chartToolbar QToolButton#chartTickDensityButton:focus,
@@ -2988,7 +2989,7 @@ QWidget#chartToolbar QToolButton#cursorDisplaySettingsButton {
 QWidget#chartToolbar QToolButton#cursorDisplaySettingsButton:hover {
     color: {{CONTROL_ACCENT}};
     border-color: {{CONTROL_ACCENT}};
-    background-color: #e8f1ff;
+    background-color: {{SURFACE_SELECTED_PALE_BLUE}};
 }
 QWidget#chartToolbar QToolButton:disabled {
     border: 1px solid #e5eaf2;
@@ -3023,15 +3024,15 @@ QWidget#markupEditorToolbar QToolButton#markupStyleButton {
     max-height: 34px;
 }
 QWidget#markupEditorToolbar QToolButton:hover {
-    background-color: #e8f1ff;
+    background-color: {{SURFACE_SELECTED_PALE_BLUE}};
     border-color: {{CONTROL_ACCENT}};
 }
 QWidget#markupEditorToolbar QToolButton:pressed {
-    background-color: #eaf2ff;
+    background-color: {{SURFACE_ACCENT_PALE_BG}};
     border-color: {{CONTROL_ACCENT}};
 }
 QWidget#markupEditorToolbar QToolButton:checked {
-    background-color: #eaf2ff;
+    background-color: {{SURFACE_ACCENT_PALE_BG}};
     border-color: {{CONTROL_ACCENT}};
 }
 QWidget#markupEditorToolbar QToolButton#markupCloseButton:hover,
@@ -3054,39 +3055,6 @@ QFrame#cursorPill QLabel#cursorPillPrimary {
 QFrame#cursorPill QLabel#cursorPillDetail {
     background: transparent;
 }
-QPushButton#cursorPillToggle {
-    background: rgba(100, 116, 139, 0.15);
-    border: 1px solid rgba(100, 116, 139, 0.3);
-    border-radius: 3px;
-    color: #475569;
-    font-size: 10px;
-    font-weight: 700;
-    padding: 0px;
-    min-width: 16px;
-    min-height: 16px;
-    max-width: 16px;
-    max-height: 16px;
-}
-/* full mode reuses the base #cursorPillToggle chrome — do not restate
- * border: here (shorthand would zero the 3px radius). */
-QPushButton#cursorPillToggle[cursorPillMode="mini"] {
-    background: rgba(37, 99, 235, 0.14);
-    border-color: rgba(37, 99, 235, 0.52);
-    color: #2563eb;
-}
-QPushButton#cursorPillToggle[cursorPillMode="full"]:hover {
-    background: rgba(100, 116, 139, 0.25);
-}
-QPushButton#cursorPillToggle[cursorPillMode="full"]:pressed {
-    background: rgba(100, 116, 139, 0.40);
-}
-QPushButton#cursorPillToggle[cursorPillMode="mini"]:hover {
-    background: rgba(37, 99, 235, 0.18);
-}
-QPushButton#cursorPillToggle[cursorPillMode="mini"]:pressed {
-    background: rgba(37, 99, 235, 0.26);
-}
-
 QFrame#cursorDisplayPopover {
     background-color: #ffffff;
     border-width: 1px;
@@ -3143,13 +3111,6 @@ QDialog#SheetSurface {
 }
 /* A rounded popover fill can ride on an inner QFrame so a translucent shell
  * keeps transparent (not boxed) corners. */
-QFrame#PopoverSurface {
-    border: 1px solid #dfe5ee;
-    border-radius: 12px;
-    background-color: #ffffff;
-}
-QFrame#PopoverSurface QLabel { color: #334155; }
-
 QFrame#TickDensitySurface {
     border: 1px solid #b7c8dc;
     border-radius: 8px;
@@ -3214,7 +3175,7 @@ QFrame#TickDensitySurface QSpinBox#tickDensitySpin {
     border: 1px solid #dde5f0;
     border-radius: 6px;
     background-color: #ffffff;
-    color: #1e293b;
+    color: {{SURFACE_DARK_TEXT}};
     font-weight: 700;
 }
 QFrame#TickDensitySurface QPushButton#tickDensityResetButton {
@@ -3284,7 +3245,7 @@ QDialog#ChartOptionsDialog QTabBar::tab:selected {
 }
 
 QDialog#ChartOptionsDialog QFrame#chartOptionsGroup {
-    border: 1px solid #d7e2f0;
+    border: 1px solid {{SURFACE_BLUE_GREY_BORDER}};
     border-radius: 8px;
     background-color: #ffffff;
 }
@@ -3857,7 +3818,7 @@ QWidget#viewTabBar QPushButton#viewTabPlus {
     border: 1px solid #cbd5e1;
     border-radius: 4px;
     background-color: #ffffff;
-    color: #1e293b;
+    color: {{SURFACE_DARK_TEXT}};
     font-weight: 700;
 }
 
@@ -3895,7 +3856,7 @@ QWidget#viewTabBar QPushButton#viewTabOverflow {
     border: 1px solid #cbd5e1;
     border-radius: 4px;
     background-color: #ffffff;
-    color: #1e293b;
+    color: {{SURFACE_DARK_TEXT}};
     font-weight: 700;
 }
 
@@ -3932,7 +3893,7 @@ QLabel#viewOverflowTitle {
 QLabel#viewOverflowCount {
     padding: 4px 7px;
     border-radius: 6px;
-    background-color: #edf4ff;
+    background-color: {{VIEW_MENU_SELECTED_BG}};
     color: #2358a6;
     font-size: 10px;
     font-weight: 700;
@@ -3951,7 +3912,7 @@ QScrollArea#viewOverflowList QScrollBar:vertical {
 QScrollArea#viewOverflowList QScrollBar::handle:vertical {
     min-height: 20px;
     border-radius: 4px;
-    background-color: #c5d0dc;
+    background-color: {{POPUP_SCROLL_HANDLE}};
 }
 
 QScrollArea#viewOverflowList QScrollBar::add-line:vertical,
@@ -3980,7 +3941,7 @@ QWidget#viewOverflowRow {
 }
 
 QWidget#viewOverflowRow[current="true"] {
-    background-color: #edf4ff;
+    background-color: {{VIEW_MENU_SELECTED_BG}};
 }
 
 QPushButton#viewOverflowRowName {
@@ -3988,12 +3949,12 @@ QPushButton#viewOverflowRowName {
     border: 1px solid transparent;
     border-radius: 4px;
     background-color: transparent;
-    color: #17243a;
+    color: {{VIEW_MENU_NAME}};
     text-align: left;
 }
 
 QPushButton#viewOverflowRowName:hover {
-    color: #164fae;
+    color: {{VIEW_MENU_NAME_HOVER}};
 }
 
 QPushButton#viewOverflowRowName:focus {
@@ -4003,8 +3964,8 @@ QPushButton#viewOverflowRowName:focus {
 QLabel#viewOverflowCurrentChip {
     padding: 3px 6px;
     border-radius: 5px;
-    background-color: #dce9ff;
-    color: #2259aa;
+    background-color: {{VIEW_MENU_CURRENT_BG}};
+    color: {{VIEW_MENU_CURRENT_TEXT}};
     font-size: 9px;
     font-weight: 700;
 }
@@ -4013,62 +3974,67 @@ QPushButton#viewOverflowRowClose {
     border: 1px solid transparent;
     border-radius: 6px;
     background-color: transparent;
-    color: #7a899d;
+    color: {{VIEW_MENU_CLOSE_TEXT}};
     font-size: 16px;
 }
 
 QPushButton#viewOverflowRowClose:hover {
-    border-color: #dfa0a9;
-    background-color: #fff0f2;
-    color: #bf3447;
+    border-color: {{VIEW_MENU_CLOSE_HOVER_BORDER}};
+    background-color: {{SURFACE_DANGER_BG}};
+    color: {{VIEW_MENU_DANGER_TEXT}};
 }
 
 QPushButton#viewOverflowRowClose:focus {
-    border-color: #e5a8b0;
+    border-color: {{VIEW_MENU_CLOSE_FOCUS_BORDER}};
 }
 
 QPushButton#viewOverflowRowClose:disabled {
-    color: #c5ced8;
+    color: {{VIEW_MENU_CLOSE_DISABLED_TEXT}};
 }
 
 QWidget#viewOverflowFooter {
     background-color: transparent;
 }
 
-QPushButton#viewOverflowCloseOthers,
-QPushButton#viewOverflowCloseAll {
+QPushButton#viewOverflowCloseOthers {
     min-height: 24px;
     max-height: 24px;
     padding: 0 8px;
-    border: 1px solid #c6d2df;
+    border: 1px solid {{VIEW_MENU_ACTION_BORDER}};
     border-radius: 6px;
     background-color: #ffffff;
-    color: #344860;
+    color: {{VIEW_MENU_ACTION_TEXT}};
     font-size: 11px;
 }
 
 QPushButton#viewOverflowCloseOthers:hover {
-    border-color: #9eb8df;
-    background-color: #edf4ff;
-    color: #174f9f;
+    border-color: {{VIEW_MENU_ACTION_HOVER_BORDER}};
+    background-color: {{VIEW_MENU_SELECTED_BG}};
+    color: {{VIEW_MENU_ACTION_HOVER_TEXT}};
 }
 
 QPushButton#viewOverflowCloseAll {
-    border-color: #e2aeb5;
-    color: #bf3447;
+    min-height: 24px;
+    max-height: 24px;
+    padding: 0 8px;
+    border: 1px solid {{VIEW_MENU_DANGER_BORDER}};
+    border-radius: 6px;
+    background-color: #ffffff;
+    font-size: 11px;
+    color: {{VIEW_MENU_DANGER_TEXT}};
 }
 
 QPushButton#viewOverflowCloseAll:hover {
-    border-color: #d88691;
-    background-color: #fff0f2;
-    color: #a62537;
+    border-color: {{VIEW_MENU_DANGER_HOVER_BORDER}};
+    background-color: {{SURFACE_DANGER_BG}};
+    color: {{VIEW_MENU_DANGER_HOVER_TEXT}};
 }
 
 QPushButton#viewOverflowCloseOthers:disabled,
 QPushButton#viewOverflowCloseAll:disabled {
-    border-color: #dde4ec;
-    background-color: #f2f5f8;
-    color: #a6b0be;
+    border-color: {{VIEW_MENU_DISABLED_BORDER}};
+    background-color: {{VIEW_MENU_DISABLED_BG}};
+    color: {{VIEW_MENU_DISABLED_TEXT}};
 }
 
 /* Cancel-merge button (right side of the View tab bar).
@@ -4211,7 +4177,7 @@ QFrame#chartHintBar { border-top: 1px solid #d3dbe6; }
 QWidget#viewTabBar { border: none; }
 
 /* Central tray backdrop — the three rounded panels float on this. */
-QWidget#centralTray { background-color: #f2f4f7; }
+QWidget#centralTray { background-color: {{SURFACE_DISABLED_BG}}; }
 
 /* Acquisition review modal hierarchy (2026-07-08 G4). */
 #reviewTitle {
@@ -4393,12 +4359,12 @@ QTableWidget#channelConfigHtmlChannelTable {
 QTableWidget#channelConfigHtmlChannelTable::item {
     padding: 0 8px;
     border: none;
-    border-bottom: 1px solid #edf1f6;
+    border-bottom: 1px solid {{SURFACE_COOL_BG}};
     background-color: #ffffff;
 }
 QTableWidget#channelConfigHtmlChannelTable::item:hover { background-color: #f8fbff; }
 QTableWidget#channelConfigHtmlChannelTable::item:selected {
-    background-color: #e8f1fb;
+    background-color: {{CHANNEL_TABLE_SELECTED_BG}};
 }
 QWidget#channelConfigHtmlCheckCell[chosen="true"] { background-color: {{CONTROL_ACCENT_WASH}}; }
 QWidget#channelConfigHtmlRemoveCell[chosen="true"] { background-color: {{CONTROL_ACCENT_WASH}}; }
@@ -5827,7 +5793,7 @@ QTableView#recentOpenTable QScrollBar:vertical {
 QTableView#recentOpenTable QScrollBar::handle:vertical {
     min-height: 20px;
     border-radius: 4px;
-    background-color: #c5d0dc;
+    background-color: {{POPUP_SCROLL_HANDLE}};
 }
 QTableView#recentOpenTable QScrollBar::add-line:vertical,
 QTableView#recentOpenTable QScrollBar::sub-line:vertical {
@@ -5839,7 +5805,7 @@ QTableView#recentOpenTable QScrollBar::sub-page:vertical {
     background-color: transparent;
 }
 QHeaderView#recentOpenHeader {
-    background-color: #f8fafd;
+    background-color: {{CONTROL_SURFACE_BOTTOM}};
     border-width: 0px;
     border-style: none;
 }
@@ -5863,23 +5829,23 @@ QPushButton#recentOpenClear {
     border-color: transparent;
     border-radius: 7px;
     background-color: transparent;
-    color: #52677f;
+    color: {{RECENT_CLEAR_TEXT}};
     font-size: 11px;
     font-weight: 650;
 }
 QPushButton#recentOpenClear:hover {
-    border-color: #dfabb2;
-    background-color: #fff4f5;
-    color: #b42335;
+    border-color: {{RECENT_CLEAR_HOVER_BORDER}};
+    background-color: {{RECENT_CLEAR_HOVER_BG}};
+    color: {{CONTROL_DANGER}};
 }
 QPushButton#recentOpenClear:disabled {
     border-color: transparent;
     background-color: transparent;
-    color: #a6b1bf;
+    color: {{RECENT_CLEAR_DISABLED_TEXT}};
 }
 QLabel#recentOpenEmptyTitle {
     background-color: transparent;
-    color: #253247;
+    color: {{CONTROL_TEXT}};
     font-size: 14px;
     min-height: 20px;
 }

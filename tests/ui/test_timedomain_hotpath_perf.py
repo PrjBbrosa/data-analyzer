@@ -380,8 +380,11 @@ def test_disabled_stats_strip_skips_full_array_statistics(monkeypatch):
     # Per-canvas cache-invalidation bookkeeping + the progress-token seam the
     # plot path now opens (returns None → the finally block skips finish).
     fake._last_filter_state_by_canvas = {}
+    fake._view_index_for_canvas = lambda _canvas: None
+    from contextlib import nullcontext
+    fake._canvas_display_update_scope = lambda _canvas: nullcontext()
     fake._begin_compute_progress = lambda *_a, **_k: None
-    fake._active_time_curve_bindings = lambda: []
+    fake._active_time_curve_bindings = lambda _view_idx=None: []
     fake._bindings_include_record_only = lambda _bindings: False
     fake._custom_xaxis_fid = None
     fake._custom_xaxis_ch = None

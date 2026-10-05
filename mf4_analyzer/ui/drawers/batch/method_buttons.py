@@ -77,6 +77,10 @@ QWidget#BatchMethodGroup QPushButton[batchMethod]:checked:hover {
     background-color: transparent;
     border-color: transparent;
 }
+QWidget#BatchMethodGroup QPushButton[batchMethod]:checked:pressed {
+    background-color: #0f4ea9;
+    color: #ffffff;
+}
 QWidget#BatchMethodGroup QPushButton[batchMethod]:checked:disabled,
 QWidget#BatchMethodGroup QPushButton[batchMethod]:checked:disabled:hover,
 QWidget#BatchMethodGroup QPushButton[batchMethod]:checked:disabled:pressed,

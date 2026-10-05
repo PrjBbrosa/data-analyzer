@@ -89,6 +89,7 @@ def test_live_stylesheet_parse_keeps_preexisting_qt_message_handler(qapp):
     original_handler = qInstallMessageHandler(preceding_handler)
     try:
         _assert_rendered_stylesheet_parses_with_a_live_widget(qapp)
+        received.clear()  # Ignore unrelated offscreen layout messages.
         qWarning("stylesheet-parse-handler-survives")
         assert received == ["stylesheet-parse-handler-survives"]
     finally:

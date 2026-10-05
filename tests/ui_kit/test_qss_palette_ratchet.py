@@ -35,7 +35,7 @@ from tests.ui_kit._qss_parse import load_style_qss, strip_qss_comments
 # (fill vs. edge) rather than drift. Net distinct = 234.
 # UltraView selected-blue tokens live in the isolated ``ULTRAVIEW_QSS_TOKENS``
 # map shared by QSS and QPainter. Amber is warning-only.
-MAX_DISTINCT_HEX_LITERALS = 211
+MAX_DISTINCT_HEX_LITERALS = 208
 
 # Not preceded/followed by another hex digit, so #11223344 is not #112233.
 _HEX6_RE = re.compile(r"(?<![0-9a-fA-F])#([0-9a-fA-F]{6})(?![0-9a-fA-F])")

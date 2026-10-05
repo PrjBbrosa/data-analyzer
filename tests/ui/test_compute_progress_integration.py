@@ -275,6 +275,7 @@ def test_fft_multi_source_progress_wraps_cache_misses_only(
 ):
     win = MainWindow()
     qtbot.addWidget(win)
+    win._analysis_page("fft").ensure_ready()
     qapp.processEvents()
 
     state = win.analysis_managers["fft"].get(win.analysis_managers["fft"].active)
@@ -361,7 +362,7 @@ def test_fft_multi_source_progress_wraps_cache_misses_only(
     monkeypatch.setattr(
         win,
         "_plot_fft_entries",
-        lambda entries, canvas: order.append(("plot", len(entries))),
+        lambda entries, canvas, **_kwargs: order.append(("plot", len(entries))),
     )
 
     win.do_fft()
@@ -583,6 +584,7 @@ def _fft_time_service_params():
 def _make_fft_time_dispatch_window(qapp, qtbot, monkeypatch):
     win = MainWindow()
     qtbot.addWidget(win)
+    win._analysis_page("fft_time").ensure_ready()
     qapp.processEvents()
     state = win.analysis_managers["fft_time"].get(
         win.analysis_managers["fft_time"].active
@@ -891,6 +893,7 @@ def test_order_service_skips_advance_and_finish_ui_progress(
 def _make_order_dispatch_window(qapp, qtbot, monkeypatch):
     win = MainWindow()
     qtbot.addWidget(win)
+    win._analysis_page("order").ensure_ready()
     qapp.processEvents()
     state = win.analysis_managers["order"].get(
         win.analysis_managers["order"].active
@@ -903,7 +906,7 @@ def _make_order_dispatch_window(qapp, qtbot, monkeypatch):
     monkeypatch.setattr(
         win,
         "_analysis_cache_key",
-        lambda section, fid, ch, rpm_source=None, pane_idx=None: (
+        lambda section, fid, ch, rpm_source=None, pane_idx=None, **_kwargs: (
             section,
             fid,
             ch,
@@ -920,7 +923,7 @@ def _make_order_dispatch_window(qapp, qtbot, monkeypatch):
     monkeypatch.setattr(
         win,
         "_build_order_job",
-        lambda pane_idx, fid, ch, rpm_source: (
+        lambda pane_idx, fid, ch, rpm_source, **_kwargs: (
             (lambda _worker: object()),
             {
                 "analysis_key": ("order", fid, ch, rpm_source, pane_idx),
@@ -1157,6 +1160,7 @@ def test_order_job_closure_passes_progress_callback_and_cancel_token(
     assert ctx == {
         "analysis_key": ("order", "f1", "torque"),
         "pane_idx": 0,
+        "pane_token": id(win.analysis_managers["order"].get(0).panes[0]),
         "source": ("f1", "torque"),
         "view_id": win.analysis_managers["order"].get(
             win.analysis_managers["order"].active

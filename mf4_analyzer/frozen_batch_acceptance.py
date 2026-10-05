@@ -155,9 +155,24 @@ def _verify_result(
         raise RuntimeError(
             f"BatchRunner did not complete: status={result.status}; blocked={result.blocked}"
         )
-    if result.degraded_count or result.warnings:
+    # Source-axis provenance is expected for MF4, not an output degradation.
+    # Only admit the runner's exact notice when the item carries its evidence;
+    # renderer/checksum/other loader warnings must still fail acceptance.
+    from .batch import _LOAD_ALIGNMENT_NOTICE
+
+    alignment_recorded = any(
+        isinstance(record.get("mf4_alignment"), dict)
+        and _LOAD_ALIGNMENT_NOTICE in record.get("warnings", [])
+        for item in result.items
+        for record in item.effective_params.get("source_diagnostics", {}).values()
+    )
+    unexpected_warnings = [
+        warning for warning in result.warnings
+        if not (alignment_recorded and warning == _LOAD_ALIGNMENT_NOTICE)
+    ]
+    if result.degraded_count or unexpected_warnings:
         raise RuntimeError(
-            f"BatchRunner degraded unexpectedly: {result.warnings}"
+            f"BatchRunner degraded unexpectedly: {unexpected_warnings}"
         )
     if len(result.items) != 3 or any(item.status != "done" for item in result.items):
         raise RuntimeError("BatchRunner did not return exactly three done items")

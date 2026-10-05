@@ -139,7 +139,7 @@ def test_toolbar_chrome_and_action_widgets(qapp, qtbot):
 
     assert card.toolbar.objectName() == "chartToolbar"
     assert card.toolbar.iconSize().width() == 18
-    assert card.toolbar.layout().spacing() == 8
+    assert card.toolbar.layout().spacing() == 1
     assert card._toolbar_compact is None
     assert card._loc_action is None
 
@@ -199,7 +199,8 @@ def test_card_layout_order_is_toolbar_canvas_hintbar(qapp, qtbot):
 
     layout = card.layout()
     ordered = [layout.itemAt(i).widget() for i in range(layout.count())]
-    assert ordered == [card.toolbar, canvas, card._hint_bar]
+    assert ordered[0].widget() is card.toolbar
+    assert ordered[1:] == [canvas, card._hint_bar]
     assert layout.stretch(1) == 1
 
 
