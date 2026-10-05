@@ -228,14 +228,7 @@ class AnalysisPaneHost(QWidget):
             canvas.levels_changed.connect(self._on_locked_levels)
 
     def apply_width_orientation(self) -> None:
-        if len(self._cards) < 2:
-            self._split.setOrientation(Qt.Horizontal)
-            return
-        width = self.width()
-        if width <= 0:
-            width = self._split.width()
-        vertical = 0 < width < _NARROW_PANE_REGION_PX
-        self._split.setOrientation(Qt.Vertical if vertical else Qt.Horizontal)
+        self._page._apply_region_orientation(self._split, len(self._cards))
 
     def teardown(self) -> None:
         try:
@@ -1755,4 +1748,16 @@ class AnalysisSectionPage(QWidget):
         if width <= 0:
             width = splitter.parentWidget().width() if splitter.parentWidget() else 0
         vertical = 0 < width < _NARROW_PANE_REGION_PX
-        splitter.setOrientation(Qt.Vertical if vertical else Qt.Horizontal)
+        orientation = Qt.Vertical if vertical else Qt.Horizontal
+        if splitter.orientation() == orientation:
+            return
+        splitter.setOrientation(orientation)
+        # Horizontal widths are not useful vertical heights. In particular a
+        # newly mounted host may still have its pre-layout minimum width ratio.
+        # Rebalance only on orientation changes, preserving later user drags.
+        extent = max(
+            splitter.height() if vertical else splitter.width(),
+            splitter.minimumSizeHint().height() if vertical else splitter.minimumSizeHint().width(),
+            1,
+        )
+        splitter.setSizes([extent] * int(pane_count))

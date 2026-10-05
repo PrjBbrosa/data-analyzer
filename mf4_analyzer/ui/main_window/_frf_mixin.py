@@ -146,8 +146,9 @@ class FrfMixin:
         follow work.
         """
         idx = self._frf_focused_pane_index(state)
+        canvas = None if idx is None else self._canvas_for_view_pane("frf", state, idx)
         result = (
-            None if idx is None
+            None if canvas is None or not canvas.has_result()
             else self._frf_cached_result_for_pane(state, state.panes[idx])
         )
         if result is None:
@@ -156,11 +157,10 @@ class FrfMixin:
         self._publish_frf_effective_facts(result)
 
     def _capture_frf_canvas_ranges(self, state):
-        page = self._analysis_page("frf")
-        for pane_idx in range(min(page.pane_count(), len(state.panes))):
+        for pane_idx in range(len(state.panes)):
             pane = state.panes[pane_idx]
-            canvas = page.pane_canvas(pane_idx)
-            if not canvas.has_result():
+            canvas = self._canvas_for_view_pane("frf", state, pane_idx)
+            if canvas is None or not canvas.has_result():
                 continue
             xlim = canvas.get_xlim()
             if xlim is not None:
@@ -241,12 +241,9 @@ class FrfMixin:
                 canvas.set_ylim(panel, *limits)
 
     def _mark_frf_pane_stale(self, state, pane_idx):
-        manager = self.analysis_managers["frf"]
-        if manager.get(manager.active) is not state:
-            return
-        page = self._analysis_page("frf")
-        if 0 <= int(pane_idx) < page.pane_count():
-            page.pane_canvas(int(pane_idx)).mark_stale()
+        canvas = self._canvas_for_view_pane("frf", state, int(pane_idx))
+        if canvas is not None:
+            canvas.mark_stale()
 
     def _dirty_frf_pane(self, state, pane_idx, *, clear_effective=False):
         """Invalidate one pane's in-flight generation and stale its canvas."""
@@ -256,12 +253,7 @@ class FrfMixin:
             return
         if clear_effective:
             state.panes[idx].effective_time_range = None
-        self._frf_coordinator.invalidate_pane(state.view_id, idx)
-        self._mark_frf_pane_stale(state, idx)
-        if idx == self._frf_focused_pane_index(state):
-            # The canvas went stale; the numbers describing it must say so too
-            # instead of silently reading as current.
-            self.inspector.frf_ctx.mark_effective_facts_stale()
+        self._reconcile_frf_result_validity(state, pane_indices=(idx,))
 
     def _on_frf_pair_changed(self, input_source, output_source):
         if self._applying_analysis_view:
@@ -285,7 +277,7 @@ class FrfMixin:
         # not submit; a cached request becomes current again, a miss stays stale.
         self._reconcile_frf_result_validity(state)
 
-    def _reconcile_frf_result_validity(self, state):
+    def _reconcile_frf_result_validity(self, state, *, pane_indices=None):
         """Publish the cached FRF for the current request, or keep it stale.
 
         ``invalidate_pane`` drops an in-flight job so it cannot paint as the
@@ -294,15 +286,12 @@ class FrfMixin:
         curves and the explicit stale label.
         """
         focused = self._frf_focused_pane_index(state)
-        page = self._analysis_page("frf")
-        active = self.analysis_managers["frf"].get(
-            self.analysis_managers["frf"].active
-        ) is state
-        for pane_idx in range(len(state.panes)):
+        indices = range(len(state.panes)) if pane_indices is None else pane_indices
+        for pane_idx in indices:
             self._frf_coordinator.invalidate_pane(state.view_id, pane_idx)
             pane = state.panes[pane_idx]
             result = self._frf_cached_result_for_pane(state, pane)
-            visible = active and page is not None and 0 <= pane_idx < page.pane_count()
+            canvas = self._canvas_for_view_pane("frf", state, pane_idx)
             if result is None:
                 self._mark_frf_pane_stale(state, pane_idx)
                 if pane_idx == focused:
@@ -313,11 +302,13 @@ class FrfMixin:
                 self._replace_analysis_pane_pins(
                     "frf", state.view_id, pane_idx, (key,),
                 )
-            if not visible:
+            pane.effective_time_range = (
+                result.effective.time_start, result.effective.time_end,
+            )
+            if canvas is None:
                 if pane_idx == focused:
                     self._publish_frf_effective_facts(result)
                 continue
-            canvas = page.pane_canvas(pane_idx)
             canvas.set_result(
                 result,
                 display_params=self._frf_display_params_for_state(state),
@@ -332,8 +323,11 @@ class FrfMixin:
             return
         _manager, state, page, _pane_idx, _pane = self._active_frf_state()
         state.params.update(dict(params or {}))
-        for idx in range(min(page.pane_count(), len(state.panes))):
-            page.pane_canvas(idx).set_display_params(params)
+        self._validate_comparison_links("frf")
+        for idx in range(len(state.panes)):
+            canvas = self._canvas_for_view_pane("frf", state, idx)
+            if canvas is not None:
+                canvas.set_display_params(params)
 
     @staticmethod
     def _frf_validate_array_shapes(time, signal, role):
@@ -423,19 +417,6 @@ class FrfMixin:
 
     def _frf_requested_range_for_pane(self, state, pane):
         """Requested range for this pane, never another view's Inspector."""
-        try:
-            pane_idx = state.panes.index(pane)
-        except ValueError:
-            # Defensive path for a detached pane supplied by a narrow caller.
-            # Normal candidate construction always owns a pane in ``state``.
-            return self._normalize_analysis_time_range(pane.time_range)
-        active_state = self.analysis_managers["frf"].get(
-            self.analysis_managers["frf"].active
-        )
-        if active_state is state:
-            return self._pane_time_range_for("frf", pane_idx)
-        # The shared helper intentionally addresses the active view;
-        # an inactive restore candidate must use its own pane instead.
         return self._normalize_analysis_time_range(pane.time_range)
 
     @staticmethod
@@ -916,14 +897,13 @@ class FrfMixin:
     def _frf_cache_key_for_pane(self, state, pane):
         """Same key the job stored: analysis Fs plus the prepared span.
 
-        ``pane.effective_time_range`` only means a run finished. It is not the
-        cache identity. Lookup uses the light time description, so it does not
+        Lookup uses current intent, including before a pane has run or after
+        its range/pair changed back. The light time description does not
         copy either signal or allocate the rebuilt grid.
         """
         if (
             pane.input_source is None
             or pane.output_source is None
-            or pane.effective_time_range is None
         ):
             return None
         try:

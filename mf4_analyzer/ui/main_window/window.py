@@ -1813,7 +1813,8 @@ class MainWindow(
         self._request_fft_page_transition_ready(state)
 
     def _fft_entry_from_cache(
-        self, result, fid, ch, color, time_range=_INSPECTOR_TIME_RANGE
+        self, result, fid, ch, color, time_range=_INSPECTOR_TIME_RANGE,
+        *, display_params=None,
     ):
         """Build a plot_spectra entry from a cached FFT result.
 
@@ -1830,9 +1831,13 @@ class MainWindow(
         Linear/dB toggle (Linear labelling still wants the source's unit/
         quantity); ``amp_for_xlim`` always stays the raw LINEAR amplitude."""
         freq, amp, _psd = result
-        p = self.inspector.fft_ctx.current_params()
+        p = self.inspector.fft_ctx.current_params() if display_params is None else display_params
         amp_y = p.get('amp_y', 'Linear')
-        resolution = self._resolve_db_reference_for_source('fft', (fid, ch))
+        resolution = (
+            self._resolve_db_reference_for_source('fft', (fid, ch))
+            if display_params is None else
+            self._resolve_db_reference_for_source('fft', (fid, ch), params=display_params)
+        )
         if amp_y == 'dB':
             amp_disp = self._amplitude_to_db(amp, resolution.value)
         else:
@@ -1911,6 +1916,7 @@ class MainWindow(
         if not entries:
             return
         p = self.inspector.fft_ctx.current_params()
+        p = self._analysis_params_for_canvas('fft', canvas, p)
         amp_y = p.get('amp_y', 'Linear')
         weighting = p.get('weighting', 'None')
         amp_label = self._fft_apply_amplitude_display(entries, amp_y, weighting)
@@ -1948,6 +1954,7 @@ class MainWindow(
         resolution instead of the pane's own saved source."""
         if section == 'fft_time':
             p = self.inspector.fft_time_ctx.get_params()
+            p = self._analysis_params_for_canvas(section, canvas, p)
             self._render_fft_time_on(canvas, result, p, source=source)
         else:
             self._render_order_on(canvas, result, source=source)
@@ -2796,10 +2803,8 @@ class MainWindow(
         """
         mode = self.chart_stack.current_mode()
         if mode in self.analysis_managers:
-            manager = self.analysis_managers[mode]
-            state = manager.get(manager.active)
-            page = self._analysis_page(mode)
-            pane_idx = page.focused_index()
+            state = self._analysis_state_for_dispatch(mode)
+            pane_idx = self._dispatch_focus_index(mode, state)
             pane = state.panes[pane_idx]
             before = pane.time_range
             if enabled:

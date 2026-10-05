@@ -298,7 +298,7 @@ class AnalysisContext:
             is_audio_source=is_audio,
         )
 
-    def resolve_db_reference_for_source(self, section, source):
+    def resolve_db_reference_for_source(self, section, source, *, params=None):
         """Resolve ``section``'s dB reference for ONE specific ``(fid, ch)``
         source, honoring the section's CURRENT View mode (spec §15 C1 /
         plan Task 6 Step 6.2) -- unlike ``_resolve_and_apply_db_reference``
@@ -318,14 +318,18 @@ class AnalysisContext:
         ``_resolve_and_apply_db_reference`` can never silently drift apart on
         the resolution rule itself.
         """
-        control = self.section_ctx(section).db_reference_control
-        mode = control.mode()
+        if params is None:
+            control = self.section_ctx(section).db_reference_control
+            mode = control.mode()
+            manual_value = control.editor.value() if mode == 'manual' else None
+        else:
+            mode = params.get('db_reference_mode', 'manual' if 'db_reference' in params else 'auto')
+            manual_value = params.get('db_reference') if mode == 'manual' else None
         facts = (
             self.channel_reference_facts(*source) if source
             else db_reference.ChannelReferenceFacts(quantity="", unit="")
         )
         snapshot = self._db_reference_store.snapshot()
-        manual_value = control.editor.value() if mode == 'manual' else None
         return db_reference.resolve_db_reference(
             mode=mode,
             manual_value=manual_value,

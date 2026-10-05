@@ -1024,7 +1024,7 @@ _HINTS = (
     ),
     Hint(
         id="analysis.cross_view_compare",
-        text="右键其他 View 可并排对比",
+        text="右键 View 可并排；联动需轴尺度兼容",
         surface="discovery",
         modes=frozenset({"fft", "fft_time", "frf", "order"}),
         priority=56,

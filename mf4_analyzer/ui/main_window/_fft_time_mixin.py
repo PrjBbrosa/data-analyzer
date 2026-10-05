@@ -665,6 +665,8 @@ class FFTTimeMixin:
         the shared validator so existing callers are unaffected.
         """
         if source is not None:
+            if 'db_reference_mode' in p:
+                return self._resolve_db_reference_for_source('fft_time', source, params=p)
             return self._resolve_db_reference_for_source('fft_time', source)
         return db_reference.degraded_numeric_resolution(p)
 
@@ -709,6 +711,7 @@ class FFTTimeMixin:
 
     def _current_fft_time_heatmap_inputs(self, canvas, result, p, source):
         """Snapshot the display inputs the next FFT-vs-Time paint or retain check reads."""
+        p = self._analysis_params_for_canvas('fft_time', canvas, p)
         resolution = self._fft_time_label_resolution(source, p)
         inputs = self._fft_time_render_inputs(
             canvas, result, p, source, resolution,
@@ -820,7 +823,8 @@ class FFTTimeMixin:
             colorbar_label=amplitude_label,
             z_unit_suffix=z_unit_suffix,
         )
-        if inputs.z_auto and inputs.amplitude_mode == "amplitude_db":
+        echo_levels = self._analysis_canvas_updates_controls("fft_time", canvas)
+        if echo_levels and inputs.z_auto and inputs.amplitude_mode == "amplitude_db":
             auto_lvls = getattr(canvas, "_last_auto_levels", None)
             if auto_lvls is not None:
                 ctx = self.inspector.fft_time_ctx
@@ -831,7 +835,7 @@ class FFTTimeMixin:
                     spin.blockSignals(True)
                     spin.setValue(val)
                     spin.blockSignals(False)
-        elif (not inputs.z_auto) and inputs.amplitude_mode == "amplitude_db":
+        elif echo_levels and (not inputs.z_auto) and inputs.amplitude_mode == "amplitude_db":
             shifted = getattr(canvas, "_last_manual_levels_shifted", None)
             if shifted is not None:
                 ctx = self.inspector.fft_time_ctx
@@ -852,6 +856,7 @@ class FFTTimeMixin:
         heatmap canvas with display options from ``p``. ``source`` is the
         ``(fid, ch)`` this specific pane/result came from -- required for a
         per-pane-accurate dB-reference resolution (spec §15 C2)."""
+        p = self._analysis_params_for_canvas('fft_time', canvas, p)
         resolution = self._fft_time_label_resolution(source, p)
         inputs = replace(
             self._fft_time_render_inputs(canvas, result, p, source, resolution),
@@ -1008,7 +1013,7 @@ class FFTTimeMixin:
         inspector = getattr(self, 'inspector', None)
         fft_ctx = getattr(inspector, 'fft_time_ctx', None) if inspector else None
         getter = getattr(fft_ctx, 'display_params', None)
-        if callable(getter) and self._analysis_ctx_targets_active_view('fft_time', ctx):
+        if callable(getter) and self._analysis_state_for_capture('fft_time') is state:
             live = dict(getter())
         elif state is not None:
             saved = dict(getattr(state, 'params', None) or {})

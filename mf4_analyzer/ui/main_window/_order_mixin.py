@@ -652,6 +652,8 @@ class OrderMixin:
         the shared validator so existing callers are unaffected.
         """
         if source is not None:
+            if 'db_reference_mode' in order_params:
+                return self._resolve_db_reference_for_source('order', source, params=order_params)
             return self._resolve_db_reference_for_source('order', source)
         return db_reference.degraded_numeric_resolution(order_params)
 
@@ -659,6 +661,7 @@ class OrderMixin:
         """Snapshot the display inputs the next Order paint or retain check reads."""
         ctx = self.inspector.order_ctx
         order_params = ctx.current_params() if hasattr(ctx, "current_params") else {}
+        order_params = self._analysis_params_for_canvas('order', canvas, order_params)
         resolution = self._order_label_resolution(source, order_params)
         inputs = self._order_render_inputs(
             canvas, result, source, order_params, resolution,
@@ -825,7 +828,8 @@ class OrderMixin:
             y_coords=result.orders,
         )
         ctx = self.inspector.order_ctx
-        if inputs.z_auto and inputs.amplitude_mode == "amplitude_db" and vmin_override is not None:
+        echo_levels = self._analysis_canvas_updates_controls("order", canvas)
+        if echo_levels and inputs.z_auto and inputs.amplitude_mode == "amplitude_db" and vmin_override is not None:
             for spin, val in (
                 (ctx.spin_z_floor, vmin_override),
                 (ctx.spin_z_ceiling, vmax_override),
@@ -833,7 +837,7 @@ class OrderMixin:
                 spin.blockSignals(True)
                 spin.setValue(val)
                 spin.blockSignals(False)
-        elif shifted_manual_levels is not None:
+        elif echo_levels and shifted_manual_levels is not None:
             for spin, val in (
                 (ctx.spin_z_floor, shifted_manual_levels[0]),
                 (ctx.spin_z_ceiling, shifted_manual_levels[1]),
@@ -857,6 +861,7 @@ class OrderMixin:
         dB-reference resolution (spec §15 C3)."""
         ctx = self.inspector.order_ctx
         order_params = ctx.current_params() if hasattr(ctx, "current_params") else {}
+        order_params = self._analysis_params_for_canvas('order', canvas, order_params)
         resolution = self._order_label_resolution(source, order_params)
         inputs = replace(
             self._order_render_inputs(
