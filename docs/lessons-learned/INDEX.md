@@ -288,6 +288,8 @@ lesson by default.
 | [FRF live cursor publishes structured facts](frf-live-cursor-publishes-structured-facts.md) | Wiring an analysis cursor into the shared ChartStack pill, or changing full/mini labels for a domain whose rows are different quantities. | See lesson |
 | [Parentless Popup Final Reference Can Break SIP Exit Iteration](parentless-popup-final-reference-can-break-sip-exit-iteration.md) | Changing cached parentless Qt popups, destroyed callbacks, or diagnosing crashes in cleanup_qobject / sip_api_visit_wrappers at interpreter exit. | See lesson |
 | [Chart Options Restore Commits The Opening Snapshot](pyqt-ui/2026-09-25-chart-options-restore-commits-opening-snapshot.md) | Changing ChartOptionsDialog reset, apply, axis range, or color-scale commit. | See lesson |
+| [FRF Faded Strokes Need Native Paint Profiling](frf-faded-strokes-need-native-paint-profiling.md) | FRF cursor or zoom stalls although curve antialiasing is already off. | See lesson |
+| [Time Range Editors Preserve Unedited Physical Endpoints](time-range-editors-preserve-unedited-physical-endpoints.md) | Editing, restoring or validating physical time endpoints through rounded numeric widgets. | See lesson |
 
 ## Selection Rules
 

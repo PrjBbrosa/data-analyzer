@@ -132,8 +132,8 @@ def test_apply_user_edit_creates_draft_when_span_differs_from_full():
 
 def test_user_edit_equal_to_full_within_display_tol_stays_full():
     ctrl = _controller()
-    # 3-decimal spinbox quantization: 0.0004 s < 0.0005 s endpoint tol.
-    intent = ctrl.apply_user_edit(*PANE, (0.0, 55.2904), SIG_A)
+    # 12-decimal editor quantization: 4e-13 s is below half a unit.
+    intent = ctrl.apply_user_edit(*PANE, (0.0, 55.29 + 4e-13), SIG_A)
     assert intent.kind == "full"
     assert ctrl.draft_for(*PANE) is None
 
@@ -148,9 +148,9 @@ def test_one_hour_minus_one_second_is_still_a_local_draft():
     assert not display_ranges_equal((0.0, 3599.0), hour)
 
 
-def test_display_tolerance_rejects_one_millisecond_beyond_half_ms():
+def test_display_tolerance_keeps_explicit_submillisecond_edits():
     ctrl = _controller(display=(0.0, 10.0), per_source={("f1", "sig"): (0.0, 10.0)})
-    assert ctrl.apply_user_edit(*PANE, (0.0, 10.0004), SIG_A).kind == "full"
+    assert ctrl.apply_user_edit(*PANE, (0.0, 10.0004), SIG_A).kind == "draft"
     assert ctrl.apply_user_edit(*PANE, (0.0, 10.001), SIG_A).kind == "draft"
 
 
@@ -1702,3 +1702,92 @@ def test_project_top_from_intent_drives_status_text(qapp, qtbot):
         TimeRangeIntent(kind="unavailable", errors=("missing source",)),
     )
     assert top.range_intent_status_text() == "当前没有可用时间范围"
+
+
+@pytest.mark.parametrize('endpoint', ['start', 'end'])
+def test_edit_one_endpoint_preserves_unedited_physical_precision(qapp, qtbot, endpoint):
+    from mf4_analyzer.ui.inspector_sections.persistent_top import PersistentTop
+
+    top = PersistentTop()
+    qtbot.addWidget(top)
+    bounds = (0.0170556123456789, 84.17071015123456)
+    top.set_range_values(*bounds)
+    if endpoint == 'end':
+        _emit_spin_text_edited(top.spin_end, '40')
+        expected = (bounds[0], 40.0)
+    else:
+        _emit_spin_text_edited(top.spin_start, '0.0180556')
+        expected = (0.0180556, bounds[1])
+    assert top.flush_pending_range_edit() == expected
+    assert top.range_values() == expected
+    assert top.flush_pending_range_edit() is None
+
+
+def test_range_editor_accepts_physical_boundary_precision(qapp, qtbot):
+    from mf4_analyzer.ui.inspector_sections.persistent_top import PersistentTop
+
+    top = PersistentTop()
+    qtbot.addWidget(top)
+    top.set_range_values(0.0, 40.0)
+    _emit_spin_text_edited(top.spin_start, '0.0170556')
+    assert top.flush_pending_range_edit() == (0.0170556, 40.0)
+
+
+def test_editor_precision_matches_display_equality_quantum(qapp, qtbot):
+    from mf4_analyzer.ui.inspector_sections.persistent_top import PersistentTop
+    from mf4_analyzer.ui.main_window.analysis_time_range import DISPLAY_ENDPOINT_TOL
+
+    top = PersistentTop()
+    qtbot.addWidget(top)
+    assert DISPLAY_ENDPOINT_TOL == 0.5 * 10 ** -top.spin_start.decimals()
+    assert top.spin_start.decimals() == top.spin_end.decimals()
+
+
+def test_precise_near_full_edit_remains_draft():
+    bounds = (0.0170556, 40.0)
+    ctrl = _controller(display=bounds, per_source={("f1", "sig"): bounds})
+    intent = ctrl.apply_user_edit(*PANE, (0.0173, 40.0), SIG_A)
+    assert intent.kind == "draft"
+    assert intent.range == (0.0173, 40.0)
+
+
+def test_range_projection_limits_and_value_changes_keep_exact_other_end(qapp, qtbot):
+    from mf4_analyzer.ui.inspector_sections.persistent_top import PersistentTop
+
+    top = PersistentTop()
+    qtbot.addWidget(top)
+    original = (-0.0170556123456789, 84.17071015123456)
+    top.set_range_limits(-100.0, 100.0)
+    top.set_range_from_span(*original)
+    top.set_range_limits(-50.0, 100.0)
+    assert top.range_values() == original
+    top.spin_end.setValue(40.0)
+    assert top.flush_pending_range_edit() == (original[0], 40.0)
+    top.set_range_limits(0.0, 100.0)
+    assert top.range_values() == (0.0, 40.0)
+    assert top.flush_pending_range_edit() is None
+
+
+def test_projecting_exact_source_at_editor_limits_does_not_round_it(qapp, qtbot):
+    from mf4_analyzer.ui.inspector_sections.persistent_top import PersistentTop
+
+    top = PersistentTop()
+    qtbot.addWidget(top)
+    bounds = (0.0170556123456789, 84.17071015123456)
+    top.set_range_limits(*bounds)
+    top.set_range_values(*bounds)
+    assert top.range_values() == bounds
+    _emit_spin_text_edited(top.spin_end, '40')
+    assert top.flush_pending_range_edit() == (bounds[0], 40.0)
+
+
+def test_repeated_value_changes_commit_latest_endpoint(qapp, qtbot):
+    from mf4_analyzer.ui.inspector_sections.persistent_top import PersistentTop
+
+    top = PersistentTop()
+    qtbot.addWidget(top)
+    start = 0.0170556123456789
+    top.set_range_values(start, 40.0)
+    top.spin_end.stepBy(1)
+    top.spin_end.stepBy(1)
+    assert top.flush_pending_range_edit() == (start, 42.0)

@@ -30,7 +30,10 @@ from ._state_holders import (
     widget_raster_metrics,
 )
 
-from ...ui_kit.message_box_buttons import fit_message_box_buttons_to_text
+from ...ui_kit.message_box_buttons import (
+    fit_message_box_buttons_to_text,
+    prepare_message_box_buttons,
+)
 
 
 def _clear_viewbox_link(viewbox) -> None:
@@ -55,6 +58,8 @@ from ..compute_feedback import summarize_compute
 from .analysis_comparison import AnalysisViewTarget
 from .analysis_context import AnalysisContext
 from .analysis_time_range import (
+    common_range,
+    covered_range_adjustment,
     display_ranges_equal,
     enabled_covers_sources,
     make_source_signature,
@@ -70,8 +75,19 @@ _ANALYSIS_CACHE_RANGE_UNSET = object()
 
 
 def _format_seconds_endpoint(value):
-    text = f"{float(value):.3f}".rstrip("0").rstrip(".")
-    return text or "0"
+    # Shortest round-trip form distinguishes real boundaries without adding
+    # the binary tails of fixed 17-digit formatting.
+    text = repr(float(value))
+    return text[:-2] if text.endswith(".0") else text
+
+
+def _format_time_difference(seconds):
+    """Readable physical boundary delta without small scientific notation."""
+    if seconds < 0.001:
+        return f"{seconds * 1e6:.6g} 微秒"
+    if seconds < 1:
+        return f"{seconds * 1e3:.6g} 毫秒"
+    return f"{seconds:.6g} 秒"
 
 
 def _format_span_seconds(span):
@@ -2424,7 +2440,7 @@ class AnalysisMixin:
         multi = len(items) > 1
         for item in items:
             span = _format_span_seconds(item.get("range"))
-            display = item.get("display_range")
+            display = item.get("available_range", item.get("display_range"))
             kind = item.get("kind")
             prefix = (
                 f"窗格 {int(item.get('pane_idx', 0)) + 1}：" if multi else ""
@@ -2452,13 +2468,7 @@ class AnalysisMixin:
                     if display is not None
                     else "当前来源可用范围"
                 )
-                detail = "；".join(
-                    str(err) for err in (item.get("errors") or ()) if err
-                )
-                extra = f"（{detail}）" if detail else ""
-                lines.append(
-                    f"{prefix}选定范围 {span} 超出{available}{extra}。"
-                )
+                lines.append(f"{prefix}选定范围 {span} 超出{available}。")
             elif multi:
                 lines.append(f"{prefix}{span}")
             else:
@@ -2466,18 +2476,33 @@ class AnalysisMixin:
                     f"你调整了时间范围为 {span}，但尚未启用。"
                     "此次计算使用哪个范围？"
                 )
-        if multi and review_only:
-            lines.append("使用新来源全时段，还是返回调整？")
+            available_pair, _ = parse_span(item.get("available_range", display))
+            requested_pair, requested_valid = parse_span(item.get("range"))
+            if kind in {"review", "uncovered_draft"} and requested_valid and available_pair:
+                if requested_pair[0] < available_pair[0]:
+                    delta = available_pair[0] - requested_pair[0]
+                    lines.append(f"{prefix}起点早于可用起点 {_format_time_difference(delta)}。")
+                if requested_pair[1] > available_pair[1]:
+                    delta = requested_pair[1] - available_pair[1]
+                    lines.append(f"{prefix}终点晚于可用终点 {_format_time_difference(delta)}。")
+            if (
+                item.get("aligned_range") is not None
+                and item["aligned_range"] != item.get("range")
+            ):
+                lines.append(
+                    f"{prefix}对齐后：{_format_span_seconds(item['aligned_range'])}"
+                    "（仅调整超出的端点）。"
+                )
+        if review_only:
+            lines.append("请选择此次计算使用的范围，或返回调整。")
         elif multi:
-            lines.append("你调整了时间范围，但尚未启用。此次计算使用哪个范围？")
-        elif review_only:
-            lines.append("使用新来源全时段，还是返回调整？")
+            lines.append("此次计算使用哪个范围？")
         return "\n".join(line for line in lines if line)
 
     def _ask_use_local_time_range(self, lo, hi, conflicts=None):
         """Modal confirm for drafts / out-of-coverage enabled ranges.
 
-        Returns ``'local'`` / ``'full'`` / ``'adjust'`` / ``'cancel'``.
+        Returns ``'local'`` / ``'align'`` / ``'full'`` / ``'adjust'`` / ``'cancel'``.
         Tests monkeypatch this seam. Default button is cancel. Full span
         is a normal role, never ``DestructiveRole``.
         """
@@ -2502,8 +2527,14 @@ class AnalysisMixin:
         ))
         local_btn = None
         adjust_btn = None
+        align_btn = None
+        if (
+            kinds & {"review", "uncovered_draft"}
+            and all(item.get("aligned_range") is not None for item in items)
+        ):
+            align_btn = box.addButton("对齐到可用范围", QMessageBox.AcceptRole)
         if review_only:
-            full_btn = box.addButton("使用新来源全时段", QMessageBox.ActionRole)
+            full_btn = box.addButton("使用当前来源全时段", QMessageBox.ActionRole)
             adjust_btn = box.addButton("返回调整", QMessageBox.AcceptRole)
         else:
             local_btn = box.addButton("用选定范围", QMessageBox.AcceptRole)
@@ -2512,11 +2543,16 @@ class AnalysisMixin:
         cancel_btn = box.addButton("取消", QMessageBox.RejectRole)
         box.setDefaultButton(cancel_btn)
         box.setEscapeButton(cancel_btn)
+        # Role polish applies the shared QSS minimum width; fit afterwards
+        # so showing the dialog cannot reset our text-sized outer widths.
+        prepare_message_box_buttons(box)
         fit_message_box_buttons_to_text(box)
         box.exec_()
         clicked = box.clickedButton()
         if clicked is local_btn:
             return "local"
+        if align_btn is not None and clicked is align_btn:
+            return "align"
         if clicked is full_btn:
             return "full"
         if clicked is adjust_btn:
@@ -2705,6 +2741,11 @@ class AnalysisMixin:
                 "reason": "ok",
                 "errors": (),
             })
+        for item in conflicts:
+            bounds = ctrl.source_bounds_for(section, state.view_id, item["pane_idx"])
+            item["available_range"] = common_range(bounds.per_source.values())
+            if item["kind"] in {"review", "uncovered_draft", "draft"}:
+                item["aligned_range"] = covered_range_adjustment(bounds, item["range"])
         return conflicts
 
     def _freeze_analysis_time_range_candidates(
@@ -2722,10 +2763,16 @@ class AnalysisMixin:
                     section, pane, state
                 )
             bounds = ctrl.source_bounds_for(section, state.view_id, idx)
-            if choice == "local":
+            if choice in {"local", "align"}:
+                requested = item.get("range")
+                if choice == "align":
+                    requested = covered_range_adjustment(bounds, requested)
+                    # Modal re-entry must not change the displayed proposal.
+                    if requested is None or requested != item.get("aligned_range"):
+                        return None
                 validation = validate_requested_span(
                     bounds.per_source,
-                    item.get("range"),
+                    requested,
                     bounds_status=bounds.status,
                     bounds_errors=bounds.errors,
                 )
@@ -2817,6 +2864,12 @@ class AnalysisMixin:
                 return False
             return self._commit_analysis_time_range_choice(
                 section, state, conflicts, "local"
+            )
+        if choice == "align":
+            if any(item.get("aligned_range") is None for item in conflicts):
+                return False
+            return self._commit_analysis_time_range_choice(
+                section, state, conflicts, "align"
             )
         if choice == "full":
             return self._commit_analysis_time_range_choice(

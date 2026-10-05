@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 
-DISPLAY_ENDPOINT_TOL = 0.0005  # seconds; Spec §6 display quantization
+DISPLAY_ENDPOINT_TOL = 5e-13  # Half the 12-decimal range editor quantum; spec §6.
 ORIGIN_USER_EDIT = "user_edit"
 NOTE_OVERLAY_OWN_FULL = "各信号使用自身全时段"
 
@@ -81,7 +81,7 @@ def parse_span(value):
 
 
 def display_ranges_equal(left, right):
-    """True when both ends match within 0.0005 s plus a float ulp."""
+    """True when both ends match within the range editor quantum plus a float ulp."""
     a = _finite_pair(left)
     b = _finite_pair(right)
     if a is None or b is None:
@@ -203,6 +203,28 @@ def validate_requested_span(
     return SpanValidation(
         ok=False, reason="uncovered", span=parsed, errors=tuple(errors),
     )
+
+
+def covered_range_adjustment(bounds, requested):
+    """Explicit-confirmation candidate, never an implicit validator tolerance.
+
+    Missing source bounds, disjoint spans and invalid requests cannot be
+    repaired by clipping. Every target must cover the complete candidate.
+    """
+    pair, valid = parse_span(requested)
+    if not valid or bounds.status == "unavailable" or not bounds.per_source:
+        return None
+    if any(_finite_pair(span) is None for span in bounds.per_source.values()):
+        return None
+    available = common_range(bounds.per_source.values())
+    if available is None:
+        return None
+    candidate = (max(pair[0], available[0]), min(pair[1], available[1]))
+    validation = validate_requested_span(
+        bounds.per_source, candidate, bounds_status=bounds.status,
+        bounds_errors=bounds.errors,
+    )
+    return validation.span if validation.ok else None
 
 
 _AXIS_FACT_KEYS = (

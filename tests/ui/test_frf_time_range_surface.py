@@ -222,3 +222,50 @@ def test_frf_compute_reads_the_same_pane_range_shown_in_the_inspector(qtbot):
 
     assert candidate["time_range"] == pytest.approx((0.25, 0.75))
     assert pane.time_range == pytest.approx(top.range_values())
+
+
+def test_frf_explicit_boundary_alignment_preserves_end_without_compute(qtbot, monkeypatch):
+    win, pane = _window_with_pair(qtbot)
+    state = win.analysis_managers['frf'].get(0)
+    source = win.files['source-a']
+    source.time_array = source.time_array + 0.0170556
+    win._apply_analysis_time_range('frf', state)
+    top = win.inspector.top
+    _set_analysis_range_specified(top, True)
+    top.spin_start.setValue(0.017)
+    top.spin_end.setValue(1.5)
+    top.flush_pending_range_edit()
+    assert pane.time_range == (0.017, 1.5)
+
+    prompts = []
+    compute = []
+    dirty = []
+    real_dirty = win._dirty_frf_pane
+
+    def choose_align(_lo, _hi, conflicts):
+        prompts.append(conflicts)
+        return 'align'
+
+    def record_dirty(*args, **kwargs):
+        dirty.append(args[1])
+        return real_dirty(*args, **kwargs)
+
+    monkeypatch.setattr(win, '_ask_use_local_time_range', choose_align)
+    monkeypatch.setattr(win, '_dirty_frf_pane', record_dirty)
+    monkeypatch.setattr(win, 'do_frf', lambda *a, **k: compute.append('do_frf'))
+    monkeypatch.setattr(
+        win._frf_coordinator, 'request', lambda *a, **k: compute.append('request'),
+    )
+
+    assert win._offer_analysis_time_range_before_compute('frf') is True
+    assert pane.time_range == (0.0170556, 1.5)
+    assert top.range_values() == pane.time_range
+    assert top.range_enabled() is True
+    assert dirty == [0]
+    assert len(prompts) == 1
+    assert compute == []
+
+    assert win._offer_analysis_time_range_before_compute('frf') is True
+    assert len(prompts) == 1
+    assert dirty == [0]
+    assert compute == []

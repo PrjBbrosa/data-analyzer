@@ -558,11 +558,11 @@ def test_ask_review_dialog_copy_and_buttons(qapp, qtbot, monkeypatch):
         ],
     )
     assert choice == "cancel"
-    assert "使用新来源全时段" in recorded["labels"]
+    assert "使用当前来源全时段" in recorded["labels"]
     assert "返回调整" in recorded["labels"]
     assert "取消" in recorded["labels"]
     assert recorded["default"] == "取消"
-    assert recorded["roles"]["使用新来源全时段"] != QMessageBox.DestructiveRole
+    assert recorded["roles"]["使用当前来源全时段"] != QMessageBox.DestructiveRole
 
 
 def test_restore_recompute_ignores_draft_and_blocks_invalid_enabled(
@@ -1070,3 +1070,121 @@ def test_specified_invalid_input_does_not_fallback_to_full_or_compute(
     )
     assert win._offer_analysis_time_range_before_compute("fft") is False
     assert computed == []
+
+
+def test_boundary_alignment_preserves_requested_end(qapp, qtbot, monkeypatch):
+    win, fid = _fft_ready_win(qtbot, hi=84.17071015)
+    win.files[fid].time_array[0] = 0.0170556
+    mgr = win.analysis_managers['fft']
+    state = mgr.get(mgr.active)
+    state.panes[0].time_range = (0.017, 40.0)
+    win._apply_analysis_time_range('fft', state)
+    asked = []
+
+    def choose(_lo, _hi, conflicts):
+        asked.extend(conflicts)
+        return 'align'
+
+    monkeypatch.setattr(win, '_ask_use_local_time_range', choose)
+    assert win._offer_analysis_time_range_before_compute('fft') is True
+    assert state.panes[0].time_range == (0.0170556, 40.0)
+    text = win._analysis_time_range_confirm_text(asked, review_only=True)
+    assert '0.0170556' in text
+    assert '起点早于' in text
+    assert '新来源' not in text
+
+
+def test_disjoint_range_cannot_align_or_mutate(qapp, qtbot, monkeypatch):
+    win, _fid = _fft_ready_win(qtbot)
+    mgr = win.analysis_managers['fft']
+    state = mgr.get(mgr.active)
+    state.panes[0].time_range = (20.0, 40.0)
+    win._apply_analysis_time_range('fft', state)
+    monkeypatch.setattr(win, '_ask_use_local_time_range', lambda *a: 'align')
+    assert win._offer_analysis_time_range_before_compute('fft') is False
+    assert state.panes[0].time_range == (20.0, 40.0)
+
+
+@pytest.mark.parametrize('mutate_second', [False, True])
+def test_align_mixed_panes_is_atomic_and_preserves_covered_draft(
+    qapp, qtbot, monkeypatch, mutate_second,
+):
+    win, fid = _fft_ready_win(qtbot)
+    state, _page = _split_fft_panes(win, fid)
+    state.panes[0].time_range = (-0.01, 4.0)
+    win._apply_analysis_time_range('fft', state)
+    sig1 = win._analysis_source_signature_for_pane('fft', state.panes[1], state)
+    win._analysis_context.time_range.apply_user_edit(
+        'fft', state.view_id, 1, (3.0, 8.0), sig1,
+    )
+
+    def choose(_lo, _hi, conflicts):
+        assert {item['kind'] for item in conflicts} == {'review', 'draft'}
+        if mutate_second:
+            state.panes[1].sources = []
+        return 'align'
+
+    monkeypatch.setattr(win, '_ask_use_local_time_range', choose)
+    assert win._offer_analysis_time_range_before_compute('fft') is (not mutate_second)
+    if mutate_second:
+        assert state.panes[0].time_range == (-0.01, 4.0)
+        assert state.panes[1].time_range is None
+    else:
+        assert state.panes[0].time_range == (0.0, 4.0)
+        assert state.panes[1].time_range == (3.0, 8.0)
+
+
+def test_alignment_candidate_revalidated_before_any_pane_write(qapp, qtbot):
+    win, fid = _fft_ready_win(qtbot)
+    state, _page = _split_fft_panes(win, fid)
+    state.panes[0].time_range = (-0.01, 4.0)
+    state.panes[1].time_range = (3.0, 12.0)
+    win._apply_analysis_time_range('fft', state)
+    _, targets, _ = win._snapshot_analysis_compute_targets('fft')
+    conflicts = win._analysis_time_range_conflicts('fft', state, targets)
+    # A stale proposal must not change even pane 0, whose range remains valid.
+    conflicts[1]['aligned_range'] = (3.0, 9.0)
+    assert win._commit_analysis_time_range_choice('fft', state, conflicts, 'align') is False
+    assert state.panes[0].time_range == (-0.01, 4.0)
+    assert state.panes[1].time_range == (3.0, 12.0)
+
+
+def test_styled_range_confirmation_buttons_fit_rendered_labels(qapp, qtbot, monkeypatch):
+    from PyQt5.QtWidgets import QWidget
+    from mf4_analyzer.ui.main_window._analysis_mixin import AnalysisMixin
+    from mf4_analyzer.ui_kit import load_stylesheet
+
+    class RangeDialogHost(QWidget, AnalysisMixin):
+        pass
+
+    host = RangeDialogHost()
+    qtbot.addWidget(host)
+    previous = qapp.styleSheet()
+    load_stylesheet(qapp)
+    observed = []
+
+    def render_dialog(box):
+        box.show()
+        qapp.processEvents()
+        box.grab()  # Exercise the styled dialog's real layout/paint path.
+        for button in box.buttons():
+            observed.append(button.text())
+            text_width = button.fontMetrics().horizontalAdvance(button.text())
+            assert button.width() >= text_width + 20 + 2 + 8
+        assert '55.6 微秒' in box.text()
+        box.defaultButton().click()
+        box.close()
+        return 0
+
+    monkeypatch.setattr(QMessageBox, 'exec_', render_dialog)
+    try:
+        assert host._ask_use_local_time_range(0.017, 40.0, [{
+            'pane_idx': 0, 'kind': 'review', 'range': (0.017, 40.0),
+            'available_range': (0.0170556, 84.17071015),
+            'aligned_range': (0.0170556, 40.0),
+        }]) == 'cancel'
+        assert set(observed) == {
+            '对齐到可用范围', '使用当前来源全时段', '返回调整', '取消',
+        }
+    finally:
+        qapp.setStyleSheet(previous)

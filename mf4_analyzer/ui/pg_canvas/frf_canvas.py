@@ -230,7 +230,11 @@ class PgFrfCanvas(QWidget):
         self._plot_coherence.setYRange(0.0, 1.0, padding=0)
         self._plot_coherence.vb.enableAutoRange(axis="y", enable=False)
         normal_pen = pg.mkPen("#1769e0", width=1.6)
-        faded_pen = pg.mkPen((23, 105, 224, 70), width=1.4)
+        # Preblend the old alpha-70 blue onto FrfStackedPlotHost's white
+        # surface (also used by captures). Opaque ink lets pyqtgraph use its
+        # fast drawLines path while interactive AA is off; translucent wide
+        # strokes forced drawPath even on every cursor-only repaint.
+        faded_pen = pg.mkPen("#bfd6f6", width=1.4)
         coherence_pen = pg.mkPen("#0f9f83", width=1.5)
         # AA-OFF at construction (spec 2026-08-15 §3.4): a freshly built FRF
         # used to paint its first frame antialiased from inside the call that
@@ -249,13 +253,17 @@ class PgFrfCanvas(QWidget):
         self._phase_low_curve = self._plot_phase.plot(
             [], [], pen=faded_pen, connect="finite", antialias=False,
         )
+        # The pale base includes every finite bin. Keep trusted runs above it
+        # without changing their z-order relative to axes and other overlays.
+        self._magnitude_low_curve.stackBefore(self._magnitude_curve)
+        self._phase_low_curve.stackBefore(self._phase_curve)
         self._magnitude_low_points = self._plot_magnitude.plot(
             [], [], pen=None, symbol="o", symbolSize=4.5, symbolPen=None,
-            symbolBrush=pg.mkBrush(23, 105, 224, 70),
+            symbolBrush=pg.mkBrush(faded_pen.color()),
         )
         self._phase_low_points = self._plot_phase.plot(
             [], [], pen=None, symbol="o", symbolSize=4.5, symbolPen=None,
-            symbolBrush=pg.mkBrush(23, 105, 224, 70),
+            symbolBrush=pg.mkBrush(faded_pen.color()),
         )
         self._magnitude_singleton_points = self._plot_magnitude.plot(
             [], [], pen=None, symbol="o", symbolSize=4.5, symbolPen=None,

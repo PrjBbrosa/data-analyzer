@@ -201,6 +201,13 @@ _HINTS = (
         priority=27,
     ),
     Hint(
+        id="analysis.range_boundary_align",
+        text="有交集的越界范围可确认对齐",
+        surface="discovery",
+        modes=frozenset({"fft", "fft_time", "frf", "order"}),
+        priority=27,
+    ),
+    Hint(
         id="analysis.page_prepare",
         text="分析页空闲时自动准备",
         surface="discovery",

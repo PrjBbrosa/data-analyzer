@@ -277,13 +277,14 @@ class PersistentTop(QWidget):
         # 紧凑化【1】: 开始 / 结束 share one form row.
         self.spin_start = _no_buttons(CompactDoubleSpinBox())
         self.spin_start.setObjectName("timeRangeStart")
-        self.spin_start.setDecimals(3)
+        # Keep half this quantum aligned with DISPLAY_ENDPOINT_TOL; tested.
+        self.spin_start.setDecimals(12)
         self.spin_start.setSuffix(" s")
         self.spin_start.setRange(0, 1e9)
         self.spin_start.setToolTip("时间范围起点，单位为秒。")
         self.spin_end = _no_buttons(CompactDoubleSpinBox())
         self.spin_end.setObjectName("timeRangeEnd")
-        self.spin_end.setDecimals(3)
+        self.spin_end.setDecimals(12)
         self.spin_end.setSuffix(" s")
         self.spin_end.setRange(0, 1e9)
         self.spin_end.setToolTip("时间范围终点，单位为秒。")
@@ -347,6 +348,7 @@ class PersistentTop(QWidget):
         self._range_checked_by_mode = {}
         self._range_silent = False
         self._range_committed = None
+        self._range_limits = (0.0, 1e9)
         self._range_edit_revision = 0
         self._range_projected_revision = 0
         self._range_flushed_revision = 0
@@ -779,13 +781,32 @@ class PersistentTop(QWidget):
         self._project_range_mode_from_checkbox()
 
     def range_values(self):
-        return (self.spin_start.value(), self.spin_end.value())
+        # Projection text is not storage: an untouched endpoint keeps the
+        # physical source precision even beyond the editor's decimal limit.
+        spins = (self.spin_start, self.spin_end)
+        raw = (self._range_start_raw, self._range_end_raw)
+        return tuple(
+            self._range_committed[idx]
+            if self._range_committed is not None and raw[idx] is None
+            else spin.value()
+            for idx, spin in enumerate(spins)
+        )
 
     def last_range_edit_query(self):
         return self._range_last_query
 
-    def _remember_committed_range(self):
-        self._range_committed = self.range_values()
+    def _remember_committed_range(self, values=None):
+        if values is None:
+            values = (self.spin_start.value(), self.spin_end.value())
+        self._range_committed = tuple(float(value) for value in values)
+        for label, spin, value in zip(
+            ("起点", "终点"), (self.spin_start, self.spin_end),
+            self._range_committed,
+        ):
+            spin.setToolTip(
+                f"当前时间范围{label}：{value!r} 秒。\n"
+                "支持小数秒；仅修改一端会保留另一端的完整精度。"
+            )
 
     def _spin_raw_text(self, spin):
         edit = spin.lineEdit()
@@ -805,13 +826,6 @@ class PersistentTop(QWidget):
         if not math.isfinite(value):
             return None
         return value
-
-    def _parse_range_texts(self, start_text, end_text):
-        lo = self._parse_spin_text(self.spin_start, start_text)
-        hi = self._parse_spin_text(self.spin_end, end_text)
-        if lo is None or hi is None:
-            return None
-        return (lo, hi)
 
     def _visible_range_text_is_unacceptable(self):
         return not (
@@ -843,9 +857,14 @@ class PersistentTop(QWidget):
         self._mark_user_range_edit(which, text)
 
     def _on_range_value_changed(self, which, _value):
-        if self._range_silent or self._range_user_editing:
+        if self._range_silent:
             return
+        raw = self._range_start_raw if which == "start" else self._range_end_raw
         spin = self.spin_start if which == "start" else self.spin_end
+        # Qt may correct Intermediate text on focus-out. Preserve that
+        # invalid draft, but allow successive keyboard/wheel steps to update.
+        if raw is not None and self._parse_spin_text(spin, raw) is None:
+            return
         self._mark_user_range_edit(which, self._spin_raw_text(spin))
 
     def _adopt_untracked_invalid_visible_text(self):
@@ -892,7 +911,15 @@ class PersistentTop(QWidget):
                 start_text,
                 end_text,
             )
-        pair = self._parse_range_texts(start_text, end_text)
+        lo = (
+            self._range_committed[0] if self._range_start_raw is None
+            else self._parse_spin_text(self.spin_start, start_text)
+        )
+        hi = (
+            self._range_committed[1] if self._range_end_raw is None
+            else self._parse_spin_text(self.spin_end, end_text)
+        )
+        pair = (lo, hi) if lo is not None and hi is not None else None
         if pair is None:
             return RangeEditQuery(
                 RangeEditQuery.INVALID_EDIT,
@@ -967,7 +994,7 @@ class PersistentTop(QWidget):
         finally:
             self.spin_start.blockSignals(old_start)
             self.spin_end.blockSignals(old_end)
-            self._remember_committed_range()
+            self._remember_committed_range((lo, hi))
             self._range_silent = False
         self._range_start_raw = None
         self._range_end_raw = None
@@ -990,7 +1017,10 @@ class PersistentTop(QWidget):
         finally:
             self.spin_start.blockSignals(old_start)
             self.spin_end.blockSignals(old_end)
-            self._remember_committed_range()
+            self._remember_committed_range(tuple(
+                min(max(float(value), self._range_limits[0]), self._range_limits[1])
+                for value in (xmin, xmax)
+            ))
             self._clear_user_range_edit(projected=True)
             self._range_silent = False
 
@@ -1027,6 +1057,9 @@ class PersistentTop(QWidget):
     def set_range_limits(self, lo, hi):
         # F14: setRange may clamp the current value and emit valueChanged.
         # Treat clamp as programmatic so it cannot look like a user commit.
+        values = self.range_values()
+        self._range_limits = (float(lo), max(float(lo), float(hi)))
+        lo, hi = self._range_limits
         self._range_silent = True
         try:
             for sp in (self.spin_start, self.spin_end):
@@ -1036,7 +1069,9 @@ class PersistentTop(QWidget):
                 finally:
                     sp.blockSignals(old)
         finally:
-            self._remember_committed_range()
+            self._remember_committed_range(
+                tuple(min(max(value, lo), hi) for value in values)
+            )
             self._clear_user_range_edit(projected=True)
             self._range_silent = False
 
