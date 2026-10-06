@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>TraceLab v8.4.1 · 使用说明</title>
+<title>TraceLab v8.4.2 · 使用说明</title>
 <!-- ===== FONTS ===== -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -263,11 +263,11 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
 {
   "meta": {
     "title": "TraceLab",
-    "version": "v8.4.1",
-    "versionLabel": "使用说明 · V8.4.1",
+    "version": "v8.4.2",
+    "versionLabel": "使用说明 · V8.4.2",
     "subtitle": "从导入数据到分析与导出，一份可直接照做的操作指南",
     "docVersion": "3.1",
-    "updated": "2026-09-25",
+    "updated": "2026-10-05",
     "credit": "GC02689"
   },
   "slides": [
@@ -827,7 +827,7 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
       "sec": "照着做",
       "kicker": "PLAYBOOK",
       "title": "三个常见场景，<c>照着做就行</c>",
-      "foot": "TraceLab v8.4.1 · 使用说明",
+      "foot": "TraceLab v8.4.2 · 使用说明",
       "density": "compact",
       "blocks": [
         {
@@ -873,7 +873,7 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
         {
           "type": "lead",
           "center": true,
-          "html": "从数据到结论，按场景完成查看、分析与导出。 —— TraceLab v8.4.1"
+          "html": "从数据到结论，按场景完成查看、分析与导出。 —— TraceLab v8.4.2"
         }
       ]
     },
@@ -882,6 +882,12 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
   ],
 
   "changelog": [
+    { "v": "v8.4.2", "date": "2026-10-05", "items": [
+      "分析页支持与其他 View 并排对比，参数编辑与图表操作跟随当前焦点；对比关系随工程保存，各 View 保留独立状态。",
+      "图表选项支持一次提交、撤销与一键恢复；改进频响图交互响应，并保留时间范围输入精度。",
+      "修正 HEAD HDF simultaneous 数据的时间基准，按文件头 delta 恢复真实采样间隔。",
+      "修复 macOS 帮助手册打开问题，恢复操作速查面板，并修正退出时的弹窗生命周期问题。"
+    ] },
     { "v": "v8.4.1", "date": "2026-09-25", "items": [
       "MF4 中恰好名为 Time 的测量通道不再覆盖公共时间轴，采样率保持文件里的真实时基；名为 t 或 zeit 的信号仍可选择。",
       "按公共时间轴对齐或端点填充时，批处理结果和回放会保留提示；填充部分不是原始测量。",

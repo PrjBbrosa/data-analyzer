@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "8.4.1",
+    [string]$Version = "8.4.2",
     [string]$AppName = "",
     [string]$Flavor = "lite",
     [string]$DependencyProfile = "modular",
@@ -334,8 +334,8 @@ if (Get-Command git -ErrorAction SilentlyContinue) {
     & git -C $RepoRoot status --short | Out-Host
 }
 Copy-Item -LiteralPath $PSCommandPath -Destination $BuildEvidenceDir
-# Default output: dist\TraceLabAnalyzer8.4.1-modular\TraceLabAnalyzer8.4.1-modular.exe
-# (override with -Version or -AppName). Does not replace dist\TraceLabAnalyzer8.4.1\.
+# Default output: dist\TraceLabAnalyzer8.4.2-modular\TraceLabAnalyzer8.4.2-modular.exe
+# (override with -Version or -AppName). Does not replace dist\TraceLabAnalyzer8.4.2\.
 
 foreach ($RequiredPath in @($EntryScript, $Requirements, $StyleQss, $RuntimeDependencyTool, $BundlePolicyTool, $BatchRenderSmokeTool, $ExtensionBuildTool, $ExtensionVerifyTool, $ExtensionInstallerScript)) {
     if (-not (Test-Path $RequiredPath)) {
