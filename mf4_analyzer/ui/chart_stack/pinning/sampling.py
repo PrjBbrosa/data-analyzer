@@ -82,6 +82,18 @@ class PinSampleEvaluator:
         self._canvas = canvas
         if not self.axis_compatible(canvas, intent):
             return None
+        if intent.domain == "frf":
+            sources = getattr(canvas, "cursor_source_bindings", None)
+            if callable(sources):
+                current = sources()
+                if any(binding.role for binding in intent.bindings):
+                    expected = {(b.role, b.fid, b.channel) for b in intent.bindings}
+                    actual = {(b.role, b.fid, b.channel) for b in current}
+                else:
+                    expected = {(b.fid, b.channel) for b in intent.bindings}
+                    actual = {(b.fid, b.channel) for b in current}
+                if not current or expected != actual:
+                    return None
         domain = intent.domain
         if intent.mode == "single":
             sample = self.evaluate(canvas, domain, mode="single", x=intent.x)
@@ -239,6 +251,9 @@ class PinSampleEvaluator:
     def bound_identity_keys(self, canvas):
         self._canvas = canvas
         keys = set()
+        sources = getattr(canvas, "cursor_source_bindings", None)
+        if callable(sources):
+            return {(binding.fid, binding.channel) for binding in sources()}
         lines = getattr(canvas, "_channel_lines", None)
         items = getattr(lines, "composite_items", None)
         if callable(items):
@@ -296,6 +311,9 @@ class PinSampleEvaluator:
     def bindings_from_sample(sample) -> tuple[PinnedCursorBinding, ...]:
         if sample is None:
             return ()
+        explicit = tuple(getattr(sample, "bindings", ()) or ())
+        if explicit:
+            return explicit
         out = []
         seen = set()
         for channel in getattr(sample, "channels", ()) or ():

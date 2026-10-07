@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, fields
 
+from .pinned_cursor_state import PinnedCursorBinding
+
 
 @dataclass(frozen=True)
 class CursorDisplayOptions:
@@ -194,6 +196,8 @@ class PinnedCursorSample:
     frf_sample: FrfCursorSample | None = None
     extrema: tuple[CursorExtremaFact, ...] = ()
     diagnostic: str = ""
+    # FRF source roles are identities, separate from its three metric rows.
+    bindings: tuple[PinnedCursorBinding, ...] = ()
 
 
 @dataclass(frozen=True)

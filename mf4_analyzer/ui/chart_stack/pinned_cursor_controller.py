@@ -67,8 +67,9 @@ from .cursor_pill import CursorPill
 
 _PLACE_B_MESSAGE = "先放置 B，再按 P 固定"
 _PLACE_AB_MESSAGE = "先放置 A、B，再按 P 固定"
+_FRF_SOURCE_MESSAGE = "频响输入/输出来源不可用，无法固定读数"
 _PIN_WARNING_MESSAGES = frozenset({
-    _PLACE_B_MESSAGE, _PLACE_AB_MESSAGE, "无数据",
+    _PLACE_B_MESSAGE, _PLACE_AB_MESSAGE, _FRF_SOURCE_MESSAGE, "无数据",
 })
 _DUMMY_RECORD_ID = "00000000-0000-0000-0000-000000000001"
 _HOST_FILTER_EVENTS = frozenset({QEvent.Show, QEvent.Hide})
@@ -1217,6 +1218,8 @@ class PinnedCursorController(QObject):
             x=x_value, sample=sample,
         )
         if intent is None:
+            if domain == "frf":
+                self.pin_feedback.emit(_FRF_SOURCE_MESSAGE)
             return
         result = self._commands.create_pin(
             collection=owner.collection,
@@ -1273,6 +1276,8 @@ class PinnedCursorController(QObject):
             ax=ax_value, bx=bx_value, sample=sample,
         )
         if intent is None:
+            if domain == "frf":
+                self.pin_feedback.emit(_FRF_SOURCE_MESSAGE)
             return
         result = self._commands.create_pin(
             collection=owner.collection,

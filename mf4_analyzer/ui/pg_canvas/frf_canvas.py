@@ -58,6 +58,7 @@ from mf4_analyzer.ui.cursor_display_model import (
     PinnedCursorSample,
 )
 from mf4_analyzer.ui.view_overlay_state import normalize_cursor_placement
+from mf4_analyzer.ui.pinned_cursor_state import PinnedCursorBinding
 from mf4_analyzer.ui.ultraview_capture_facts import (
     analysis_idle_timer_is_busy,
     build_capture_facts,
@@ -1948,6 +1949,10 @@ class PgFrfCanvas(QWidget):
         self._next_dual_cursor = "a"
         self._hide_frequency_cursor_items()
 
+    def hide_live_cursor_items(self) -> None:
+        """Consume the live candidate without changing mode or A/B placement."""
+        self._hide_frequency_cursor_items(emit_empty=False)
+
     def _project_frequency_cursors(self) -> None:
         if self._cursor_mode == "dual" and self._cursor_a_frequency is not None:
             self.set_dual_cursor_frequencies(
@@ -2032,6 +2037,28 @@ class PgFrfCanvas(QWidget):
             return None
         return self._frf_sample_from_index(idx)
 
+    def cursor_source_bindings(self) -> tuple[PinnedCursorBinding, ...]:
+        """The complete SISO source pair, preserving input/output roles."""
+        bindings = []
+        for role in ("input", "output"):
+            source = self._context.get(f"{role}_source")
+            if not isinstance(source, (tuple, list)) or len(source) != 2:
+                return ()
+            fid, channel = source
+            if not fid or not channel:
+                return ()
+            bindings.append(PinnedCursorBinding(str(fid), str(channel), role=role))
+        return tuple(bindings)
+
+    def current_single_cursor_x(self):
+        """Visible live frequency in physical Hz; dual placement stays separate."""
+        if self._cursor_mode != "single":
+            return None
+        for line in self._cursor_lines:
+            if line.isVisible():
+                return self._optional_finite(self._view_x_to_hz(line.value()))
+        return None
+
     def evaluate_frequency_cursor_sample(self, hz):
         sample = self.evaluate_frequency_cursor(hz)
         if sample is None:
@@ -2042,6 +2069,7 @@ class PgFrfCanvas(QWidget):
             mode="single",
             x=sample.frequency_hz,
             frf_sample=sample,
+            bindings=self.cursor_source_bindings(),
         )
 
     def evaluate_dual_frequency_cursor(self, a_hz, b_hz):
@@ -2081,6 +2109,7 @@ class PgFrfCanvas(QWidget):
             ax=None if sample.a is None else sample.a.frequency_hz,
             bx=None if sample.b is None else sample.b.frequency_hz,
             frf_sample=sample,
+            bindings=self.cursor_source_bindings(),
         )
 
     def set_cursor_frequency(self, frequency) -> str:

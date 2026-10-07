@@ -563,7 +563,7 @@ _HINTS = (
     ),
     Hint(
         id="cursor.pin_single",
-        text="P 固定；数值/完整；点 Pn 开合；×删除",
+        text="P 固定；数值/完整；点 Pn 开合；×删除；含频响",
         surface="context",
         modes=frozenset({"time", "fft", "frf"}),
         cursor_modes=frozenset({"single"}),
