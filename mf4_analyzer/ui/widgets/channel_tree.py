@@ -2560,8 +2560,10 @@ class MultiFileChannelWidget(QWidget):
         self.channels_changed.emit()
 
     def _on_context_menu(self, pos):
-        """Right-click menu on a channel row: 设为左轴，以及（多选时）合并/拆分
-        共轴组。文件行与空白处忽略。"""
+        """Right-click channel actions, including single-channel name copy.
+
+        文件行与空白处忽略；多选时提供合并/拆分共轴组。
+        """
         item = self.tree.itemAt(pos)
         if item is None:
             return
@@ -2589,7 +2591,8 @@ class MultiFileChannelWidget(QWidget):
             | Qt.NoDropShadowWindowHint
         )
         menu.setAttribute(Qt.WA_TranslucentBackground, True)
-        act_primary = menu.addAction("设为左轴")
+        act_copy_name = menu.addAction("复制通道名") if len(sel_keys) == 1 else None
+        act_primary = menu.addAction("设为左轴") if len(sel_keys) == 1 else None
         act_merge = menu.addAction("合并为共轴") if can_merge else None
         act_split = menu.addAction("拆分共轴组") if can_split else None
         act_restore_wwt = (
@@ -2604,7 +2607,9 @@ class MultiFileChannelWidget(QWidget):
         chosen = menu.exec_(self.tree.viewport().mapToGlobal(pos))
         if chosen is None:
             return
-        if chosen is act_primary:
+        if act_copy_name is not None and chosen is act_copy_name:
+            QApplication.clipboard().setText(str(ch))
+        elif act_primary is not None and chosen is act_primary:
             self.primary_channel_requested.emit(fid, ch)
         elif act_merge is not None and chosen is act_merge:
             self.merge_axis_group(sel_keys)

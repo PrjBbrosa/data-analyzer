@@ -291,6 +291,7 @@ lesson by default.
 | [FRF Faded Strokes Need Native Paint Profiling](frf-faded-strokes-need-native-paint-profiling.md) | FRF cursor or zoom stalls although curve antialiasing is already off. | See lesson |
 | [Time Range Editors Preserve Unedited Physical Endpoints](time-range-editors-preserve-unedited-physical-endpoints.md) | Editing, restoring or validating physical time endpoints through rounded numeric widgets. | See lesson |
 | [Qt Test Input State Survives Failed Widget Tests](qt-test-input-state-survives-failed-widget-tests.md) | Hover or pin tests pass alone but fail later in a shared QApplication. | See lesson |
+| [Channel Menu Actions Follow Target Cardinality](channel-menu-actions-follow-target-cardinality.md) | Adding or changing channel-tree context-menu actions. | See lesson |
 
 ## Selection Rules
 

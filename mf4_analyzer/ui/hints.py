@@ -444,7 +444,7 @@ _HINTS = (
     ),
     Hint(
         id="channel.right_click",
-        text="左侧通道右键 → 设为叠加图左轴",
+        text="通道右键：单选复制/设左轴，多选共轴",
         surface="discovery",
         retire_on="channel_context_menu",
         priority=80,
