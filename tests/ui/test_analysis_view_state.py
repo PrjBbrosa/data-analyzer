@@ -45,7 +45,7 @@ def test_analysis_view_default_attachment_is_explicitly_empty():
     v = AnalysisViewState(name="View 1", tab_color="#2d7ff9")
     assert v.attached_file_ids == []
     payload = v.to_dict()
-    assert payload["schema"] == 11
+    assert payload["schema"] == 12
     assert payload["attached_file_ids"] == []
     assert payload["preset_baseline"] is None
     restored = AnalysisViewState.from_dict(payload)
@@ -148,7 +148,7 @@ def test_none_time_range_round_trip_stays_full():
     restored = PaneState.from_dict(payload)
     assert restored.time_range is None
     view = AnalysisViewState(name="FFT", tab_color="#2d7ff9")
-    assert view.to_dict()["schema"] == 11
+    assert view.to_dict()["schema"] == 12
     assert AnalysisViewState.from_dict(view.to_dict()).panes[0].time_range is None
 
 
@@ -265,7 +265,7 @@ def test_analysis_view_schema6_is_additive_and_migrates_the_old_frf_toggle():
 
     payload = view.to_dict()
 
-    assert payload["schema"] == 11
+    assert payload["schema"] == 12
     assert payload["attached_file_ids"] == []
     assert payload["preset_baseline"] is None
     legacy = AnalysisViewState.from_dict({
@@ -349,7 +349,7 @@ def test_preset_baseline_round_trip_preserves_fields_and_deep_copies_params():
     view.preset_baseline = _baseline(params=original_params)
 
     payload = view.to_dict()
-    assert payload["schema"] == 11
+    assert payload["schema"] == 12
     assert payload["preset_baseline"]["kind"] == "fft"
     assert payload["preset_baseline"]["slot"] == 2
     assert payload["preset_baseline"]["display_name"] == "均衡"
@@ -448,7 +448,7 @@ def test_v2_preset_baseline_round_trip_keeps_source_payload_and_deep_copies():
     view = AnalysisViewState(name="FFT", tab_color="#2d7ff9")
     view.preset_baseline = original
     payload = view.to_dict()
-    assert payload["schema"] == 11
+    assert payload["schema"] == 12
     assert payload["preset_baseline"]["version"] == 2
     assert payload["preset_baseline"]["source_payload"]["overlap"] == 50
     payload["preset_baseline"]["source_payload"]["overlap"] = 1
@@ -562,7 +562,7 @@ def test_pane_pinned_cursors_roundtrip_and_schema11():
     assert restored.pinned_cursors.records[0].ordinal == 1
     assert restored.pinned_cursors.records[0].x == 12.0
     view = AnalysisViewState(name="FFT", tab_color="#2d7ff9", panes=[pane])
-    assert view.to_dict()["schema"] == 11
+    assert view.to_dict()["schema"] == 12
     again = AnalysisViewState.from_dict(view.to_dict())
     assert again.panes[0].pinned_cursors.records[0].record_id == pins.records[0].record_id
 
@@ -614,7 +614,7 @@ def test_chart_appearances_omit_defaults_and_keep_explicit_empty_title():
     view = AnalysisViewState(name="FFT", tab_color="#2d7ff9", panes=[pane])
     again = AnalysisViewState.from_dict(view.to_dict())
     assert again.panes[0].chart_appearances == restored.chart_appearances
-    assert again.to_dict()["schema"] == 11
+    assert again.to_dict()["schema"] == 12
 
 
 def test_schema10_payload_loads_with_empty_pins():
@@ -629,7 +629,7 @@ def test_schema10_payload_loads_with_empty_pins():
     })
     assert restored.panes[0].pinned_cursors.records == ()
     assert restored.panes[0].cursor_placement == {"ax": 1.0, "bx": 2.0}
-    assert restored.to_dict()["schema"] == 11
+    assert restored.to_dict()["schema"] == 12
 
 
 def test_duplicate_analysis_view_remints_pane_pin_ids(qapp):
@@ -646,3 +646,39 @@ def test_duplicate_analysis_view_remints_pane_pin_ids(qapp):
     assert copied.panes[0].pinned_cursors.records[0].record_id != original_record
     assert copied.panes[0].pinned_cursors.records[0].ordinal == 1
     assert original.panes[0].pinned_cursors.scope_id == original_scope
+
+
+def _heatmap_basis():
+    return {"version": 1, "policy_owner": "view_default", "source": ["f1", "signal"],
+            "amplitude_mode": "amplitude_db", "reference": 1.23456789012345,
+            "unit": "N", "quantity": "force"}
+
+
+def test_heatmap_basis_roundtrip_and_copy_isolation():
+    original = _heatmap_basis()
+    pane = PaneState.from_dict({"sources": [["f1", "signal"]], "heatmap_color_basis": original})
+    payload = pane.to_dict()
+    assert payload["heatmap_color_basis"] == original
+    duplicate = PaneState.from_dict(payload)
+    original["source"][0] = "old-input"
+    payload["heatmap_color_basis"]["source"][0] = "serialized"
+    duplicate.heatmap_color_basis["source"][0] = "duplicate"
+    assert pane.heatmap_color_basis["source"] == ["f1", "signal"]
+    assert pane.heatmap_color_basis["reference"] == 1.23456789012345
+
+
+def test_old_heatmap_pane_omits_absent_basis():
+    pane = PaneState.from_dict({"sources": [["f1", "signal"]]})
+    assert pane.heatmap_color_basis is None
+    assert "heatmap_color_basis" not in pane.to_dict()
+
+
+def test_corrupt_heatmap_basis_is_local_loss_and_logs_once(caplog):
+    with caplog.at_level(logging.WARNING):
+        pane = PaneState.from_dict({"sources": [["f1", "signal"]],
+                                    "heatmap_color_basis": dict(_heatmap_basis(), reference=False)})
+        assert "heatmap_color_basis" not in pane.to_dict()
+        assert "heatmap_color_basis" not in pane.to_dict()
+    assert pane.sources == [("f1", "signal")]
+    assert pane.heatmap_color_basis is None
+    assert sum("heatmap_color_basis" in record.message for record in caplog.records) == 1

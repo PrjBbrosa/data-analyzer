@@ -3371,8 +3371,8 @@ def test_unchanged_heatmap_section_entry_does_not_redraw(two_file_win, section):
     assert len(plots) == 3
 
 
-def test_order_z_auto_section_entry_still_redraws_heatmap(two_file_win):
-    """Auto colour levels rewrite the spins, so the next entry paints again."""
+def test_order_z_auto_section_entry_retains_resolved_heatmap(two_file_win):
+    """Resolved auto levels are projection, so unchanged entry can retain."""
     win = two_file_win
     win.toolbar._set_mode("order")
     _seed_active_analysis_attachments(win)
@@ -3382,9 +3382,15 @@ def test_order_z_auto_section_entry_still_redraws_heatmap(two_file_win):
     canvas = win._analysis_page("order").pane_canvas(0)
     plots = _install_heatmap_plot_spy(canvas, "order")
     active = win.analysis_managers["order"].active
+    requested = dict(state.params)
     win._on_analysis_view_switched("order", active)
+    levels = tuple(canvas._img.getLevels())
     win._on_analysis_view_switched("order", active)
-    assert len(plots) == 2
+    assert len(plots) == 1
+    assert tuple(canvas._img.getLevels()) == levels
+    assert state.params == requested
+    projected = win.inspector.order_ctx.color_policy_projection()
+    assert (projected["z_floor"], projected["z_ceiling"]) == levels
 
 
 def test_fft_cache_redraw_keeps_pane_chart_appearance(two_file_win):

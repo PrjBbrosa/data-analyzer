@@ -1433,7 +1433,7 @@ def test_serialized_views_omit_drafts_and_signatures(qapp, qtbot, monkeypatch):
     assert "draft" not in pane
     assert "source_signature" not in pane
     assert "needs_review" not in pane
-    assert payload["schema"] == 11
+    assert payload["schema"] == 12
 
 
 def test_restored_explicit_range_keeps_source_precision(qapp, qtbot):

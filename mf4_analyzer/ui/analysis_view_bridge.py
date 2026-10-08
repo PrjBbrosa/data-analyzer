@@ -42,10 +42,23 @@ def _write_preset_baseline(ctx, baseline) -> None:
     ctx.preset_baseline = baseline
 
 
-def capture_params_to_state(ctx, state) -> None:
+def requested_params_from_context(ctx, state) -> dict:
+    """Merge non-Z controls while keeping an unedited projected request exact."""
     current_params = getattr(ctx, "current_params", None)
     params_getter = current_params if callable(current_params) else ctx.get_params
-    state.params = dict(params_getter())
+    params = dict(params_getter())
+    projection = getattr(ctx, "color_policy_projection", None)
+    if callable(projection) and projection() is not None:
+        for key in ("z_auto", "z_floor", "z_ceiling"):
+            if key in state.params:
+                params[key] = state.params[key]
+            else:
+                params.pop(key, None)
+    return params
+
+
+def capture_params_to_state(ctx, state) -> None:
+    state.params = requested_params_from_context(ctx, state)
     state.preset_baseline = _copy_preset_baseline(_read_preset_baseline(ctx))
 
 

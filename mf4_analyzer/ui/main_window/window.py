@@ -5643,6 +5643,9 @@ class MainWindow(
             if ctx.current_signal() != signal:
                 return
             params['cmap'] = self._heatmap_cmap_for_canvas(section, target_canvas)
+            projection = ctx.color_policy_projection()
+            if projection is not None:
+                params.update(projection)
         if self.inspector.top.range_enabled():
             params['time_range'] = self.inspector.top.range_values()
         self._last_batch_preset = AnalysisPreset.from_current_single(

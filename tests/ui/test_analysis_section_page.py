@@ -1104,3 +1104,65 @@ def test_comparison_expand_keeps_both_regions_and_export_names(page, qapp):
     }
     assert page.view_id_for_canvas(page.peer_cards()[0].canvas) == str(peer.view_id)
     assert page.focused_canvas() is page.peer_cards()[0].canvas
+
+
+def test_color_projection_batch_defers_intermediate_lock_union(page):
+    page.enter_split()
+    with page.color_projection_batch():
+        _plot_heat(page.pane_canvas(0), 100.0)
+        with page.color_projection_batch():
+            _plot_heat(page.pane_canvas(1), 50.0)
+            page.set_levels_locked(True)
+        assert tuple(page.pane_canvas(0)._img.getLevels()) == (1.0, 100.0)
+        assert tuple(page.pane_canvas(1)._img.getLevels()) == (1.0, 50.0)
+    # Exiting paint preparation must not settle before the owner has all inputs.
+    assert tuple(page.pane_canvas(1)._img.getLevels()) == (1.0, 50.0)
+    page.set_levels_locked(True)
+    assert tuple(page.pane_canvas(1)._img.getLevels()) == (1.0, 100.0)
+
+
+def test_color_projection_batch_unwinds_after_failed_paint(page):
+    page.enter_split()
+    with pytest.raises(ValueError, match='paint failed'):
+        with page.color_projection_batch():
+            raise ValueError('paint failed')
+    _plot_heat(page.pane_canvas(0), 100.0)
+    _plot_heat(page.pane_canvas(1), 50.0)
+    assert tuple(page.pane_canvas(1)._img.getLevels()) == (1.0, 100.0)
+
+
+def test_locked_manual_drag_projects_slice_and_colorbar(slice_page):
+    slice_page.enter_split()
+    for idx in (0, 1):
+        slice_page.pane_canvas(idx).plot_result(
+            _slice_result('signal', fmax=500.0), z_auto=False,
+            z_floor=-80.0, z_ceiling=0.0,
+        )
+    slice_page.set_levels_locked(True)
+    source, sibling = (slice_page.pane_canvas(idx) for idx in (0, 1))
+    source._cbar.setLevels((-45, -5))
+    source._cbar.sigLevelsChanged.emit(source._cbar)
+    assert tuple(sibling._img.getLevels()) == (-45, -5)
+    assert sibling._cbar.levels() == (-45, -5)
+    assert sibling._panel_amp_range == (-45, -5)
+    assert sibling._slice_plot.vb.viewRange()[1] == pytest.approx((-45, -5))
+
+
+def test_peer_region_locked_drag_projects_colorbar_and_slice(slice_page):
+    manager = slice_page.manager
+    manager.new_view(activate=False)
+    host, peer = manager.get(0), manager.get(1)
+    slice_page.show_comparison_peer(host.view_id, peer.view_id, 2)
+    region = slice_page._peer_host
+    for idx in (0, 1):
+        region.canvas_at(idx).plot_result(
+            _slice_result('peer', fmax=500.0), z_auto=False,
+            z_floor=-80.0, z_ceiling=0.0,
+        )
+    region.set_levels_locked(True)
+    source, sibling = region.canvas_at(0), region.canvas_at(1)
+    source._cbar.setLevels((-45, -5))
+    source._cbar.sigLevelsChanged.emit(source._cbar)
+    assert sibling._cbar.levels() == (-45, -5)
+    assert sibling._panel_amp_range == (-45, -5)
+    assert sibling._slice_plot.vb.viewRange()[1] == pytest.approx((-45, -5))

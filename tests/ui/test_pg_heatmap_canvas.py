@@ -4913,3 +4913,79 @@ def test_heatmap_replot_drops_previous_view_appearance(canvas):
     )
     assert canvas._plot.getAxis("bottom").labelText == "Time (s)"
     assert bool(canvas._plot.getAxis("bottom").grid)
+
+
+def test_resolved_manual_levels_do_not_inherit_previous_canvas_reference(canvas):
+    result = _spec_result()
+    for reference in (1.0, 10 ** 1.5, 1.0, 10 ** 1.5):
+        canvas.plot_result(
+            result, z_auto=False, z_floor=-80.0, z_ceiling=0.0,
+            db_reference=reference, levels_are_resolved=True,
+        )
+        assert canvas._img.getLevels() == pytest.approx((-80, 0))
+        assert canvas._cbar.levels() == pytest.approx((-80, 0))
+        assert canvas._panel_amp_range == (-80, 0)
+        assert canvas._last_manual_levels_shifted is None
+        assert canvas._last_db_reference == reference
+
+
+def test_color_level_projection_is_silent_and_respects_drag(canvas):
+    canvas.plot_result(_spec_result(), z_auto=False)
+    emitted = []
+    def record(*args):
+        emitted.append(args)
+
+    canvas.color_policy_committed.connect(record)
+    canvas.levels_changed.connect(record)
+    assert canvas.project_color_levels(False, -60.123456789, 2.987654321)
+    assert canvas._img.getLevels() == pytest.approx((-60.123456789, 2.987654321))
+    assert canvas._panel_amp_range == (-60.123456789, 2.987654321)
+    assert not emitted
+    old_levels = canvas._cbar.levels()
+    old_origin = (canvas._cbar.lo_prv, canvas._cbar.hi_prv)
+    canvas._cbar.region.moving = True
+    try:
+        assert not canvas.project_color_levels(False, -50, 10)
+        assert canvas._cbar.levels() == old_levels
+        assert (canvas._cbar.lo_prv, canvas._cbar.hi_prv) == old_origin
+    finally:
+        canvas._cbar.region.moving = False
+
+
+def test_resolved_levels_do_not_compute_legacy_reference_ratio(canvas):
+    result = _spec_result()
+    for reference in (1e-300, 1e300):
+        canvas.plot_result(
+            result, z_auto=False, z_floor=-80, z_ceiling=0,
+            db_reference=reference, levels_are_resolved=True,
+        )
+        assert canvas._img.getLevels() == pytest.approx((-80, 0))
+
+
+def test_heatmap_chart_dialog_forwards_owner_restore_callback(canvas, monkeypatch):
+    from mf4_analyzer.ui import _axis_interaction
+
+    restored = []
+    def restore():
+        restored.append(True)
+    def edit(parent, handle, *, color_policy_restore_callback):
+        assert parent is canvas
+        assert color_policy_restore_callback is restore
+        color_policy_restore_callback()
+        return True
+    monkeypatch.setattr(_axis_interaction, 'edit_chart_options_dialog', edit)
+    assert canvas.open_chart_options_dialog(
+        canvas, color_policy_restore_callback=restore,
+    )
+    assert restored == [True]
+
+
+def test_final_lock_projection_becomes_double_click_reset_baseline(canvas):
+    canvas.plot_result(_spec_result(), z_auto=False, z_floor=-80, z_ceiling=0)
+    # The render owner settles the group union after both panes were painted.
+    assert canvas.project_color_levels(False, -100, 20, reset_baseline=True)
+    # A subsequent user edit changes the window, not the last render baseline.
+    canvas.apply_color_policy(False, -50, 5)
+    assert canvas.reset_colorbar_levels()
+    assert canvas._cbar.levels() == (-100, 20)
+    assert canvas._panel_amp_range == (-100, 20)

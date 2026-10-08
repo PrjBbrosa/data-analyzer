@@ -127,7 +127,7 @@ def test_pane_and_analysis_schema11_roundtrip_and_schema10_load():
     )
     view = AnalysisViewState(name="FFT", tab_color="#2d7ff9", panes=[pane])
     payload = json.loads(json.dumps(view.to_dict()))
-    assert payload["schema"] == 11
+    assert payload["schema"] == 12
     restored = AnalysisViewState.from_dict(payload)
     assert restored.panes[0].cursor_placement == {"ax": 12.0, "bx": 40.0}
     assert restored.panes[0].pinned_cursors.scope_id == pins.scope_id
@@ -140,7 +140,7 @@ def test_pane_and_analysis_schema11_roundtrip_and_schema10_load():
         "panes": [{"sources": [["f1", "a"]]}],
     })
     assert legacy.panes[0].pinned_cursors.records == ()
-    assert legacy.to_dict()["schema"] == 11
+    assert legacy.to_dict()["schema"] == 12
 
 
 def test_remap_view_pins_rewrites_known_drops_unknown_and_placement():

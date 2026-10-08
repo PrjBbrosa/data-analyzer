@@ -359,7 +359,7 @@ def heatmap_level_writeback_blocks_retain(inputs) -> bool:
     the plot in that window must not leave the spins on the saved values
     while the canvas shows a shifted or auto window.
     """
-    if inputs.amplitude_mode != "amplitude_db":
+    if inputs.levels_are_resolved or inputs.amplitude_mode != "amplitude_db":
         return False
     if inputs.z_auto:
         return True
@@ -377,7 +377,7 @@ def finish_heatmap_render_inputs(inputs, canvas):
     """
     direction, slice_x, slice_y = heatmap_slice_snapshot(canvas)
     previous = inputs.previous_db_reference
-    if hasattr(canvas, "_last_db_reference"):
+    if not inputs.levels_are_resolved and hasattr(canvas, "_last_db_reference"):
         previous = canvas_previous_db_reference(canvas)
     return replace(
         inputs,
@@ -430,6 +430,7 @@ class OrderHeatmapRenderInputs:
     previous_db_reference: float | None
     x_extent: tuple[float, float]
     y_extent: tuple[float, float]
+    levels_are_resolved: bool = False
 
     def signature_tuple(self) -> tuple:
         return astuple(self)
@@ -478,6 +479,7 @@ class FftTimeHeatmapRenderInputs:
     frequency_extent: tuple[float, float] | None
     channel_name: str
     channel_unit: str
+    levels_are_resolved: bool = False
 
     def signature_tuple(self) -> tuple:
         return astuple(self)

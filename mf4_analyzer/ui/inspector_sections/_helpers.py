@@ -38,6 +38,115 @@ from ..widgets.db_reference import DbReferenceControl
 from .._axis_defaults import z_range_for
 
 
+class _HeatmapColorProjection:
+    """Ephemeral exact presentation values and one explicit widget edit.
+
+    This is not a request store: the View/pane owner persists user intent.
+    The cache only avoids reading an untouched rounded spin value back.
+    """
+
+    def __init__(self, owner):
+        self.owner = owner
+        self.clear()
+
+    def clear(self):
+        self._levels = None
+        self._projected = False
+        self._pending = None
+        self._requested = None
+
+    def params(self):
+        owner = self.owner
+        lo, hi = self._levels or (
+            float(owner.spin_z_floor.value()),
+            float(owner.spin_z_ceiling.value()),
+        )
+        return dict(z_auto=owner.chk_z_auto.isChecked(), z_floor=lo, z_ceiling=hi)
+
+    def projection(self):
+        return self.params() if self._projected else None
+
+    def comparison_request(self):
+        return dict(self._requested) if self._requested is not None else None
+
+    def consume_edit(self):
+        edit, self._pending = self._pending, None
+        return edit
+
+    def note_edit(self, sender):
+        self._pending = None
+        owner = self.owner
+        if sender not in (owner.chk_z_auto, owner.spin_z_floor, owner.spin_z_ceiling):
+            return
+        params = self.params()
+        if sender is owner.spin_z_floor:
+            params['z_floor'] = float(owner.spin_z_floor.value())
+        elif sender is owner.spin_z_ceiling:
+            params['z_ceiling'] = float(owner.spin_z_ceiling.value())
+        self._levels = (params['z_floor'], params['z_ceiling'])
+        # A user draft is also presentation until the owner validates and
+        # commits it. Later View capture must not persist a rejected range.
+        self._projected = True
+        self._pending = params
+
+    def note_preset(self, values):
+        if any(key in values for key in ('z_auto', 'z_floor', 'z_ceiling', 'dynamic')):
+            self._pending = self.params()
+
+    def prepare_restore(self, values):
+        self.clear()
+        for key, spin in (('z_floor', self.owner.spin_z_floor),
+                          ('z_ceiling', self.owner.spin_z_ceiling)):
+            if key in values:
+                try:
+                    value = float(values[key])
+                except (TypeError, ValueError):
+                    continue
+                if math.isfinite(value):
+                    blocked = spin.blockSignals(True)
+                    spin.setRange(min(spin.minimum(), value - 1),
+                                  max(spin.maximum(), value + 1))
+                    spin.blockSignals(blocked)
+
+    def remember_restored(self, values):
+        params = self.params()
+        for key in ('z_floor', 'z_ceiling'):
+            try:
+                value = float(values.get(key, params[key]))
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(value):
+                params[key] = value
+        self._levels = (params['z_floor'], params['z_ceiling'])
+
+    def project(self, auto, lo, hi, *, requested=None):
+        lo, hi = float(lo), float(hi)
+        if not (math.isfinite(lo) and math.isfinite(hi) and lo < hi):
+            return False
+        owner = self.owner
+        widgets = (owner.chk_z_auto, owner.spin_z_floor, owner.spin_z_ceiling)
+        blocked = [widget.blockSignals(True) for widget in widgets]
+        try:
+            owner.chk_z_auto.setChecked(bool(auto))
+            for spin, value in ((owner.spin_z_floor, lo), (owner.spin_z_ceiling, hi)):
+                spin.setRange(min(spin.minimum(), value - 1),
+                              max(spin.maximum(), value + 1))
+                spin.setValue(value)
+        finally:
+            for widget, previous in zip(widgets, blocked):
+                widget.blockSignals(previous)
+        self._levels = (lo, hi)
+        self._projected = True
+        self._pending = None
+        self._requested = (
+            {key: requested[key] for key in ('z_auto', 'z_floor', 'z_ceiling')
+             if key in requested}
+            if requested is not None else None
+        )
+        owner._sync_axis_enabled()
+        return True
+
+
 _PRESET_ORG = "MF4Analyzer"
 _PRESET_APP = "DataAnalyzer"
 

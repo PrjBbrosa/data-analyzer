@@ -1363,7 +1363,7 @@ _NUDGE_PREDICATES = {
 # in chart_stack / inspector points at a single source of truth for the text.
 _FLASH_TIPS = {
     "spectrogram.slice_pick": "已取该帧切片 · 也可拖动切片标记线移动取样位置",
-    "spectrogram.colorbar": "拖 colorbar 调色阶 · 双击 colorbar 可重置范围 · 图表选项可换色图，默认 HEAD 风格",
+    "spectrogram.colorbar": "拖 colorbar 调色阶 · 双击重置 · 图表选项可换色图，默认 HEAD 风格 · 锁定时同步编辑，解除锁定恢复各窗格范围",
     "spectrogram.divider": "拖上下分隔条调高度 · 双击重置 · 底部可折叠/展开",
     "fft.preview_source": "已选为时域预览的源 · 平滚轮平移 Y · Shift/Ctrl 缩放 · 右键可设左轴",
     "preset.right_click": "预设槽右键可保存 / 重命名 / 重置槽位 / 恢复面板默认",

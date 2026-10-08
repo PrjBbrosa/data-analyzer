@@ -668,7 +668,7 @@ class OrderMixin:
         )
         return replace(inputs, db_value=float(resolution.value))
 
-    def _order_render_inputs(self, canvas, result, source, order_params, resolution):
+    def _order_render_inputs(self, canvas, result, source, order_params, resolution, color_policy=None):
         """Build the frozen display snapshot. Paint reads this object only."""
         from ..pg_canvas.heatmap_canvas import time_axis_display_extent
 
@@ -684,6 +684,9 @@ class OrderMixin:
             )
             else "amplitude"
         )
+        resolver = getattr(self, "_heatmap_color_policy_for_canvas", None)
+        if color_policy is None and callable(resolver):
+            color_policy = resolver("order", canvas, order_params, resolution, source, amplitude_mode)
         x_extent = time_axis_display_extent(
             result.times,
             params=result_params,
@@ -707,9 +710,9 @@ class OrderMixin:
             db_quantity=str(resolution.quantity or ""),
             db_source=str(resolution.source or ""),
             db_warning=str(resolution.warning or ""),
-            z_auto=bool(order_params.get("z_auto", False)),
-            z_floor=float(order_params.get("z_floor", -30.0)),
-            z_ceiling=float(order_params.get("z_ceiling", 0.0)),
+            z_auto=color_policy.z_auto if color_policy is not None else bool(order_params.get("z_auto", False)),
+            z_floor=color_policy.z_floor if color_policy is not None else float(order_params.get("z_floor", -30.0)),
+            z_ceiling=color_policy.z_ceiling if color_policy is not None else float(order_params.get("z_ceiling", 0.0)),
             x_auto=bool(order_params.get("x_auto", True)),
             x_min=float(order_params.get("x_min", 0.0)),
             x_max=float(order_params.get("x_max", 0.0)),
@@ -732,7 +735,8 @@ class OrderMixin:
             canvas_width=width,
             canvas_height=height,
             canvas_dpr=dpr,
-            previous_db_reference=canvas_previous_db_reference(canvas),
+            previous_db_reference=None if color_policy is not None else canvas_previous_db_reference(canvas),
+            levels_are_resolved=color_policy is not None,
             x_extent=(float(x_extent[0]), float(x_extent[1])),
             y_extent=(float(result.orders[0]), float(result.orders[-1])),
         )
@@ -769,7 +773,7 @@ class OrderMixin:
             )
             plot_amp_mode = "amplitude"
             delta_fn = getattr(canvas, "reference_delta_since_last_render", None)
-            if callable(delta_fn):
+            if not inputs.levels_are_resolved and callable(delta_fn):
                 if hasattr(canvas, "_last_db_reference"):
                     canvas._last_db_reference = inputs.previous_db_reference
                 reference_delta = delta_fn(inputs.db_value)
@@ -828,7 +832,8 @@ class OrderMixin:
             y_coords=result.orders,
         )
         ctx = self.inspector.order_ctx
-        echo_levels = self._analysis_canvas_updates_controls("order", canvas)
+        echo_levels = (not inputs.levels_are_resolved
+                       and self._analysis_canvas_updates_controls("order", canvas))
         if echo_levels and inputs.z_auto and inputs.amplitude_mode == "amplitude_db" and vmin_override is not None:
             for spin, val in (
                 (ctx.spin_z_floor, vmin_override),
@@ -863,20 +868,38 @@ class OrderMixin:
         order_params = ctx.current_params() if hasattr(ctx, "current_params") else {}
         order_params = self._analysis_params_for_canvas('order', canvas, order_params)
         resolution = self._order_label_resolution(source, order_params)
+        resolver = getattr(self, "_heatmap_color_policy_for_canvas", None)
+        amplitude_mode = ("amplitude_db" if amplitude_mode_is_db(
+            order_params.get("amplitude_mode", "Amplitude dB")) else "amplitude")
+        from ...heatmap_color_policy import HeatmapColorPolicyError
+
+        try:
+            policy = (resolver("order", canvas, order_params, resolution, source, amplitude_mode)
+                      if callable(resolver) else None)
+        except HeatmapColorPolicyError as error:
+            self._reject_heatmap_color_render("order", canvas, source, error)
+            return
         inputs = replace(
             self._order_render_inputs(
-                canvas, result, source, order_params, resolution,
+                canvas, result, source, order_params, resolution, color_policy=policy,
             ),
             db_value=float(resolution.value),
         )
         self._paint_order_heatmap(canvas, result, inputs)
-        notify_ultraview_plot(self, "order", "order-plot")
+        complete = getattr(self, "_complete_heatmap_color_render", None)
+        if policy is not None and callable(complete):
+            complete("order", canvas, policy)
         self._restore_analysis_canvas_viewport("order", canvas)
         # After the viewport restore, so the signature records the pane
         # limits the next entry will read.
-        commit = getattr(self, "_commit_heatmap_reveal", None)
-        if callable(commit):
-            commit("order", canvas, inputs, result)
+        finish = getattr(self, "_finish_heatmap_color_presentation", None)
+        if callable(finish):
+            finish("order", canvas, inputs, result)
+        else:
+            notify_ultraview_plot(self, "order", "heatmap-plot")
+            commit = getattr(self, "_commit_heatmap_reveal", None)
+            if callable(commit):
+                commit("order", canvas, inputs, result)
         if self._comparison_routes("order"):
             comp = self._comparison()
             focus = comp.focused("order") if comp is not None else None

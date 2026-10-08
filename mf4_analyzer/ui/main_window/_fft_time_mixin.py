@@ -718,8 +718,11 @@ class FFTTimeMixin:
         )
         return replace(inputs, db_value=float(resolution.value))
 
-    def _fft_time_render_inputs(self, canvas, result, p, source, resolution):
+    def _fft_time_render_inputs(self, canvas, result, p, source, resolution, color_policy=None):
         """Build the frozen display snapshot. Paint reads this object only."""
+        resolver = getattr(self, "_heatmap_color_policy_for_canvas", None)
+        if color_policy is None and callable(resolver):
+            color_policy = resolver("fft_time", canvas, p, resolution, source, p["amplitude_mode"])
         if bool(p.get("freq_auto", p.get("y_auto", True))):
             freq_range = None
         else:
@@ -744,9 +747,9 @@ class FFTTimeMixin:
             db_quantity=str(resolution.quantity or ""),
             db_source=str(resolution.source or ""),
             db_warning=str(resolution.warning or ""),
-            z_auto=bool(p.get("z_auto", False)),
-            z_floor=float(p.get("z_floor", -80.0)),
-            z_ceiling=float(p.get("z_ceiling", 0.0)),
+            z_auto=color_policy.z_auto if color_policy is not None else bool(p.get("z_auto", False)),
+            z_floor=color_policy.z_floor if color_policy is not None else float(p.get("z_floor", -80.0)),
+            z_ceiling=color_policy.z_ceiling if color_policy is not None else float(p.get("z_ceiling", 0.0)),
             x_auto=bool(p.get("x_auto", True)),
             x_min=float(p.get("x_min", 0.0)),
             x_max=float(p.get("x_max", 0.0)),
@@ -770,7 +773,8 @@ class FFTTimeMixin:
             canvas_width=width,
             canvas_height=height,
             canvas_dpr=dpr,
-            previous_db_reference=canvas_previous_db_reference(canvas),
+            previous_db_reference=None if color_policy is not None else canvas_previous_db_reference(canvas),
+            levels_are_resolved=color_policy is not None,
             time_extent=time_extent,
             frequency_extent=frequency_extent,
             channel_name=str(getattr(result, "channel_name", "") or ""),
@@ -799,7 +803,7 @@ class FFTTimeMixin:
         setter = getattr(canvas, "set_overlay_source", None)
         if callable(setter):
             setter(inputs.source_id)
-        if inputs.amplitude_mode == "amplitude_db":
+        if not inputs.levels_are_resolved and inputs.amplitude_mode == "amplitude_db":
             delta_fn = getattr(canvas, "reference_delta_since_last_render", None)
             if callable(delta_fn) and hasattr(canvas, "_last_db_reference"):
                 canvas._last_db_reference = inputs.previous_db_reference
@@ -822,8 +826,10 @@ class FFTTimeMixin:
             amplitude_label=amplitude_label,
             colorbar_label=amplitude_label,
             z_unit_suffix=z_unit_suffix,
+            **({"levels_are_resolved": True} if inputs.levels_are_resolved else {}),
         )
-        echo_levels = self._analysis_canvas_updates_controls("fft_time", canvas)
+        echo_levels = (not inputs.levels_are_resolved
+                       and self._analysis_canvas_updates_controls("fft_time", canvas))
         if echo_levels and inputs.z_auto and inputs.amplitude_mode == "amplitude_db":
             auto_lvls = getattr(canvas, "_last_auto_levels", None)
             if auto_lvls is not None:
@@ -858,18 +864,34 @@ class FFTTimeMixin:
         per-pane-accurate dB-reference resolution (spec §15 C2)."""
         p = self._analysis_params_for_canvas('fft_time', canvas, p)
         resolution = self._fft_time_label_resolution(source, p)
+        resolver = getattr(self, "_heatmap_color_policy_for_canvas", None)
+        from ...heatmap_color_policy import HeatmapColorPolicyError
+
+        try:
+            policy = (resolver("fft_time", canvas, p, resolution, source, p["amplitude_mode"])
+                      if callable(resolver) else None)
+        except HeatmapColorPolicyError as error:
+            self._reject_heatmap_color_render("fft_time", canvas, source, error)
+            return
         inputs = replace(
-            self._fft_time_render_inputs(canvas, result, p, source, resolution),
+            self._fft_time_render_inputs(canvas, result, p, source, resolution, color_policy=policy),
             db_value=float(resolution.value),
         )
         self._paint_fft_time_heatmap(canvas, result, inputs)
-        notify_ultraview_plot(self, "fft_time", "fft-time-plot")
+        complete = getattr(self, "_complete_heatmap_color_render", None)
+        if policy is not None and callable(complete):
+            complete("fft_time", canvas, policy)
         self._restore_analysis_canvas_viewport("fft_time", canvas)
         # After the viewport restore, so the signature records the pane
         # limits the next entry will read.
-        commit = getattr(self, "_commit_heatmap_reveal", None)
-        if callable(commit):
-            commit("fft_time", canvas, inputs, result)
+        finish = getattr(self, "_finish_heatmap_color_presentation", None)
+        if callable(finish):
+            finish("fft_time", canvas, inputs, result)
+        else:
+            notify_ultraview_plot(self, "fft_time", "heatmap-plot")
+            commit = getattr(self, "_commit_heatmap_reveal", None)
+            if callable(commit):
+                commit("fft_time", canvas, inputs, result)
 
     # ---- FFT vs Time coordinator events --------------------------------
     def _on_fft_time_render_requested(self, ctx, result, cache_hit):

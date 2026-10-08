@@ -1657,7 +1657,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             return "FFT vs Time 热图"
         return "热图"
 
-    def open_chart_options_dialog(self, parent=None):
+    def open_chart_options_dialog(self, parent=None, *, color_policy_restore_callback=None):
         """Open coordinate/color-scale options for the main heatmap."""
         from mf4_analyzer.ui import _axis_interaction
 
@@ -1666,8 +1666,11 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         handle._chart_options_target = target
         self._chart_options_target = target
         target_parent = parent if parent is not None else self.window()
+        kwargs = {}
+        if color_policy_restore_callback is not None:
+            kwargs['color_policy_restore_callback'] = color_policy_restore_callback
         return bool(_axis_interaction.edit_chart_options_dialog(
-            target_parent, handle))
+            target_parent, handle, **kwargs))
 
     def _refresh_bottom_x_ticks(self, *_args) -> None:
         if self._bottom_tick_target is None or self._bottom_tick_density is None:
@@ -1768,6 +1771,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         y_auto=True, y_min=0.0, y_max=0.0,
         interp=DEFAULT_HEATMAP_INTERP, db_reference=1.0,
         amplitude_label=None, colorbar_label=None, z_unit_suffix=None,
+        levels_are_resolved=False,
     ):
         """Render a ``SpectrogramResult`` as a 2D heatmap + frequency slice.
 
@@ -1776,6 +1780,10 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         site (main_window.py:2825). ``result.amplitude`` is shape
         ``(freq_bins, frames)`` → rows are frequency (Y), columns are
         time (X).
+
+        ``levels_are_resolved=True`` applies the supplied manual window exactly;
+        the owner has already resolved its reference basis. The default retains
+        standalone canvas reference-change behavior.
 
         ``db_reference`` is a DISPLAY-only kwarg (NOT a field on
         ``result.params``): it is the dB normalisation reference the caller
@@ -1851,7 +1859,13 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             # Spec §8.3.1: diff THIS render's reference against the last one
             # this canvas actually used, so a manual window can be shifted by
             # the same delta as the (unclipped) matrix below.
-            reference_delta = self.reference_delta_since_last_render(db_ref)
+            if levels_are_resolved:
+                # The owner has a View/pane basis; another canvas frame is not
+                # part of this request. Track only for standalone compatibility.
+                self._last_db_reference = db_ref
+                reference_delta = None
+            else:
+                reference_delta = self.reference_delta_since_last_render(db_ref)
             if z_auto:
                 # Use a fixed SPAN anchored at a robust high-percentile
                 # ceiling so the auto window is expressed in *absolute* dB —
@@ -2361,6 +2375,27 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             return
         if self._matrix_disp is not None:
             self._apply_slice()
+
+    def project_color_levels(
+        self, auto: bool, lo: float, hi: float, *, reset_baseline: bool = False,
+    ) -> bool:
+        """Install a resolved window silently, preserving active drag origins.
+
+        Unlike apply_color_policy, this never derives another automatic window
+        or emits user intent. The transaction owner supplies final group levels.
+        A completed render can publish that final group window as the double-click
+        reset baseline; ordinary user edits retain the previous render baseline.
+        """
+        legal = _legal_color_levels(lo, hi)
+        if legal is None or not self._install_color_levels(*legal):
+            return False
+        if reset_baseline:
+            self._rendered_levels = legal
+        self._z_color_auto = bool(auto)
+        self._last_auto_levels = legal if auto else None
+        self._panel_amp_range = None if auto else legal
+        self._sync_slice_to_color_policy()
+        return True
 
     def apply_color_policy(self, auto: bool, lo: float, hi: float) -> None:
         """Apply Z auto or a manual window and emit ``color_policy_committed``.

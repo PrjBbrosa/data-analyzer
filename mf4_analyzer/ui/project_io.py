@@ -710,6 +710,7 @@ def remap_analysis_view_fids(analysis_views: dict, fid_map: dict) -> dict:
     without the field derive attachments from remapped pane roles only —
     never from the full project file set.
     """
+    from ..heatmap_color_policy import normalize_heatmap_color_basis
     from .analysis_view_state import (
         analysis_view_source_fids,
         normalize_analysis_attachments,
@@ -752,6 +753,18 @@ def remap_analysis_view_fids(analysis_views: dict, fid_map: dict) -> dict:
                         pn["chart_appearances"] = appearances
                     else:
                         pn.pop("chart_appearances", None)
+                if "heatmap_color_basis" in pane:
+                    basis = normalize_heatmap_color_basis(pane["heatmap_color_basis"])
+                    if basis is None and pane["heatmap_color_basis"] is not None:
+                        import logging
+                        logging.getLogger(__name__).warning(
+                            "dropping corrupt heatmap_color_basis during source remap",
+                        )
+                    if basis is not None and basis["source"][0] in fid_map:
+                        basis["source"][0] = fid_map[basis["source"][0]]
+                        pn["heatmap_color_basis"] = basis
+                    else:
+                        pn.pop("heatmap_color_basis", None)
                 panes.append(pn)
             v["panes"] = panes
             if "attached_file_ids" in view:

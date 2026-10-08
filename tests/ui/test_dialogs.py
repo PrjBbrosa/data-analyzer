@@ -1927,3 +1927,103 @@ def test_chart_options_form_columns_track_dialog_width(qapp):
     finally:
         if previous:
             qapp.setStyle(previous)
+
+
+def test_chart_color_restore_callback_keeps_opening_owner_basis(qtbot, qapp):
+    from mf4_analyzer.ui.dialogs import ChartOptionsDialog
+
+    canvas, handle = _pg_heatmap_handle(qapp)
+    qtbot.addWidget(canvas)
+    opened = tuple(canvas._cbar.levels())
+    restored, edits = [], []
+
+    def restore():
+        restored.append(True)
+        canvas.project_color_levels(False, *opened)
+
+    def record(*values):
+        edits.append(values)
+    canvas.color_policy_committed.connect(record)
+    dlg = ChartOptionsDialog(canvas, handle, color_policy_restore_callback=restore)
+    qtbot.addWidget(dlg)
+    assert not restored
+    dlg.spin_color_min.setValue(1)
+    dlg.spin_color_max.setValue(5)
+    dlg.edit_title.setText('edited')
+    dlg.apply_changes()
+    assert len(edits) == 1
+    dlg.restore_opened()
+    assert restored == [True]
+    assert len(edits) == 1
+    assert canvas._cbar.levels() == opened
+    assert handle.get_title() == ''
+    assert not dlg.btn_reset.isEnabled()
+
+
+def test_chart_color_restore_callback_tracks_same_value_apply(qtbot, qapp):
+    from mf4_analyzer.ui.dialogs import ChartOptionsDialog
+
+    canvas, handle = _pg_heatmap_handle(qapp)
+    qtbot.addWidget(canvas)
+    restored = []
+    def restore():
+        restored.append(True)
+    dlg = ChartOptionsDialog(canvas, handle, color_policy_restore_callback=restore)
+    qtbot.addWidget(dlg)
+    dlg.spin_color_min.lineEdit().textEdited.emit(dlg.spin_color_min.text())
+    dlg.apply_changes()
+    assert dlg.btn_reset.isEnabled()
+    dlg.restore_opened()
+    assert restored == [True]
+    assert not dlg.btn_reset.isEnabled()
+
+
+def test_chart_color_restore_callback_is_not_used_for_unapplied_draft(qtbot, qapp):
+    from mf4_analyzer.ui.dialogs import ChartOptionsDialog
+
+    canvas, handle = _pg_heatmap_handle(qapp)
+    qtbot.addWidget(canvas)
+    restored = []
+    def restore():
+        restored.append(True)
+    dlg = ChartOptionsDialog(canvas, handle, color_policy_restore_callback=restore)
+    qtbot.addWidget(dlg)
+    dlg.spin_color_min.setValue(1)
+    dlg.restore_opened()
+    assert not restored
+
+
+def test_chart_color_restore_callback_rejects_stale_target(qtbot, qapp):
+    from mf4_analyzer.ui.dialogs import ChartOptionsDialog
+
+    canvas, handle = _pg_heatmap_handle(qapp)
+    qtbot.addWidget(canvas)
+    def reject_restore():
+        return False
+    dlg = ChartOptionsDialog(canvas, handle, color_policy_restore_callback=reject_restore)
+    qtbot.addWidget(dlg)
+    dlg.spin_color_min.setValue(1)
+    dlg.spin_color_max.setValue(5)
+    dlg.edit_title.setText('applied')
+    dlg.apply_changes()
+    dlg.restore_opened()
+    assert canvas._cbar.levels() == (1, 5)
+    assert handle.get_title() == 'applied'
+    assert not dlg._last_apply_ok
+
+
+def test_chart_color_restore_callback_skips_title_only_apply(qtbot, qapp):
+    from mf4_analyzer.ui.dialogs import ChartOptionsDialog
+
+    canvas, handle = _pg_heatmap_handle(qapp)
+    qtbot.addWidget(canvas)
+    restored = []
+    def restore():
+        restored.append(True)
+    dlg = ChartOptionsDialog(canvas, handle, color_policy_restore_callback=restore)
+    qtbot.addWidget(dlg)
+    dlg.edit_title.setText('applied')
+    dlg.apply_changes()
+    dlg.restore_opened()
+    assert not restored
+    assert handle.get_title() == ''

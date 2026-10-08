@@ -334,7 +334,7 @@ def test_analysis_view_schema6_round_trip_preserves_db_reference_mode_and_value(
         "nfft": 4096,
     }
     d = v.to_dict()
-    assert d["schema"] == 11
+    assert d["schema"] == 12
     assert d["preset_baseline"] is None
 
     v2 = AnalysisViewState.from_dict(d)
@@ -418,7 +418,7 @@ def test_preset_baseline_round_trips_through_project_json(tmp_path):
     )
     loaded = load_project_from_json(path)
     payload = loaded.analysis_views["fft"]["views"][0]
-    assert payload["schema"] == 11
+    assert payload["schema"] == 12
     assert payload["params"]["nfft"] == 4096
     assert payload["preset_baseline"]["kind"] == "fft"
     assert payload["preset_baseline"]["slot"] == 2
@@ -488,7 +488,7 @@ def test_v2_preset_baseline_round_trips_through_project_json(tmp_path):
     )
     loaded = load_project_from_json(path)
     payload = loaded.analysis_views["fft"]["views"][0]
-    assert payload["schema"] == 11
+    assert payload["schema"] == 12
     assert payload["preset_baseline"]["version"] == 2
     restored = AnalysisViewState.from_dict(payload)
     assert restored.preset_baseline["source_payload"]["overlap"] == 50
@@ -544,7 +544,7 @@ def test_project_json_time_range_omits_drafts_and_keeps_none_as_full(tmp_path):
     )
     loaded = load_project_from_json(path)
     views = loaded.analysis_views["fft"]["views"]
-    assert views[0]["schema"] == 11
+    assert views[0]["schema"] == 12
     assert views[0]["panes"][0].get("time_range") in (None, [])
     assert views[1]["panes"][0]["time_range"] == [0.25, 0.75]
     for pane in (views[0]["panes"][0], views[1]["panes"][0]):
@@ -624,3 +624,37 @@ def test_viewport_origins_survive_project_json_and_legacy_migration(tmp_path):
     assert restored.panes[0].xlim == (1., 2.)
     assert restored.panes[0].ylim == (3., 4.)
     assert restored.panes[1].viewport_origin == {'x': 'legacy', 'y': 'auto'}
+
+
+def test_heatmap_basis_project_roundtrip_and_fid_remap(tmp_path):
+    basis = {"version": 1, "policy_owner": "view_default", "source": ["f1", "vib"],
+             "amplitude_mode": "amplitude_db", "reference": 1.23456789012345,
+             "unit": "N", "quantity": "force"}
+    view = AnalysisViewState(name="Heatmap", tab_color="#2d7ff9",
+                             params={"z_auto": False, "z_floor": -80.123456789, "z_ceiling": 0.123456789},
+                             panes=[PaneState(sources=[("f1", "vib")], heatmap_color_basis=basis)])
+    doc = ProjectDocument(active_file="f1", current_mode="fft_time",
+                          analysis_views={"fft_time": {"active": 0, "views": [view.to_dict()]}})
+    path = tmp_path / "heatmap.tlproj"
+    save_project_to_json(doc, path)
+    loaded = load_project_from_json(path)
+    remapped = remap_analysis_view_fids(loaded.analysis_views, {"f1": "new-file"})
+    restored = AnalysisViewState.from_dict(remapped["fft_time"]["views"][0])
+    assert restored.params == view.params
+    assert restored.panes[0].heatmap_color_basis == dict(basis, source=["new-file", "vib"])
+    assert loaded.analysis_views["fft_time"]["views"][0]["panes"][0]["heatmap_color_basis"] == basis
+    missing = remap_analysis_view_fids(loaded.analysis_views, {})
+    assert "heatmap_color_basis" not in missing["fft_time"]["views"][0]["panes"][0]
+    assert missing["fft_time"]["views"][0]["params"] == view.params
+
+
+def test_corrupt_heatmap_basis_remap_reports_local_loss(caplog):
+    doc = _doc()
+    pane = doc.analysis_views["fft"]["views"][0]["panes"][0]
+    pane["heatmap_color_basis"] = {"reference": False}
+    with caplog.at_level("WARNING"):
+        remapped = remap_analysis_view_fids(doc.analysis_views, {"f1": "new-file"})
+        restored = AnalysisViewState.from_dict(remapped["fft"]["views"][0])
+    assert restored.panes[0].heatmap_color_basis is None
+    assert restored.panes[0].sources == [("new-file", "vib")]
+    assert sum("heatmap_color_basis" in record.message for record in caplog.records) == 1

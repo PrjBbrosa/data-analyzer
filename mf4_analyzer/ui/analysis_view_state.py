@@ -19,6 +19,7 @@ from typing import Any, Iterable, Mapping, Sequence
 from uuid import uuid4
 
 from ..db_reference import migrate_legacy_reference_params
+from ..heatmap_color_policy import normalize_heatmap_color_basis
 from .pinned_cursor_state import (
     PinnedCursorCollection,
     collection_from_dict,
@@ -49,7 +50,8 @@ MAX_PANES = 2  # spec §2: v1 caps split at 2; the model is list-shaped for late
 # number, so schema-2 through schema-6 projects all apply the
 # saved snapshot value manual-style instead of erroring or dropping it.
 # schema 11 adds optional per-pane ``pinned_cursors`` (P-key pin intent).
-_SCHEMA = 11
+# schema 12 adds optional pane-owned manual heatmap color reference intent.
+_SCHEMA = 12
 _PRESET_BASELINE_VERSION = 2
 _PRESET_BASELINE_SUPPORTED_VERSIONS = frozenset({1, 2})
 _PRESET_BASELINE_KINDS = frozenset({"fft", "fft_time", "order", "frf"})
@@ -396,6 +398,9 @@ class PaneState:
     # same state. Roles: spectrum, preview, heatmap.
     chart_appearances: dict[str, dict[str, Any]] = field(default_factory=dict)
 
+    # Request reference intent only; never stores a canvas's effective levels.
+    heatmap_color_basis: dict[str, Any] | None = None
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "sources": [list(k) for k in self.sources],
@@ -427,6 +432,10 @@ class PaneState:
             {"chart_appearances": copy.deepcopy(appearances)}
             if (appearances := normalize_pane_chart_appearances(self.chart_appearances))
             else {}
+        ) | (
+            {"heatmap_color_basis": basis}
+            if (basis := normalize_heatmap_color_basis(self.heatmap_color_basis)) is not None
+            else {}
         )
 
     @classmethod
@@ -438,7 +447,11 @@ class PaneState:
                 return (float(v[0]), float(v[1])) if len(v) == 2 else None
             except (TypeError, ValueError, IndexError):
                 return None
+        basis = normalize_heatmap_color_basis(data.get("heatmap_color_basis"))
+        if data.get("heatmap_color_basis") is not None and basis is None:
+            logger.warning("dropping corrupt heatmap_color_basis; preserving pane request")
         return cls(
+            heatmap_color_basis=basis,
             sources=[_coerce_key(k) for k in data.get("sources", [])],
             rpm_source=(_coerce_key(data["rpm_source"])
                         if data.get("rpm_source") else None),

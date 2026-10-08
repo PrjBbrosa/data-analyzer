@@ -171,8 +171,10 @@ class ChartOptionsDialog(QDialog):
     }
     TEXT_TO_SCALE = {v: k for k, v in SCALE_TO_TEXT.items()}
 
-    def __init__(self, parent, axis_or_handle):
+    def __init__(self, parent, axis_or_handle, *, color_policy_restore_callback=None):
         super().__init__(parent)
+        self._color_policy_restore_callback = color_policy_restore_callback
+        self._color_policy_applied_since_open = False
         # Runtime callers pass an existing pyqtgraph AxisHandle. make_handle()
         # keeps the public constructor guarded and rejects raw renderer objects.
         self.handle = make_handle(axis_or_handle)
@@ -716,7 +718,11 @@ class ChartOptionsDialog(QDialog):
         """
         if not self._restore_available():
             return
-        write_chart = self._committed_differs_from_open()
+        restore_owned_color = (
+            self._color_policy_restore_callback is not None
+            and self._color_policy_applied_since_open
+        )
+        write_chart = self._committed_differs_from_open() or restore_owned_color
         self._load_opened_fields()
         if not write_chart:
             self._color_policy_dirty = False
@@ -728,6 +734,26 @@ class ChartOptionsDialog(QDialog):
         }
         self._range_axes_edited = set(range_edited)
         self._color_policy_dirty = self._color_needs_restore()
+        if restore_owned_color:
+            # The owning View/pane restores its request and basis. Treating its
+            # opening effective numbers as a new edit would lose that basis.
+            if self._color_policy_restore_callback() is False:
+                self._last_apply_ok = False
+                return
+            self._color_policy_dirty = False
+            mappable = self._current_mappable()
+            auto_reader = getattr(mappable, "is_color_auto", None)
+            auto = bool(auto_reader()) if callable(auto_reader) else False
+            lo, hi = mappable.get_clim()
+            self._loading = True
+            try:
+                self.chk_color_auto.setChecked(auto)
+                self.spin_color_min.set_source_value(lo)
+                self.spin_color_max.set_source_value(hi)
+            finally:
+                self._loading = False
+            self._committed.update(color_auto=auto, color_min=lo, color_max=hi)
+            self._color_policy_applied_since_open = False
         self._commit_valid_draft(self._appearance_dirty(), range_edited)
         self._last_apply_ok = True
         self._range_axes_edited.clear()
@@ -752,6 +778,8 @@ class ChartOptionsDialog(QDialog):
         return (
             self._draft_differs_from_open()
             or self._committed_differs_from_open()
+            or (self._color_policy_restore_callback is not None
+                and self._color_policy_applied_since_open)
         )
 
     def _draft_differs_from_open(self):
@@ -1147,6 +1175,7 @@ class ChartOptionsDialog(QDialog):
             policy(bool(auto), lo, hi)
         elif not auto:
             mappable.set_clim(lo, hi)
+        self._color_policy_applied_since_open = True
         self._committed["color_auto"] = bool(auto)
         self._committed["color_min"] = lo
         self._committed["color_max"] = hi

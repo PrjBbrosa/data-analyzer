@@ -33,6 +33,7 @@ from __future__ import annotations
 import numpy as np
 
 from ... import db_reference
+from ..heatmap_color_coordinator import HeatmapColorCoordinator
 from .analysis_comparison import AnalysisComparisonDisplay
 from .analysis_time_range import (
     AnalysisTimeRangeController,
@@ -87,6 +88,7 @@ class AnalysisContext:
         # Cross-view comparison display. One owner, not a cluster of window
         # fields. View/pane state remains the intent; canvases only project.
         self.comparison = AnalysisComparisonDisplay()
+        self.heatmap_color = HeatmapColorCoordinator(context=self)
 
     # -- section routing ----------------------------------------------------
 
@@ -103,7 +105,17 @@ class AnalysisContext:
         """Write complete params + baseline after a successful preset commit."""
         from ..analysis_view_bridge import capture_params_to_state
 
-        capture_params_to_state(self.section_ctx(section), state)
+        ctx = self.section_ctx(section)
+        if section in ("fft_time", "order"):
+            consume = getattr(ctx, "consume_color_policy_edit", None)
+            edit = consume() if callable(consume) else None
+            if edit is not None:
+                canvas = self.page(section).focused_canvas()
+                focus = self.comparison.focused(section)
+                if self.comparison.is_open(section) and focus is not None:
+                    canvas = self.comparison.canvas_for(section, focus[0], focus[1])
+                self.heatmap_color.commit(section, canvas, edit, origin="preset")
+        capture_params_to_state(ctx, state)
 
     def page(self, section):
         """The chart-stack page rendering ``section``."""

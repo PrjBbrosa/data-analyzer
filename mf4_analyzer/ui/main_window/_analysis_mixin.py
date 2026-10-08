@@ -11,6 +11,7 @@ copy regardless of base-class order — there are no name collisions.
 
 import logging
 import math
+from contextlib import nullcontext
 from dataclasses import replace
 from functools import partial
 
@@ -492,6 +493,74 @@ class AnalysisMixin:
         mgr = self.analysis_managers[section]
         return mgr.get(mgr.active)
 
+    def _heatmap_color_coordinator(self, section):
+        if section not in {"fft_time", "order"}:
+            return None
+        context = getattr(self, "_analysis_context", None)
+        coordinator = getattr(context, "heatmap_color", None)
+        if coordinator is not None:
+            coordinator.set_comparison_compatibility_checker(
+                self._comparison_levels_compatible,
+            )
+        return coordinator
+
+    def _heatmap_color_policy_for_canvas(
+        self, section, canvas, params, resolution, source, amplitude_mode,
+    ):
+        coordinator = self._heatmap_color_coordinator(section)
+        if coordinator is None:
+            return None
+        return coordinator.prepare(
+            section, canvas, params, resolution, source, amplitude_mode,
+        )
+
+    def _reject_heatmap_color_render(self, section, canvas, source, error):
+        coordinator = self._heatmap_color_coordinator(section)
+        if coordinator is None or not coordinator.has_current_picture(section, canvas, source):
+            self._clear_analysis_canvas(canvas)
+            canvas.show_empty_hint("色阶范围无效，请调整上下限")
+        if self._analysis_canvas_updates_controls(section, canvas):
+            self.statusBar.showMessage("色阶范围无效，请设置有限数值且下限小于上限")
+        logging.getLogger(__name__).warning(
+            "Rejected heatmap color policy: section=%s source=%r: %s",
+            section, source, error,
+        )
+
+    def _complete_heatmap_color_render(self, section, canvas, policy):
+        coordinator = self._heatmap_color_coordinator(section)
+        if coordinator is not None and policy is not None:
+            coordinator.complete(section, canvas, policy)
+
+    def _finish_heatmap_color_presentation(self, section, canvas, inputs, result):
+        coordinator = self._heatmap_color_coordinator(section)
+        callback = partial(
+            self._publish_settled_heatmap, section, canvas, inputs, result,
+        )
+        if coordinator is not None:
+            coordinator.defer_after_settle(section, callback)
+        else:
+            callback()
+
+    def _publish_settled_heatmap(self, section, canvas, inputs, result):
+        self._commit_heatmap_reveal(section, canvas, inputs, result)
+        notify_ultraview_plot(self, section, "heatmap-settled")
+
+    def _settle_heatmap_color(self, section):
+        coordinator = self._heatmap_color_coordinator(section)
+        if coordinator is not None:
+            coordinator.settle(section)
+
+    def _commit_heatmap_color_edit(self, section, canvas, edit, origin):
+        coordinator = self._heatmap_color_coordinator(section)
+        if coordinator is None:
+            return False
+        committed = coordinator.commit(section, canvas, edit, origin=origin)
+        if committed:
+            holder = getattr(self, "_project_dirty", None)
+            if holder is not None:
+                holder.mark_user_mutation()
+        return committed
+
     def _analysis_params_for_canvas(self, section, canvas, fallback):
         """Resolve display intent from the bound View, never the other side's UI."""
         comp = self._comparison()
@@ -500,6 +569,15 @@ class AnalysisMixin:
             state = self._analysis_state_by_id(section, target.view_id)
             if state is not None:
                 return dict(state.params)
+        if section in {"fft_time", "order"}:
+            mgr = self.analysis_managers.get(section)
+            if mgr is not None and mgr.views:
+                params = dict(fallback)
+                state = mgr.get(mgr.active)
+                for key in ("z_auto", "z_floor", "z_ceiling"):
+                    if key in state.params:
+                        params[key] = state.params[key]
+                return params
         return fallback
 
     def _analysis_canvas_updates_controls(self, section, canvas):
@@ -507,6 +585,10 @@ class AnalysisMixin:
         comp = self._comparison()
         target = comp.target_for_canvas(canvas) if comp is not None else None
         if target is None:
+            if section in {"fft_time", "order"} and hasattr(self, "_analysis_context"):
+                page = self._analysis_page(section)
+                return (self.chart_stack.current_mode() == section
+                        and page.pane_canvas(page.focused_index()) is canvas)
             return True
         focus = comp.focused(section)
         return (
@@ -897,6 +979,7 @@ class AnalysisMixin:
             if dirty is not None:
                 dirty.end_restore()
         self._sync_section_effective_facts(section, state)
+        self._settle_heatmap_color(section)
 
     def _present_comparison(self, section, host_id, peer_id) -> None:
         """Mount both regions and paint cached results. Never submits a job."""
@@ -953,8 +1036,11 @@ class AnalysisMixin:
                 axis_linked=comp.axis_linked(section),
                 levels_locked=comp.levels_locked(section),
             )
-        self._render_comparison_view(section, host)
-        self._render_comparison_view(section, peer)
+        coordinator = self._heatmap_color_coordinator(section)
+        transaction = coordinator.transaction(section) if coordinator else nullcontext()
+        with transaction:
+            self._render_comparison_view(section, host)
+            self._render_comparison_view(section, peer)
 
     def _align_host_panes(self, section, state) -> None:
         page = self._analysis_page(section)
@@ -1011,13 +1097,11 @@ class AnalysisMixin:
             return
         if str(focus[0]) != str(target.view_id) or int(focus[1]) != int(target.pane_index):
             return
-        ctx = self._analysis_ctx(section)
-        ctx.apply_params({
-            "z_auto": False,
-            "z_floor": float(lo),
-            "z_ceiling": float(hi),
-        })
-        self._sync_active_analysis_params(section)
+        state = self._analysis_state_by_id(section, target.view_id)
+        canvas = self._canvas_for_view_pane(section, state, target.pane_index)
+        self._commit_heatmap_color_edit(section, canvas, {
+            "z_auto": False, "z_floor": float(lo), "z_ceiling": float(hi),
+        }, "colorbar")
 
     def _suspend_comparison_display(self, section) -> None:
         comp = self._comparison()
@@ -1094,11 +1178,13 @@ class AnalysisMixin:
         self._note_comparison_mutation(section, before)
         if on:
             self._link_comparison_levels(section)
+            self._settle_heatmap_color(section)
             return True
         if comp.axis_linked(section):
             self._link_comparison_cameras(section)
         else:
             comp.unlink(section)
+        self._settle_heatmap_color(section)
         return True
 
     def _comparison_levels_compatible(self, section) -> bool:
@@ -1481,7 +1567,7 @@ class AnalysisMixin:
         policy = getattr(canvas, 'color_policy_committed', None)
         if policy is not None:
             policy.connect(partial(
-                self._on_analysis_color_policy, section, pane_idx,
+                self._on_analysis_color_policy, section, pane_idx, canvas=canvas,
             ))
         self._wrap_heatmap_chart_options(canvas, section, pane_idx)
         canvas._levels_echo_wired = True
@@ -1529,8 +1615,16 @@ class AnalysisMixin:
             if not auto:
                 patch[axis + "_min"], patch[axis + "_max"] = limits
         ctx = self._analysis_ctx(section)
+        from ..analysis_view_bridge import requested_params_from_context
+
+        requested = requested_params_from_context(ctx, state)
         ctx.apply_params(patch)
-        state.params = dict(ctx.current_params())
+        requested.update(patch)
+        if section == "fft_time" and "y" in policies:
+            current = ctx.current_params()
+            for key in ("freq_auto", "freq_min", "freq_max"):
+                requested[key] = current[key]
+        state.params = requested
         if self._project_dirty is not None:
             self._project_dirty.mark_user_mutation()
         self._clear_analysis_view_viewports(state, tuple(policies))
@@ -1721,7 +1815,21 @@ class AnalysisMixin:
             return None
         params_getter = getattr(ctx, 'current_params', ctx.get_params)
         state = self._analysis_state_for_dispatch(section)
-        state.params = dict(params_getter())
+        from ..analysis_view_bridge import requested_params_from_context
+
+        consume = getattr(ctx, "consume_color_policy_edit", None)
+        edit = consume() if callable(consume) else None
+        if edit is not None:
+            pane_idx = self._dispatch_focus_index(section, state)
+            canvas = self._canvas_for_view_pane(section, state, pane_idx)
+            try:
+                self._commit_heatmap_color_edit(section, canvas, edit, "inspector")
+            except ValueError:
+                # A half-entered boundary remains an editor draft, never a
+                # persistent request or a render input. Keep the valid plot.
+                self.statusBar.showMessage("色阶下限必须小于上限，且两个值均为有限数")
+                return None
+        state.params = requested_params_from_context(ctx, state)
         holder = getattr(self, "_project_dirty", None)
         if holder is not None:
             holder.mark_user_mutation()
@@ -2229,6 +2337,7 @@ class AnalysisMixin:
         if section in {'fft', 'frf'}:
             self._apply_frequency_cursor_controls(section, state)
         self._sync_section_effective_facts(section, state)
+        self._settle_heatmap_color(section)
 
     def _on_analysis_compare_toggled(self, section, key, on):
         """A page compare toggle (联动缩放 / 锁定色阶) flipped → persist it onto
@@ -2240,6 +2349,8 @@ class AnalysisMixin:
         mgr = self.analysis_managers[section]
         state = self._analysis_state_for_dispatch(section)
         state.compare[key] = bool(on)
+        if key == "levels_locked":
+            self._settle_heatmap_color(section)
         holder = getattr(self, "_project_dirty", None)
         if holder is not None:
             holder.mark_user_mutation()
@@ -2263,16 +2374,9 @@ class AnalysisMixin:
             return
         if pane_idx != page.focused_index():
             return
-        ctx = self._analysis_ctx(section)
-        ctx.apply_params({
-            'z_auto': False,
-            'z_floor': float(lo),
-            'z_ceiling': float(hi),
-        })
-        # apply_params is silent (no display_params_changed → no replot).
-        # Persist the View ledger here so a later view-switch still sees
-        # the dragged / restored window.
-        self._sync_active_analysis_params(section)
+        self._commit_heatmap_color_edit(section, page.pane_canvas(pane_idx), {
+            "z_auto": False, "z_floor": float(lo), "z_ceiling": float(hi),
+        }, "colorbar")
 
     def _wire_analysis_chart_appearance(self, canvas, section, pane_idx):
         """PaneState owns appearance. The canvas only projects the current spec."""
@@ -2313,24 +2417,15 @@ class AnalysisMixin:
         if holder is not None:
             holder.mark_user_mutation()
 
-    def _on_analysis_color_policy(self, section, pane_idx, z_auto, lo, hi):
+    def _on_analysis_color_policy(self, section, pane_idx, z_auto, lo, hi, *, canvas=None):
         """Chart-options colour policy. Distinct from a colorbar drag."""
         if self._applying_analysis_view:
             return
-        page = self._analysis_page(section)
-        if pane_idx != page.focused_index():
-            return
-        auto = bool(z_auto)
-        floor = float(lo)
-        ceiling = float(hi)
-        ctx = self._analysis_ctx(section)
-        ctx.apply_params({
-            "z_auto": auto,
-            "z_floor": floor,
-            "z_ceiling": ceiling,
-        })
-        self._sync_active_analysis_params(section)
-        self._store_heatmap_color_policy(section, pane_idx, auto, floor, ceiling)
+        if canvas is None:
+            canvas = self._analysis_page(section).pane_canvas(pane_idx)
+        self._commit_heatmap_color_edit(section, canvas, {
+            "z_auto": bool(z_auto), "z_floor": float(lo), "z_ceiling": float(hi),
+        }, "chart_options")
 
     def _store_heatmap_color_policy(self, section, pane_idx, z_auto, lo, hi):
         from ..analysis_view_state import normalize_pane_chart_appearances
@@ -2372,8 +2467,18 @@ class AnalysisMixin:
     def _open_captured_heatmap_chart_options(
         self, section, pane_idx, canvas, opener, parent=None,
     ):
-        applied = bool(opener(parent))
-        if applied:
+        coordinator = self._heatmap_color_coordinator(section)
+        snapshot = coordinator.snapshot(section, canvas) if coordinator else None
+        if snapshot is not None:
+            with coordinator.edit_session(section, canvas):
+                applied = bool(opener(
+                    parent, color_policy_restore_callback=partial(
+                        coordinator.restore, section, canvas, snapshot,
+                    ),
+                ))
+        else:
+            applied = bool(opener(parent))
+        if applied and (snapshot is None or coordinator.target(section, canvas) == snapshot["target"]):
             self._capture_heatmap_chart_options(section, pane_idx, canvas)
         return applied
 
@@ -2419,10 +2524,9 @@ class AnalysisMixin:
         cmap = getattr(canvas, "_cmap_name", None)
         if isinstance(cmap, str) and cmap.strip():
             spec["cmap"] = cmap.strip()
-        mgr = self.analysis_managers.get(section)
-        if mgr is None or not mgr.views or pane_idx >= len(mgr.get(mgr.active).panes):
+        pane = self._analysis_pane_for_canvas(section, canvas)
+        if pane is None:
             return
-        pane = mgr.get(mgr.active).panes[pane_idx]
         existing = dict((getattr(pane, "chart_appearances", None) or {}).get("heatmap") or {})
         for key in ("z_auto", "z_min", "z_max"):
             if key in existing:
@@ -2443,6 +2547,12 @@ class AnalysisMixin:
         mgr = managers.get(section)
         if mgr is None or not getattr(mgr, "views", None) or canvas is None:
             return None
+        comp = self._comparison()
+        target = comp.target_for_canvas(canvas) if comp is not None else None
+        if target is not None and target.section == section:
+            state = self._analysis_state_by_id(section, target.view_id)
+            if state is not None and target.pane_index < len(state.panes):
+                return state.panes[target.pane_index]
         page = self._analysis_page(section)
         if page is None or not hasattr(page, "pane_canvas"):
             return None
@@ -2483,6 +2593,9 @@ class AnalysisMixin:
                 spec = dict(raw)
             if hasattr(canvas, "_cmap_name"):
                 canvas._cmap_name = self._heatmap_cmap_for_canvas(section, canvas)
+        if self._heatmap_color_coordinator(section) is not None:
+            for key in ("z_auto", "z_min", "z_max"):
+                spec.pop(key, None)
         apply = getattr(canvas, "apply_user_appearance", None)
         if callable(apply):
             apply(spec)
@@ -3526,6 +3639,9 @@ class AnalysisMixin:
             ctx = self._analysis_ctx(section)
             sig = ctx.current_signal()
             pane.sources = [tuple(sig)] if sig else []
+            basis = pane.heatmap_color_basis
+            if basis is not None and tuple(basis["source"]) not in pane.sources:
+                pane.heatmap_color_basis = None
             if section == 'order':
                 rpm = ctx.current_rpm()
                 pane.rpm_source = tuple(rpm) if rpm else None
@@ -4130,15 +4246,27 @@ class AnalysisMixin:
 
     def _drop_analysis_view_pins(self, section, view_id):
         self._analysis_pins.drop_view(section, view_id)
+        coordinator = self._heatmap_color_coordinator(section)
+        if coordinator is not None:
+            coordinator.forget(section, view_id)
 
     def _clear_analysis_section_pins(self, section):
         self._analysis_pins.clear_section(section)
+        coordinator = self._heatmap_color_coordinator(section)
+        if coordinator is not None:
+            coordinator.forget(section)
         if section in ("order", "fft_time"):
             book = getattr(self, "_heatmap_reveal", None)
             if book is not None:
                 book.forget_section(section)
 
     def _render_analysis_view_from_cache(self, section, state):
+        coordinator = self._heatmap_color_coordinator(section)
+        transaction = coordinator.transaction(section) if coordinator else nullcontext()
+        with transaction:
+            return self._render_analysis_view_from_cache_impl(section, state)
+
+    def _render_analysis_view_from_cache_impl(self, section, state):
         """Render each pane from cached results; panes whose sources are not all
         cached show an empty state and a 'click 计算' status hint.
 
@@ -4290,6 +4418,10 @@ class AnalysisMixin:
         canvas.show_empty_hint("点击『计算』生成")
 
     def _clear_analysis_canvas(self, canvas):
+        context = getattr(self, "_analysis_context", None)
+        coordinator = getattr(context, "heatmap_color", None)
+        if coordinator is not None:
+            coordinator.forget_canvas(canvas)
         book = getattr(self, "_heatmap_reveal", None)
         if book is not None:
             book.forget_canvas(canvas)

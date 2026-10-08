@@ -24,6 +24,7 @@ from ...ui_kit.widgets.searchable_combo import SearchableComboBox
 from ..widgets.compact_spinbox import CompactDoubleSpinBox
 from .._axis_defaults import z_range_for
 from ._helpers import (
+    _HeatmapColorProjection,
     CUSTOM_PRESET_SLOTS,
     _LONG_FIELD_MAX_WIDTH,
     _PRESET_KEY_TO_SLOT,
@@ -71,6 +72,7 @@ class OrderContextual(QWidget):
         self.setObjectName("orderContextual")
         self.setAttribute(Qt.WA_StyledBackground, True)
         self._applying_preset = False
+        self._color_projection = _HeatmapColorProjection(self)
         self._source_weighting_default = 'None'
         # Auto-NFFT preview data hook: a callable returning the available
         # revolution count for the current order signal (or None when no data
@@ -281,6 +283,7 @@ class OrderContextual(QWidget):
             builtin_defaults=self._builtin_preset_defaults(),
             default_params=self._collect_preset(),
             custom_slots=CUSTOM_PRESET_SLOTS,
+            compare_fn=self._compare_preset,
         )
         self.preset_bar.preset_committed.connect(self.preset_committed)
         self._order_section.add_persistent(self.preset_bar)
@@ -346,6 +349,7 @@ class OrderContextual(QWidget):
 
     def _on_preset_param_changed(self, *_):
         if not self._applying_preset:
+            self._color_projection.note_edit(self.sender())
             # Refresh baseline difference dots; do not reverse-match another slot.
             self.preset_bar.sync_match(clear_recommendation=True)
         self._refresh_order_summary()
@@ -439,10 +443,19 @@ class OrderContextual(QWidget):
         ``_sync_axis_enabled`` (called at the end) sees the auto-on state
         and disables both spinboxes.
         """
+        self._color_projection.clear()
         floor, ceiling = z_range_for(text)
-        self.chk_z_auto.setChecked(True)
-        self.spin_z_floor.setValue(floor)
-        self.spin_z_ceiling.setValue(ceiling)
+        widgets = (self.chk_z_auto, self.spin_z_floor, self.spin_z_ceiling)
+        blocked = [widget.blockSignals(True) for widget in widgets]
+        try:
+            self.chk_z_auto.setChecked(True)
+            self.spin_z_floor.setValue(floor)
+            self.spin_z_ceiling.setValue(ceiling)
+        finally:
+            for widget, previous in zip(widgets, blocked):
+                widget.blockSignals(previous)
+        # The amplitude combo publishes one complete display update after this
+        # slot. Intermediate bounds can cross and are never separate Z edits.
         self._sync_axis_enabled()
 
     def _on_max_order_changed(self, val):
@@ -546,9 +559,7 @@ class OrderContextual(QWidget):
             y_auto=bool(self.chk_y_auto.isChecked()),
             y_min=float(self.spin_y_min.value()),
             y_max=float(self.spin_y_max.value()),
-            z_auto=bool(self.chk_z_auto.isChecked()),
-            z_floor=float(self.spin_z_floor.value()),
-            z_ceiling=float(self.spin_z_ceiling.value()),
+            **self._color_projection.params(),
             rpm_mode=self.rpm_mode(),
             manual_rpm=self.manual_rpm(),
         )
@@ -556,13 +567,24 @@ class OrderContextual(QWidget):
     def _apply_preset(self, d):
         before_compute = self.compute_params()
         before_display = self.display_params()
+        source_patch = self.preset_bar.applied_source_patch()
+        if source_patch is None:
+            source_patch = d
+        changes_z = any(
+            key in source_patch for key in ('z_auto', 'z_floor', 'z_ceiling', 'dynamic')
+        )
+        if changes_z:
+            self._color_projection.prepare_restore(d)
         self._applying_preset = True
         try:
             self._apply_preset_values(d)
+            if changes_z:
+                self._color_projection.remember_restored(d)
         finally:
             self._applying_preset = False
             self._refresh_order_summary()
         self.preset_bar.sync_match()
+        self._color_projection.note_preset(source_patch)
         self._emit_param_deltas(before_compute, before_display)
 
     def _apply_preset_values(self, d):
@@ -790,9 +812,7 @@ class OrderContextual(QWidget):
             y_auto=bool(self.chk_y_auto.isChecked()),
             y_min=float(self.spin_y_min.value()),
             y_max=float(self.spin_y_max.value()),
-            z_auto=bool(self.chk_z_auto.isChecked()),
-            z_floor=float(self.spin_z_floor.value()),
-            z_ceiling=float(self.spin_z_ceiling.value()),
+            **self._color_projection.params(),
         )
 
     def current_params(self):
@@ -810,6 +830,35 @@ class OrderContextual(QWidget):
         if display != before_display:
             self.display_params_changed.emit(display)
 
+    def project_color_levels(self, auto, lo, hi, *, requested=None):
+        """Show resolved levels, keeping the owner request for preset comparison."""
+        projected = self._color_projection.project(auto, lo, hi, requested=requested)
+        if projected:
+            self.preset_bar.sync_match()
+        return projected
+
+    def _compare_preset(self):
+        params = self._collect_preset()
+        requested = self._color_projection.comparison_request()
+        if requested is not None:
+            for key in ('z_auto', 'z_floor', 'z_ceiling'):
+                if key in requested:
+                    params[key] = requested[key]
+                else:
+                    params.pop(key, None)
+            # The legacy alias must not reinstate an effective Z window when
+            # the owning request has no explicit Z fields.
+            params.pop('dynamic', None)
+        return params
+
+    def color_policy_projection(self):
+        """Return the exact display projection, or None after a restore."""
+        return self._color_projection.projection()
+
+    def consume_color_policy_edit(self):
+        """Take the explicit Z edit once, preserving untouched precision."""
+        return self._color_projection.consume_edit()
+
     def apply_params(self, d):
         """Restore inspector widgets without emitting display/compute signals.
 
@@ -817,9 +866,11 @@ class OrderContextual(QWidget):
         through this method; emitting ``display_params_changed`` here would
         replot the heatmap and rewrite ColorBarItem.lo_prv mid-drag.
         """
+        self._color_projection.prepare_restore(d)
         self._applying_preset = True
         try:
             self._apply_params_unlocked(d)
+            self._color_projection.remember_restored(d)
         finally:
             self._applying_preset = False
         self.preset_bar.sync_match()

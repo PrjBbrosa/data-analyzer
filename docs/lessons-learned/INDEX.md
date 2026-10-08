@@ -293,6 +293,7 @@ lesson by default.
 | [Qt Test Input State Survives Failed Widget Tests](qt-test-input-state-survives-failed-widget-tests.md) | Hover or pin tests pass alone but fail later in a shared QApplication. | See lesson |
 | [Channel Menu Actions Follow Target Cardinality](channel-menu-actions-follow-target-cardinality.md) | Adding or changing channel-tree context-menu actions. | See lesson |
 | [Pin tests must cover real creation and source roles](pin-tests-must-cover-real-creation-and-source-roles.md) | Adding Pin support to an analysis canvas or changing its sampling/identity adapter. | See lesson |
+| [热图色阶必须从所属请求及稳定参考基准推导](heatmap-color-request-reference-anchor.md) | 手动热图色阶随 View 切换、reference、分屏锁定、保存或图表还原发生改变。 | See lesson |
 
 ## Selection Rules
 

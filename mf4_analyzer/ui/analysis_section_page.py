@@ -15,6 +15,7 @@ ChartStack/MainWindow (state capture/apply, tabbar signal handling).
 from __future__ import annotations
 
 import logging
+from contextlib import contextmanager
 
 import numpy as np
 from PyQt5.QtCore import QEvent, Qt, QTimer, pyqtSignal
@@ -257,10 +258,7 @@ class AnalysisPaneHost(QWidget):
         if not self._levels_locked:
             return
         for canvas in self._heatmap_canvases():
-            img = getattr(canvas, "_img", None)
-            if img is None:
-                continue
-            img.setLevels((float(lo), float(hi)))
+            self._page._set_canvas_levels(canvas, lo, hi, auto=False)
 
     def _apply_focus_style(self) -> None:
         accent = self._page._active_view_focus_accent()
@@ -352,6 +350,7 @@ class AnalysisSectionPage(QWidget):
         self._previous_focused = 0
         self._linked = False
         self._levels_locked = False
+        self._color_projection_depth = 0
         self._peer_host = None
         self._view_split = None
         self._host_view_id = ""
@@ -1352,10 +1351,11 @@ class AnalysisSectionPage(QWidget):
         if not self._levels_locked or len(canvases) < 2:
             self._refresh_compare_buttons()
             return
-        lo, hi = self._combined_levels(canvases)
-        if lo is not None:
-            for c in canvases:
-                self._set_canvas_levels(c, lo, hi)
+        if not self._color_projection_depth:
+            lo, hi = self._combined_levels(canvases)
+            if lo is not None:
+                for c in canvases:
+                    self._set_canvas_levels(c, lo, hi)
         for c in canvases:
             c.levels_changed.connect(self._on_locked_levels_changed)
             policy = getattr(c, "color_policy_committed", None)
@@ -1380,8 +1380,21 @@ class AnalysisSectionPage(QWidget):
             except TypeError:
                 pass
 
+    @contextmanager
+    def color_projection_batch(self):
+        """Defer lock unions while a render transaction prepares its panes.
+
+        The transaction owner settles final levels explicitly after all panes
+        have been painted; unwinding this guard never publishes an interim union.
+        """
+        self._color_projection_depth += 1
+        try:
+            yield
+        finally:
+            self._color_projection_depth -= 1
+
     def _on_canvas_levels_rebased(self) -> None:
-        if not self._levels_locked:
+        if self._color_projection_depth or not self._levels_locked:
             return
         canvases = self._heatmap_canvases()
         if len(canvases) < 2:
@@ -1399,7 +1412,7 @@ class AnalysisSectionPage(QWidget):
         if not self._levels_locked:
             return
         for canvas in self._heatmap_canvases():
-            self._set_canvas_levels(canvas, float(lo), float(hi))
+            self._set_canvas_levels(canvas, float(lo), float(hi), auto=False)
 
     @staticmethod
     def _combined_levels(canvases):
@@ -1429,22 +1442,11 @@ class AnalysisSectionPage(QWidget):
         return min(los), max(his)
 
     @staticmethod
-    def _set_canvas_levels(canvas, lo, hi) -> None:
-        """Programmatically set both the image and colorbar levels, blocking
-        signals so the colorbar's ``sigLevelsChanged`` cannot re-enter the
-        lock propagation as a phantom drag."""
-        canvas._img.setLevels((lo, hi))
-        cbar = getattr(canvas, '_cbar', None)
-        if cbar is None:
-            return
-        probe = getattr(canvas, 'colorbar_interaction_active', None)
-        if callable(probe) and probe():
-            # ImageItem already tracks the live drag. Rewriting ColorBarItem
-            # lo_prv while handles are offset compounds the next move.
-            return
-        cbar.blockSignals(True)
-        cbar.setLevels((lo, hi))
-        cbar.blockSignals(False)
+    def _set_canvas_levels(canvas, lo, hi, *, auto=None) -> None:
+        """Project image, colorbar and slice without publishing a user edit."""
+        if auto is None:
+            auto = canvas._z_color_auto
+        canvas.project_color_levels(bool(auto), float(lo), float(hi))
 
     def _on_locked_color_policy(self, z_auto, lo: float, hi: float) -> None:
         """Manual chart-options levels follow a locked sibling.
@@ -1459,7 +1461,7 @@ class AnalysisSectionPage(QWidget):
         self._suppress_color_policy_echo = True
         try:
             for canvas in self._heatmap_canvases():
-                self._set_canvas_levels(canvas, float(lo), float(hi))
+                self._set_canvas_levels(canvas, float(lo), float(hi), auto=False)
         finally:
             self._suppress_color_policy_echo = False
 
@@ -1472,7 +1474,7 @@ class AnalysisSectionPage(QWidget):
         if not self._levels_locked:
             return
         for c in self._heatmap_canvases():
-            self._set_canvas_levels(c, float(lo), float(hi))
+            self._set_canvas_levels(c, float(lo), float(hi), auto=False)
 
     # -- compare toggle buttons -----------------------------------------
     def _make_toggle(self, text, tooltip):

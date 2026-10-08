@@ -544,7 +544,7 @@ class PresetBar(QWidget):
 
     def __init__(
         self, kind, collect_fn, apply_fn, parent=None, builtin_defaults=None,
-        default_params=None, custom_slots=None,
+        default_params=None, custom_slots=None, compare_fn=None,
     ):
         """Construct a preset bar.
 
@@ -565,6 +565,9 @@ class PresetBar(QWidget):
             Construction-time panel defaults restored by the explicit
             「恢复面板默认参数」 menu action. Distinct from resetting a
             builtin slot's QSettings override.
+        compare_fn : callable[[], dict] | None
+            Optional owning-request snapshot for baseline comparisons. Saving
+            still uses collect_fn so derived visible values can be exported.
         custom_slots : dict[int, str] | None
             Additional user-owned slots. An empty custom slot saves the current
             parameters on left-click; unlike a builtin slot it never receives a
@@ -574,7 +577,11 @@ class PresetBar(QWidget):
         self.setObjectName("inspectorPresetBar")
         self._kind = kind
         self._collect = collect_fn
+        self._compare_collect = compare_fn if compare_fn is not None else collect_fn
+        self._has_comparison_collector = compare_fn is not None
         self._apply = apply_fn
+        self._applying_source_patch = None
+        self._prepared_preserved_axes = set()
         self._builtins = builtin_defaults  # None => legacy mode
         self._custom_slots = {
             int(slot): str(name)
@@ -758,6 +765,15 @@ class PresetBar(QWidget):
             return {}
         return current if isinstance(current, dict) else {}
 
+    def _comparison_collect_safe(self):
+        """Compare owning requests without reusing exported display values."""
+        try:
+            current = self._compare_collect()
+        except Exception:
+            logger.exception("preset comparison collection failed")
+            return {}
+        return current if isinstance(current, dict) else {}
+
     def _slot_is_available(self, slot):
         if slot not in self._slots:
             return False
@@ -842,7 +858,7 @@ class PresetBar(QWidget):
         self._refresh_states()
 
     def _project_baseline(self):
-        current = self._collect_safe()
+        current = self._comparison_collect_safe()
         baseline = self._baseline if isinstance(self._baseline, dict) else None
         if baseline is None:
             self._selected_slot = None
@@ -1141,6 +1157,7 @@ class PresetBar(QWidget):
         owned_only = True
         if is_baseline:
             display_params = baseline.get("params") or params
+            current_params = self._comparison_collect_safe()
             owned_only = False
         # Resolve blurb for builtin slots: reverse-map slot index → preset key.
         _SLOT_TO_KEY = {v: k for k, v in _PRESET_KEY_TO_SLOT.items()}
@@ -1360,6 +1377,7 @@ class PresetBar(QWidget):
     def _prepare_user_preset(self, params, *, purpose="switch", current=None):
         """Protect ranges at user entry points only, never during View restore."""
         target = dict(params)
+        self._prepared_preserved_axes = set()
         if current is None:
             current = self._collect_safe()
         conflict_axes = manual_axis_conflicts(self._kind, current, target)
@@ -1378,6 +1396,7 @@ class PresetBar(QWidget):
         if choice == 'cancel':
             return None
         if choice == 'keep':
+            self._prepared_preserved_axes = set(keepable)
             return apply_keep_ranges(self._kind, current, target)
         return apply_preset_ranges(self._kind, current, target)
 
@@ -1389,17 +1408,38 @@ class PresetBar(QWidget):
         return comparable_params_match(
             self._kind,
             self._baseline.get("params") or {},
-            self._collect_safe(),
+            self._comparison_collect_safe(),
         )
 
-    def _apply_with_rollback(self, params, *, error_prefix, snapshot=None):
+    def applied_source_patch(self):
+        """Original user patch during apply; None for snapshot restores.
+
+        Resolved targets include inherited display values. Those fields are not
+        necessarily explicit edits and must not claim another policy's ownership.
+        """
+        if self._applying_source_patch is None:
+            return None
+        return dict(self._applying_source_patch)
+
+    def _apply_with_rollback(
+        self, params, *, error_prefix, snapshot=None, source_patch=None,
+    ):
         snapshot = snapshot or self._snapshot_collect_and_baseline()
+        self._applying_source_patch = (
+            dict(source_patch) if source_patch is not None else None
+        )
+        if self._applying_source_patch is not None and 'z' in self._prepared_preserved_axes:
+            for key in ('z_auto', 'z_floor', 'z_ceiling', 'dynamic'):
+                self._applying_source_patch.pop(key, None)
         try:
             self._apply(params)
         except Exception as e:
             self._restore_collect_and_baseline(snapshot)
             self.acknowledged.emit("error", f"{error_prefix}: {e}")
             return False
+        finally:
+            self._applying_source_patch = None
+            self._prepared_preserved_axes = set()
         return True
 
     def _on_left_click(self, slot):
@@ -1428,10 +1468,16 @@ class PresetBar(QWidget):
             return
         existing = self._read(slot)
         name = existing[0] if existing else self._default_name(slot)
+        baseline_params = (
+            self._comparison_collect_safe() if self._has_comparison_collector else params
+        )
+        if not baseline_params:
+            self.acknowledged.emit("error", "保存失败: 当前预设比较参数不可用")
+            return
 
         def work():
             self._write(slot, name, params)
-            if not self._commit_loaded_slot(slot, params, params):
+            if not self._commit_loaded_slot(slot, baseline_params, params):
                 self.acknowledged.emit("error", "保存失败: 无法建立预设基准")
                 return False
             return True
@@ -1459,7 +1505,11 @@ class PresetBar(QWidget):
             self.acknowledged.emit("error", "加载失败: 当前预设参数不可用")
             return
         target = resolve_preset_target(self._kind, before, params)
-        if not target:
+        baseline_target = (
+            resolve_preset_target(self._kind, self._comparison_collect_safe(), params)
+            if self._has_comparison_collector else target
+        )
+        if not target or not baseline_target:
             self.acknowledged.emit("error", "加载失败: 无法解析预设目标")
             return
         prepared = self._prepare_user_preset(target, current=before)
@@ -1474,9 +1524,10 @@ class PresetBar(QWidget):
         def work():
             if not self._apply_with_rollback(
                 prepared, error_prefix="加载失败", snapshot=snapshot,
+                source_patch=params,
             ):
                 return False
-            if not self._commit_loaded_slot(slot, target, params):
+            if not self._commit_loaded_slot(slot, baseline_target, params):
                 self._restore_collect_and_baseline(snapshot)
                 self.acknowledged.emit("error", "加载失败: 无法建立预设基准")
                 return False
@@ -1501,6 +1552,7 @@ class PresetBar(QWidget):
         def work():
             if not self._apply_with_rollback(
                 prepared, error_prefix="恢复默认失败", snapshot=snapshot,
+                source_patch=params,
             ):
                 return False
             self._clear_baseline()
