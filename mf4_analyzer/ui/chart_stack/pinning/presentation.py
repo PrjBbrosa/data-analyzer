@@ -6,6 +6,7 @@ offscreen flags, and highlight.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from functools import partial
 
@@ -138,6 +139,7 @@ class _PresentationState:
     hover_target: object = None
     capture_target: object = None
     reveal_hold: object = None
+    tether_update_depth: int = 0
 
 
 class PinPanelProjector(QObject):
@@ -438,6 +440,23 @@ class PinPanelProjector(QObject):
         availability=None,
         collection=None,
     ) -> None:
+        with self._settle_tethers(key, canvas):
+            self._project_record_content(
+                key, canvas, intent, sample, inherit_live=inherit_live,
+                availability=availability, collection=collection,
+            )
+
+    def _project_record_content(
+        self,
+        key,
+        canvas,
+        intent,
+        sample,
+        *,
+        inherit_live=None,
+        availability=None,
+        collection=None,
+    ) -> None:
         ports = self._ports
         host = ports.host_widget()
         stack = ports.stack_widget()
@@ -500,6 +519,7 @@ class PinPanelProjector(QObject):
             self.apply_anchor(
                 pill, collection, pill_record_id=intent.record_id,
             )
+        self.arrange_pinned_panels(key, canvas, collection)
 
     def pill_content(self, intent, sample, status):
         if status == PIN_STATUS_PENDING:
@@ -533,6 +553,14 @@ class PinPanelProjector(QObject):
     def update_display_projection(
         self, key, canvas, intent, sample, status, collection,
     ) -> None:
+        with self._settle_tethers(key, canvas):
+            self._update_display_projection_content(
+                key, canvas, intent, sample, status, collection,
+            )
+
+    def _update_display_projection_content(
+        self, key, canvas, intent, sample, status, collection,
+    ) -> None:
         pill = self.pill_for(key, intent.record_id)
         if not _widget_alive(pill):
             return
@@ -549,6 +577,8 @@ class PinPanelProjector(QObject):
         if projection is not None:
             pill.set_display_projection(projection)
         self._remember_typeset(state, pill, intent)
+        if pill.is_user_placed() and not pill.is_dragging():
+            self.apply_anchor(pill, collection, pill_record_id=intent.record_id)
         self.arrange_pinned_panels(key, canvas, collection)
 
     def raise_record(self, key, canvas, record_id) -> None:
@@ -569,9 +599,23 @@ class PinPanelProjector(QObject):
         else:
             state.panel_endpoints.pop(str(record_id), None)
 
+    @contextmanager
+    def _settle_tethers(self, key, canvas):
+        """Publish connections after content, anchors and sibling placement settle."""
+        state = self.state_for(key)
+        state.tether_update_depth += 1
+        try:
+            yield
+        finally:
+            state.tether_update_depth -= 1
+            if state.tether_update_depth == 0:
+                self.sync_tethers(key, canvas)
+
     def sync_tethers(self, key, canvas) -> None:
         """Project visible pinned cards as transient canvas-local tether DTOs."""
         state = self._states.get(key)
+        if state is not None and state.tether_update_depth:
+            return
         overlay = getattr(canvas, "_pinned_overlay", None) if _widget_alive(canvas) else None
         stack = self._ports.stack_widget()
         if state is None or overlay is None or not _widget_alive(stack):
@@ -778,6 +822,10 @@ class PinPanelProjector(QObject):
         return tuple(ranked)
 
     def arrange_pinned_panels(self, key, canvas, collection) -> None:
+        with self._settle_tethers(key, canvas):
+            self._arrange_pinned_panels(key, canvas, collection)
+
+    def _arrange_pinned_panels(self, key, canvas, collection) -> None:
         if collection is None:
             return
         state = self.state_for(key)
@@ -813,6 +861,8 @@ class PinPanelProjector(QObject):
             missing = []
             for intent, pill in candidates:
                 stored = state.auto_panel_rects.get(intent.record_id)
+                if stored is not None:
+                    stored = QRect(stored.topLeft(), pill.size())
                 if (
                     preserve
                     and stored is not None

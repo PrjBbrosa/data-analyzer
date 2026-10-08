@@ -294,6 +294,7 @@ lesson by default.
 | [Channel Menu Actions Follow Target Cardinality](channel-menu-actions-follow-target-cardinality.md) | Adding or changing channel-tree context-menu actions. | See lesson |
 | [Pin tests must cover real creation and source roles](pin-tests-must-cover-real-creation-and-source-roles.md) | Adding Pin support to an analysis canvas or changing its sampling/identity adapter. | See lesson |
 | [热图色阶必须从所属请求及稳定参考基准推导](heatmap-color-request-reference-anchor.md) | 手动热图色阶随 View 切换、reference、分屏锁定、保存或图表还原发生改变。 | See lesson |
+| [Cursor Readouts Need Sequence Geometry Contracts](cursor-readouts-need-sequence-geometry-contract.md) | Changing cursor title wrapping, value-driven card size, visible-row fitting, pin placement, or tether publication. | See lesson |
 
 ## Selection Rules
 

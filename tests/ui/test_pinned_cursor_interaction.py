@@ -717,14 +717,20 @@ def test_bottom_label_arrow_keeps_frf_log_frequency_in_hz(qapp, qtbot):
     canvas.set_result(
         _frf_result(log=True),
         {"frequency_scale": "log", "magnitude_scale": "linear"},
-        {},
+        {
+            "input_source": ("fid-a", "force"),
+            "output_source": ("fid-a", "response"),
+        },
     )
     collection, _ = next_record(empty_collection(), {
         "mode": "single",
         "domain": "frf",
         "x": 10.0,
         "x_unit": "Hz",
-        "bindings": [{"fid": "fid-a", "channel": "force"}],
+        "bindings": [
+            {"fid": "fid-a", "channel": "force", "role": "input"},
+            {"fid": "fid-a", "channel": "response", "role": "output"},
+        ],
     })
     cs.set_pinned_cursors_for_canvas(canvas, collection)
     qapp.processEvents()

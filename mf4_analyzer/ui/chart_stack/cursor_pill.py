@@ -603,6 +603,7 @@ class CursorPill(QFrame):
         self._clear_content_tooltip()
         lay.addWidget(self._primary)
         lay.addWidget(self._detail)
+        lay.addStretch(1)
         self._drag_offset = None
         self._drag_moved = False
         # User-positioned flag — true after first manual drag, so resize events
@@ -621,10 +622,15 @@ class CursorPill(QFrame):
         self._avoidance_obstacle = None
         # Shared-table layout state (R8). Structural inputs (host size,
         # font, field/channel sets, mode) rebuild the plan; value-only
-        # updates reuse it and may only grow the value envelope.
+        # updates may grow the retained geometry, never collapse it. These
+        # per-card measurements are transient and excluded from snapshots.
         self._table_plan = None
         self._layout_signature = None
         self._value_envelope_width = 0.0
+        self._primary_envelope_width = 0.0
+        self._primary_envelope_height = 0.0
+        self._branch_envelope_width = 0.0
+        self._frame_envelope_size = QSize()
         self._name_elisions = ()
         self._pane_content_width = 0.0
         # ChartStack supplies the owning canvas's mapped safe rectangle for
@@ -1044,16 +1050,10 @@ class CursorPill(QFrame):
     def _apply_pinned_primary_layout(self, text, budget, reserve):
         """Reserve controls on the header only; subsequent rows use full width."""
         fragments = [part for part in text.split(_CURSOR_HTML_SEP) if part]
-        first = ""
-        if fragments and self._primary_html_width(fragments[0]) <= budget - reserve:
-            first = fragments.pop(0)
-        rows = []
-        for fragment in fragments:
-            joined = _CURSOR_HTML_SEP.join((rows[-1], fragment)) if rows else fragment
-            if rows and self._primary_html_width(joined) <= budget:
-                rows[-1] = joined
-            else:
-                rows.append(fragment)
+        # Identity always owns the controls row. Never repack it alongside
+        # changing coordinates merely because this frame happens to fit.
+        first = fragments.pop(0) if fragments else ""
+        rows = fragments
         html = "".join(f'<p style="margin:0;">{row or "&nbsp;"}</p>'
                        for row in [first] + rows)
         self._primary.setContentsMargins(0, 0, 0, 0)
@@ -1094,7 +1094,7 @@ class CursorPill(QFrame):
         """
         if not text:
             return text
-        if self._primary_html_width(text) <= budget:
+        if self._primary_stable_width(text) <= budget:
             return text
         segments = [part for part in text.split(_CURSOR_HTML_SEP) if part]
         if not 3 <= len(segments) <= 4:
@@ -1103,10 +1103,10 @@ class CursorPill(QFrame):
             _CURSOR_HTML_SEP.join(segments[:2]) + "<br>"
             + _CURSOR_HTML_SEP.join(segments[2:])
         )
-        if self._primary_html_width(grouped) <= budget:
+        if self._primary_stable_width(grouped) <= budget:
             return grouped
         each = "<br>".join(segments)
-        if self._primary_html_width(each) <= budget:
+        if self._primary_stable_width(each) <= budget:
             return each
         # One segment alone still exceeds the budget: show the short
         # out-of-space state instead of splitting a number mid-token (R6).
@@ -1119,6 +1119,26 @@ class CursorPill(QFrame):
         doc.setDefaultFont(self._primary.font())
         doc.setHtml(html)
         return doc.idealWidth()
+
+    def _primary_stable_width(self, html):
+        """Budget digit advances without changing the real displayed text.
+
+        Proportional digits of the same precision must not cross a wrapping
+        threshold on each sample. Measure the widest same-shape digit variant
+        with the primary font; tags (sizes/colors) remain untouched.
+        """
+        parts = re.split(r'(<[^>]*>|&(?:#\d+|#x[0-9a-fA-F]+|\w+);)', html)
+        shape = ''.join(part if index % 2 else re.sub(r'[0-9]', '#', part)
+                        for index, part in enumerate(parts))
+        key = ('primary-digits', shape, self._primary.font().key())
+        if key not in self._text_measure_cache:
+            self._text_measure_cache[key] = max(
+                self._primary_html_width(''.join(
+                    part if index % 2 else re.sub(r'[0-9]', digit, part)
+                    for index, part in enumerate(parts)))
+                for digit in '0123456789'
+            )
+        return self._text_measure_cache[key]
 
     def _primary_doc_size(self, width=None):
         if not (self._primary.text() or "").strip():
@@ -1256,10 +1276,15 @@ class CursorPill(QFrame):
         self._table_plan = None
         self._layout_signature = None
         self._value_envelope_width = 0.0
+        self._primary_envelope_width = 0.0
+        self._primary_envelope_height = 0.0
+        self._branch_envelope_width = 0.0
+        self._frame_envelope_size = QSize()
         self._name_elisions = ()
         self._text_measure_cache = {}
         self._pane_content_width = 0.0
         self._space_hidden = False
+        self._primary.setMinimumHeight(0)
 
     def safe_rect(self):
         if self._host_pending:
@@ -1461,6 +1486,10 @@ class CursorPill(QFrame):
                              preserved_right, preserved_top):
         from .cursor_display import visible_block_label
 
+        # New pinned cards receive content before show(). Polish the owner
+        # too, so its first QSS font is not mistaken for a later settings
+        # change that discards the just-published geometry reserve.
+        self.ensurePolished()
         self._detail.ensurePolished()
         self._primary.ensurePolished()
         # The ratio budget is a preference; a fitting horizontal table may
@@ -1472,17 +1501,28 @@ class CursorPill(QFrame):
         # Start from the pane's *ceiling*.  It becomes the settled content
         # width below once the table's actual grid width is known.
         self._pane_content_width = content
-        # Structural change rebuilds the plan and resets the envelope;
-        # value-only updates keep both and may only grow the envelope (R8).
+        # Structural change resets retained geometry. Branch/status rows are
+        # sampled content: their removal clears the text, not the size reserve.
         signature = self._layout_signature_for(projection)
         if signature != self._layout_signature:
             self._layout_signature = signature
             self._value_envelope_width = 0.0
+            self._primary_envelope_width = 0.0
+            self._primary_envelope_height = 0.0
+            self._branch_envelope_width = 0.0
+            self._frame_envelope_size = QSize()
+            self._primary.setMinimumHeight(0)
             self._text_measure_cache = {}
         envelope = self._refresh_value_envelope(projection)
         label_widths = tuple(
             self._measure_body_text(label)
             for label in projection.metric_labels
+        )
+        self._branch_envelope_width = max(
+            self._branch_envelope_width,
+            max((self._measure_body_text(row.branch_label) + 10
+                 for block in projection.blocks for row in block.table_rows
+                 if row.branch_label), default=0.0),
         )
         plan = choose_table_layout(
             content_width=content,
@@ -1491,9 +1531,7 @@ class CursorPill(QFrame):
             field_label_widths=label_widths,
             signal_width=max((self._signal_width(block, projection)
                               for block in projection.blocks), default=0.0),
-            branch_width=max((self._measure_body_text(row.branch_label) + 10
-                              for block in projection.blocks for row in block.table_rows
-                              if row.branch_label), default=0.0),
+            branch_width=self._branch_envelope_width,
         )
         self._table_plan = plan
         if plan.required_width > content:
@@ -1513,8 +1551,8 @@ class CursorPill(QFrame):
         # made every panel expand to Wcap and created the large blank slabs in
         # the cursor screenshots.  The layout plan's shared column sum is the
         # width contract; use it as the settled content width instead.
-        # Title chrome overlays the first line and must not stretch this grid,
-        # or the table grows a blank right slab under 数值/完整.
+        # The detail grid keeps its own intrinsic width. The separate header
+        # budget may widen the frame to fit identity and controls together.
         table_width = (
             min(content, max((self._signal_width(block, projection)
                               for block in projection.blocks), default=1.0))
@@ -1527,20 +1565,26 @@ class CursorPill(QFrame):
         # actions, independently of the numeric grid's intrinsic width.
         fragments = [part for part in self._primary_original.split(_CURSOR_HTML_SEP)
                      if part]
-        primary_min = max((self._primary_html_width(part) for part in fragments),
+        primary_min = max((self._primary_stable_width(part) for part in fragments),
                           default=0.0)
         if self._pin_role == "pinned":
-            # The first fragment (normally Pn) shares the controls row only
-            # when it fits. Other fragments never pay the controls' width.
-            pane = max(table_width, ceil(primary_min), self._title_chrome_width())
+            identity_width = self._primary_stable_width(fragments[0]) if fragments else 0
+            pane = max(table_width, ceil(primary_min),
+                       ceil(identity_width) + self._title_chrome_width())
         else:
             pane = max(table_width, ceil(primary_min) + self._title_chrome_width())
-        pane = min(wcap - _PILL_LEFT_MARGIN - _PILL_RIGHT_MARGIN, pane)
+        self._primary_envelope_width = max(self._primary_envelope_width, pane)
+        pane = min(wcap - _PILL_LEFT_MARGIN - _PILL_RIGHT_MARGIN,
+                   self._primary_envelope_width)
 
         self._pane_content_width = table_width
         self._detail.setMaximumWidth(int(ceil(table_width)))
         self._apply_primary_layout(pane)
-        primary_h = self._primary_doc_size(pane).height()
+        self._primary_envelope_height = max(
+            self._primary_envelope_height, self._primary_doc_size(pane).height()
+        )
+        primary_h = self._primary_envelope_height
+        self._primary.setMinimumHeight(ceil(primary_h))
         available = max(
             0.0,
             safe.height()
@@ -1571,7 +1615,11 @@ class CursorPill(QFrame):
         frame_h = int(
             primary_h + 2.0 + detail_h
         ) + _PILL_TOP_MARGIN + _PILL_BOTTOM_MARGIN
-        self.resize(int(frame_w), min(int(frame_h), safe.height()))
+        self._frame_envelope_size = self._frame_envelope_size.expandedTo(
+            QSize(frame_w, frame_h)
+        )
+        self.resize(min(self._frame_envelope_size.width(), safe.width()),
+                    min(self._frame_envelope_size.height(), safe.height()))
         self._settle_position(preserved_right, preserved_top, safe)
         self._set_space_hidden(False)
 
@@ -1600,12 +1648,15 @@ class CursorPill(QFrame):
             projection.cursor_mode,
             projection.x_mode,
             bool(projection.mini),
-            self.safe_rect().width(),
-            self._detail.font().key(), self._primary.font().key(),
+            self.safe_rect().width(), self.safe_rect().height(),
+            self._pin_role, self._ordinal, self._title_chrome_width(),
+            bool(projection.omit_visible_source_prefix),
+            bool(projection.retain_mini_labels),
+            self.font().key(), self._detail.font().key(), self._primary.font().key(),
             self.logicalDpiX(), self.logicalDpiY(),
             projection.metric_labels,
             tuple((str(block.identity), block.channel_label, block.qualified_label,
-                   block.unit_text, tuple(row.branch_label for row in block.table_rows))
+                   block.unit_text)
                   for block in projection.blocks),
         )
 
