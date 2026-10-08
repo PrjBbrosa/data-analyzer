@@ -181,7 +181,7 @@ def _run_source_smoke(output_directory: Path, child_json: Path) -> subprocess.Co
 
 @pytest.fixture(scope="module")
 def frozen_smoke_png_artifacts(tmp_path_factory):
-    """One 6-PNG smoke child. Qt dies with that process; files are immutable."""
+    """One 8-PNG smoke child. Qt dies with that process; files are immutable."""
 
     root = tmp_path_factory.mktemp("frozen-smoke")
     output_directory = root / "outputs"
@@ -203,7 +203,8 @@ def test_runtime_smoke_cli_generates_heatmap_png_kinds(frozen_smoke_png_artifact
         f"{kind}.png"
         for kind in ("time", "fft", "fft_time", "order_time")
     } | {
-        f"{kind}_default_cmap.png"
+        f"{kind}_{suffix}.png"
+        for suffix in ("default_cmap", "gnuplot2")
         for kind in ("fft_time", "order_time")
     }
     assert result["ok"] is True
@@ -279,7 +280,7 @@ def test_artifact_verifier_checks_qt_cjk_proof_and_turbo_samples(
     assert completed.returncode == 0, completed.stderr
     evidence = json.loads(evidence_json.read_text(encoding="utf-8"))
     assert evidence["ok"] is True
-    assert evidence["artifact_count"] == 6
+    assert evidence["artifact_count"] == 8
     assert evidence["qt_qpa_platform"] == "offscreen"
     assert evidence["qt_platform_name"] == "offscreen"
     assert evidence["cjk_proof"]["supports"] is True
@@ -790,3 +791,39 @@ def test_render_verifier_still_writes_legal_failure_evidence(tmp_path):
     report = json.loads(evidence.read_text(encoding="utf-8"))
     assert report["ok"] is False
     assert "error" in report
+
+
+def test_smoke_child_validates_all_custom_resources(frozen_smoke_png_artifacts):
+    from mf4_analyzer.colormaps import list_colormap_specs
+    expected = [
+        {"id": spec.id, "rgb_sha256": spec.rgb_sha256, "sample_count": 256}
+        for spec in list_colormap_specs() if spec.provider == "rgb_lut"
+    ]
+    assert expected
+    assert frozen_smoke_png_artifacts.result["colormap_resources"] == expected
+
+
+def test_smoke_resource_error_becomes_failed_child_result(tmp_path, monkeypatch):
+    from mf4_analyzer import batch_render_smoke
+    from mf4_analyzer.colormaps import ColormapResourceError
+
+    def broken():
+        raise ColormapResourceError("custom LUT hash mismatch")
+
+    monkeypatch.setattr(batch_render_smoke, "validate_colormap_resources", broken)
+    result_path = tmp_path / "child.json"
+    assert batch_render_smoke.run(tmp_path / "outputs", result_path) == 1
+    result = json.loads(result_path.read_text())
+    assert result["ok"] is False
+    assert "hash mismatch" in result["error"]
+    assert result["outputs"] == []
+
+
+def test_verifier_rejects_missing_custom_resource_proof(tmp_path, frozen_smoke_png_artifacts):
+    from tools import verify_frozen_batch_render as verifier
+    child = dict(frozen_smoke_png_artifacts.result)
+    child.pop("colormap_resources")
+    child_json = tmp_path / "child.json"
+    child_json.write_text(json.dumps(child))
+    with pytest.raises(RuntimeError, match="colormap resource hashes"):
+        verifier.verify_artifacts(frozen_smoke_png_artifacts.output_directory, child_json, "offscreen")

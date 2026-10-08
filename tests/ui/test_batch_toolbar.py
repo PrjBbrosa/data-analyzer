@@ -29,6 +29,34 @@ import pytest
 from PyQt5.QtWidgets import QFileDialog
 
 
+@pytest.mark.parametrize("method", ["fft_time", "order_time"])
+@pytest.mark.parametrize("cmap", ["tracelab.head-style.v1", "third-party.palette.v9"])
+def test_colormap_survives_batch_sheet_and_recipe_roundtrip(qtbot, tmp_path, method, cmap):
+    from mf4_analyzer.batch import AnalysisPreset
+    from mf4_analyzer.batch_preset_io import load_preset_from_json, save_preset_to_json
+    from mf4_analyzer.batch_recipe import recipe_fingerprint
+    from mf4_analyzer.ui.drawers.batch import BatchSheet
+
+    sheet = BatchSheet(None, files={})
+    qtbot.addWidget(sheet)
+    preset = AnalysisPreset.free_config(name="Color roundtrip", method=method,
+        target_signals=("signal",), params={"cmap": cmap, "nfft": 1024})
+    sheet.apply_preset(preset)
+    # Exercise an unrelated displayed parameter edit while preserving the
+    # hidden cmap carried in the base recipe.
+    sheet._analysis_panel.apply_params({"nfft": 2048})
+    exported = sheet._build_preset_for_export()
+    assert exported.params["cmap"] == cmap
+    assert exported.params["nfft"] == 2048
+    path = tmp_path / "palette-recipe.json"
+    save_preset_to_json(exported, path)
+    restored = load_preset_from_json(path)
+    assert restored.params["cmap"] == cmap
+    assert recipe_fingerprint(restored.params, method) == recipe_fingerprint(exported.params, method)
+    other = dict(restored.params, cmap="gnuplot2")
+    assert recipe_fingerprint(other, method) != recipe_fingerprint(restored.params, method)
+
+
 @pytest.fixture
 def qt_app_files(tmp_path):
     """One-file FileData map keyed by fid=0 with a 'sig' column.

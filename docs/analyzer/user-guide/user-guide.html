@@ -1588,7 +1588,7 @@ const chartDescs = {
   annotate: {t:'标注 · 开启/关闭', d:'开启后：左键单击图上任意点，添加一个带读数的标注；右键单击删除最近一个标注。',                            meta:'状态按钮 · 文案会变'},
   clear:    {t:'标注 · 清除',   d:'一次清空当前图表里的所有标注。',                                                                                meta:'不可撤销'},
   copy:     {t:'复制为图片',    d:'把当前图（含可见游标线、活动读数和已固定面板）复制到剪贴板，可直接粘到 PPT 或聊天窗口。',                      meta:'推荐用这个'},
-  options:  {t:'图表选项',      d:'展开 X/Y/Z 轴的进阶设置：自动范围 / 手动范围 / 标签字号 / 是否对数刻度等。',                                  meta:'每个模式可选项不同'}
+  options:  {t:'图表选项',      d:'展开 X/Y/Z 轴的进阶设置：自动范围 / 手动范围 / 标签字号 / 是否对数刻度等。时频与阶次默认使用 HEAD 风格，可在此切换色表而不重算。',                                  meta:'每个模式可选项不同'}
 };
 const chartDetail = document.getElementById('chartDetail');
 document.querySelectorAll('[data-chart]').forEach(b => {

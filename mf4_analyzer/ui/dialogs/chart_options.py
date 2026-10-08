@@ -30,7 +30,7 @@ from ...ui_kit.dialog_geometry import fit_window, nudge_into_work_area
 from .._axis_handle import make_handle
 from .._color_utils import is_color_like as _is_color_like
 from .._color_utils import to_hex as _to_hex
-from ..pg_canvas.heatmap_canvas import SUPPORTED_HEATMAP_COLORMAPS
+from ...colormaps import DEFAULT_HEATMAP_CMAP, list_colormap_specs
 from ..widgets.compact_spinbox import CompactDoubleSpinBox
 
 
@@ -499,7 +499,8 @@ class ChartOptionsDialog(QDialog):
 
         self.chk_color_auto = QCheckBox("自动色阶范围", group)
         self.combo_cmap = self._grow_field(QComboBox(group))
-        self.combo_cmap.addItems(SUPPORTED_HEATMAP_COLORMAPS)
+        for spec in list_colormap_specs():
+            self.combo_cmap.addItem(spec.label, spec.id)
         self.spin_color_min = self._grow_field(self._spin(group))
         self.spin_color_max = self._grow_field(self._spin(group))
 
@@ -636,7 +637,7 @@ class ChartOptionsDialog(QDialog):
                 color_auto = bool(auto_reader())
         else:
             cmin, cmax = 0.0, 1.0
-            cmap = SUPPORTED_HEATMAP_COLORMAPS[0]
+            cmap = DEFAULT_HEATMAP_CMAP
         return {
             "title": self.handle.get_title(),
             "x_min": float(xlo),
@@ -689,7 +690,15 @@ class ChartOptionsDialog(QDialog):
         index = d["curve_index"] if self._lines else 0
         self._curve_combo_index = index
         self.combo_curve.setCurrentIndex(index)
-        self.combo_cmap.setCurrentText(d["cmap"])
+        cmap_index = self.combo_cmap.findData(d["cmap"])
+        if cmap_index < 0:
+            self.combo_cmap.addItem(f"不可用：{d['cmap']}", d["cmap"])
+            cmap_index = self.combo_cmap.count() - 1
+            self.combo_cmap.setItemData(
+                cmap_index, "暂用 gnuplot2 显示；保留原色图 ID，选择其他色图才替换。",
+                Qt.ToolTipRole,
+            )
+        self.combo_cmap.setCurrentIndex(cmap_index)
         self.spin_color_min.set_source_value(d["color_min"])
         self.spin_color_max.set_source_value(d["color_max"])
         self.chk_color_auto.setChecked(bool(d["color_auto"]))
@@ -803,7 +812,7 @@ class ChartOptionsDialog(QDialog):
             self._stash_curve_draft()
             view["curves"] = tuple(sorted(self._curve_drafts.items()))
         if self._mappables and self.combo_cmap.isEnabled():
-            view["cmap"] = self.combo_cmap.currentText()
+            view["cmap"] = self.combo_cmap.currentData()
             view["color_auto"] = self.chk_color_auto.isChecked()
             if not view["color_auto"]:
                 view["color_min"] = self._spin_draft_value(self.spin_color_min)
@@ -1024,7 +1033,7 @@ class ChartOptionsDialog(QDialog):
         if self._curve_colors_dirty():
             return True
         if self._mappables and self.combo_cmap.isEnabled():
-            if self.combo_cmap.currentText() != committed.get("cmap"):
+            if self.combo_cmap.currentData() != committed.get("cmap"):
                 return True
         if self._color_policy_dirty:
             return True
@@ -1118,7 +1127,7 @@ class ChartOptionsDialog(QDialog):
     def _commit_cmap(self):
         if not self._mappables or not self.combo_cmap.isEnabled():
             return
-        name = self.combo_cmap.currentText()
+        name = self.combo_cmap.currentData()
         if name == self._committed.get("cmap"):
             return
         self._current_mappable().set_cmap(name)

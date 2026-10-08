@@ -828,3 +828,22 @@ def test_lite_post_check_timeout_kills_child_then_runs_the_next(tmp_path):
     assert "importer: passed" in output
     assert "Build succeeded: False" in output
     assert "process terminated" in output
+
+
+@pytest.mark.parametrize("script_name", [
+    "build_windows_folder.ps1",
+    "build_windows_folder_lite.ps1",
+    "build_windows_folder_lite_modular.ps1",
+])
+def test_all_windows_profiles_validate_and_bundle_colormap_directory(script_name):
+    text = (ROOT / "tools" / script_name).read_text(encoding="utf-8")
+    assert 'Join-Path $RepoRoot "mf4_analyzer\\colormaps\\resources"' in text
+    assert '$AddDataColormaps = "$ColormapResourceDir;mf4_analyzer\\colormaps\\resources"' in text
+    assert text.count('"--add-data", $AddDataColormaps') == 1
+    assert '"validate_heatmap_colormaps.py"' in text
+    if script_name == "build_windows_folder.ps1":
+        call = '& $VenvPython $ColormapValidator'
+        assert 'throw "Heatmap colormap resource validation failed."' in text
+    else:
+        call = 'Invoke-LoggedNative -Executable $VenvPython -Arguments @($ColormapValidator)'
+    assert text.index(call) < text.index('"--add-data", $AddDataColormaps')

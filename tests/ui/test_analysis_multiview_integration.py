@@ -3440,8 +3440,9 @@ def test_fft_cache_redraw_keeps_pane_chart_appearance(two_file_win):
     assert canvas._amp_curves[0].opts["pen"].color().name().lower() == "#ff0000"
 
 
+@pytest.mark.parametrize("cmap", ["plasma", "gnuplot2", "tracelab.head-style.v1", "third-party.palette.v9"])
 def test_heatmap_cmap_stays_on_its_view_and_survives_project_reopen(
-    two_file_win, tmp_path, qtbot,
+    two_file_win, tmp_path, qtbot, cmap,
 ):
     win = two_file_win
     win.toolbar._set_mode("fft_time")
@@ -3452,25 +3453,25 @@ def test_heatmap_cmap_stays_on_its_view_and_survives_project_reopen(
     state.panes[0].xlim = (0.1, 0.4)
     state.panes[0].viewport_origin["x"] = "user"
     state.panes[0].chart_appearances = {
-        "heatmap": {"title": "Only title", "cmap": "plasma"},
+        "heatmap": {"title": "Only title", "cmap": cmap},
     }
     win._render_analysis_view_from_cache("fft_time", state)
     canvas = win._analysis_page("fft_time").pane_canvas(0)
-    assert canvas._cmap_name == "plasma"
+    assert canvas._cmap_name == cmap
     assert state.params.get("z_auto") is True
     assert state.panes[0].xlim == (0.1, 0.4)
 
     mgr = win.analysis_managers["fft_time"]
     mgr.new_view()
-    assert canvas._cmap_name != "plasma"
+    assert canvas._cmap_name == "tracelab.head-style.v1"
     fresh = mgr.get(mgr.active)
     assert fresh.panes[0].chart_appearances == {}
 
     mgr.set_active(0)
     win._render_analysis_view_from_cache("fft_time", mgr.get(0))
-    assert canvas._cmap_name == "plasma"
+    assert canvas._cmap_name == cmap
     copied = mgr.duplicate(0)
-    assert mgr.get(copied).panes[0].chart_appearances["heatmap"]["cmap"] == "plasma"
+    assert mgr.get(copied).panes[0].chart_appearances["heatmap"]["cmap"] == cmap
 
     proj = tmp_path / "appearance.tlproj"
     win.save_project(proj)
@@ -3482,16 +3483,16 @@ def test_heatmap_cmap_stays_on_its_view_and_survives_project_reopen(
         for view in win2.analysis_managers["fft_time"].views
         for pane in view.panes
     ]
-    assert "plasma" in cmaps
+    assert cmap in cmaps
     reopened = next(
         view for view in win2.analysis_managers["fft_time"].views
         if any(
-            (pane.chart_appearances.get("heatmap") or {}).get("cmap") == "plasma"
+            (pane.chart_appearances.get("heatmap") or {}).get("cmap") == cmap
             for pane in view.panes
         )
     )
     assert reopened.panes[0].chart_appearances["heatmap"]["title"] == "Only title"
-    assert reopened.params.get("cmap") != "plasma"
+    assert "cmap" not in reopened.params or reopened.params["cmap"] == "tracelab.head-style.v1"
 
 
 def test_color_policy_commit_keeps_auto_distinct_from_colorbar_drag(two_file_win):
@@ -3549,3 +3550,66 @@ def test_cross_view_comparison_stays_distinct_from_in_view_split(two_file_win):
     assert len(host.panes) == 2
     assert len(peer.panes) == 1
     assert page.pane_count() == 2
+
+
+@pytest.mark.parametrize("section", ["fft_time", "order"])
+def test_current_batch_cmap_follows_split_and_comparison_pane(two_file_win, section, monkeypatch):
+    win = two_file_win
+    win.toolbar._set_mode(section)
+    _seed_active_analysis_attachments(win)
+    fid = next(iter(win.files))
+    ctx = win._analysis_ctx(section)
+    monkeypatch.setattr(ctx, "current_signal", lambda: (fid, "speed"))
+    mgr = win.analysis_managers[section]
+    host = mgr.get(mgr.active)
+    host.panes[0].chart_appearances = {"heatmap": {"cmap": "gnuplot2"}}
+    win._on_analysis_split(section, True)
+    host.panes[1].chart_appearances = {"heatmap": {"cmap": "tracelab.head-style.v1"}}
+    page = win._analysis_page(section)
+    page.set_focused_index(1)
+    assert win._build_current_batch_preset().params["cmap"] == "tracelab.head-style.v1"
+    page.set_focused_index(0)
+    assert win._build_current_batch_preset().params["cmap"] == "gnuplot2"
+    mgr.new_view(activate=False)
+    peer = mgr.get(1)
+    peer.panes[0].chart_appearances = {"heatmap": {"cmap": "third-party.palette.v9"}}
+    assert win.open_comparison(section, host.view_id, peer.view_id)
+    assert win.focus_comparison(section, peer.view_id, 0)
+    assert win._build_current_batch_preset().params["cmap"] == "third-party.palette.v9"
+
+
+@pytest.mark.parametrize("section,method", [("fft_time", "fft_time"), ("order", "order_time")])
+def test_batch_completion_requires_focused_target_canvas(two_file_win, section, method, monkeypatch):
+    win = two_file_win
+    win.toolbar._set_mode(section)
+    _seed_active_analysis_attachments(win)
+    fid = next(iter(win.files))
+    signal = (fid, "speed")
+    ctx = win._analysis_ctx(section)
+    monkeypatch.setattr(ctx, "current_signal", lambda: signal)
+    win._on_analysis_split(section, True)
+    state = win._analysis_state_for_dispatch(section)
+    state.panes[0].chart_appearances = {"heatmap": {"cmap": "gnuplot2"}}
+    state.panes[1].chart_appearances = {"heatmap": {"cmap": "tracelab.head-style.v1"}}
+    page = win._analysis_page(section)
+    page.set_focused_index(1)
+    win._remember_batch_preset("focused", method, signal, {}, target_canvas=page.pane_canvas(1))
+    preset = win._last_batch_preset
+    assert preset.params["cmap"] == "tracelab.head-style.v1"
+    win._remember_batch_preset("background", method, signal, {}, target_canvas=page.pane_canvas(0))
+    assert win._last_batch_preset is preset
+    win._remember_batch_preset("unbound", method, signal, {})
+    assert win._last_batch_preset is preset
+
+
+@pytest.mark.parametrize("cmap", ["gnuplot2", "tracelab.head-style.v1", "third-party.palette.v9"])
+def test_capture_heatmap_title_retains_requested_cmap(two_file_win, cmap):
+    win = two_file_win
+    win.toolbar._set_mode("fft_time")
+    state = win._analysis_state_for_dispatch("fft_time")
+    state.panes[0].chart_appearances = {"heatmap": {"cmap": cmap}}
+    canvas = win._analysis_page("fft_time").pane_canvas(0)
+    win._project_heatmap_pane_appearance("fft_time", canvas)
+    canvas._set_title_override("Only title changed")
+    win._capture_heatmap_chart_options("fft_time", 0, canvas)
+    assert state.panes[0].chart_appearances["heatmap"]["cmap"] == cmap

@@ -34,6 +34,7 @@ from mf4_analyzer.frozen_evidence_paths import (  # noqa: E402
     canonical_path,
     reject_aliased_evidence,
 )
+from mf4_analyzer.colormaps import list_colormap_specs, load_rgb_lut  # noqa: E402
 from mf4_analyzer.qt_analysis_shared import (  # noqa: E402
     DEFAULT_HEATMAP_CMAP,
     _resolve_colormap,
@@ -43,12 +44,13 @@ from mf4_analyzer.qt_analysis_shared import (  # noqa: E402
 TITLE = "单帧振动加速度"
 KINDS = ("time", "fft", "fft_time", "order_time")
 FORMATS = ("png",)
-# Heatmaps that exercise the shipping-default local LUT (gnuplot2), not turbo.
+# Heatmaps exercise the shipping default and explicit legacy LUT independently.
 DEFAULT_CMAP_HEATMAP_KINDS = ("fft_time", "order_time")
 EXPECTED_NAMES = {
     f"{kind}.{image_format}" for kind in KINDS for image_format in FORMATS
 } | {
-    f"{kind}_default_cmap.{image_format}"
+    f"{kind}_{suffix}.{image_format}"
+    for suffix in ("default_cmap", "gnuplot2")
     for kind in DEFAULT_CMAP_HEATMAP_KINDS
     for image_format in FORMATS
 }
@@ -409,18 +411,31 @@ def verify_artifacts(
         if _contains_rgb(image, turbo_high_rgb) < 1_000:
             raise RuntimeError(f"Turbo high sample missing from {kind}.png")
 
+    colormap_resources = []
+    for spec in list_colormap_specs():
+        if spec.provider != "rgb_lut":
+            continue
+        rgb = load_rgb_lut(spec.id)
+        digest = hashlib.sha256(bytes(channel for row in rgb for channel in row)).hexdigest()
+        colormap_resources.append({
+            "id": spec.id, "rgb_sha256": digest, "sample_count": len(rgb),
+        })
+    if child.get("colormap_resources") != colormap_resources:
+        raise RuntimeError("render child custom colormap resource hashes do not match delivery catalog")
+
     default_low_rgb, default_high_rgb = _default_cmap_endpoint_rgb()
-    for kind in DEFAULT_CMAP_HEATMAP_KINDS:
-        name = f"{kind}_default_cmap.png"
-        image = QImage(str(artifacts / name))
-        if _contains_rgb_in_interior(image, default_low_rgb) < 1_000:
-            raise RuntimeError(
-                f"{DEFAULT_HEATMAP_CMAP} low sample missing from {name}"
-            )
-        if _contains_rgb_in_interior(image, default_high_rgb) < 1_000:
-            raise RuntimeError(
-                f"{DEFAULT_HEATMAP_CMAP} high sample missing from {name}"
-            )
+    legacy_low_rgb, legacy_high_rgb = _endpoint_rgb(_resolve_colormap("gnuplot2"))
+    for suffix, cmap_id, low_rgb, high_rgb in (
+        ("default_cmap", DEFAULT_HEATMAP_CMAP, default_low_rgb, default_high_rgb),
+        ("gnuplot2", "gnuplot2", legacy_low_rgb, legacy_high_rgb),
+    ):
+        for kind in DEFAULT_CMAP_HEATMAP_KINDS:
+            name = f"{kind}_{suffix}.png"
+            image = QImage(str(artifacts / name))
+            if _contains_rgb_in_interior(image, low_rgb) < 1_000:
+                raise RuntimeError(f"{cmap_id} low sample missing from {name}")
+            if _contains_rgb_in_interior(image, high_rgb) < 1_000:
+                raise RuntimeError(f"{cmap_id} high sample missing from {name}")
 
     return {
         "ok": True,
@@ -434,6 +449,11 @@ def verify_artifacts(
         "cjk_font_families": child.get("cjk_font_families", []),
         "layout_diagnostics": layout,
         "page_layout_proof": page_proof,
+        "colormap_resources": colormap_resources,
+        "gnuplot2_samples": {
+            "low_rgb": list(legacy_low_rgb),
+            "high_rgb": list(legacy_high_rgb),
+        },
         "turbo_samples": {
             "low_rgb": list(turbo_low_rgb),
             "high_rgb": list(turbo_high_rgb),

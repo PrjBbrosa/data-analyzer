@@ -322,6 +322,11 @@ $AddDataWwt = "$WwtTemplateDir;assets\wwt"
 # resolves to _MEIPASS\mf4_analyzer\help under the frozen build.
 $HelpDir = Join-Path $RepoRoot "mf4_analyzer\help"
 $AddDataHelp = "$HelpDir;mf4_analyzer\help"
+$ColormapResourceDir = Join-Path $RepoRoot "mf4_analyzer\colormaps\resources"
+$AddDataColormaps = "$ColormapResourceDir;mf4_analyzer\colormaps\resources"
+$ColormapValidator = Join-Path $PSScriptRoot "validate_heatmap_colormaps.py"
+Invoke-LoggedNative -Executable $VenvPython -Arguments @($ColormapValidator)
+
 $HiddenImports = @(
     "mf4_analyzer.ui_kit",
     "mf4_analyzer.ui_kit.fonts",
@@ -412,6 +417,7 @@ $PyInstallerArgs += @(
     "--add-data", $AddDataBranding,
     "--add-data", $AddDataWwt,
     "--add-data", $AddDataHelp,
+    "--add-data", $AddDataColormaps,
     # Belt-and-suspenders: keep the acquisition packages and their native-only
     # deps out even if some indirect reference appears. The Analyzer never needs
     # them at runtime (cockpit is lazy-imported and guarded).

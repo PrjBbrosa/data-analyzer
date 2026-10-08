@@ -915,6 +915,7 @@ class OrderMixin:
             self.inspector.order_ctx.current_signal(),
             batch_params,
             rpm_signal=self.inspector.order_ctx.current_rpm(),
+            target_canvas=self.canvas_order,
         )
         if emit_feedback:
             self.statusBar.showMessage(

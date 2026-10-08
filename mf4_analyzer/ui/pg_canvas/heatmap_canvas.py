@@ -157,7 +157,9 @@ class _NamedColorMap:
     __slots__ = ("name",)
 
     def __init__(self, name: str):
-        self.name = _normalise_colormap_name(name)
+        # This facade reports user intent, including unavailable catalog IDs.
+        # The resolver alone chooses a temporary rendering fallback.
+        self.name = str(name or DEFAULT_HEATMAP_CMAP).strip() or DEFAULT_HEATMAP_CMAP
 
 
 class _HeatmapMappable:
@@ -174,7 +176,7 @@ class _HeatmapMappable:
         canvas = self._canvas
         canvas._note_presentation_content_invalidated()
         canvas._cancel_presentation_paint_ack()
-        name = _normalise_colormap_name(name)
+        name = _NamedColorMap(name).name
         cm = _resolve_colormap(name)
         canvas._cmap_name = name
         canvas._img.setColorMap(cm)
@@ -1310,7 +1312,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         x0, x1 = float(x_extent[0]), float(x_extent[1])
         y0, y1 = float(y_extent[0]), float(y_extent[1])
 
-        self._cmap_name = _normalise_colormap_name(cmap)
+        self._cmap_name = _NamedColorMap(cmap).name
         cm = _resolve_colormap(self._cmap_name)
         self._img.setImage(m, autoLevels=False)
         self._img.setRect(QRectF(x0, y0, x1 - x0, y1 - y0))
@@ -2431,7 +2433,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
 
     def _apply_live_colormap(self, name) -> None:
         """Retint the current image and colorbar. Do not write preset params."""
-        normalized = _normalise_colormap_name(name)
+        normalized = _NamedColorMap(name).name
         cmap = _resolve_colormap(normalized)
         self._note_presentation_content_invalidated()
         self._cancel_presentation_paint_ack()

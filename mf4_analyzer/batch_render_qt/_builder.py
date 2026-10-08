@@ -35,6 +35,7 @@ from mf4_analyzer.signal.frf import (
 # the diff audit that cleared the switch.
 from mf4_analyzer.qt_analysis_shared import (
     DEFAULT_HEATMAP_CMAP,
+    FALLBACK_HEATMAP_CMAP,
     DEFAULT_HEATMAP_INTERP,
     HEATMAP_SMOOTH_INTERP_MODES,
     SUPPORTED_HEATMAP_COLORMAPS,
@@ -723,19 +724,17 @@ def _slice_alignment_callback(layout, main_plot, slice_plot, *, right_reserve=0.
 def _resolve_heatmap_colormap(
     params: Mapping[str, Any], warnings_out: list[str] | None
 ) -> tuple[pg.ColorMap, np.ndarray]:
-    # 默认值和解析器都与交互画布共用（``_resolve_colormap``）。批处理面板没有
-    # 色图控件，以前这里硬编码 "turbo"，而画布默认 gnuplot2 —— 同一份数据在
-    # 单文件里和导出的 PNG 里是两种配色，就是用户看到的「色阶不一致」。
-    # 注意 gnuplot2 不是 pyqtgraph 内置项（本地构造），所以不能用
-    # ``pg.colormap.get`` 直接取。
+    # The shipping default and renderer come from the same neutral catalog as
+    # GUI. Unknown persisted IDs retain the legacy fallback, independent of the
+    # default for newly created heatmaps; registered resource failures propagate.
     requested = params.get("cmap", DEFAULT_HEATMAP_CMAP)
     if str(requested) not in SUPPORTED_HEATMAP_COLORMAPS:
         # 保留既有语义：名字不认识要出警告，不静默改配色。
         if warnings_out is not None:
             warnings_out.append(
-                f"Invalid colormap {requested!r}; using {DEFAULT_HEATMAP_CMAP!r}."
+                f"Invalid colormap {requested!r}; using {FALLBACK_HEATMAP_CMAP!r}."
             )
-        requested = DEFAULT_HEATMAP_CMAP
+        requested = FALLBACK_HEATMAP_CMAP
     color_map = _resolve_colormap(str(requested))
     lut = color_map.getLookupTable(0.0, 1.0, 256, alpha=True)
     return color_map, np.asarray(lut, dtype=np.ubyte)

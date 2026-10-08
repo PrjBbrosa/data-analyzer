@@ -3668,6 +3668,7 @@ def test_builtin_preset_bar_custom_slot_saves_and_loads_without_builtin_toggle(q
 # ---- Requested first-open defaults for FFT-vs-Time spectrogram ----
 
 def test_fft_time_defaults_match_requested_screenshot(qtbot):
+    from mf4_analyzer.colormaps import DEFAULT_HEATMAP_CMAP
     from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
     ctx = FFTTimeContextual()
     qtbot.addWidget(ctx)
@@ -3686,7 +3687,7 @@ def test_fft_time_defaults_match_requested_screenshot(qtbot):
     assert params['z_auto'] is False
     assert params['z_floor'] == -70.0
     assert params['z_ceiling'] == -20.0
-    assert params['cmap'] == 'gnuplot2'
+    assert params['cmap'] == DEFAULT_HEATMAP_CMAP
     assert ctx.spin_overlap.value() == 80, (
         f"FFTTimeContextual.spin_overlap default = "
         f"{ctx.spin_overlap.value()}; expected 80."

@@ -202,13 +202,15 @@ def test_linear_mode_levels_auto(canvas):
     assert lo == pytest.approx(1.0) and hi == pytest.approx(100.0)
 
 
-def test_fresh_heatmap_canvas_defaults_to_gnuplot2(canvas):
-    assert canvas._cmap_name == "gnuplot2"
+def test_fresh_heatmap_canvas_uses_shared_default(canvas):
+    from mf4_analyzer.colormaps import DEFAULT_HEATMAP_CMAP
+
+    assert canvas._cmap_name == DEFAULT_HEATMAP_CMAP
     canvas.plot_or_update_heatmap(
         matrix=_mat(), x_extent=(0.0, 10.0), y_extent=(0.0, 8.0),
         amplitude_mode='amplitude', z_auto=True,
     )
-    assert canvas._cmap_name == "gnuplot2"
+    assert canvas._cmap_name == DEFAULT_HEATMAP_CMAP
 
 
 def test_linear_mode_manual_levels_drive_image_and_colorbar(canvas):

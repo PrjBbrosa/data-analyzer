@@ -9,6 +9,7 @@ import pytest
 from PyQt5.QtCore import QRectF, Qt
 from PyQt5.QtGui import QFontMetricsF
 
+from mf4_analyzer.colormaps import list_colormap_specs, load_rgb_lut
 from mf4_analyzer.batch_image_options import BatchRenderOptions
 from mf4_analyzer.batch_render_qt import BatchRenderContext
 from mf4_analyzer.batch_render_qt import _builder as batch_render_builder
@@ -273,7 +274,7 @@ def test_valid_non_turbo_heatmap_colormap_remains_available(qapp):
         scene.close()
 
 
-def test_invalid_heatmap_colormap_falls_back_to_default_and_warns(qapp):
+def test_invalid_heatmap_colormap_falls_back_to_legacy_and_warns(qapp):
     warnings_out = []
     scene = _open_scene(
         qapp,
@@ -294,20 +295,17 @@ def test_invalid_heatmap_colormap_falls_back_to_default_and_warns(qapp):
 
 @pytest.mark.parametrize("kind", ["fft_time", "order_time"])
 def test_heatmap_without_cmap_uses_the_interactive_canvas_default(qapp, kind):
-    """无 ``cmap`` 键时批处理必须落在画布的默认色图上。
-
-    批处理面板不提供色图控件，所以导出走的就是这条缺省路径。它以前硬编码
-    "turbo"，而画布默认 gnuplot2 —— 同一份数据两种配色。字节级比对 golden，
-    并直接对照 ``qt_analysis_shared`` 的解析结果，任何一侧再漂移都会红。
-    """
+    """Missing cmap uses the same new default as an interactive canvas."""
     from mf4_analyzer.qt_analysis_shared import (
         DEFAULT_HEATMAP_CMAP, _resolve_colormap,
     )
 
+    from mf4_analyzer.colormaps import load_rgb_lut
+
     scene = _open_scene(qapp, kind, params={"amplitude_mode": "amplitude"})
     try:
         np.testing.assert_array_equal(
-            scene.heatmap_lut, np.load(GOLDEN)["gnuplot2"]
+            scene.heatmap_lut[:, :3], np.asarray(load_rgb_lut(DEFAULT_HEATMAP_CMAP))
         )
         np.testing.assert_array_equal(
             scene.heatmap_lut,
@@ -1459,3 +1457,46 @@ def test_horizontal_tick_rects_fit_rejects_a_near_edge_interior_label():
         100.0,
         480000.0,
     )
+
+
+def test_explicit_legacy_colormap_keeps_golden_lut(qapp):
+    scene = _open_scene(qapp, "fft_time", params={"cmap": "gnuplot2"})
+    try:
+        np.testing.assert_array_equal(scene.heatmap_lut, np.load(GOLDEN)["gnuplot2"])
+    finally:
+        scene.close()
+
+
+def test_registered_colormap_resource_error_is_not_fallback(monkeypatch):
+    from mf4_analyzer.batch_render_qt import _builder
+    from mf4_analyzer.colormaps import ColormapResourceError, DEFAULT_HEATMAP_CMAP
+
+    def broken_resource(name):
+        raise ColormapResourceError("test LUT hash mismatch")
+
+    monkeypatch.setattr(_builder, "_resolve_colormap", broken_resource)
+    warnings = []
+    with pytest.raises(ColormapResourceError, match="hash mismatch"):
+        _builder._resolve_heatmap_colormap({"cmap": DEFAULT_HEATMAP_CMAP}, warnings)
+    assert warnings == []
+
+
+@pytest.mark.parametrize("cmap_id", [
+    spec.id for spec in list_colormap_specs() if spec.provider == "rgb_lut"
+])
+@pytest.mark.parametrize("kind", ["fft_time", "order_time"])
+@pytest.mark.parametrize("levels", [(10.0, 40.0), (20.0, 50.0), (0.0, 50.0)])
+def test_every_custom_batch_colormap_preserves_lut_across_ranges(qapp, cmap_id, kind, levels):
+    payload = _spectro()
+    original = payload.matrix.copy()
+    scene = _open_scene(qapp, kind, payload=payload, params={
+        "cmap": cmap_id, "amplitude_mode": "amplitude", "z_auto": False,
+        "z_floor": levels[0], "z_ceiling": levels[1],
+    })
+    try:
+        np.testing.assert_array_equal(scene.heatmap_lut[:, :3], load_rgb_lut(cmap_id))
+        np.testing.assert_array_equal(scene.heatmap_lut[:, 3], np.full(256, 255))
+        assert scene.heatmap_levels == levels
+        np.testing.assert_array_equal(payload.matrix, original)
+    finally:
+        scene.close()

@@ -1,6 +1,8 @@
 """FFTTimeContextual widget."""
 import math
 
+from ...colormaps import DEFAULT_HEATMAP_CMAP
+
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QCheckBox,
@@ -108,7 +110,7 @@ class FFTTimeContextual(QWidget):
     preset_committed = pyqtSignal(object)
     _AUTO_NFFT_LABEL = "自动"
     # 色图由图表选项管理；此值只为新建画布和旧参数消费者保留默认契约。
-    _FIXED_CMAP = "gnuplot2"
+    _FIXED_CMAP = DEFAULT_HEATMAP_CMAP
 
     def __init__(self, parent=None):
         super().__init__(parent)

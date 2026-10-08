@@ -483,7 +483,7 @@ QUICKREF: Tuple[QuickGroup, ...] = (
                 gesture="缩放 / 平移 / Home",
             ),
             QuickRow("自动范围", sub="频率覆盖完整结果 bins；FFT 与切片幅值适配当前可见窗口，包含真实深谷。"),
-            QuickRow("调色阶", sub="自动色阶用于对比度，不裁断原始矩阵；双击重置", gesture="拖 colorbar"),
+            QuickRow("调色阶", sub="自动色阶用于对比度，不裁断原始矩阵；双击重置。图表选项可换色图，默认 HEAD 风格；换色图保留范围。", gesture="拖 colorbar"),
             QuickRow("幅值与计权", sub="None 表示不计权；Linear 显示线性幅值，dB 按当前参考换算。"),
             QuickRow("调谱图/切片高度", sub="双击重置", gesture="拖分隔条"),
         ),

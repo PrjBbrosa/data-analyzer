@@ -2383,7 +2383,6 @@ class AnalysisMixin:
         Render/restore does not read ``canvas._cmap_name``. This read happens
         only at the commit, after chart options wrote the current view.
         """
-        from ...qt_analysis_shared import DEFAULT_HEATMAP_CMAP
         from .._axis_handle import PgAxisHandle, _plain_axis_text
         from ..analysis_view_state import normalize_pane_chart_appearances
 
@@ -2418,7 +2417,7 @@ class AnalysisMixin:
             if grid is not True:
                 spec["grid"] = grid
         cmap = getattr(canvas, "_cmap_name", None)
-        if isinstance(cmap, str) and cmap.strip() and cmap.strip() != DEFAULT_HEATMAP_CMAP:
+        if isinstance(cmap, str) and cmap.strip():
             spec["cmap"] = cmap.strip()
         mgr = self.analysis_managers.get(section)
         if mgr is None or not mgr.views or pane_idx >= len(mgr.get(mgr.active).panes):

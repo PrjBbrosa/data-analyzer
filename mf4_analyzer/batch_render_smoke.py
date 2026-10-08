@@ -5,11 +5,13 @@ endpoint hunting stays unambiguous; RGB expectations live in the verifier and
 must be read back from the product runtime — see
 ``docs/analyzer/specs/2026-08-12-guideline-hardening-spec.md`` §3.3.
 A second heatmap pass omits ``cmap`` so the shipping-default local LUT
-(``DEFAULT_HEATMAP_CMAP`` / gnuplot2) is exercised in the frozen package.
+(``DEFAULT_HEATMAP_CMAP``) is exercised in the frozen package. An explicit
+gnuplot2 pass retains legacy coverage; all custom resource hashes are validated.
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -40,6 +42,7 @@ from .batch_render_qt._theme import (
     logical_export_dpi,
 )
 from .qt_chart_fonts import ASCII_CONTRACT_TEXT
+from .colormaps import list_colormap_specs, load_rgb_lut, validate_colormap_resources
 
 
 SMOKE_TITLE = "单帧振动加速度"
@@ -48,10 +51,23 @@ SMOKE_DEFAULT_CMAP_KINDS = ("fft_time", "order_time")
 SMOKE_FORMATS = ("png",)
 SMOKE_ARTIFACT_COUNT = (
     len(SMOKE_KINDS) * len(SMOKE_FORMATS)
-    + len(SMOKE_DEFAULT_CMAP_KINDS) * len(SMOKE_FORMATS)
+    + 2 * len(SMOKE_DEFAULT_CMAP_KINDS) * len(SMOKE_FORMATS)
 )
 SMOKE_LAYOUT_KIND = "time"
 SMOKE_LAYOUT_ARTIFACT = "time.png"
+
+
+def colormap_resource_proof() -> list[dict[str, object]]:
+    """Read and hash every shipped custom LUT inside the running package."""
+    validate_colormap_resources()
+    records = []
+    for spec in list_colormap_specs():
+        if spec.provider != "rgb_lut":
+            continue
+        rgb = load_rgb_lut(spec.id)
+        digest = hashlib.sha256(bytes(channel for row in rgb for channel in row)).hexdigest()
+        records.append({"id": spec.id, "rgb_sha256": digest, "sample_count": len(rgb)})
+    return records
 
 
 def _payloads() -> dict[str, object]:
@@ -262,6 +278,7 @@ def run(output_directory: Path, result_json: Path) -> int:
     qt_qpa_platform = str(os.environ.get("QT_QPA_PLATFORM") or "")
     qt_platform_name = ""
     layout_diagnostics: dict[str, object] = {}
+    colormap_resources: list[dict[str, object]] = []
     cjk_proof: dict[str, object] = {
         "font": "",
         "supports": False,
@@ -270,6 +287,7 @@ def run(output_directory: Path, result_json: Path) -> int:
         "pass": False,
     }
     try:
+        colormap_resources = colormap_resource_proof()
         app = ensure_app()
         qt_qpa_platform = str(os.environ.get("QT_QPA_PLATFORM") or "")
         qt_platform_name = str(app.platformName() or "")
@@ -317,21 +335,25 @@ def run(output_directory: Path, result_json: Path) -> int:
                         context=context,
                     )
                     outputs.append({"path": str(target), "bytes": target.stat().st_size})
-            # Shipping-default local LUT path (gnuplot2). Omit cmap so the frozen
-            # package actually resolves DEFAULT_HEATMAP_CMAP rather than a prop pin.
-            for kind in SMOKE_DEFAULT_CMAP_KINDS:
-                for image_format in SMOKE_FORMATS:
-                    target = output_directory / f"{kind}_default_cmap.{image_format}"
-                    if target.exists():
-                        target.unlink()
-                    render_batch_image(
-                        (kind, payloads[kind]),
-                        target,
-                        params=dict(base_params),
-                        options=options,
-                        context=context,
-                    )
-                    outputs.append({"path": str(target), "bytes": target.stat().st_size})
+            # Omit cmap to exercise the shipping default, and pin the legacy
+            # map separately so changing the default never removes its coverage.
+            for suffix, extra_params in (
+                ("default_cmap", {}),
+                ("gnuplot2", {"cmap": "gnuplot2"}),
+            ):
+                for kind in SMOKE_DEFAULT_CMAP_KINDS:
+                    for image_format in SMOKE_FORMATS:
+                        target = output_directory / f"{kind}_{suffix}.{image_format}"
+                        if target.exists():
+                            target.unlink()
+                        render_batch_image(
+                            (kind, payloads[kind]),
+                            target,
+                            params={**base_params, **extra_params},
+                            options=options,
+                            context=context,
+                        )
+                        outputs.append({"path": str(target), "bytes": target.stat().st_size})
             axis_font = export_chart_font(12.0)
             screen = app.primaryScreen()
             dpr = float(screen.devicePixelRatio()) if screen is not None else 1.0
@@ -379,6 +401,7 @@ def run(output_directory: Path, result_json: Path) -> int:
             [str(cjk_proof.get("font"))] if cjk_proof.get("font") else []
         ),
         "layout_diagnostics": layout_diagnostics,
+        "colormap_resources": colormap_resources,
     }
     if environment_gate:
         result["environment_gate"] = environment_gate

@@ -32,6 +32,10 @@ branch (B5). The span, percentile and ceiling-headroom constants
 """
 from __future__ import annotations
 
+from copy import deepcopy
+from functools import lru_cache
+import logging
+
 import numpy as np
 import pyqtgraph as pg
 from PyQt5.QtGui import QPainter
@@ -39,21 +43,17 @@ from PyQt5.QtGui import QPainter
 from mf4_analyzer.ui_kit.ticks_math import _DEGENERATE_SPAN_RATIO
 
 
-# 热力图默认色图。交互画布和批处理渲染器必须用同一个值，否则同一份数据在
-# 单文件里是一种配色、导出的 PNG 里是另一种——用户看到的是「色阶不一致」。
-# 批处理侧以前硬编码 "turbo"，而画布侧是 "gnuplot2"；常量放在这个中立模块里，
-# 两边各自 import，谁也不能再单方面漂移（``batch_render_qt`` 不允许 import
-# ``mf4_analyzer.ui``，所以不能直接引画布里的常量）。
-DEFAULT_HEATMAP_CMAP = "gnuplot2"
-SUPPORTED_HEATMAP_COLORMAPS = (
+from mf4_analyzer.colormaps import (
+    ColormapResourceError,
     DEFAULT_HEATMAP_CMAP,
-    "turbo",
-    "viridis",
-    "plasma",
-    "inferno",
-    "magma",
-    "cividis",
+    FALLBACK_HEATMAP_CMAP,
+    SUPPORTED_HEATMAP_COLORMAPS,
+    get_colormap_spec,
+    load_rgb_lut,
 )
+from mf4_analyzer.diagnostics import throttled
+
+_LOGGER = logging.getLogger(__name__)
 
 # Heatmap interpolation default + the set that enables SmoothPixmapTransform.
 # Interactive canvas (``heatmap_canvas``) and the batch Qt renderer must share
@@ -116,27 +116,44 @@ def _gnuplot2_lut() -> np.ndarray:
 
 
 _GNUPLOT2_COLORMAP = pg.ColorMap(
-    np.linspace(0.0, 1.0, 256), _gnuplot2_lut(), name=DEFAULT_HEATMAP_CMAP,
+    np.linspace(0.0, 1.0, 256), _gnuplot2_lut(), name=FALLBACK_HEATMAP_CMAP,
 )
 
 
 def _normalise_colormap_name(name: str | None) -> str:
     requested = str(name or DEFAULT_HEATMAP_CMAP)
-    return requested if requested in SUPPORTED_HEATMAP_COLORMAPS else DEFAULT_HEATMAP_CMAP
+    if requested in SUPPORTED_HEATMAP_COLORMAPS:
+        return requested
+    _warn_unknown_colormap(requested)
+    return FALLBACK_HEATMAP_CMAP
 
 
-def _resolve_colormap(name: str) -> pg.ColorMap:
-    """Resolve a supported heatmap map without a Matplotlib dependency."""
+@lru_cache(maxsize=128)
+def _warn_unknown_colormap(requested: str) -> None:
+    throttled(
+        _LOGGER, "unknown-heatmap-colormap", logging.WARNING,
+        "Unknown heatmap colormap %r; displaying %s temporarily",
+        requested, FALLBACK_HEATMAP_CMAP,
+    )
+
+
+def _resolve_colormap(name: str | None) -> pg.ColorMap:
+    """Return an independent map; registered resource errors must propagate."""
     requested = _normalise_colormap_name(name)
-    if requested == DEFAULT_HEATMAP_CMAP:
-        return _GNUPLOT2_COLORMAP
-    try:
-        cm = pg.colormap.get(requested)
-        if cm is not None:
-            return cm
-    except Exception:
-        pass
-    return _GNUPLOT2_COLORMAP
+    spec = get_colormap_spec(requested)
+    if spec.provider == "legacy_gnuplot2":
+        return pg.ColorMap(np.linspace(0.0, 1.0, 256), _gnuplot2_lut(), name=spec.id)
+    if spec.provider == "rgb_lut":
+        rgb = np.asarray(load_rgb_lut(spec.id), dtype=np.ubyte)
+        return pg.ColorMap(np.linspace(0.0, 1.0, len(rgb)), rgb, name=spec.id)
+    native = pg.colormap.get(spec.name)
+    if native is None:
+        raise ColormapResourceError(f"{spec.id}: pyqtgraph provider returned no colormap")
+    # pyqtgraph caches its native maps, including writable position/color arrays.
+    # Never hand that shared object to consumers that may reverse or edit it.
+    result = deepcopy(native)
+    result.name = spec.id
+    return result
 
 
 def _finite_data_bounds(matrix):

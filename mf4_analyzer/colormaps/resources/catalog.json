@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "entries": [
+    {
+      "id": "gnuplot2",
+      "label": "gnuplot2",
+      "provider": "legacy_gnuplot2"
+    },
+    {
+      "id": "turbo",
+      "label": "turbo",
+      "provider": "pyqtgraph",
+      "name": "turbo"
+    },
+    {
+      "id": "viridis",
+      "label": "viridis",
+      "provider": "pyqtgraph",
+      "name": "viridis"
+    },
+    {
+      "id": "plasma",
+      "label": "plasma",
+      "provider": "pyqtgraph",
+      "name": "plasma"
+    },
+    {
+      "id": "inferno",
+      "label": "inferno",
+      "provider": "pyqtgraph",
+      "name": "inferno"
+    },
+    {
+      "id": "magma",
+      "label": "magma",
+      "provider": "pyqtgraph",
+      "name": "magma"
+    },
+    {
+      "id": "cividis",
+      "label": "cividis",
+      "provider": "pyqtgraph",
+      "name": "cividis"
+    },
+    {
+      "id": "tracelab.head-style.v1",
+      "label": "HEAD 风格",
+      "provider": "rgb_lut",
+      "file": "luts/head-style-v1.json",
+      "rgb_sha256": "76035b39ed2f1223139896d983808146d89f21295f0db78a5c20e1057048d79d"
+    }
+  ]
+}

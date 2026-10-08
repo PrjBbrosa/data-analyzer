@@ -183,6 +183,14 @@ $AddDataVendorPya2l = "$VendorPya2lDir;_vendor_pya2l"
 # _MEIPASS\mf4_analyzer\help under the frozen build.
 $HelpDir = Join-Path $RepoRoot "mf4_analyzer\help"
 $AddDataHelp = "$HelpDir;mf4_analyzer\help"
+$ColormapResourceDir = Join-Path $RepoRoot "mf4_analyzer\colormaps\resources"
+$AddDataColormaps = "$ColormapResourceDir;mf4_analyzer\colormaps\resources"
+$ColormapValidator = Join-Path $PSScriptRoot "validate_heatmap_colormaps.py"
+& $VenvPython $ColormapValidator
+if ($LASTEXITCODE -ne 0) {
+    throw "Heatmap colormap resource validation failed."
+}
+
 $HiddenImports = @(
     # pyxcp/pya2l are --exclude-module (vendored), so PyInstaller cannot see
     # their import closure and does not auto-collect stdlib modules that ONLY
@@ -304,6 +312,7 @@ $PyInstallerArgs += @(
     "--add-data", $AddDataVendorPyxcp,
     "--add-data", $AddDataVendorPya2l,
     "--add-data", $AddDataHelp,
+    "--add-data", $AddDataColormaps,
     "--runtime-hook", $RuntimeHookPyxcp,
     "--exclude-module", "pyxcp",
     "--exclude-module", "pya2l",

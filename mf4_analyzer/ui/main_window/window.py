@@ -5566,6 +5566,11 @@ class MainWindow(
             params['fs'] = self.inspector.fft_time_ctx.fs()
             if self.inspector.top.range_enabled():
                 params['time_range'] = self.inspector.top.range_values()
+            state = self._analysis_state_for_dispatch('fft_time')
+            canvas = self._canvas_for_view_pane(
+                'fft_time', state, self._dispatch_focus_index('fft_time', state),
+            )
+            params['cmap'] = self._heatmap_cmap_for_canvas('fft_time', canvas)
             params = normalize_batch_params(params, 'fft_time')
             return AnalysisPreset.from_current_single(
                 name="当前 FFT vs Time",
@@ -5598,6 +5603,11 @@ class MainWindow(
             # also drops ``time_range``, which batch order discards by design
             # (the matrix must span the full valid time domain) and which the
             # Batch sheet only ever surfaces for the FFT method.
+            state = self._analysis_state_for_dispatch('order')
+            canvas = self._canvas_for_view_pane(
+                'order', state, self._dispatch_focus_index('order', state),
+            )
+            params['cmap'] = self._heatmap_cmap_for_canvas('order', canvas)
             params = normalize_batch_params(params, 'order_time')
             return AnalysisPreset.from_current_single(
                 name="当前时间-阶次",
@@ -5609,12 +5619,30 @@ class MainWindow(
             )
         return None
 
-    def _remember_batch_preset(self, name, method, signal, params, rpm_signal=None):
+    def _remember_batch_preset(
+        self, name, method, signal, params, rpm_signal=None, *, target_canvas=None,
+    ):
         from ...batch import AnalysisPreset
 
         if signal is None:
             return
         params = dict(params)
+        section = {"fft_time": "fft_time", "order_time": "order"}.get(method)
+        if section is not None:
+            # Completion must identify its canvas: equal source names do not
+            # establish which View/pane still owns the focused controls.
+            if target_canvas is None or self.chart_stack.current_mode() != section:
+                return
+            state = self._analysis_state_for_dispatch(section)
+            focused_canvas = self._canvas_for_view_pane(
+                section, state, self._dispatch_focus_index(section, state),
+            )
+            if target_canvas is not focused_canvas:
+                return
+            ctx = self._analysis_ctx(section)
+            if ctx.current_signal() != signal:
+                return
+            params['cmap'] = self._heatmap_cmap_for_canvas(section, target_canvas)
         if self.inspector.top.range_enabled():
             params['time_range'] = self.inspector.top.range_values()
         self._last_batch_preset = AnalysisPreset.from_current_single(
