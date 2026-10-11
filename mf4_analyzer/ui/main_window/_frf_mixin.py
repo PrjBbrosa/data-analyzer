@@ -583,9 +583,7 @@ class FrfMixin:
     def _frf_compute_values_for_state(self, state):
         """Compute fields for this view. Inactive views do not read Inspector."""
         stored = getattr(state, "params", None) or {}
-        manager = self.analysis_managers["frf"]
-        active = manager.get(manager.active) if manager.views else None
-        if active is state:
+        if self._analysis_state_for_capture("frf") is state:
             values = self.inspector.frf_ctx.compute_params()
         else:
             defaults = FrfParams()

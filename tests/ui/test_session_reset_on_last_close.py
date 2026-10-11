@@ -393,6 +393,35 @@ def test_last_source_keep_retains_binding_and_marks_dirty(
     assert "*" in win.toolbar.lbl_project_session.text()
 
 
+@pytest.mark.parametrize("decision", ["keep", "close"])
+def test_closing_all_files_drops_comparison_and_projects_default(
+    qapp, qtbot, tmp_path, monkeypatch, decision,
+):
+    win, fid_a, fid_b = _load_two(qtbot, tmp_path)
+    project = tmp_path / "comparison-close.tlproj"
+    assert win.save_project(project) is True
+    win.toolbar._set_mode("fft")
+    mgr = win.analysis_managers["fft"]
+    mgr.new_view(activate=False)
+    host, peer = mgr.get(0), mgr.get(1)
+    host.params["window"] = "hanning"
+    peer.params["window"] = "hamming"
+    assert win.open_comparison("fft", host.view_id, peer.view_id)
+    assert win.focus_comparison("fft", peer.view_id, 0)
+    assert win._analysis_ctx("fft").current_params()["window"] == "hamming"
+    monkeypatch.setattr(
+        win, "_confirm_last_source_removal", lambda *args, **kwargs: decision,
+    )
+    win._close_files([fid_a, fid_b])
+    assert win._comparison().relations_payload("fft") == {}
+    visible = win._analysis_ctx("fft").current_params()["window"]
+    survivor = win.analysis_managers["fft"].get(0)
+    assert visible == "hanning"
+    win._capture_active_analysis_view("fft")
+    assert survivor.params.get("window") == visible
+    assert survivor.params.get("window") != "hamming"
+
+
 def test_last_source_close_project_unbinds_once(
     qapp, qtbot, tmp_path, monkeypatch,
 ):

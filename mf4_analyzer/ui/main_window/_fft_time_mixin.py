@@ -1,8 +1,11 @@
 """FFTTimeMixin: FFT-vs-Time (spectrogram) compute, cache, dispatch, render."""
 
+import itertools
 from dataclasses import replace
 
 import numpy as np
+
+_FFT_TIME_PANE_TOKENS = itertools.count(1)
 
 from ... import db_reference
 from ...signal import (
@@ -28,6 +31,18 @@ from .fft_time_coordinator import make_fft_time_analysis_key
 from .ultraview_coordinator import notify_ultraview_plot
 
 
+def _fft_time_pane_token(pane):
+    """Generation stamped on the pane object. ``id(pane)`` is reused."""
+    if pane is None:
+        return None
+    token = getattr(pane, "_fft_time_pane_token", None)
+    if isinstance(token, int):
+        return token
+    token = next(_FFT_TIME_PANE_TOKENS)
+    pane._fft_time_pane_token = token
+    return token
+
+
 class FFTTimeMixin:
     """Domain adapter for FFT-vs-Time input collection and rendering.
 
@@ -36,6 +51,9 @@ class FFTTimeMixin:
     opaque context so completion never reads a mutable window-wide pending
     record.
     """
+
+    def _fft_time_pane_token(self, pane):
+        return _fft_time_pane_token(pane)
 
     @staticmethod
     def _resolve_fft_time_effective_params(p, n_samples):
@@ -319,7 +337,7 @@ class FFTTimeMixin:
                 "channel": ch,
                 "params": dict(effective_compute_p),
                 "pane_idx": pane_idx,
-                "pane_token": id(pane),
+                "pane_token": _fft_time_pane_token(pane),
                 "time_range": time_range,
                 "render_params": dict(render_p),
                 "source": (fid, ch),
@@ -392,7 +410,7 @@ class FFTTimeMixin:
                     'channel': ch,
                     'params': dict(compute_p),
                     'pane_idx': pane_idx,
-                    'pane_token': id(state.panes[pane_idx]),
+                    'pane_token': _fft_time_pane_token(state.panes[pane_idx]),
                     'time_range': time_range,
                     'job': None,
                     'render_params': dict(render_p),
@@ -408,7 +426,7 @@ class FFTTimeMixin:
                 'channel': ch,
                 'params': dict(effective_compute_p),
                 'pane_idx': pane_idx,
-                'pane_token': id(state.panes[pane_idx]),
+                'pane_token': _fft_time_pane_token(state.panes[pane_idx]),
                 'time_range': time_range,
                 'render_params': dict(render_p),
                 'source': (fid, ch),
@@ -488,7 +506,7 @@ class FFTTimeMixin:
         view_id = mgr.get(mgr.active).view_id
         single_state = mgr.get(mgr.active)
         pane_token = (
-            id(single_state.panes[pane_idx])
+            _fft_time_pane_token(single_state.panes[pane_idx])
             if 0 <= pane_idx < len(single_state.panes) else None
         )
         self._fft_time_coordinator.request_batch([{
@@ -965,7 +983,7 @@ class FFTTimeMixin:
             return 'reject'
         pane = state.panes[pane_idx]
         token = ctx.get('pane_token')
-        if token is not None and token != id(pane):
+        if token is not None and token != _fft_time_pane_token(pane):
             return 'reject'
         source = ctx.get('source')
         if source is None and ctx.get('fid') is not None:
