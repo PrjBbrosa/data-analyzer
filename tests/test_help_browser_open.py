@@ -44,14 +44,35 @@ def test_open_guide_on_macos_opens_the_published_copy(monkeypatch, tmp_path):
     monkeypatch.setattr(help_module, "guide_path", lambda name: source)
     monkeypatch.setattr(help_module, "publish_help_for_browser", lambda path: published)
 
-    def fake_run(command, **kwargs):
-        opened.append(command)
-        return type("Result", (), {"returncode": 0})()
+    def fake_popen(command, **kwargs):
+        opened.append((command, kwargs.get("start_new_session")))
+        return type("Proc", (), {"pid": 1})()
 
-    monkeypatch.setattr(help_module.subprocess, "run", fake_run)
+    monkeypatch.setattr(help_module.subprocess, "Popen", fake_popen)
 
     assert help_module.open_guide("manual") is True
-    assert opened == [["/usr/bin/open", str(published)]]
+    assert opened == [(["/usr/bin/open", str(published)], True)]
+
+
+def test_publish_rebuilds_when_dest_exists_and_is_missing_files(tmp_path):
+    root = tmp_path / "Downloads" / "data analyzer" / "help"
+    assets = root / "assets"
+    assets.mkdir(parents=True)
+    page = root / "TraceLab-使用说明.html"
+    page.write_text("<img src='assets/shot.png'>使用说明", encoding="utf-8")
+    (assets / "shot.png").write_bytes(b"png")
+    parent = tmp_path / "browser-temp"
+    published = publish_help_for_browser(page, root=root, dest_parent=parent)
+    (published.parent / "assets" / "shot.png").unlink()
+    stale = published.parent.parent / "0123456789abcdef"
+    stale.mkdir()
+    (stale / "old.html").write_text("old", encoding="utf-8")
+
+    again = publish_help_for_browser(page, root=root, dest_parent=parent)
+
+    assert again == published
+    assert (again.parent / "assets" / "shot.png").read_bytes() == b"png"
+    assert not stale.exists()
 
 
 def test_open_guide_reports_a_missing_file_without_publishing(monkeypatch, tmp_path):

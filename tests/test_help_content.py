@@ -25,7 +25,7 @@ def _deck_data() -> dict:
 def test_deck_data_valid_and_version_bumped():
     d = _deck_data()
     assert d["meta"]["version"] == "v8.4.2"
-    assert d["meta"]["updated"] == "2026-10-05"
+    assert d["meta"]["updated"] == "2026-10-11"
     assert d["meta"]["docVersion"] == "3.1"
     assert [c["v"] for c in d["changelog"]][:12] == [
         "v8.4.2", "v8.4.1", "v8.4", "v8.3.2", "v8.3.1", "v8.3.0", "v8.2.5", "v8.2.4", "v8.2.3", "v8.2.2", "v8.2.1", "v8.2.0",
