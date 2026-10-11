@@ -295,6 +295,9 @@ lesson by default.
 | [Pin tests must cover real creation and source roles](pin-tests-must-cover-real-creation-and-source-roles.md) | Adding Pin support to an analysis canvas or changing its sampling/identity adapter. | See lesson |
 | [热图色阶必须从所属请求及稳定参考基准推导](heatmap-color-request-reference-anchor.md) | 手动热图色阶随 View 切换、reference、分屏锁定、保存或图表还原发生改变。 | See lesson |
 | [Cursor Readouts Need Sequence Geometry Contracts](cursor-readouts-need-sequence-geometry-contract.md) | Changing cursor title wrapping, value-driven card size, visible-row fitting, pin placement, or tether publication. | See lesson |
+| [Heatmap Natural Window Comes From The Current Matrix](heatmap-natural-window-from-current-matrix.md) | Changing automatic heatmap color windows, view switching, or split color-scale lock. | See lesson |
+| [Ending A Comparison Must Reproject The Surviving View](comparison-implicit-end-reprojects-host.md) | Deleting a comparison peer, closing other views, or closing all files while a peer holds focus. | See lesson |
+| [Analysis Log Ranges Are Engineering Values](analysis-log-scale-engineering-range.md) | Changing FFT or spectrum log scale, `plot_spectra`, or chart-options range apply. | See lesson |
 
 ## Selection Rules
 

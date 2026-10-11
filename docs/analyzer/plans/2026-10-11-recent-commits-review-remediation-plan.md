@@ -1,7 +1,7 @@
 # 近期 25 个提交复审修复执行计划
 
 - 日期：2026-10-11。
-- 状态：**待实施**。本次只交付复审与文档；未改产品代码、未提交实现。
+- 状态：**T1–T12 与 T14 已合入 `cursor/recent-commits-review-remediation-9f02`；T13 全量门禁在该稳定快照上执行。Windows 启动器未编译，Cocoa 未复测。**
 - 配套 [spec](../specs/2026-10-11-recent-commits-review-remediation-spec.md)；问题编号
   H/C/O/K/S 与验收编号 A1–A11 以 spec 为准。
 - Review 终点与编写时 HEAD：`4667dd06`。实施前按符号重新定位。
@@ -319,3 +319,17 @@
 - 未运行全量套件；复审期间运行的聚焦测试与探针（热图自动窗四组合、FFT log 量程、对比四分区
   H1–H5、chart options 171 项 focused 基线、启动器 / HDF / 帮助 287 项 focused）均在 HEAD
   `4667dd06` 的干净工作区完成，仅作为问题存在性证据，不作为任何 Task 的通过证据。
+
+## 18. 执行记录（2026-10-11）
+
+五条 lane 在独立 worktree 实现后合入本分支。产品决定：D4 方案 A（分析谱 log 走工程坐标并进入外观）；D5 无改动 OK 为 no-op，不新增重置按钮；不升 `APP_VERSION`。
+
+| Lane | 结果 |
+| --- | --- |
+| 热图 T1/T6/T7/T8/K2 | 自动窗来自 `_automatic_color_window()`，删除 `_last_auto_levels`。与对比 lane 自动合并后，热图 + 对比回归 + 热图画布 360 passed。 |
+| 对比 T2/T3 | 隐式结束对比会把存活 View 投影回 Inspector；范围编辑只写目标轴。144 passed。U-C1/U-C3 未复现；U-C2 的 facts 卡在 peer 聚焦时保持空白，未改发布路径。 |
+| 图表选项 T4/T5/O9 | log 量程经 `set_engineering_*lim`；缺省 scale 为 linear。合并后 20 项端到端/还原/AA 用例 passed。 |
+| 游标 T9/T10（不含 K2） | 「来源已更换」、一次排布、缓存上限。77 + 64 passed。`test_compact_table_pairs_share_slot_edges` 在本机改前即失败（字宽判成 grouped），不是本次回归。 |
+| HDF/启动器/文档 T11/T12/T14 | 174 passed，12 skipped（既有 Windows PowerShell 与 macOS `open`）。`launcher_win32.cc` 无 MSVC，未编译。S15 指纹核验仍未接线。 |
+
+未关闭的验收：A9 的 Windows 三场景、A7 的 Cocoa 卡片截图、HEAD Companion 对 simultaneous 时间的官方对照（U-S1）。Order 的 `pane_token` 仍是 `id(pane)`；C7 只改了 FFT-Time 与 `analysis_comparison`。
