@@ -17,6 +17,7 @@ struct SessionState {
     bool direct_runtime = false;
     std::string stage = "preparing";
     bool slow = false;
+    bool stage_seen = false;
     int screen_x = 0;
     int screen_y = 0;
     int screen_w = 0;
@@ -32,4 +33,8 @@ SessionApply session_finish(SessionState& state);
 SessionApply session_hide(SessionState& state, const std::string& reason);
 SessionApply session_dpi(SessionState& state, int x, int y, int w, int h);
 SessionApply session_present_failed(SessionState& state);
+// EOF hides even when finish was requested. A second EOF does not replace the reason.
+SessionApply session_pipe_eof(SessionState& state);
+// Hide only after a stage arrived and finish has not been requested.
+SessionApply session_handover_timeout(SessionState& state);
 int session_tip_index(const SessionState& state, long long visible_elapsed_ms);

@@ -44,8 +44,10 @@ switch ($machine) {
     default { throw "Runtime PE machine 0x$("{0:X}" -f $machine) has no supported MSVC launcher target. x64 and ARM64 must be built natively for that architecture." }
 }
 
-$generated = Join-Path ([System.IO.Path]::GetDirectoryName($OutputPath)) "startup-launcher-generated"
+$generated = Join-Path $RepoRoot "build\startup-launcher"
+$objectDir = Join-Path $generated "obj"
 New-Item -ItemType Directory -Force -Path $generated | Out-Null
+New-Item -ItemType Directory -Force -Path $objectDir | Out-Null
 & $Python (Join-Path $RepoRoot "tools\generate_startup_launcher_resources.py") --output-dir $generated
 if ($LASTEXITCODE -ne 0) {
     throw "Startup visual resource generation failed."
@@ -63,7 +65,8 @@ $sources = @(
 $quotedSources = ($sources | ForEach-Object { '"' + $_ + '"' }) -join " "
 $include = '"' + $generated + '" "' + $sourceDir + '"'
 $outQuoted = '"' + $OutputPath + '"'
-$command = "`"$vcvars`" $arch && cl /nologo /EHsc /O2 /utf-8 /std:c++17 /DUNICODE /D_UNICODE /I $include $quotedSources /Fe:$outQuoted /link /SUBSYSTEM:WINDOWS /ENTRY:wWinMainCRTStartup"
+$fo = '/Fo"' + $objectDir + '\\"'
+$command = "`"$vcvars`" $arch && cl /nologo /EHsc /O2 /utf-8 /std:c++17 /DUNICODE /D_UNICODE /I $include $fo $quotedSources /Fe:$outQuoted /link /SUBSYSTEM:WINDOWS /ENTRY:wWinMainCRTStartup"
 cmd.exe /c $command
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $OutputPath)) {
     throw "Native startup launcher compile failed. The package was not given a public EXE without an early panel."

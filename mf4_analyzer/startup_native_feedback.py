@@ -353,6 +353,7 @@ class NativeStartupFeedback:
                 logger.warning("native startup read failed: %s", exc)
                 chunk = b""
             if not chunk:
+                logger.warning("native startup pipe reached EOF")
                 with self._lock:
                     self._pipe_eof = True
                     finished = self._finish_requested
@@ -382,7 +383,16 @@ class NativeStartupFeedback:
         if message.get("session") != self._session:
             logger.warning("native startup ignored a cross-session message")
             return
-        if int(message.get("v") or 0) != 1:
+        raw_version = message.get("v")
+        try:
+            version = int(raw_version or 0)
+        except (TypeError, ValueError):
+            logger.warning(
+                "native startup ignored a non-numeric protocol version: %r",
+                raw_version,
+            )
+            return
+        if version != 1:
             return
         kind = message.get("type")
         reveal = False
@@ -440,6 +450,10 @@ class NativeStartupFeedback:
                 if self._hidden or self._reveal_notified:
                     return
                 self._handover_failed = True
+            logger.warning(
+                "native startup handover timed out after %.2fs",
+                self._handover_timeout_s,
+            )
         self._notify_reveal(reason=reason)
 
     def _notify_reveal(self, *, reason: str) -> None:

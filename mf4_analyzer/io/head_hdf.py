@@ -15,6 +15,8 @@ be normalized; they are never replaced with a guessed default.
 """
 from __future__ import annotations
 
+import codecs
+import logging
 import math
 import re
 from collections.abc import Mapping, Sequence
@@ -22,6 +24,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 _SIG = b"HEAD acoustics datafile format"
 HEAD_HDF_TIME_RULE_VERSION = "head-hdf-time-1"
@@ -35,6 +39,15 @@ _TIME_NAMES = frozenset({
 _APPENDIX = re.compile(br"; xmlAppendix_utf16 (\d+) :")
 _RATE_REL_TOL = 1e-8
 _AXIS_REL_TOL = 1e-6
+# ``code page`` selects a text decoder. It is not a layout fact.
+_CODE_PAGE_ENCODINGS = {
+    "936": "cp936",
+    "1252": "cp1252",
+    "65001": "utf-8",
+}
+_CODE_PAGE_LINE = re.compile(
+    br"(?im)^[ \t]*;?#?[ \t]*code page:[ \t]*([^\r\n]+)"
+)
 
 
 def sniff_head_hdf(path) -> bool:
@@ -208,11 +221,43 @@ def legacy_simultaneous_dt(delta: float, slot_count: int, factor: int) -> float:
     return float(delta) * float(slot_count) / float(factor)
 
 
+def _axis_step(t0: float, dt: float, index: int) -> float:
+    """Float64 step into sample ``index`` (1-based), without allocating an axis."""
+    right = float(np.float64(t0) + np.float64(index) * np.float64(dt))
+    left = float(np.float64(t0) + np.float64(index - 1) * np.float64(dt))
+    if not math.isfinite(right) or not math.isfinite(left):
+        raise ValueError("时间轴含非有限值，无法按声明的 dt 生成")
+    return right - left
+
+
+def _reject_unrepresentable_time_axis(t0: float, dt: float, count: int) -> None:
+    """Reject an axis whose first or last step is not the declared ``dt``.
+
+    Endpoint checks replace a pair of full-length difference arrays. The
+    axis itself is allocated once, later, by ``build_time_axis``.
+    """
+    if count <= 1:
+        if count == 1 and not math.isfinite(float(np.float64(t0))):
+            raise ValueError("时间轴含非有限值，无法按声明的 dt 生成")
+        return
+    last_index = count - 1
+    steps = (_axis_step(t0, dt, 1),)
+    if last_index != 1:
+        steps = (_axis_step(t0, dt, 1), _axis_step(t0, dt, last_index))
+    for step in steps:
+        if not math.isfinite(step) or step <= 0:
+            raise ValueError("float64 无法分辨该时间起点与采样间隔下的相邻样本")
+        rel = abs(step - float(dt)) / float(dt)
+        if rel > _AXIS_REL_TOL:
+            raise ValueError("时间轴间隔与声明的 dt 不一致，不能用差分中位数掩盖")
+
+
 def build_time_axis(t0: float, dt: float, n: int) -> np.ndarray:
     """Return ``t0 + k*dt``. Raise if float64 cannot represent that axis.
 
-    The last step is checked directly. A collapsed spacing is a precision
-    error, not something ``median(diff)`` may paper over.
+    The first and last steps are checked as scalars. A collapsed spacing is
+    a precision error, not something ``median(diff)`` may paper over. The
+    returned buffer is the only array this function allocates.
     """
     if isinstance(n, bool) or not isinstance(n, (int, np.integer)):
         raise ValueError(f"样本数不是整数: {n!r}")
@@ -223,19 +268,14 @@ def build_time_axis(t0: float, dt: float, n: int) -> np.ndarray:
         raise ValueError("时间起点不是有限值")
     if not math.isfinite(dt) or dt <= 0:
         raise ValueError("采样间隔必须是有限正数")
+    _reject_unrepresentable_time_axis(t0, dt, count)
     if count == 0:
         return np.empty(0, dtype=np.float64)
     if count == 1:
         return np.array([t0], dtype=np.float64)
-    axis = np.asarray(t0, dtype=np.float64) + np.arange(count, dtype=np.float64) * dt
-    if axis.shape != (count,) or not np.isfinite(axis).all():
-        raise ValueError("时间轴含非有限值，无法按声明的 dt 生成")
-    diffs = np.diff(axis)
-    if not np.isfinite(diffs).all() or np.any(diffs <= 0):
-        raise ValueError("float64 无法分辨该时间起点与采样间隔下的相邻样本")
-    rel = float(np.max(np.abs(diffs - dt) / dt))
-    if rel > _AXIS_REL_TOL:
-        raise ValueError("时间轴间隔与声明的 dt 不一致，不能用差分中位数掩盖")
+    axis = np.arange(count, dtype=np.float64)
+    axis *= np.float64(dt)
+    axis += np.float64(t0)
     return axis
 
 
@@ -453,7 +493,7 @@ def _assign_sampling(channels, *, rule: str, delta: float, t0: float, n_scans: i
             raise ValueError(f"通道 {channel.definition_index} 的 dt 不是有限正数")
         key = (dt, n_samples)
         if key not in checked:
-            build_time_axis(t0, dt, n_samples)
+            _reject_unrepresentable_time_axis(t0, dt, n_samples)
             checked.add(key)
         channel.dt = dt
         channel.fs = 1.0 / dt
@@ -501,10 +541,63 @@ def _demux(path: Path, start: int, nbytes: int, channels, ch_order, n_scans: int
             warnings.append(f"通道 {label} 含非有限样本，已原样保留")
 
 
+def _encoding_for_code_page(code_page: str) -> tuple[str, bool]:
+    """Return ``(encoding, known)``.
+
+    Known pages are 936, 1252, and 65001. Anything else still decodes, with
+    ``errors="replace"`` and a warning, because the code page is not a reason
+    to reject the file layout.
+    """
+    known = _CODE_PAGE_ENCODINGS.get(code_page)
+    if known is not None:
+        return known, True
+    candidate = "utf-8"
+    if code_page.isdigit():
+        numbered = f"cp{int(code_page)}"
+        try:
+            codecs.lookup(numbered)
+        except LookupError:
+            numbered = ""
+        if numbered:
+            candidate = numbered
+    return candidate, False
+
+
+def _header_code_page(header: bytes) -> str | None:
+    match = _CODE_PAGE_LINE.search(header)
+    if match is None:
+        return None
+    try:
+        token = match.group(1).decode("ascii").strip()
+    except UnicodeDecodeError:
+        return None
+    if not token:
+        return None
+    return token.split()[0]
+
+
+def _decode_header(header: bytes, warnings: list[str]) -> str:
+    code_page = _header_code_page(header)
+    if code_page is None:
+        return header.decode("cp936", errors="replace")
+    encoding, known = _encoding_for_code_page(code_page)
+    if not known:
+        logger.warning(
+            "HEAD .hdf code page %s 没有确认的解码器，已按 %s errors=replace 解码",
+            code_page,
+            encoding,
+        )
+        warnings.append(
+            f"code page {code_page} 未确认，已按 {encoding} errors=replace 解码"
+        )
+    return header.decode(encoding, errors="replace")
+
+
 def parse_head_hdf(path) -> HeadHdfFile:
     path = Path(path)
     header, start, file_size = _read_bounded_header(path)
-    text = header.decode("cp936", errors="replace")
+    warnings: list[str] = []
+    text = _decode_header(header, warnings)
     lines = text.splitlines()
 
     top = {}
@@ -587,8 +680,6 @@ def parse_head_hdf(path) -> HeadHdfFile:
     if kind != "time data":
         raise NotImplementedError(f"unsupported kind: {top.get('kind')!r}")
     code_page = _require_text(top.get("code page"), "code page")
-    if code_page != "936":
-        raise NotImplementedError(f"unsupported code page: {top.get('code page')!r}")
     scan_mode = _require_text(top.get("scan mode"), "scan mode")
     if scan_mode == "simultaneous":
         rule = "simultaneous"
@@ -718,6 +809,15 @@ def parse_head_hdf(path) -> HeadHdfFile:
             "HEAD .hdf simultaneous 目前只支持全部 factor=1；"
             "其他 factor 组合在有官方依据前不生成采样率"
         )
+    # Reject a truncated body before any time-axis allocation. A corrupt
+    # ``nbr of scans`` must be a data error, not a MemoryError from arange.
+    nbytes = n_scans * slot_count * _SLOT_BYTES
+    available = file_size - start
+    if available < nbytes:
+        raise ValueError(
+            f"HEAD .hdf 数据块被截断：需要 {nbytes} 字节，"
+            f"start of data 之后只有 {available} 字节"
+        )
     _assign_sampling(
         channels,
         rule=rule,
@@ -726,14 +826,6 @@ def parse_head_hdf(path) -> HeadHdfFile:
         n_scans=n_scans,
         slot_count=slot_count,
     )
-
-    nbytes = n_scans * slot_count * _SLOT_BYTES
-    available = file_size - start
-    if available < nbytes:
-        raise ValueError(
-            f"HEAD .hdf 数据块被截断：需要 {nbytes} 字节，"
-            f"start of data 之后只有 {available} 字节"
-        )
     trailer_size = available - nbytes
     if trailer_size > _MAX_TRAILER:
         raise NotImplementedError(
@@ -748,7 +840,6 @@ def parse_head_hdf(path) -> HeadHdfFile:
                 "HEAD .hdf 数据块之后有无法解释的额外数据，不能忽略"
             )
 
-    warnings: list[str] = []
     _demux(path, start, nbytes, channels, ch_order, n_scans, slot_count, warnings)
 
     return HeadHdfFile(

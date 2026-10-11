@@ -1327,6 +1327,9 @@ class ChartStack(QWidget):
         if self.split_active() and self._page_transition.image_bytes() > 0:
             self.cancel_page_transition("time-split-exited")
         if self._secondary_card is not None:
+            secondary_toolbar = getattr(self._secondary_card, "toolbar", None)
+            if secondary_toolbar is not None:
+                secondary_toolbar.discard_pending_history()
             self._secondary_card.close_cursor_display_popover()
             self._secondary_card.setVisible(False)
             self._drop_cursor_canvas_state(self._secondary_card.canvas)

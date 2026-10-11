@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -59,6 +60,44 @@ def guide_path(name: str) -> Path:
 
 # stamp -> temp directory that holds one published copy of the help tree.
 _PUBLISHED_HELP: dict[str, Path] = {}
+_STAMP_DIR = re.compile(r"^[0-9a-f]{16}$")
+
+
+def _help_file_worth_copying(path: Path) -> bool:
+    return (
+        path.is_file()
+        and not path.is_symlink()
+        and path.suffix != ".pyc"
+        and "__pycache__" not in path.parts
+    )
+
+
+def _published_tree_complete(root: Path, dest_root: Path) -> bool:
+    if not dest_root.is_dir():
+        return False
+    for path in root.rglob("*"):
+        if not _help_file_worth_copying(path):
+            continue
+        published = dest_root / path.relative_to(root)
+        if published.is_symlink() or not published.is_file():
+            return False
+    return True
+
+
+def _remove_older_help_stamps(parent: Path, stamp: str) -> None:
+    help_parent = parent / "tracelab-help"
+    if not help_parent.is_dir():
+        return
+    for child in list(help_parent.iterdir()):
+        if child.name == stamp or not child.is_dir():
+            continue
+        if _STAMP_DIR.fullmatch(child.name) is None:
+            continue
+        try:
+            shutil.rmtree(child)
+        except OSError:
+            # A stale copy still open in a browser should not block the new one.
+            continue
 
 
 def _help_tree_stamp(root: Path) -> str:
@@ -95,15 +134,38 @@ def publish_help_for_browser(
     if dest_root is None or dest_parent is not None:
         dest_root = parent / "tracelab-help" / stamp
     published = dest_root / relative
-    if not published.is_file() or published.is_symlink():
-        if dest_root.exists():
-            shutil.rmtree(dest_root)
+    if (
+        published.is_symlink()
+        or not published.is_file()
+        or not _published_tree_complete(root, dest_root)
+    ):
+        help_parent = parent / "tracelab-help"
+        help_parent.mkdir(parents=True, exist_ok=True)
+        staging = help_parent / f".{stamp}-{os.getpid()}-tmp"
+        if staging.exists():
+            shutil.rmtree(staging)
         shutil.copytree(
             root,
-            dest_root,
+            staging,
             ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
             symlinks=False,
         )
+        try:
+            if dest_root.exists():
+                shutil.rmtree(dest_root)
+            staging.rename(dest_root)
+        except OSError:
+            # The destination can already exist if two opens race. Fill it
+            # in place instead of failing the GUI thread.
+            shutil.copytree(
+                staging,
+                dest_root,
+                ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+                symlinks=False,
+                dirs_exist_ok=True,
+            )
+            shutil.rmtree(staging, ignore_errors=True)
+        _remove_older_help_stamps(parent, stamp)
     if published.is_symlink() or not published.is_file():
         raise OSError(f"help publish did not create a real file: {published}")
     if dest_parent is None:
@@ -118,15 +180,17 @@ def _open_in_browser(path: Path) -> bool:
         except (OSError, ValueError):
             return False
         try:
-            completed = subprocess.run(
+            # Popen returns as soon as /usr/bin/open is spawned. Waiting on
+            # subprocess.run would block the GUI thread for the browser.
+            subprocess.Popen(
                 ["/usr/bin/open", os.fspath(target)],
-                check=False,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                start_new_session=True,
             )
         except OSError:
             return False
-        return completed.returncode == 0
+        return True
 
     from PyQt5.QtCore import QUrl
     from PyQt5.QtGui import QDesktopServices

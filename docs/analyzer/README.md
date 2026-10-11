@@ -153,7 +153,8 @@ main window's screen, and keeps a reduced-motion preference.
 8.4.2 adds cross-View analysis comparison with focus-bound editing and persisted
 comparison relations, reversible chart options and one-click restoration. It
 improves FRF interaction responsiveness and time-range precision, corrects HEAD
-HDF simultaneous sampling to use the header delta, and repairs macOS help
+HDF simultaneous sampling to use the header delta (official HEAD Companion
+comparison is still pending), and repairs macOS help
 opening, the quick-reference panel, and popup teardown.
 Update the published guides when these behaviours change; preserve each loader's
 timing and unit boundaries instead of describing inferred metadata as measured
