@@ -1047,7 +1047,7 @@ _HINTS = (
     ),
     Hint(
         id="analysis.cross_view_compare",
-        text="View 独立调参；窄窗操作见对比选项",
+        text="标签切页，图面聚焦；半色记并排",
         surface="discovery",
         modes=frozenset({"fft", "fft_time", "frf", "order"}),
         priority=56,

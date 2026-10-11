@@ -24,7 +24,7 @@ Published guide entry points:
 
 ## Current Product Baseline
 
-The current baseline is TraceLab 8.4.2. It retains the 7.6 ASCII (`.asc`),
+The current baseline is TraceLab 8.4.4. It retains the 7.6 ASCII (`.asc`),
 NI TDMS (`.tdms`), and the original 12-View expansion (time-domain is now 24
 Views; the four analysis sections stay at 12), as well as the native WinWert
 (`.wwt`), ZFGE2/TestRunPRO (`.zfd`), and MATLAB (`.mat`) imports introduced
@@ -155,6 +155,9 @@ comparison relations, reversible chart options and one-click restoration. It
 improves FRF interaction responsiveness and time-range precision, corrects HEAD
 HDF simultaneous sampling to use the header delta, and repairs macOS help
 opening, the quick-reference panel, and popup teardown.
+8.4.4 makes analysis View tabs open their own pages, keeps remembered comparison
+indicators visible across navigation, and prevents cross-canvas heatmap dB cache
+collisions. Canvas clicks still change only the editing focus.
 Update the published guides when these behaviours change; preserve each loader's
 timing and unit boundaries instead of describing inferred metadata as measured
 truth.

@@ -530,8 +530,9 @@ def test_relation_survives_rename_and_ends_when_the_peer_is_deleted(two_file_win
 
     peer_idx = next(i for i, state in enumerate(mgr.views) if state.view_id == peer_id)
     win._on_analysis_switch("fft", peer_idx)
-    assert mgr.get(mgr.active).view_id == host_id
-    assert comp.focused("fft")[0] == peer_id
+    assert mgr.get(mgr.active).view_id == peer_id
+    assert comp.focused("fft") is None
+    assert not comp.is_open("fft")
     assert comp.peer_of("fft", peer_id) is None
     assert comp.peer_of("fft", host_id) == peer_id
 

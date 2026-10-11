@@ -29,7 +29,7 @@ def test_windows_folder_build_script_uses_onedir_pyinstaller_contract():
         "--hidden-import",
         "qtawesome",
         "MF4 Data Analyzer V1.py",
-        "TraceLab8.4.2",
+        "TraceLab8.4.4",
     ):
         assert token in text
 
@@ -283,10 +283,10 @@ def test_windows_build_scripts_default_to_current_release():
         script = ROOT / "tools" / filename
         text = script.read_text(encoding="utf-8")
 
-        assert '[string]$Version = "8.4.2"' in text
+        assert '[string]$Version = "8.4.4"' in text
 
     lite_script = ROOT / "tools" / "build_windows_folder_lite.ps1"
-    assert "TraceLabAnalyzer8.4.2" in lite_script.read_text(encoding="utf-8")
+    assert "TraceLabAnalyzer8.4.4" in lite_script.read_text(encoding="utf-8")
 
 
 def test_lite_build_script_omits_acquisition_and_native_deps():

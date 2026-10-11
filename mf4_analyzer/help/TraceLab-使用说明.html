@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>TraceLab v8.4.2 · 使用说明</title>
+<title>TraceLab v8.4.4 · 使用说明</title>
 <!-- ===== FONTS ===== -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -263,11 +263,11 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
 {
   "meta": {
     "title": "TraceLab",
-    "version": "v8.4.2",
-    "versionLabel": "使用说明 · V8.4.2",
+    "version": "v8.4.4",
+    "versionLabel": "使用说明 · V8.4.4",
     "subtitle": "从导入数据到分析与导出，一份可直接照做的操作指南",
     "docVersion": "3.1",
-    "updated": "2026-10-05",
+    "updated": "2026-10-11",
     "credit": "GC02689"
   },
   "slides": [
@@ -827,7 +827,7 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
       "sec": "照着做",
       "kicker": "PLAYBOOK",
       "title": "三个常见场景，<c>照着做就行</c>",
-      "foot": "TraceLab v8.4.2 · 使用说明",
+      "foot": "TraceLab v8.4.4 · 使用说明",
       "density": "compact",
       "blocks": [
         {
@@ -873,7 +873,7 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
         {
           "type": "lead",
           "center": true,
-          "html": "从数据到结论，按场景完成查看、分析与导出。 —— TraceLab v8.4.2"
+          "html": "从数据到结论，按场景完成查看、分析与导出。 —— TraceLab v8.4.4"
         }
       ]
     },
@@ -882,6 +882,11 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
   ],
 
   "changelog": [
+    { "v": "v8.4.4", "date": "2026-10-11", "items": [
+      "修复分析 View 标签导航：并排时点击另一 View 标签直接打开其页面，图面点击仍只切换操作焦点。",
+      "并排半色色标按保存的配对关系显示；切换 View 或模块后仍保留，返回恢复并排，结束对比或删除后同步清除。",
+      "修复时频与阶次结果在并排画布间切换时可能误用旧 dB 矩阵的问题；导航保留结果且不重新计算。"
+    ] },
     { "v": "v8.4.2", "date": "2026-10-05", "items": [
       "分析页支持与其他 View 并排对比，参数编辑与图表操作跟随当前焦点；对比关系随工程保存，各 View 保留独立状态。",
       "图表选项支持一次提交、撤销与一键恢复；改进频响图交互响应，并保留时间范围输入精度。",

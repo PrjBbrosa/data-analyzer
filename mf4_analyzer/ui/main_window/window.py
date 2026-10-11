@@ -1456,6 +1456,8 @@ class MainWindow(
         ):
             mgr = self.analysis_managers[sec]
             bar = page.tabbar
+            page.set_comparison_peer_provider(
+                partial(self._analysis_context.comparison.peer_of, sec))
             bar.switch_requested.connect(
                 lambda idx, s=sec: self._on_analysis_switch(s, idx))
             bar.new_requested.connect(

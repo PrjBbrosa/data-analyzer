@@ -12,7 +12,7 @@
 
   <section class="slide cover active">
     <div class="frame">
-      <div class="corner reveal d1">TraceLab · 频响（FRF）</div>
+      <div class="corner reveal d1">TraceLab v8.4.4 · 频响（FRF）</div>
       <div class="cover-eyebrow reveal d1">操作指南 · <b>FRF / 系统辨识</b></div>
       <h1 class="reveal d2">FR<em>F</em></h1>
       <p class="sub reveal d3">用同一来源中严格同步的输入与输出，查看系统如何传递。</p>
@@ -94,7 +94,7 @@
       <div class="paths">
         <div class="path reveal d3"><div class="tagA">范围</div><div class="ptxt">选“指定范围”并填写开始、结束秒数，点计算才执行。只改一端时，另一端保留原始精度。越界提示显示精确边界和差值；有交集时可确认“对齐到可用范围”，只调整超出的端点。选“全时段”用完整数据，起止框只读。切换不重算、不 Home；图上缩放只查看。</div></div>
         <div class="path reveal d4"><div class="tagA g">custom-X</div><div class="ptxt"><b>custom-X</b> 不是秒；FRF 分析时间仍应按真实时间轴的秒数填写。</div></div>
-        <div class="path reveal d5"><div class="tagA">查看</div><div class="ptxt">“在时域查看”会先复用同一签名的时域 View；没有时才新建，并带回输入、输出和已选范围，不覆盖无关 View。同一频响模块里，右键其他 View 可以<span class="ui">与此 View 并排</span>；<span class="ui">结束 View 对比</span>只取消对照，不删除 View。并排的两个 View 独立设置 H1/H2、窗长及显示参数，共用工具栏；Home 和标注操作焦点侧，频响参数在右侧面板独立调整。主标签色标两半代表两个 View。<span class="ui">添加同参数窗格</span>仍共享同一 View 的算法参数，仅来源与时间范围独立。 窄窗口中，联动、锁色阶和展开操作集中到“对比选项”，为当前 View 标签保留空间。</div></div>
+        <div class="path reveal d5"><div class="tagA">查看</div><div class="ptxt">“在时域查看”会先复用同一签名的时域 View；没有时才新建，并带回输入、输出和已选范围，不覆盖无关 View。同一频响模块里，右键其他 View 可以<span class="ui">与此 View 并排</span>；<span class="ui">结束 View 对比</span>只取消对照，不删除 View。并排的两个 View 独立设置 H1/H2、窗长及显示参数，共用工具栏；Home 和标注操作焦点侧，频响参数在右侧面板独立调整。点 View 标签打开该 View 自己的页面，点击并排图面只切换操作焦点；半色色标表示保存的并排关系，切到其他 View 仍保留，返回后恢复并排。<span class="ui">添加同参数窗格</span>仍共享同一 View 的算法参数，仅来源与时间范围独立。 窄窗口中，联动、锁色阶和展开操作集中到“对比选项”，为当前 View 标签保留空间。</div></div>
       </div>
       <div class="tip reveal d5"><span class="ic">!</span><p>输入与输出必须严格同时间轴：长度、每个时刻和采样间隔都要一致。时间戳抖动超限时，系统会按建议采样率自动重建均匀网格再计算（不做静默改幅值）；缺失或自动生成的时间轴仍会阻断。系统真实延迟默认保留，不做自动补偿；相位曲线会如实显示这部分延迟。</p></div>
     </div>

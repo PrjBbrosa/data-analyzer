@@ -369,6 +369,7 @@ class AnalysisSectionPage(QWidget):
         self._view_split = None
         self._host_view_id = ""
         self._peer_view_id = ""
+        self._comparison_peer_provider = None
         self._comparison_focus_is_host = True
         self._comparison_expanded = False
         self._suppress_focus_emit = False
@@ -1197,13 +1198,17 @@ class AnalysisSectionPage(QWidget):
     def _active_view_focus_accent(self) -> str:
         return self._view_focus_accent(self._host_view_id or self._active_view_id())
 
+    def set_comparison_peer_provider(self, provider) -> None:
+        """Read remembered host→peer identities independently of mounted cards."""
+        self._comparison_peer_provider = provider
+        self.tabbar.refresh_comparison_presentation()
+
     def _comparison_partner_index(self, index):
-        if self._peer_host is None or not 0 <= index < len(self.manager.views):
+        if self._comparison_peer_provider is None or not 0 <= index < len(self.manager.views):
             return None
-        if str(self.manager.views[index].view_id) != self._host_view_id:
-            return None
+        peer_id = self._comparison_peer_provider(self.manager.views[index].view_id)
         return next((i for i, view in enumerate(self.manager.views)
-                     if str(view.view_id) == self._peer_view_id), None)
+                     if str(view.view_id) == str(peer_id)), None)
 
     def refresh_focus_style(self, *_args) -> None:
         self._apply_focus_style()

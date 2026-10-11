@@ -298,6 +298,8 @@ lesson by default.
 | [Cursor Readouts Need Sequence Geometry Contracts](cursor-readouts-need-sequence-geometry-contract.md) | Changing cursor title wrapping, value-driven card size, visible-row fitting, pin placement, or tether publication. | See lesson |
 | [Commit validated editor input before switching its state owner](analysis-editors-commit-before-binding-snapshot.md) | Changing analysis View focus, saving projects, or wiring focus-out-only parameter editors. | See lesson |
 | [Cache availability does not authorize result publication](analysis-cache-is-not-result-publication-authority.md) | Changing analysis parameter signals, cache restoration, display-only callbacks, project restoration, or asynchronous result admission. | See lesson |
+| [Comparison tabs project remembered relations through production wiring](comparison-tabs-project-remembered-relations.md) | Changing analysis View navigation, comparison focus, or half-color tab indicators. | See lesson |
+| [Result cache tokens must be unique across canvases](result-cache-tokens-must-be-unique-across-canvases.md) | Caching transformed results that can move between host, peer, or restored canvases. | See lesson |
 
 ## Selection Rules
 

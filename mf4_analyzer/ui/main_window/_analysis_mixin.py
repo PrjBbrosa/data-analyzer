@@ -286,21 +286,7 @@ class AnalysisMixin:
 
     def _on_analysis_switch(self, section, idx):
         mgr = self.analysis_managers[section]
-        comp = self._comparison()
-        if (
-            comp is not None
-            and comp.is_open(section)
-            and 0 <= idx < len(mgr.views)
-            and comp.activation_effect(section, mgr.get(idx).view_id) == "focus"
-        ):
-            clicked = mgr.get(idx)
-            pane = 0
-            current = comp.focused(section)
-            if current is not None and str(current[0]) == str(clicked.view_id):
-                pane = int(current[1])
-            self.focus_comparison(section, clicked.view_id, pane)
-            return
-        if idx == mgr.active:
+        if not 0 <= idx < len(mgr.views) or idx == mgr.active:
             return
         self._capture_active_analysis_view(section)
         if self._should_begin_analysis_page_transition(section, idx):
@@ -313,6 +299,9 @@ class AnalysisMixin:
                 target_view_id=target.view_id,
                 pane_signature=(section, "single"),
             )
+        # A tab selects a page, even when that View is already a visible peer.
+        # Capture while the old binding is alive; suspend preserves host→peer.
+        self._suspend_comparison_display(section)
         mgr.set_active(idx)
 
     def _on_analysis_view_rename(self, section, idx, name):
@@ -801,6 +790,7 @@ class AnalysisMixin:
     def _note_comparison_mutation(self, section, before) -> None:
         if self._comparison_relations(section) == before:
             return
+        self._analysis_page(section).tabbar.refresh_comparison_presentation()
         self._mark_comparison_user_change()
 
     def _mark_comparison_user_change(self) -> None:
@@ -863,11 +853,13 @@ class AnalysisMixin:
         view_ids = [str(item.view_id) for item in mgr.views]
         if "comparisons" not in (block or {}):
             comp.replace_relations(section, {})
+            self._analysis_page(section).tabbar.refresh_comparison_presentation()
             return {}, []
         payload, dropped = normalize_analysis_comparisons(
             block.get("comparisons"), view_ids,
         )
         comp.replace_relations(section, payload)
+        self._analysis_page(section).tabbar.refresh_comparison_presentation()
         return payload, dropped
 
     def open_comparison(self, section, host_id, peer_id) -> bool:
@@ -877,6 +869,9 @@ class AnalysisMixin:
         comp = self._comparison()
         if host is None or peer is None or comp is None or host is peer:
             return False
+        mgr = self.analysis_managers[section]
+        host_idx = next(i for i, state in enumerate(mgr.views)
+                        if state.view_id == host.view_id)
         before = comp.relations_payload(section)
         if comp.is_open(section):
             shown = comp.displayed(section)
@@ -886,14 +881,11 @@ class AnalysisMixin:
                 self._capture_active_analysis_view(section)
                 comp.suspend(section)
                 self._hide_comparison_widgets(section)
+        elif mgr.active != host_idx:
+            self._capture_active_analysis_view(section)
         if not comp.begin(section, host.view_id, peer.view_id):
             return False
-        mgr = self.analysis_managers[section]
-        host_idx = next(
-            (i for i, state in enumerate(mgr.views) if state.view_id == host.view_id),
-            None,
-        )
-        if host_idx is not None and mgr.active != host_idx:
+        if mgr.active != host_idx:
             mgr.set_active(host_idx)
         self._present_comparison(section, host.view_id, peer.view_id)
         self._note_comparison_mutation(section, before)
@@ -2116,24 +2108,11 @@ class AnalysisMixin:
         state = mgr.get(idx)
         if comp is not None and comp.is_open(section):
             pair = comp.displayed(section)
-            if (
-                pair is not None
-                and str(state.view_id) == str(pair[1])
-                and str(state.view_id) != str(pair[0])
-            ):
-                self.focus_comparison(section, state.view_id, 0)
-                host_idx = next(
-                    (i for i, item in enumerate(mgr.views) if item.view_id == pair[0]),
-                    None,
-                )
-                if host_idx is not None and host_idx != mgr.active:
-                    comp.hold_switch = True
-                    try:
-                        mgr.set_active(host_idx)
-                    finally:
-                        comp.hold_switch = False
-                return
-            if pair is not None and str(state.view_id) not in {str(pair[0]), str(pair[1])}:
+            if pair is not None and str(state.view_id) != str(pair[0]):
+                # Direct manager activation also leaves the old comparison.
+                # The comparison focus still identifies the outgoing editor
+                # even though manager.active already names the destination.
+                self._capture_active_analysis_view(section)
                 self._suspend_comparison_display(section)
         page = self._analysis_page(section)
         self._applying_analysis_view = True

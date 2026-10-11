@@ -1516,6 +1516,25 @@ def test_db_memo_keys_on_epoch_token_not_id(qapp):
     c.deleteLater()
 
 
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+def test_db_memo_identity_survives_results_moving_between_canvases(qtbot, dtype):
+    """A peer's result must not hit the host's unrelated dB cache entry."""
+    from mf4_analyzer.signal.spectrogram import SpectrogramAnalyzer
+
+    host = PgHeatmapCanvas(with_slice=False)
+    peer = PgHeatmapCanvas(with_slice=False)
+    qtbot.addWidget(host)
+    qtbot.addWidget(peer)
+    a = _make_spec("same-name", np.array([[1, 2], [3, 4]], dtype=dtype))
+    b = _make_spec("same-name", np.array([[10, 20], [30, 40]], dtype=dtype))
+    host.plot_result(a, amplitude_mode="amplitude_db", z_auto=True)
+    peer.plot_result(b, amplitude_mode="amplitude_db", z_auto=True)
+    for canvas, result in ((host, b), (peer, a), (host, a), (peer, b)):
+        canvas.plot_result(result, amplitude_mode="amplitude_db", z_auto=True)
+        expected = SpectrogramAnalyzer.amplitude_to_db(result.amplitude, 1.0)
+        np.testing.assert_array_equal(canvas._matrix_disp, expected)
+
+
 def test_slice_updates_on_select(qapp):
     c = PgHeatmapCanvas(with_slice=True)
     c.resize(640, 480)

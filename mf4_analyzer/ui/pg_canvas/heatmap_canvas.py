@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 import math
 from collections.abc import Mapping
+from itertools import count
 
 import numpy as np
 import pyqtgraph as pg
@@ -130,6 +131,10 @@ from mf4_analyzer.qt_analysis_shared import (  # noqa: F401
 )
 
 logger = logging.getLogger(__name__)
+
+# Results travel from peer to host canvases. Their stamped identity must be
+# unique across every canvas, not merely within the first one that drew them.
+_RESULT_DB_EPOCHS = count(1)
 
 
 class _AxisShim:
@@ -557,7 +562,6 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         # The epoch token is stamped onto each distinct result the first time
         # it is rendered, so it travels with the object and never collides.
         self._db_cache = None   # (token, db_ref) -> ndarray
-        self._db_epoch_counter = 0
         # Set by plot_result when z_auto=True so the caller can read back
         # the absolute vmin/vmax that were actually applied and write them
         # into the inspector spins (blockSignals) — eliminating the jump
@@ -1750,14 +1754,13 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
     # ------------------------------------------------------------------
     def _result_db_token(self, result):
         """Return a stable hashable token identifying ``result`` for the dB
-        memo. Stamps a monotonic ``_pg_db_epoch`` attribute on first sight so
-        the token travels with the object across AnalysisResultCache eviction
+        memo. Stamps a process-wide monotonic ``_pg_db_epoch`` on first sight so
+        the token travels across canvases and AnalysisResultCache eviction
         and never collides via id() reuse. Falls back to id() for exotic
         results that reject attribute assignment (never in practice)."""
         token = getattr(result, '_pg_db_epoch', None)
         if token is None:
-            self._db_epoch_counter += 1
-            token = self._db_epoch_counter
+            token = next(_RESULT_DB_EPOCHS)
             try:
                 result._pg_db_epoch = token
             except (AttributeError, TypeError):

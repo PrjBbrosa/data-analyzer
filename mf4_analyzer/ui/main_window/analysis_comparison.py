@@ -81,10 +81,7 @@ class AnalysisComparisonDisplay:
         return bool(rel.levels_locked) if rel is not None else False
 
     def activation_effect(self, section, view_id) -> str:
-        """``focus`` when the id is already on screen, otherwise ``switch``."""
-        pair = self._displayed.get(section)
-        if pair is not None and str(view_id) in {str(pair[0]), str(pair[1])}:
-            return "focus"
+        """Page activation always navigates; only canvas interactions focus."""
         return "switch"
 
     def begin(self, section, host_view_id, peer_view_id) -> bool:
