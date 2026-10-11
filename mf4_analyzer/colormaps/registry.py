@@ -10,8 +10,11 @@ from functools import lru_cache
 import hashlib
 from importlib import resources
 import json
+import logging
 from pathlib import Path, PurePosixPath
 import re
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_HEATMAP_CMAP = "tracelab.head-style.v1"
 FALLBACK_HEATMAP_CMAP = "gnuplot2"
@@ -132,9 +135,27 @@ def _read_specs(root):
     return tuple(specs)
 
 
+_FALLBACK_SPECS = (
+    ColormapSpec(id=FALLBACK_HEATMAP_CMAP, label=FALLBACK_HEATMAP_CMAP, provider="legacy_gnuplot2"),
+)
+
+
 @lru_cache(maxsize=1)
 def list_colormap_specs() -> tuple[ColormapSpec, ...]:
-    return _read_specs(_resource_root())
+    """Ordered catalog. A missing or invalid package falls back to gnuplot2.
+
+    ``validate_colormap_resources`` stays strict. This reader is the one
+    import and presentation paths use, so a broken resource must not take
+    down ``import mf4_analyzer.qt_analysis_shared``.
+    """
+    try:
+        return _read_specs(_resource_root())
+    except ColormapResourceError:
+        logger.error(
+            "Heatmap colormap catalog is missing or invalid; using %s",
+            FALLBACK_HEATMAP_CMAP,
+        )
+        return _FALLBACK_SPECS
 
 
 def get_colormap_spec(ident: str) -> ColormapSpec:
@@ -218,4 +239,36 @@ def validate_colormap_resources() -> tuple[ColormapSpec, ...]:
     return specs
 
 
-SUPPORTED_HEATMAP_COLORMAPS = tuple(spec.id for spec in list_colormap_specs())
+class _SupportedHeatmapColormaps:
+    """Lazy id list. Importing the name does not read the catalog."""
+
+    def _ids(self) -> tuple[str, ...]:
+        return tuple(spec.id for spec in list_colormap_specs())
+
+    def __iter__(self):
+        return iter(self._ids())
+
+    def __contains__(self, item) -> bool:
+        return item in self._ids()
+
+    def __len__(self) -> int:
+        return len(self._ids())
+
+    def __getitem__(self, index):
+        return self._ids()[index]
+
+    def __eq__(self, other) -> bool:
+        if isinstance(other, (str, bytes)) or other is None:
+            return False
+        try:
+            return self._ids() == tuple(other)
+        except TypeError:
+            return NotImplemented
+
+    def __repr__(self) -> str:
+        return repr(self._ids())
+
+    __hash__ = None
+
+
+SUPPORTED_HEATMAP_COLORMAPS = _SupportedHeatmapColormaps()

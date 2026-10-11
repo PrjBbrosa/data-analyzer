@@ -865,3 +865,8 @@ def test_all_windows_profiles_validate_and_bundle_colormap_directory(script_name
     else:
         call = 'Invoke-LoggedNative -Executable $VenvPython -Arguments @($ColormapValidator)'
     assert text.index(call) < text.index('"--add-data", $AddDataColormaps')
+    resource_dir = ROOT / "mf4_analyzer" / "colormaps" / "resources"
+    assert resource_dir.is_dir()
+    import importlib.resources as resources
+    packaged = resources.files("mf4_analyzer.colormaps").joinpath("resources")
+    assert Path(str(packaged)).resolve() == resource_dir.resolve()

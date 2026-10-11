@@ -76,7 +76,7 @@ def test_rejects_invalid_lut(resources_copy, field, value):
 def test_rejects_unsafe_resource_paths(resources_copy, relative):
     _edit(resources_copy / "catalog.json", lambda data: data["entries"][-1].update(file=relative))
     with pytest.raises(registry.ColormapResourceError):
-        registry.list_colormap_specs()
+        registry.validate_colormap_resources()
 
 
 @pytest.mark.parametrize("relative", ["catalog.json", "luts/head-style-v1.json"])
@@ -173,3 +173,50 @@ def test_directory_symlink_cycle_rejected(resources_copy):
     (resources_copy / "luts/cycle").symlink_to(resources_copy / "luts", target_is_directory=True)
     with pytest.raises(registry.ColormapResourceError, match="symlink LUT directory"):
         registry.validate_colormap_resources()
+
+
+def test_qt_analysis_shared_import_does_not_read_the_catalog():
+    code = """
+import mf4_analyzer.qt_analysis_shared
+import mf4_analyzer.colormaps.registry as registry
+assert registry.list_colormap_specs.cache_info().currsize == 0
+from mf4_analyzer.colormaps import SUPPORTED_HEATMAP_COLORMAPS
+assert registry.list_colormap_specs.cache_info().currsize == 0
+"""
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1])
+    result = subprocess.run(
+        [sys.executable, "-c", code], env=env, capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_missing_catalog_resolves_gnuplot2(tmp_path, monkeypatch, caplog):
+    monkeypatch.setattr(registry, "_resource_root", lambda: tmp_path / "missing")
+    registry.list_colormap_specs.cache_clear()
+    try:
+        with caplog.at_level("ERROR"):
+            specs = registry.list_colormap_specs()
+        assert tuple(spec.id for spec in specs) == (registry.FALLBACK_HEATMAP_CMAP,)
+        assert registry.SUPPORTED_HEATMAP_COLORMAPS == (registry.FALLBACK_HEATMAP_CMAP,)
+        assert "gnuplot2" in caplog.text
+    finally:
+        registry.list_colormap_specs.cache_clear()
+
+
+def test_bad_catalog_is_fail_soft_for_list(resources_copy, caplog):
+    (resources_copy / "catalog.json").write_text("{ not json")
+    with caplog.at_level("ERROR"):
+        specs = registry.list_colormap_specs()
+    assert tuple(spec.id for spec in specs) == ("gnuplot2",)
+    assert "invalid" in caplog.text.lower() or "missing" in caplog.text.lower()
+    with pytest.raises(registry.ColormapResourceError):
+        registry.validate_colormap_resources()
+
+
+def test_catalog_pyqtgraph_provider_names_resolve():
+    import pyqtgraph as pg
+
+    for spec in registry.list_colormap_specs():
+        if spec.provider == "pyqtgraph":
+            assert pg.colormap.get(spec.name) is not None, spec.id
