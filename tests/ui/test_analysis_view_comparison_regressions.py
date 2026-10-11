@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import numpy as np
 import pandas as pd
 import pytest
+from mf4_analyzer.ui.analysis_result_state import bind_result, snapshot_request
 from mf4_analyzer.ui.main_window import MainWindow
 from .test_frf_main_window import _window_with_pair
 from .test_analysis_view_comparison import _enter, _pair, _stamp, _curve_y, _frf_result
@@ -50,6 +51,7 @@ def test_fft_each_side_uses_own_display_params(win, reference):
         fid, ch = state.panes[0].sources[0]
         key = win._analysis_cache_key_for_view_source('fft', state, state.panes[0], 0, fid, ch)
         win.analysis_caches['fft'].put(key, (np.arange(8.0), np.full(8, 2.0), np.full(8, 2.0)))
+        bind_result(state.panes[0], snapshot_request(state, state.panes[0]), (key,))
     win.open_comparison('fft', a.view_id, b.view_id)
     ya = _curve_y(page.pane_canvas(0))[0]
     yb = _curve_y(page.peer_cards()[0].canvas)[0]

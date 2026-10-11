@@ -844,17 +844,17 @@ def test_set_compare_buttons_no_edge_emit(page):
 
 def test_analysis_tabbar_uses_active_pane_split_controls(page):
     labels = page.tabbar.split_action_labels()
-    assert labels['split'] == "添加对比窗格"
-    assert labels['replace'] == "添加对比窗格"
-    assert labels['clear'] == "关闭对比窗格"
+    assert labels['split'] == "添加同参数窗格"
+    assert labels['replace'] == "添加同参数窗格"
+    assert labels['clear'] == "关闭同参数窗格"
     assert page.tabbar.split_action_mode() == "active_pane"
 
     assert not page.tabbar._split_clear.isVisible()
     page.enter_split()
     page.tabbar.refresh_split_controls()
     assert page.tabbar._split_clear.isVisible()
-    assert page.tabbar._split_clear.text() == "✕ 关闭对比窗格"
-    assert page.tabbar._split_clear.toolTip() == "关闭当前 View 的对比窗格"
+    assert page.tabbar._split_clear.text() == "✕ 关闭同参数窗格"
+    assert page.manager.get(page.manager.active).name in page.tabbar._split_clear.toolTip()
 
 
 @pytest.mark.parametrize("fixture_name", ["page", "line_page", "slice_page"])

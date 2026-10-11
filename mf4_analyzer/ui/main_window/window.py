@@ -1348,31 +1348,12 @@ class MainWindow(
             _preset_ctx.preset_committed.connect(
                 partial(self._on_preset_committed, _preset_section)
             )
-        # dB reference is display-only: changing it while in FFT mode should
-        # immediately re-render without recompute. Re-evaluate _fft_render_signature
-        # (which now includes db_reference) so the stale-check in _enter_fft_mode
-        # detects the change and re-draws from cache.
-        self.inspector.fft_ctx.spin_db_ref.valueChanged.connect(
-            lambda _: self._on_db_reference_value_edited(
-                'fft', self._enter_fft_mode,
+        # A reference edit changes presentation of the accepted result only.
+        # Deferred refresh lets Auto-to-Manual commit finish before drawing.
+        for section in ('fft', 'fft_time', 'order'):
+            self._analysis_ctx(section).spin_db_ref.valueChanged.connect(
+                partial(self._on_db_reference_value_edited, section)
             )
-        )
-        # Order dB reference is display-only: changing it re-renders from cache
-        # (do_order_time hits cache, calls _render_order_on, no worker dispatch).
-        self.inspector.order_ctx.spin_db_ref.valueChanged.connect(
-            lambda _: self._on_db_reference_value_edited(
-                'order', self.do_order_time,
-            )
-        )
-        # FFT-vs-Time dB reference is also display-only.  Changing it should
-        # take the normal cache-hit render path (force=False) so the current
-        # SpectrogramResult is redrawn with the new render-time reference
-        # without scheduling a needless recompute.
-        self.inspector.fft_time_ctx.spin_db_ref.valueChanged.connect(
-            lambda _: self._on_db_reference_value_edited(
-                'fft_time', lambda: self.do_fft_time(force=False),
-            )
-        )
         # dB-reference-defaults Task 5: every section's manage button opens
         # the ONE shared DbReferenceDefaultsDialog editing the ONE global
         # catalog service (spec §11.1); each lambda only carries which
@@ -1779,7 +1760,7 @@ class MainWindow(
         # stay owned by the state that was just applied on mode entry.
         # A deferred entry can run after comparison focus has moved, so the
         # checkbox write follows that pane rather than the host tab.
-        if not self._analysis_restore_pending:
+        if not self._opening_project:
             pane_idx = None
             if self._comparison_routes('fft'):
                 pane_idx = self._dispatch_focus_index('fft', state)
@@ -1796,20 +1777,7 @@ class MainWindow(
             self._request_fft_page_transition_ready(state)
             return
         self._fft_last_render_sig = signature
-        if self._fft_any_source_cached(state):
-            self._render_analysis_view_from_cache('fft', state)
-        else:
-            if self._comparison_routes('fft'):
-                canvas = self._dispatch_canvas(
-                    'fft', state, self._dispatch_focus_index('fft', state),
-                )
-            else:
-                page = self.chart_stack.page_fft
-                canvas = page.pane_canvas(page.focused_index())
-            if getattr(canvas, 'has_result', lambda: False)():
-                self._refresh_fft_time_preview(clear_spectrum=False)
-            else:
-                self._refresh_fft_time_preview()
+        self._render_analysis_view_from_cache('fft', state)
         self._request_fft_page_transition_ready(state)
 
     def _fft_entry_from_cache(
@@ -2813,8 +2781,8 @@ class MainWindow(
                 self._convert_analysis_time_range_to_full(
                     mode, state=state, pane_idx=pane_idx,
                 )
-            if mode == 'frf' and pane.time_range != before:
-                self._dirty_frf_pane(state, pane_idx, clear_effective=True)
+            if pane.time_range != before:
+                self._mark_analysis_pane_pending(mode, state, pane_idx)
             if mode == 'fft':
                 self._refresh_fft_time_preview(clear_spectrum=False)
             return
@@ -2859,7 +2827,7 @@ class MainWindow(
         # (PgHeatmapCanvas) are pyqtgraph widgets — no ``fig``/``draw_idle``.
         # Their set_tick_density takes the same inspector tick COUNTS the
         # old MaxNLocator(nbins=...) loop consumed, so the knob semantics hold.
-        # Use peek/pane_count so a display-settings tick does not construct
+        # Use all_cards so a display-settings tick does not construct
         # every deferred analysis page; latest values apply on page ready.
         for page in (
             self.chart_stack.page_fft,
@@ -2867,8 +2835,8 @@ class MainWindow(
             self.chart_stack.page_frf,
             self.chart_stack.page_order,
         ):
-            for pane_idx in range(page.pane_count()):
-                page.pane_canvas(pane_idx).set_tick_density(xt, yt)
+            for card in page.all_cards():
+                card.canvas.set_tick_density(xt, yt)
 
     def _unit_for_signal(self, data):
         """Resolve the channel unit for a ``(fid, ch)`` signal payload.
@@ -2973,22 +2941,42 @@ class MainWindow(
         fd = self.files[fid]
         self.inspector.fft_time_ctx.set_fs(fd.fs)
 
-    def _on_db_reference_value_edited(self, section, rerender_fn):
-        """A manual dB-reference value commit changes the nudge-eligible fact
-        set (mode/value) immediately, ahead of the existing display-only
-        re-render this ``valueChanged`` wiring already schedules -- additive
-        stamping (spec 2026-07-12 S5 / A17), no render/resolve-logic change.
-        ``rerender_fn`` is the SAME callable each ``_connect`` call site
-        already deferred via ``QTimer.singleShot(0, ...)``."""
+    def _on_db_reference_value_edited(self, section, _value=None):
+        """Repaint a reference edit from cache without submitting analysis.
+
+        Freeze the edited View for the deferred redraw so a focus change
+        cannot redirect it to another comparison side.
+        Deferral lets the editor finish its Auto-to-Manual commit first.
+        """
         if (
             self._applying_analysis_view
             or getattr(self._analysis_ctx(section), "_applying_preset", False)
             or self.chart_stack.current_mode() != section
         ):
             return
-        self._sync_active_analysis_params(section)
+        state = self._sync_active_analysis_params(section)
         self._stamp_db_reference_nudge_facts(section)
-        QTimer.singleShot(0, rerender_fn)
+        if state is None:
+            return
+
+        def redraw_edited_view():
+            from PyQt5 import sip
+
+            if (
+                sip.isdeleted(self)
+                or self.chart_stack.current_mode() != section
+                or self._analysis_state_by_id(section, state.view_id) is not state
+                or (section, state.view_id) in self._analysis_restore_pending
+            ):
+                return
+            if (
+                self._analysis_state_for_dispatch(section) is not state
+                and not self._comparison_render_bound(section, state)
+            ):
+                return
+            self._render_analysis_view_from_cache(section, state)
+
+        QTimer.singleShot(0, redraw_edited_view)
 
     def _open_db_reference_dialog(
         self,

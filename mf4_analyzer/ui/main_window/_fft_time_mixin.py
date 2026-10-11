@@ -16,6 +16,7 @@ from ...signal.analysis_defaults import (
 )
 from ...signal.spectrogram import spectrogram_facts_from_result
 from ..compute_feedback import ComputeOutcome
+from ..analysis_result_state import bind_result, mark_pending, snapshot_request
 from ._sentinel import _INSPECTOR_TIME_RANGE
 from ._state_holders import (
     FftTimeHeatmapRenderInputs,
@@ -381,6 +382,8 @@ class FFTTimeMixin:
                 continue
             any_source = True
             fid, ch = sources[0]
+            mark_pending(state.panes[pane_idx])
+            request = snapshot_request(state, state.panes[pane_idx])
             render_p = {**compute_p, **display_p}
             time_range = self._dispatch_time_range('fft_time', state, pane_idx)
             prepared = self._fft_time_effective_params_for_source(
@@ -399,6 +402,7 @@ class FFTTimeMixin:
                     'source': (fid, ch),
                     'force': force,
                     'view_id': state.view_id,
+                    'request_snapshot': request,
                 })
                 continue
             effective_compute_p, _compute_time_range = prepared
@@ -414,6 +418,7 @@ class FFTTimeMixin:
                 'source': (fid, ch),
                 'force': force,
                 'view_id': state.view_id,
+                'request_snapshot': request,
                 'job_factory': lambda pane_idx=pane_idx, fid=fid, ch=ch,
                 raw_params=dict(compute_p), display_params=dict(display_p), \
                 time_range=time_range: self._build_fft_time_job(
@@ -448,6 +453,8 @@ class FFTTimeMixin:
         """
         page = self._analysis_page('fft_time')
         pane_idx = page.focused_index()
+        state = self._analysis_state_for_dispatch('fft_time')
+        mark_pending(state.panes[pane_idx])
         fid, ch, t, sig, fd = self._get_fft_time_signal()
         if sig is None or len(sig) < 2:
             self.toast("请选择有效信号", "warning")
@@ -487,6 +494,10 @@ class FFTTimeMixin:
         mgr = self.analysis_managers['fft_time']
         view_id = mgr.get(mgr.active).view_id
         single_state = mgr.get(mgr.active)
+        request = replace(
+            snapshot_request(single_state, single_state.panes[pane_idx]),
+            sources=((fid, ch),), time_range=rng,
+        )
         pane_token = (
             id(single_state.panes[pane_idx])
             if 0 <= pane_idx < len(single_state.panes) else None
@@ -502,6 +513,7 @@ class FFTTimeMixin:
             'source': (fid, ch),
             'force': force,
             'view_id': view_id,
+            'request_snapshot': request,
             'job_factory': lambda: self._build_fft_time_job(
                 pane_idx, fid, ch, dict(compute_p), time_range=compute_time_range,
                 signal_getter=self._get_fft_time_signal,
@@ -910,13 +922,20 @@ class FFTTimeMixin:
             else:
                 outcome.computed += 1
         decision = self._fft_time_completion_decision(ctx)
-        if decision == 'keep':
-            return
         if decision == 'reject':
             self._unpublish_analysis_completion('fft_time', ctx)
             return
         state = self._analysis_state_by_id('fft_time', ctx.get('view_id'))
         pane_idx = ctx.get('pane_idx', 0)
+        request = ctx.get('request_snapshot')
+        if request is not None:
+            key = ctx.get('analysis_key')
+            if not bind_result(state.panes[int(pane_idx)], request, (key,) if key is not None else ()):
+                self._unpublish_analysis_completion('fft_time', ctx)
+                return
+            self._replace_analysis_pane_pins('fft_time', state.view_id, int(pane_idx), (key,))
+        if decision == 'keep':
+            return
         source = ctx.get('source')
         p = self._fft_time_completion_display_params(state, ctx)
         self._cancel_fft_time_page_transition_cover(ctx.get('view_id'))
@@ -955,8 +974,6 @@ class FFTTimeMixin:
         state = self._analysis_state_by_id('fft_time', ctx.get('view_id'))
         if state is None:
             return 'reject'
-        if not self._analysis_completion_is_visible('fft_time', ctx):
-            return 'keep'
         try:
             pane_idx = int(ctx.get('pane_idx', 0))
         except (TypeError, ValueError):
@@ -966,6 +983,9 @@ class FFTTimeMixin:
         pane = state.panes[pane_idx]
         token = ctx.get('pane_token')
         if token is not None and token != id(pane):
+            return 'reject'
+        request = ctx.get('request_snapshot')
+        if request is not None and request.revision != pane.request_revision:
             return 'reject'
         source = ctx.get('source')
         if source is None and ctx.get('fid') is not None:
@@ -977,8 +997,10 @@ class FFTTimeMixin:
             live = list(pane.sources or [])
             if live and tuple(live[0]) != source:
                 return 'reject'
-        if self._fft_time_completion_request_changed(state, pane, pane_idx, ctx):
+        if request is None and self._fft_time_completion_request_changed(state, pane, pane_idx, ctx):
             return 'reject'
+        if not self._analysis_completion_is_visible('fft_time', ctx):
+            return 'keep'
         return 'draw'
 
     def _fft_time_current_cache_key(self, state, pane, pane_idx):
@@ -1074,26 +1096,13 @@ class FFTTimeMixin:
             ctx.clear_effective_facts()
             return
         pane = state.panes[idx]
-        sources = list(pane.sources)
-        if not sources:
+        binding = pane.result_binding
+        if binding is None or not binding.request.sources:
             ctx.clear_effective_facts()
             return
+        sources = list(binding.request.sources)
         fid, ch = sources[0]
-        time_range = self._dispatch_time_range('fft_time', state, idx)
-        prepared = self._fft_time_effective_params_for_source(
-            self.inspector.fft_time_ctx.compute_params()
-            if hasattr(self.inspector.fft_time_ctx, 'compute_params')
-            else self.inspector.fft_time_ctx.get_params(),
-            fid, ch, time_range,
-        )
-        if prepared is None:
-            ctx.clear_effective_facts()
-            return
-        effective_p, _rng = prepared
-        key = self._fft_time_analysis_cache_key(
-            fid, ch, effective_p, time_range,
-        )
-        result = self.analysis_caches['fft_time'].get(key)
+        result = self.analysis_caches['fft_time'].get(binding.keys[0])
         facts = getattr(result, 'effective', None) if result is not None else None
         if facts is None:
             ctx.clear_effective_facts()
@@ -1102,6 +1111,8 @@ class FFTTimeMixin:
         self._publish_analysis_effective_facts(
             ctx, facts, sig=sig, fid=fid, sources=sources,
         )
+        if binding.stale:
+            ctx.mark_effective_facts_stale()
 
     def _on_fft_time_failed(self, _ctx, message):
         """Coordinator failure — keep the previous chart on screen.
@@ -1129,6 +1140,24 @@ class FFTTimeMixin:
         surfaces as a normal error toast and the user can click
         重建时间轴 manually.
         """
+        request = _ctx.get('request_snapshot')
+        state = self._analysis_state_by_id('fft_time', _ctx.get('view_id'))
+        pane_idx = int(_ctx.get('pane_idx', 0))
+        if request is not None:
+            if state is None or not 0 <= pane_idx < len(state.panes):
+                return
+            pane = state.panes[pane_idx]
+            if _ctx.get('pane_token', id(pane)) != id(pane) or request.revision != pane.request_revision:
+                return
+            mark_pending(pane)
+            if (
+                self.chart_stack.current_mode() != 'fft_time'
+                or not self._analysis_completion_is_visible('fft_time', _ctx)
+                or not self._completion_updates_focus('fft_time', _ctx)
+                or self._dispatch_focus_index('fft_time', state) != pane_idx
+            ):
+                return
+            self._sync_fft_time_effective_facts(state)
         msg = str(message)
         outcome = getattr(self, '_fft_time_outcome', None)
         if outcome is not None:

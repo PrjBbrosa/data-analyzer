@@ -1398,7 +1398,7 @@ def test_one_view_analysis_menu_has_no_empty_compare_submenu(qtbot, monkeypatch)
     assert "与此 View 并排" not in labels
     assert "结束 View 对比" not in labels
     assert "加入总览" in labels
-    assert "添加对比窗格" in labels
+    assert f"添加对比窗格 — {_manager.get(0).name}" in labels
 
 
 def _shown_bar(qtbot, count=3, active=0):

@@ -901,19 +901,19 @@ class PgNavigationToolbar(QToolBar):
         return 0 <= self._view_pointer < len(self._view_stack) - 1
 
     def _refresh_history_actions(self):
-        back = self._history_can_back()
-        forward = self._history_can_forward()
-        for toolbar in self._peers():
-            back = back or toolbar._history_can_back()
-            forward = forward or toolbar._history_can_forward()
-        back_act = self._actions_by_key.get("back")
-        forward_act = self._actions_by_key.get("forward")
-        # Skip unchanged writes. setEnabled posts a layout that lets split
-        # panes recompute axis reserves independently and undo alignment.
-        if back_act is not None and back_act.isEnabled() != back:
-            back_act.setEnabled(back)
-        if forward_act is not None and forward_act.isEnabled() != forward:
-            forward_act.setEnabled(forward)
+        # A gesture in a hidden peer controller must enable the visible shared
+        # actions immediately, including while the history timer is pending.
+        group = [self, *self._peers()]
+        back = any(toolbar._history_can_back() for toolbar in group)
+        forward = any(toolbar._history_can_forward() for toolbar in group)
+        for toolbar in group:
+            back_act = toolbar._actions_by_key.get("back")
+            forward_act = toolbar._actions_by_key.get("forward")
+            # Unchanged writes cause unnecessary split-layout recalculation.
+            if back_act is not None and back_act.isEnabled() != back:
+                back_act.setEnabled(back)
+            if forward_act is not None and forward_act.isEnabled() != forward:
+                forward_act.setEnabled(forward)
 
     def _channel_data_x_union(self):
         canvas = self._canvas

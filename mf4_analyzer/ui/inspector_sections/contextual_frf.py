@@ -114,6 +114,8 @@ class FrfContextual(QWidget):
         self.setAttribute(Qt.WA_StyledBackground, True)
         self._applying_preset = False
         self._external_validation = ""
+        self._external_validation_retryable = False
+        self._validation_context = None
         self._candidate_sources = frozenset()
         self._channel_labels = {}
 
@@ -635,26 +637,40 @@ class FrfContextual(QWidget):
     def validation_message(self) -> str:
         return self.lbl_validation.text()
 
-    def set_validation_message(self, message) -> None:
+    def set_validation_context(self, context) -> None:
+        """Discard attempt diagnostics when the projected request changes.
+
+        The window supplies an opaque identity; this widget never reads View
+        or session state. Diagnostics are transient, not persisted View data.
+        """
+        if context != self._validation_context:
+            self._validation_context = context
+            self.set_validation_message("")
+
+    def set_validation_message(self, message, *, retryable=False) -> None:
         self._external_validation = str(message or "")
+        self._external_validation_retryable = bool(retryable)
         self._refresh_validation()
 
     def _refresh_validation(self) -> None:
         input_source, output_source = self.pair()
         candidate_scope_message = self._candidate_scope_message()
-        if self._external_validation:
-            message = self._external_validation
-        elif candidate_scope_message:
-            message = candidate_scope_message
+        if candidate_scope_message:
+            blocker = candidate_scope_message
         elif input_source is None or output_source is None:
-            message = "请选择输入和输出"
+            blocker = "请选择输入和输出"
         elif input_source == output_source:
-            message = "输入和输出不能相同"
+            blocker = "输入和输出不能相同"
         else:
-            message = ""
+            blocker = ""
+        message = blocker or self._external_validation
         self.lbl_validation.setText(message)
         self.lbl_validation.setVisible(bool(message))
-        self.btn_compute.setEnabled(not message)
+        # A failed attempt may be retried through the normal range-confirm and
+        # preflight path. Current pair/scope problems remain hard blockers.
+        self.btn_compute.setEnabled(not blocker and (
+            not self._external_validation or self._external_validation_retryable
+        ))
         self.btn_view_time.setEnabled(
             input_source is not None
             and output_source is not None
@@ -822,8 +838,7 @@ class FrfContextual(QWidget):
             # A failed preflight can depend on the segment parameters.  Once
             # they change, enable a fresh compute attempt; the preflight will
             # still present any remaining data error.
-            self._external_validation = ""
-            self._refresh_validation()
+            self.set_validation_message("")
         if emit_changes:
             compute = self.compute_params()
             display = self.display_params()
@@ -884,8 +899,7 @@ class FrfContextual(QWidget):
         else:
             # Compute-parameter edits must not leave a valid pair trapped
             # behind the previous preflight error.
-            self._external_validation = ""
-            self._refresh_validation()
+            self.set_validation_message("")
             self.compute_params_changed.emit(self.compute_params())
 
 

@@ -14,6 +14,7 @@ from ...signal.frf import (
 )
 from ...signal.spectrogram import DEFAULT_TIME_JITTER_TOLERANCE
 from ..time_xaxis import CHANNEL_MODE, CustomXAxisSpec
+from ..analysis_result_state import bind_result, mark_pending, snapshot_request
 from .frf_coordinator import frf_compute_cache_params
 from .ultraview_coordinator import notify_ultraview_plot
 
@@ -80,12 +81,22 @@ class FrfMixin:
         finally:
             ctx.combo_output.blockSignals(old_output)
             ctx.combo_input.blockSignals(old_input)
+        self._sync_frf_validation_context(state, idx)
         ctx._refresh_validation()
         # A focused-pane echo owns its immediate facts refresh.  The full View
         # restore has a later cache-render sync after all final source, range,
         # and canvas state is in place, so it suppresses this provisional one.
         if sync_effective_facts:
             self._sync_frf_effective_facts(state)
+
+    def _sync_frf_validation_context(self, state, pane_idx):
+        pane = state.panes[pane_idx]
+        self.inspector.frf_ctx.set_validation_context((
+            state.view_id, int(pane_idx),
+            self._analysis_source_signature_for_pane("frf", pane, state),
+            pane.time_range,
+            tuple(sorted(self._frf_compute_values_for_state(state).items())),
+        ))
 
     def _frf_focused_pane_index(self, state):
         """Focused pane index while ``state`` is the one on screen, else None."""
@@ -113,6 +124,41 @@ class FrfMixin:
             return None
         return self.analysis_caches["frf"].get(key)
 
+    def _frf_bound_result_for_pane(self, state, pane):
+        """Only this pane's accepted explicit request may provide its picture."""
+        binding = pane.result_binding
+        if binding is None or not binding.keys:
+            return None
+        return self.analysis_caches["frf"].get(binding.keys[0])
+
+    def _frf_bound_context_for_pane(self, pane):
+        binding = pane.result_binding
+        if binding is None:
+            return {}
+        return self._frf_render_context_for_pane(binding.request)
+
+    def _render_bound_frf_pane(self, state, pane_idx, canvas):
+        pane = state.panes[pane_idx]
+        result = self._frf_bound_result_for_pane(state, pane)
+        if result is None:
+            canvas.full_reset()
+            self._rebind_pane_overlay(canvas, pane)
+            self._replace_analysis_pane_pins("frf", state.view_id, pane_idx, ())
+            if pane.input_source is not None or pane.output_source is not None:
+                canvas.show_empty_hint("点击『计算频响』生成")
+            return False
+        self._replace_analysis_pane_pins(
+            "frf", state.view_id, pane_idx, pane.result_binding.keys,
+        )
+        canvas.set_result(
+            result, display_params=self._frf_display_params_for_state(state),
+            context=self._frf_bound_context_for_pane(pane),
+        )
+        self._restore_frf_canvas_ranges(canvas, pane)
+        if pane.result_binding.stale:
+            canvas.mark_stale()
+        return True
+
     def _frf_view_is_uncomputed(self, state) -> bool:
         """True when the View has an I/O pair but no cached FRF result."""
         panes = tuple(getattr(state, "panes", ()) or ())
@@ -121,7 +167,7 @@ class FrfMixin:
         pane = panes[0]
         if pane.input_source is None or pane.output_source is None:
             return False
-        return self._frf_cached_result_for_pane(state, pane) is None
+        return self._frf_bound_result_for_pane(state, pane) is None
 
     def _cancel_frf_page_transition_cover(self, view_id=None) -> None:
         """Drop a pending FRF cover before a live result or status replaces it."""
@@ -149,12 +195,14 @@ class FrfMixin:
         canvas = None if idx is None else self._canvas_for_view_pane("frf", state, idx)
         result = (
             None if canvas is None or not canvas.has_result()
-            else self._frf_cached_result_for_pane(state, state.panes[idx])
+            else self._frf_bound_result_for_pane(state, state.panes[idx])
         )
         if result is None:
             self.inspector.frf_ctx.clear_effective_facts()
             return
         self._publish_frf_effective_facts(result)
+        if state.panes[idx].result_binding.stale:
+            self.inspector.frf_ctx.mark_effective_facts_stale()
 
     def _capture_frf_canvas_ranges(self, state):
         for pane_idx in range(len(state.panes)):
@@ -251,7 +299,7 @@ class FrfMixin:
         idx = int(pane_idx)
         if not (0 <= idx < len(state.panes)):
             return
-        if clear_effective:
+        if clear_effective and state.panes[idx].result_binding is None:
             state.panes[idx].effective_time_range = None
         self._reconcile_frf_result_validity(state, pane_indices=(idx,))
 
@@ -273,50 +321,19 @@ class FrfMixin:
             return
         _manager, state, _page, _pane_idx, _pane = self._active_frf_state()
         state.params.update(dict(params or {}))
-        # Compute controls belong to the whole Analysis View. Reconcile does
-        # not submit; a cached request becomes current again, a miss stays stale.
         self._reconcile_frf_result_validity(state)
 
     def _reconcile_frf_result_validity(self, state, *, pane_indices=None):
-        """Publish the cached FRF for the current request, or keep it stale.
-
-        ``invalidate_pane`` drops an in-flight job so it cannot paint as the
-        new request. The completed cache entry stays. A hit restores that
-        result and clears the facts stale bit; a miss keeps the previous
-        curves and the explicit stale label.
-        """
+        """An intent edit marks the accepted result pending; cache is not consent."""
         focused = self._frf_focused_pane_index(state)
         indices = range(len(state.panes)) if pane_indices is None else pane_indices
         for pane_idx in indices:
-            self._frf_coordinator.invalidate_pane(state.view_id, pane_idx)
-            pane = state.panes[pane_idx]
-            result = self._frf_cached_result_for_pane(state, pane)
-            canvas = self._canvas_for_view_pane("frf", state, pane_idx)
-            if result is None:
-                self._mark_frf_pane_stale(state, pane_idx)
-                if pane_idx == focused:
-                    self.inspector.frf_ctx.mark_effective_facts_stale()
-                continue
-            key = self._frf_cache_key_for_pane(state, pane)
-            if key is not None:
-                self._replace_analysis_pane_pins(
-                    "frf", state.view_id, pane_idx, (key,),
-                )
-            pane.effective_time_range = (
-                result.effective.time_start, result.effective.time_end,
-            )
-            if canvas is None:
-                if pane_idx == focused:
-                    self._publish_frf_effective_facts(result)
-                continue
-            canvas.set_result(
-                result,
-                display_params=self._frf_display_params_for_state(state),
-                context=self._frf_render_context_for_pane(pane),
-            )
-            self._restore_frf_canvas_ranges(canvas, pane)
             if pane_idx == focused:
-                self._publish_frf_effective_facts(result)
+                self._sync_frf_validation_context(state, pane_idx)
+            self._frf_coordinator.invalidate_pane(state.view_id, pane_idx)
+            mark_pending(state.panes[pane_idx])
+            self._mark_frf_pane_stale(state, pane_idx)
+        self._sync_frf_effective_facts(state)
 
     def _on_frf_display_params_changed(self, params):
         if self._applying_analysis_view:
@@ -694,6 +711,8 @@ class FrfMixin:
         return {
             "view_id": state.view_id,
             "pane_idx": idx,
+            "request_snapshot": snapshot_request(state, pane),
+            "request_pane": pane,
             "input_source": input_key,
             "output_source": output_key,
             "params": canonical,
@@ -711,7 +730,13 @@ class FrfMixin:
         if not self._offer_analysis_time_range_before_compute("frf"):
             return False
         self._capture_active_analysis_view("frf")
-        _manager, state, page, pane_idx, _pane = self._active_frf_state()
+        _manager, state, page, pane_idx, pane = self._active_frf_state()
+        # A retry supersedes the accepted request even when preflight fails
+        # or the service suppresses terminal callbacks after cancellation.
+        # Keep the coordinator's cross-pane queue/replacement policy intact.
+        mark_pending(pane)
+        self._mark_frf_pane_stale(state, pane_idx)
+        self._sync_frf_effective_facts(state)
         try:
             candidate = self._build_frf_candidate(state, pane_idx, force=force)
         except FrfPreflightError as issue:
@@ -824,11 +849,23 @@ class FrfMixin:
     def _on_frf_render_requested(self, context, result, cache_hit):
         state = self._frf_state_by_id(context.get("view_id"))
         if state is None:
+            self._unpublish_analysis_completion("frf", context)
             return
         pane_idx = int(context.get("pane_idx", 0))
         if not (0 <= pane_idx < len(state.panes)):
+            self._unpublish_analysis_completion("frf", context)
             return
         pane = state.panes[pane_idx]
+        request = context.get("request_snapshot")
+        key = context.get("analysis_key")
+        if (
+            context.get("request_pane") is not pane
+            or request is None or key is None
+            or not bind_result(pane, request, (key,))
+        ):
+            self._unpublish_analysis_completion("frf", context)
+            return
+        self._replace_analysis_pane_pins("frf", state.view_id, pane_idx, (key,))
         pane.effective_time_range = (
             float(result.effective.time_start),
             float(result.effective.time_end),
@@ -838,7 +875,7 @@ class FrfMixin:
         canvas = self._canvas_for_completion("frf", state.view_id, pane_idx)
         if canvas is None:
             return
-        render_context = self._frf_render_context_for_pane(pane)
+        render_context = self._frf_bound_context_for_pane(pane)
         render_context.update({
             key: context[key]
             for key in (
@@ -867,7 +904,10 @@ class FrfMixin:
             # Both the worker completion and the synchronous cache hit land
             # here, so the resident facts are filled exactly once per render.
             self._publish_frf_effective_facts(result)
-        if self._completion_updates_focus("frf", context):
+        if (
+            self.chart_stack.current_mode() == "frf"
+            and self._frf_focused_pane_index(state) == pane_idx
+        ):
             suffix = "（缓存）" if cache_hit else ""
             self.statusBar.showMessage(
                 f"频响完成{suffix} · {result.effective.segments} 段 · "
@@ -877,6 +917,19 @@ class FrfMixin:
     def _on_frf_failed(self, context, issue):
         message = str(issue)
         state = self._frf_state_by_id(context.get("view_id"))
+        pane_idx = int(context.get("pane_idx", 0))
+        if state is None or not 0 <= pane_idx < len(state.panes):
+            return
+        pane = state.panes[pane_idx]
+        request = context.get("request_snapshot")
+        if request is not None and (
+            context.get("request_pane") is not pane
+            or request.revision != pane.request_revision
+        ):
+            return
+        mark_pending(pane)
+        if self._frf_focused_pane_index(state) == pane_idx:
+            self._sync_frf_effective_facts(state)
         if state is not None and self._analysis_completion_is_visible("frf", context):
             pane_idx = int(context.get("pane_idx", 0))
             canvas = self._canvas_for_completion("frf", state.view_id, pane_idx)
@@ -889,8 +942,12 @@ class FrfMixin:
                 else self._analysis_page("frf").focused_index()
             )
             if pane_idx == focus_pane and self._completion_updates_focus("frf", context):
-                self.inspector.frf_ctx.set_validation_message(message)
-        if self._completion_updates_focus("frf", context):
+                self._sync_frf_validation_context(state, pane_idx)
+                self.inspector.frf_ctx.set_validation_message(message, retryable=True)
+        if (
+            self.chart_stack.current_mode() == "frf"
+            and self._frf_focused_pane_index(state) == pane_idx
+        ):
             self.statusBar.showMessage(f"频响错误: {message}")
             self.toast(message, "error")
 
@@ -925,37 +982,11 @@ class FrfMixin:
     def _render_frf_view_from_cache(self, state):
         page = self._analysis_page("frf")
         missing = False
-        enumerated_panes = set()
         for pane_idx in range(min(page.pane_count(), len(state.panes))):
-            enumerated_panes.add(pane_idx)
-            pane = state.panes[pane_idx]
-            canvas = page.pane_canvas(pane_idx)
-            key = self._frf_cache_key_for_pane(state, pane)
-            if key is None:
-                canvas.full_reset()
-                self._rebind_pane_overlay(canvas, pane)
-                self._replace_analysis_pane_pins(
-                    "frf", state.view_id, pane_idx, ())
-                continue
-            self._replace_analysis_pane_pins(
-                "frf", state.view_id, pane_idx, (key,))
-            result = self.analysis_caches["frf"].get(key)
-            if result is None:
-                missing = True
-                canvas.full_reset()
-                self._rebind_pane_overlay(canvas, pane)
-                canvas.show_empty_hint("点击『计算频响』生成")
-                continue
-            canvas.set_result(
-                result,
-                display_params=self._frf_display_params_for_state(state),
-                context=self._frf_render_context_for_pane(pane),
+            restored = self._render_bound_frf_pane(
+                state, pane_idx, page.pane_canvas(pane_idx),
             )
-            self._restore_frf_canvas_ranges(canvas, pane)
-        for pane_idx in range(len(state.panes)):
-            if pane_idx not in enumerated_panes:
-                self._replace_analysis_pane_pins(
-                    "frf", state.view_id, pane_idx, ())
+            missing = missing or not restored
         self._sync_frf_effective_facts(state)
         notify_ultraview_plot(self, "frf", "frf-restore-plot")
         if missing:

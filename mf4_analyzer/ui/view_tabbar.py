@@ -499,6 +499,7 @@ class ViewTabBar(QWidget):
         split_action_mode='view_pair',
         active_split_provider=None,
         comparison_open_provider=None,
+        comparison_partner_provider=None,
         focused_pane_provider=None,
     ):
         super().__init__(parent)
@@ -517,6 +518,7 @@ class ViewTabBar(QWidget):
         self._split_action_mode = str(split_action_mode)
         self._active_split_provider = active_split_provider
         self._comparison_open_provider = comparison_open_provider
+        self._comparison_partner_provider = comparison_partner_provider
         self._focused_pane_provider = focused_pane_provider
         self._suppress = False
         self._rename_editor = None
@@ -697,6 +699,15 @@ class ViewTabBar(QWidget):
         return anchor
 
     def _on_manager_split_changed(self, _idx) -> None:
+        self.refresh_comparison_presentation()
+
+    def refresh_comparison_presentation(self) -> None:
+        """Project the owner's current comparison without rebuilding tabs.
+
+        Analysis relationships live outside ViewManager. Their owner calls
+        this when a pair opens, closes, or is restored; the provider resolves
+        stable View identities to current indices at paint time.
+        """
         # Merge created/cancelled: update the status chip AND re-tint tab dots
         # (host gains a half partner-color swatch; cancel restores solid).
         self._update_split_chip()
@@ -704,21 +715,23 @@ class ViewTabBar(QWidget):
         # The cancel-merge button just appeared/vanished, which moves the tab
         # strip's measured budget by its whole width.
         self._sync_tabbar_width()
+        self._sync_overflow_popup()
         self._relocate_marker(interpolate=False)
 
     def _partner_color_for(self, idx: int):
         """Return the partner View's tab color when ``idx`` is a merge host,
         else None. Only hosts get a split dot; source Views stay solid."""
-        partner_for = getattr(self._manager, "partner_for", None)
+        partner_for = self._comparison_partner_provider
+        if partner_for is None:
+            partner_for = getattr(self._manager, "partner_for", None)
         if not callable(partner_for):
             return None
         partner = partner_for(idx)
-        if partner is None:
+        if partner is None or partner == idx:
             return None
-        try:
-            return self._manager.get(partner).tab_color
-        except Exception:
+        if not 0 <= partner < len(self._manager.views):
             return None
+        return self._manager.get(partner).tab_color
 
     def _refresh_tab_swatches(self) -> None:
         if self._reordering:
@@ -880,6 +893,14 @@ class ViewTabBar(QWidget):
         """Public entry for hosts that changed sibling width (UltraView Dock)."""
         self._sync_tabbar_width()
         self._relocate_marker(interpolate=False)
+
+    def minimum_active_tab_width(self) -> int:
+        """Measured rail reserve that keeps the active tab fully hittable."""
+        budget = self._tabs_budget(include_overflow=True)
+        if budget is None or self._tabs.count() == 0:
+            return self.minimumSizeHint().width()
+        active_hint = self._tabs.tabSizeHint(self._manager.active).width()
+        return self.width() - budget + active_hint
 
     def refresh(self) -> None:
         if self._reordering:
@@ -1337,10 +1358,10 @@ class ViewTabBar(QWidget):
             self._split_chip.setVisible(False)
             self._split_chip.setText("")
             self._split_clear.setVisible(visible)
+            action_text = self._active_pane_action_text('clear')
             self._split_clear.setText("✕ " + self._split_action_labels['clear'])
-            self._split_clear.setToolTip("关闭当前 View 的对比窗格")
-            self._split_clear.setAccessibleName(
-                "关闭当前 View 的对比窗格" if visible else "")
+            self._split_clear.setToolTip(action_text)
+            self._split_clear.setAccessibleName(action_text if visible else "")
             return
         partner_for = getattr(self._manager, "partner_for", None)
         partner = partner_for(self._manager.active) if callable(partner_for) else None
@@ -1557,6 +1578,11 @@ class ViewTabBar(QWidget):
                 return host
         return None
 
+    def _active_pane_action_text(self, action: str) -> str:
+        # Internal panes are a host-only operation, even when the independent
+        # comparison peer has focus. Always name the host rather than "current".
+        return f"{self._split_action_labels[action]} — {self._view_name(self._manager.active)}"
+
     def _on_context_menu(self, pos) -> None:
         idx = self._tabs.tabAt(pos)
         if not self._is_valid_tab(idx):
@@ -1578,13 +1604,8 @@ class ViewTabBar(QWidget):
             and active_partner is not None
             and active_partner != idx
         )
-        if self._split_action_mode == 'active_pane':
-            if self._active_pane_split_visible() and idx == self._manager.active:
-                split_action = menu.addAction(self._split_action_labels['clear'])
-            else:
-                split_action = menu.addAction(self._split_action_labels['split'])
-            split_action.setEnabled(idx == self._manager.active)
-        else:
+        split_action = None
+        if self._split_action_mode != 'active_pane':
             if partner is not None:
                 split_action = menu.addAction(self._split_action_labels['clear'])
             elif will_replace:
@@ -1615,6 +1636,14 @@ class ViewTabBar(QWidget):
                         compare_actions.append(action)
             if self._comparison_is_open():
                 end_action = menu.addAction("结束 View 对比")
+        if self._split_action_mode == 'active_pane':
+            if beside_action is not None or compare_actions or end_action is not None:
+                menu.addSeparator()
+            action_key = 'clear' if self._active_pane_split_visible() else 'split'
+            split_action = menu.addAction(self._active_pane_action_text(action_key))
+            split_action.setToolTip("同一 View，共享分析参数，来源与时间范围独立")
+            menu.setToolTipsVisible(True)
+            split_action.setEnabled(idx == self._manager.active)
         menu.addSeparator()
         delete_action = menu.addAction("删除")
         delete_action.setEnabled(len(self._manager.views) > 1)

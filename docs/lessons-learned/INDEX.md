@@ -290,11 +290,14 @@ lesson by default.
 | [Chart Options Restore Commits The Opening Snapshot](pyqt-ui/2026-09-25-chart-options-restore-commits-opening-snapshot.md) | Changing ChartOptionsDialog reset, apply, axis range, or color-scale commit. | See lesson |
 | [FRF Faded Strokes Need Native Paint Profiling](frf-faded-strokes-need-native-paint-profiling.md) | FRF cursor or zoom stalls although curve antialiasing is already off. | See lesson |
 | [Time Range Editors Preserve Unedited Physical Endpoints](time-range-editors-preserve-unedited-physical-endpoints.md) | Editing, restoring or validating physical time endpoints through rounded numeric widgets. | See lesson |
+| [FRF Attempt Errors Do Not Block Request Recovery](frf-attempt-errors-do-not-block-request-recovery.md) | Changing FRF validation, retry, range correction, or View/pane projection. | See lesson |
 | [Qt Test Input State Survives Failed Widget Tests](qt-test-input-state-survives-failed-widget-tests.md) | Hover or pin tests pass alone but fail later in a shared QApplication. | See lesson |
 | [Channel Menu Actions Follow Target Cardinality](channel-menu-actions-follow-target-cardinality.md) | Adding or changing channel-tree context-menu actions. | See lesson |
 | [Pin tests must cover real creation and source roles](pin-tests-must-cover-real-creation-and-source-roles.md) | Adding Pin support to an analysis canvas or changing its sampling/identity adapter. | See lesson |
 | [热图色阶必须从所属请求及稳定参考基准推导](heatmap-color-request-reference-anchor.md) | 手动热图色阶随 View 切换、reference、分屏锁定、保存或图表还原发生改变。 | See lesson |
 | [Cursor Readouts Need Sequence Geometry Contracts](cursor-readouts-need-sequence-geometry-contract.md) | Changing cursor title wrapping, value-driven card size, visible-row fitting, pin placement, or tether publication. | See lesson |
+| [Commit validated editor input before switching its state owner](analysis-editors-commit-before-binding-snapshot.md) | Changing analysis View focus, saving projects, or wiring focus-out-only parameter editors. | See lesson |
+| [Cache availability does not authorize result publication](analysis-cache-is-not-result-publication-authority.md) | Changing analysis parameter signals, cache restoration, display-only callbacks, project restoration, or asynchronous result admission. | See lesson |
 
 ## Selection Rules
 

@@ -631,6 +631,22 @@ _HINTS = (
         dwell_ms=8000,
     ),
     Hint(
+        id="analysis.project_compute",
+        text="重开项目只恢复设置，请点击计算",
+        surface="context",
+        modes=frozenset({"fft", "fft_time", "frf", "order"}),
+        priority=70,
+        dwell_ms=8000,
+    ),
+    Hint(
+        id="analysis.explicit_compute",
+        text="改参数保留上次结果，点计算才应用",
+        surface="context",
+        modes=frozenset({"fft", "fft_time", "frf", "order"}),
+        priority=70,
+        dwell_ms=8000,
+    ),
+    Hint(
         id="analysis.zoom_scope",
         text="Home 查看全部；重新计算按参数显示",
         surface="context",
@@ -652,6 +668,13 @@ _HINTS = (
         surface="context",
         modes=frozenset({"frf"}),
         priority=110,
+    ),
+    Hint(
+        id="frf.retry_compute",
+        text="计算失败可重试，范围与输入会重新检查",
+        surface="context",
+        modes=frozenset({"frf"}),
+        priority=75,
     ),
     Hint(
         id="frf.custom_x_limit",
@@ -1024,7 +1047,7 @@ _HINTS = (
     ),
     Hint(
         id="analysis.cross_view_compare",
-        text="右键 View 可并排；联动需轴尺度兼容",
+        text="View 独立调参；窄窗操作见对比选项",
         surface="discovery",
         modes=frozenset({"fft", "fft_time", "frf", "order"}),
         priority=56,

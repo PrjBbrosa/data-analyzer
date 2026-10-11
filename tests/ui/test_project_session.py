@@ -787,11 +787,9 @@ def test_open_project_keeps_analysis_empty_owner_after_time_view_restore(
     assert "FRF · View 2" in mw2.navigator.channel_list.empty_state.text()
 
 
-def test_open_project_auto_recomputes_source_bearing_analysis_views(
+def test_open_project_preserves_source_bearing_views_without_computing(
         qapp, tmp_path, monkeypatch):
-    """Recompute-on-open: a saved project stores each analysis view's params +
-    sources but NOT the numeric results, so opening it must auto-recompute every
-    view that has sources (and leave source-less views alone)."""
+    """All source-bearing Views restore intent, including inactive drafts."""
     from mf4_analyzer.ui.analysis_view_state import AnalysisViewState, PaneState
     from mf4_analyzer.ui.main_window import MainWindow
     csv_a = tmp_path / "a.csv"; _write_csv(csv_a)
@@ -802,8 +800,7 @@ def test_open_project_auto_recomputes_source_bearing_analysis_views(
     fid = next(iter(mw.files))
     # Give the Order view a source while the app is in 'time' mode — save then
     # preserves these sources (capture_sources only re-reads the navigator for
-    # the CURRENT mode). Seed two FFT views so open must dispatch both, not
-    # only the active tab. Mutate the manager list directly so set_active
+    # the CURRENT mode). Seed two FFT views to cover active and inactive drafts. Mutate the manager list directly so set_active
     # cannot rewrite the shared Time/FFT navigator mid-setup.
     mw.analysis_managers['order'].get(0).panes[0].sources = [(fid, 'rpm')]
     fft_mgr = mw.analysis_managers['fft']
@@ -825,24 +822,19 @@ def test_open_project_auto_recomputes_source_bearing_analysis_views(
     )
     mw2.open_project(proj)
     assert recomputed == []
-    assert mw2._analysis_jobs.progress_token("restore") is not None
-    assert "恢复分析" in (mw2._compute_progress._full_label or "")
-    assert len(mw2._analysis_restore_queue) == 3
     _drain_analysis_restore(qapp, mw2)
-
-    sections = {section for section, _view_id in recomputed}
-    assert 'order' in sections, "source-bearing Order view must auto-recompute"
-    fft_ids = [view_id for section, view_id in recomputed if section == 'fft']
-    assert len(fft_ids) == 2, "every source-bearing FFT View must recompute"
-    assert set(fft_ids) == {v.view_id for v in mw2.analysis_managers['fft'].views}
-    assert 'fft_time' not in sections, "source-less FFT-vs-Time must NOT recompute"
+    assert recomputed == []
+    assert not mw2._analysis_restore_pending
     assert mw2._analysis_jobs.progress_token("restore") is None
+    assert len(mw2.analysis_managers['fft'].views) == 2
+    for section in ('fft', 'order'):
+        for state in mw2.analysis_managers[section].views:
+            assert state.panes[0].sources[0][1] == 'rpm'
 
 
-def test_open_project_recomputes_inactive_fft_view_without_clicking_compute(
+def test_open_project_keeps_inactive_fft_empty_until_clicking_compute(
         qapp, tmp_path, qtbot):
-    """Opening a project must refill every FFT View's cache so switching tabs
-    shows the restored spectrum without pressing 计算."""
+    """Switching restored active/inactive Views does not grant computation."""
     from mf4_analyzer.ui.analysis_view_state import AnalysisViewState, PaneState
     from mf4_analyzer.ui.main_window import MainWindow
     csv_a = tmp_path / "a.csv"
@@ -874,17 +866,19 @@ def test_open_project_recomputes_inactive_fft_view_without_clicking_compute(
     mw2.toolbar._set_mode("fft")
     qapp.processEvents()
     canvas = mw2.chart_stack.page_fft.pane_canvas(0)
-    assert len(canvas._amp_curves) >= 1
+    assert len(canvas._amp_curves) == 0
     other = 1 - fft_mgr2.active
     fft_mgr2.set_active(other)
     qapp.processEvents()
+    assert len(canvas._amp_curves) == 0
+
+    mw2.inspector.fft_ctx.btn_fft.click()
     assert len(canvas._amp_curves) >= 1
 
 
-def test_fft_inspector_signal_is_saved_and_recomputed_on_open(
+def test_fft_inspector_signal_is_saved_and_waits_for_compute_on_open(
         qapp, tmp_path, qtbot):
-    """Inspector 单信号 (no navigator ticks) must persist as pane.sources so
-    reopen can recompute instead of showing an empty '未选通道' chart."""
+    """Inspector 单信号 persists as intent and remains ready for Compute."""
     from mf4_analyzer.ui.main_window import MainWindow
     csv_a = tmp_path / "a.csv"
     _write_csv(csv_a, n=256)
@@ -912,6 +906,8 @@ def test_fft_inspector_signal_is_saved_and_recomputed_on_open(
     mw2.toolbar._set_mode("fft")
     qapp.processEvents()
     canvas = mw2.chart_stack.page_fft.pane_canvas(0)
+    assert len(canvas._amp_curves) == 0
+    mw2.inspector.fft_ctx.btn_fft.click()
     assert len(canvas._amp_curves) >= 1
 
 
@@ -2128,6 +2124,9 @@ def test_project_roundtrip_restores_fft_remarks_and_frequency_cursor(
     pane_state = mw2.analysis_managers["fft"].get(0).panes[0]
     assert pane_state.remarks[0]["source"] == [restored_fid, "rpm"]
     assert pane_state.remarks[0]["x"] == pytest.approx(saved_x)
+    assert not canvas2._amp_curves
+    mw2.inspector.fft_ctx.btn_fft.click()
+    qapp.processEvents()
     assert canvas2.remark_count() == 1
     assert canvas2._cursor_a_frequency == pytest.approx(placement["ax"])
     assert canvas2._cursor_b_frequency == pytest.approx(placement["bx"])

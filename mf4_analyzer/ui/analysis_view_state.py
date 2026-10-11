@@ -26,6 +26,7 @@ from .pinned_cursor_state import (
     collection_to_dict,
     empty_collection,
 )
+from .analysis_result_state import AnalysisResultBinding
 from .view_overlay_state import (
     normalize_cursor_placement,
     normalize_remarks,
@@ -400,6 +401,10 @@ class PaneState:
 
     # Request reference intent only; never stores a canvas's effective levels.
     heatmap_color_basis: dict[str, Any] | None = None
+
+    # Appended for positional compatibility; deliberately absent from to_dict.
+    result_binding: AnalysisResultBinding | None = field(default=None, repr=False, compare=False)
+    request_revision: int = field(default=0, repr=False, compare=False)
 
     def to_dict(self) -> dict[str, Any]:
         return {

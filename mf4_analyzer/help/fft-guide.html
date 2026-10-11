@@ -23,7 +23,19 @@
         </div>
     </section>
 
-    <section class="slide">
+        <section class="slide">
+        <div class="frame">
+            <div class="topbar reveal d1"><span class="eyebrow">计算与恢复 · <b>点击计算才应用</b></span><span class="turbo-rule"></span></div>
+            <div class="step-head reveal d2"><span class="big">草稿 → 计算</span><h2>设置与结果分开保存</h2></div>
+            <div class="paths">
+                <div class="path reveal d3"><div class="tagA">调参数</div><div class="ptxt">修改算法参数、来源、时间范围或应用预设，只保存草稿；保留上次结果并提示<b>待计算</b>。点击<span class="ui">计算</span>才应用新请求，已有缓存可直接复用。</div></div>
+                <div class="path reveal d4"><div class="tagA g">调显示</div><div class="ptxt">Linear/dB、参考值、坐标、色图和相位等显示设置只调整已应用结果；保存 dB 参考目录、切换 View 或对比焦点都不重新计算。没有结果时保持空图。</div></div>
+                <div class="path reveal d5"><div class="tagA">重开项目</div><div class="ptxt">项目保存来源、参数、预设、布局和显示意图，<b>不保存分析结果</b>。无论之前是否计算过，打开新旧项目后都请<span class="ui">点击计算</span>。FFT 源信号时域预览可以先显示。</div></div>
+            </div>
+        </div>
+    </section>
+
+<section class="slide">
         <div class="frame">
             <div class="topbar reveal d1"><span class="eyebrow">先认准位置 · <b>在哪点什么</b></span><span class="turbo-rule"></span></div>
             <div class="map-grid">
@@ -145,7 +157,7 @@
             <div class="step-head reveal d2"><span class="big">+</span><h2>在多个频谱间安全切换</h2></div>
             <div class="step-grid">
                 <div class="instr">
-                    <div class="blk reveal d3"><span class="k">①</span><p><span class="ui">View 色标关闭</span>：当前 View 悬停色标出现 ×；其他 View 首击只切换，移出再进入后才可关闭。右侧 <span class="ui">⋯</span> 始终可管理全部 View，窄窗口显示 <span class="ui">»N</span>。同一模块里，右键其他 View 可选<span class="ui">与此 View 并排</span>，当前 View 可选<span class="ui">与其他 View 并排…</span>；<span class="ui">结束 View 对比</span>不删除 View，也不重新计算。</p></div>
+                    <div class="blk reveal d3"><span class="k">①</span><p><span class="ui">View 色标关闭</span>：当前 View 悬停色标出现 ×；其他 View 首击只切换，移出再进入后才可关闭。右侧 <span class="ui">⋯</span> 始终可管理全部 View，窄窗口显示 <span class="ui">»N</span>。同一模块里，右键其他 View 可选<span class="ui">与此 View 并排</span>，当前 View 可选<span class="ui">与其他 View 并排…</span>；<span class="ui">结束 View 对比</span>不删除 View，也不重新计算。并排的两个 View 独立调参，共用上方工具栏；Home、标注和图表选项操作焦点侧，主标签色标两半分别代表两个 View。<span class="ui">添加同参数窗格</span>是在同一 View 内比较来源或时间范围，算法参数共享。 窄窗口中，联动、锁色阶和展开操作集中到“对比选项”，为当前 View 标签保留空间。</p></div>
                     <div class="blk reveal d4"><span class="k">②</span><p>Windows/Linux 用 Ctrl+Tab / Ctrl+Shift+Tab 切换；macOS 界面显示为 Meta+Tab / Meta+Shift+Tab，实际按 Control+Tab（⌃⇥）/ Control+Shift+Tab（⌃⇧⇥）。图表复位用 Ctrl+R，Esc 只退出最内层菜单或临时编辑。</p></div>
                     <div class="blk reveal d5"><span class="k">③</span><p>需要回看原始时域波形时，时域图的<span class="ui">游标显示设置</span>可控制极值点和双游标 Min / Max / Avg / 差值；其 mini 读数保留完整提示。</p></div>
                 </div>

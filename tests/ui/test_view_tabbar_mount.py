@@ -331,7 +331,7 @@ def test_analysis_rail_state_matrix_on_chart_stack(
     assert _host_clickables(host)[-1] is dock
     assert clear.isVisible() is split
     if split:
-        assert clear.text() == "✕ 关闭对比窗格"
+        assert clear.text() == "✕ 关闭同参数窗格"
         assert clear.parentWidget() is page.tabbar
     assert page.btn_link.isVisible() is expect_link
     assert page.btn_lock_levels.isVisible() is expect_lock

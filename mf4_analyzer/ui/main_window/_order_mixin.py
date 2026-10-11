@@ -20,6 +20,7 @@ from ...signal.spectrogram import SpectrogramAnalyzer
 from ..pg_canvas.heatmap_canvas import DEFAULT_HEATMAP_INTERP
 from ...qt_analysis_shared import amplitude_mode_is_db
 from ..compute_feedback import ComputeOutcome
+from ..analysis_result_state import bind_result, mark_pending, snapshot_request
 from ._sentinel import _INSPECTOR_TIME_RANGE
 from ._state_holders import (
     OrderHeatmapRenderInputs,
@@ -430,6 +431,8 @@ class OrderMixin:
             fid, ch = sources[0]
             rpm_source = state.panes[pane_idx].rpm_source
             pane = state.panes[pane_idx]
+            mark_pending(pane)
+            request = snapshot_request(state, pane)
             if routed:
                 analysis_key = self._analysis_cache_key_for_view_source(
                     'order', state, pane, pane_idx, fid, ch,
@@ -443,6 +446,9 @@ class OrderMixin:
             if cached is not None:
                 self._store_analysis_result(
                     'order', state.view_id, pane_idx, analysis_key, cached)
+                if not bind_result(pane, request, (analysis_key,)):
+                    continue
+                self._replace_analysis_pane_pins('order', state.view_id, pane_idx, (analysis_key,))
                 canvas = self._dispatch_canvas('order', state, pane_idx)
                 if canvas is not None:
                     self._render_order_on(canvas, cached, source=(fid, ch))
@@ -452,6 +458,8 @@ class OrderMixin:
                     pane_idx, fid, ch, rpm_source,
                     state=state if routed else None,
                 )
+                if built is None:
+                    mark_pending(pane)
                 jobs.append(built if built is not None else (None, {'pane_idx': pane_idx}))
 
         if not jobs:
@@ -471,6 +479,9 @@ class OrderMixin:
         """Legacy single-source Order path: compute the inspector's selected
         signal/rpm onto the primary canvas. Kept for the standalone-signal UX
         and the pre-V7b tests."""
+        state = self._analysis_state_for_dispatch('order')
+        pane_idx = self._dispatch_focus_index('order', state)
+        mark_pending(state.panes[pane_idx])
         sig_data = self.inspector.order_ctx.current_signal()
         rpm_data = self.inspector.order_ctx.current_rpm()
         if not sig_data:
@@ -485,6 +496,11 @@ class OrderMixin:
             self.inspector.order_ctx.set_progress("")
             return
         self._order_outcome = None
+        _job, context = built
+        cached = self.analysis_caches['order'].get(context.get('analysis_key'))
+        if cached is not None:
+            self._on_order_job_finished(context, cached)
+            return
         self._start_order_batch([built])
 
     def _start_order_batch(self, jobs):
@@ -600,6 +616,12 @@ class OrderMixin:
             # Views, so the callback must not read the then-active view.
             'view_id': view_id,
         }
+        if owner is not None and 0 <= int(pane_idx) < len(owner.panes):
+            ctx['request_snapshot'] = replace(
+                snapshot_request(owner, owner.panes[int(pane_idx)]),
+                sources=((fid, ch),), time_range=time_range,
+                rpm_source=tuple(rpm_source) if rpm_source else None,
+            )
 
         samples_per_rev = int(op.get('samples_per_rev', 256))
         order_res = float(op['order_res'])
@@ -966,10 +988,18 @@ class OrderMixin:
         # A still-active View whose request changed keeps the cache entry under
         # the old key and does not publish that result as current.
         decision = self._order_completion_decision(ctx)
-        if decision == 'keep':
-            return
         if decision == 'reject':
             self._unpublish_analysis_completion('order', ctx)
+            return
+        request = ctx.get('request_snapshot')
+        if request is not None:
+            state = self._analysis_state_by_id('order', ctx.get('view_id'))
+            pane_idx = int(ctx.get('pane_idx', 0))
+            if not bind_result(state.panes[pane_idx], request, (analysis_key,) if analysis_key is not None else ()):
+                self._unpublish_analysis_completion('order', ctx)
+                return
+            self._replace_analysis_pane_pins('order', state.view_id, pane_idx, (analysis_key,))
+        if decision == 'keep':
             return
         self._cancel_order_page_transition_cover(ctx.get('view_id'))
         # V7b: render onto the SPECIFIC pane this job was computed for.
@@ -1009,8 +1039,6 @@ class OrderMixin:
         state = self._analysis_state_by_id('order', ctx.get('view_id'))
         if state is None:
             return 'reject'
-        if not self._analysis_completion_is_visible('order', ctx):
-            return 'keep'
         try:
             pane_idx = int(ctx.get('pane_idx', 0))
         except (TypeError, ValueError):
@@ -1021,6 +1049,9 @@ class OrderMixin:
         token = ctx.get('pane_token')
         if token is not None and token != id(pane):
             return 'reject'
+        request = ctx.get('request_snapshot')
+        if request is not None and request.revision != pane.request_revision:
+            return 'reject'
         source = ctx.get('source')
         if source:
             source = tuple(source)
@@ -1029,8 +1060,10 @@ class OrderMixin:
             live = list(pane.sources or [])
             if live and tuple(live[0]) != source:
                 return 'reject'
-        if self._order_completion_request_changed(state, pane, pane_idx, ctx):
+        if request is None and self._order_completion_request_changed(state, pane, pane_idx, ctx):
             return 'reject'
+        if not self._analysis_completion_is_visible('order', ctx):
+            return 'keep'
         return 'draw'
 
     def _order_current_cache_key(self, state, pane, pane_idx):
@@ -1087,26 +1120,14 @@ class OrderMixin:
             ctx.clear_effective_facts()
             return
         pane = state.panes[idx]
-        sources = list(pane.sources)
-        if not sources:
+        binding = pane.result_binding
+        if binding is None or not binding.request.sources:
             ctx.clear_effective_facts()
             return
+        sources = list(binding.request.sources)
         fid, ch = sources[0]
-        time_range = self._dispatch_time_range('order', state, idx)
-        rpm_source = pane.rpm_source
-        params = self.inspector.order_ctx.compute_params()
-        effective = self._order_effective_params_for_source(
-            params, fid, ch, rpm_source, time_range,
-        )
-        if effective is None:
-            ctx.clear_effective_facts()
-            return
-        key = self._order_analysis_cache_key(
-            fid, ch, effective,
-            rpm_source=tuple(rpm_source) if rpm_source else None,
-            time_range=time_range,
-        )
-        result = self.analysis_caches['order'].get(key)
+        time_range = binding.request.time_range
+        result = self.analysis_caches['order'].get(binding.keys[0])
         facts = getattr(result, 'effective', None) if result is not None else None
         if facts is None:
             ctx.clear_effective_facts()
@@ -1115,6 +1136,8 @@ class OrderMixin:
         self._publish_analysis_effective_facts(
             ctx, facts, sig=sig, fid=fid, sources=sources,
         )
+        if binding.stale:
+            ctx.mark_effective_facts_stale()
 
     def _on_order_job_failed(self, _ctx, message):
         # A single pane's failure must not abort the service FIFO batch.
@@ -1124,6 +1147,24 @@ class OrderMixin:
         # modal exec() raised mid-queue spins a nested event loop that can
         # re-enter the compute pump (and hangs under offscreen Qt with no
         # user to click OK — lesson qmessagebox-static-warning-hangs-offscreen).
+        request = _ctx.get('request_snapshot')
+        state = self._analysis_state_by_id('order', _ctx.get('view_id'))
+        pane_idx = int(_ctx.get('pane_idx', 0))
+        if request is not None:
+            if state is None or not 0 <= pane_idx < len(state.panes):
+                return
+            pane = state.panes[pane_idx]
+            if _ctx.get('pane_token', id(pane)) != id(pane) or request.revision != pane.request_revision:
+                return
+            mark_pending(pane)
+            if (
+                self.chart_stack.current_mode() != 'order'
+                or not self._analysis_completion_is_visible('order', _ctx)
+                or not self._completion_updates_focus('order', _ctx)
+                or self._dispatch_focus_index('order', state) != pane_idx
+            ):
+                return
+            self._sync_order_effective_facts(state)
         msg = str(message)
         outcome = getattr(self, '_order_outcome', None)
         if outcome is not None:

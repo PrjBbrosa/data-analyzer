@@ -197,7 +197,8 @@ def test_sc_helper_surfaces_missing_key():
 def test_modes_group_has_five_workspaces_plus_readonly_overview():
     modes = next(g for g in quickref.QUICKREF if g.title == "五个分析工作区 + 总览")
     assert [row.desc for row in modes.rows] == [
-        "时域", "频谱", "时频", "阶次", "频响", "有效事实卡", "自动 NFFT", "总览",
+        "时域", "频谱", "时频", "阶次", "频响", "计算与显示", "重开项目后计算",
+        "有效事实卡", "自动 NFFT", "总览",
     ]
     facts = next(row for row in modes.rows if row.desc == "有效事实卡")
     assert "NFFT" in facts.sub and "4096" in facts.sub

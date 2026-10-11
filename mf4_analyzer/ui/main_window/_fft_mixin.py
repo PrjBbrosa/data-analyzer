@@ -1,6 +1,7 @@
 """FFTMixin: FFT spectrum compute, cache, and render methods for MainWindow."""
 
 import inspect
+from dataclasses import replace
 
 import numpy as np
 
@@ -26,6 +27,7 @@ from ...signal.analysis_defaults import (
 from ...signal.fft import build_fft_effective_facts
 from ...signal.spectrogram import SpectrogramAnalyzer
 from ..compute_feedback import ComputeOutcome
+from ..analysis_result_state import bind_result, mark_pending, snapshot_request
 from ._sentinel import _INSPECTOR_TIME_RANGE
 from .ultraview_coordinator import notify_ultraview_plot
 
@@ -361,33 +363,21 @@ class FFTMixin:
             ctx.clear_effective_facts()
             return
         pane = state.panes[idx]
-        sources = list(pane.sources)
-        if not sources:
+        binding = pane.result_binding
+        if binding is None or not binding.request.sources:
             ctx.clear_effective_facts()
             return
-        time_range = self._dispatch_time_range('fft', state, idx)
-        fft_params = self.inspector.fft_ctx.compute_params()
+        sources = list(binding.request.sources)
+        time_range = binding.request.time_range
+        fft_params = dict(binding.request.params)
         groups = []
         extra_warnings = []
         any_content = False
-        for fid, ch in sources:
+        for (fid, ch), key in zip(sources, binding.keys):
             header = f"{fid} · {ch}"
             sig, fs = self._fft_fetch_signal(
                 fid, ch, time_range=time_range, params=fft_params,
             )
-            params = self._fft_effective_params_for_source(
-                fft_params, fid, ch, time_range, prepared=(sig, fs),
-            )
-            decision = params.get('nfft_decision')
-            blocked = (
-                params.get('nfft_status') == 'blocked'
-                or getattr(decision, 'status', None) == 'blocked'
-            )
-            if blocked:
-                groups.append((header, None, _blocked_auto_nfft_lines(decision)))
-                any_content = True
-                continue
-            key = self._fft_analysis_cache_key(fid, ch, params, time_range)
             result = self.analysis_caches['fft'].get(key)
             facts = getattr(result, 'effective', None) if result is not None else None
             if facts is None:
@@ -414,16 +404,22 @@ class FFTMixin:
             return
         if len(groups) == 1 and groups[0][1] is not None:
             ctx.set_effective_facts(groups[0][1], extra_warnings)
+            if binding.stale:
+                ctx.mark_effective_facts_stale()
             return
         setter = getattr(ctx, 'set_effective_facts_groups', None)
         if callable(setter):
             setter(groups, extra_warnings)
+            if binding.stale:
+                ctx.mark_effective_facts_stale()
             return
         facts = next((item[1] for item in groups if item[1] is not None), None)
         if facts is None:
             ctx.clear_effective_facts()
             return
         ctx.set_effective_facts(facts, extra_warnings)
+        if binding.stale:
+            ctx.mark_effective_facts_stale()
 
     def _fft_time_facts_for_source(self, fid, ch, time_range, params):
         from ...analysis_time_axis import prepare_analysis_time_axis
@@ -648,11 +644,16 @@ class FFTMixin:
         any_multi = False
         outcome = ComputeOutcome()
         for pane_idx in self._dispatch_pane_indices('fft', state):
-            sources = state.panes[pane_idx].sources
+            pane = state.panes[pane_idx]
+            mark_pending(pane)
+            request = snapshot_request(state, pane)
+            sources = request.sources
             if not sources:
                 continue
             any_multi = True
             entries = []
+            successful_sources = []
+            successful_keys = []
             time_range = self._dispatch_time_range('fft', state, pane_idx)
             for fid, ch in sources:
                 fd = self.files.get(fid)
@@ -697,8 +698,20 @@ class FFTMixin:
                 entries.append(self._fft_entry_from_cache(
                     result, fid, ch, colors.get((fid, ch)),
                     time_range=time_range))
+                successful_sources.append((fid, ch))
+                successful_keys.append(key)
             canvas = self._dispatch_canvas('fft', state, pane_idx)
-            if entries and canvas is not None:
+            accepted = bind_result(
+                pane, replace(request, sources=tuple(successful_sources)),
+                successful_keys,
+            )
+            if accepted:
+                self._replace_analysis_pane_pins(
+                    'fft', state.view_id, pane_idx, successful_keys,
+                )
+            elif not successful_keys and request.revision == pane.request_revision:
+                mark_pending(pane)
+            if accepted and canvas is not None:
                 self._plot_fft_entries(entries, canvas)
                 notify_ultraview_plot(self, "fft", "fft-plot")
         self._sync_fft_effective_facts(state)
@@ -711,6 +724,10 @@ class FFTMixin:
         self._do_fft_single()
 
     def _do_fft_single(self):
+        state = self._analysis_state_for_dispatch('fft')
+        pane_idx = self._dispatch_focus_index('fft', state)
+        pane = state.panes[pane_idx]
+        mark_pending(pane)
         t, sig, fs = self._get_sig()
         if sig is None or len(sig) < 10:
             self.toast("请选择有效信号", "warning"); return
@@ -747,6 +764,18 @@ class FFTMixin:
         fft_params['analysis_time_axis'] = time_facts
         win = fft_params['window']
         nfft = fft_params['nfft']
+        state = self._analysis_state_for_dispatch('fft')
+        pane_idx = self._dispatch_focus_index('fft', state)
+        pane = state.panes[pane_idx]
+        request = replace(
+            snapshot_request(state, pane),
+            sources=(tuple(sig_data),) if sig_data else (),
+            time_range=self._normalize_analysis_time_range(rng),
+        )
+        key = (
+            self._fft_analysis_cache_key(sig_data[0], sig_data[1], fft_params, rng)
+            if sig_data else None
+        )
 
         progress_token = self._begin_compute_progress("FFT 计算中")
         error = None
@@ -758,7 +787,14 @@ class FFTMixin:
             # pyqt-ui/2026-08-15-progress-pump-makes-the-render-reentrant).
             QApplication.processEvents(QEventLoop.ExcludeUserInputEvents)
 
-            result = self._fft_compute_arrays(sig, fs, fft_params, time=t)
+            result = self.analysis_caches['fft'].get(key) if key is not None else None
+            if result is None:
+                result = self._fft_compute_arrays(sig, fs, fft_params, time=t)
+            if key is not None:
+                self._store_analysis_result('fft', state.view_id, pane_idx, key, result)
+                if not bind_result(pane, request, (key,)):
+                    return
+                self._replace_analysis_pane_pins('fft', state.view_id, pane_idx, (key,))
             freq, amp, _psd = result
             self._publish_analysis_effective_facts(
                 self.inspector.fft_ctx,
@@ -845,6 +881,8 @@ class FFTMixin:
         finally:
             self._finish_compute_progress(token=progress_token)
         if blocked_error is not None:
+            if request.revision == pane.request_revision:
+                mark_pending(pane)
             self.toast(_auto_nfft_skip_reason(blocked_error), "warning")
             self.statusBar.showMessage(str(blocked_error))
             ctx = self.inspector.fft_ctx
@@ -859,4 +897,6 @@ class FFTMixin:
                 )
             return
         if error is not None:
+            if request.revision == pane.request_revision:
+                mark_pending(pane)
             QMessageBox.critical(self, 'FFT错误', str(error))

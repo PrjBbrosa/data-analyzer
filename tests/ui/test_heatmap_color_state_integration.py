@@ -7,6 +7,7 @@ import pytest
 
 from mf4_analyzer.signal.order_cot import COTParams, COTResult
 from mf4_analyzer.signal.spectrogram import SpectrogramParams, SpectrogramResult
+from mf4_analyzer.ui.analysis_result_state import bind_result, snapshot_request
 from mf4_analyzer.ui.main_window import MainWindow
 
 
@@ -69,16 +70,18 @@ def _seed(win, section):
 
 
 def _cache(win, section, state, result):
+    """Model a successful explicit calculation, not an unaccepted cache hit."""
     for index, pane in enumerate(state.panes):
         fid, channel = pane.sources[0]
         key = win._analysis_cache_key_for_view_source(
             section, state, pane, index, fid, channel,
         )
         win.analysis_caches[section].put(key, result)
+        assert bind_result(pane, snapshot_request(state, pane), (key,))
 
 
 def _other(win, section, state, result, reference=10 ** 1.5):
-    other = copy.deepcopy(state)
+    other = type(state).from_dict(state.to_dict())
     other.view_id = uuid.uuid4().hex
     other.name = "Other color owner"
     other.params["db_reference"] = reference
@@ -98,7 +101,7 @@ def test_manual_color_request_survives_twenty_view_roundtrips(color_win, qapp, s
     win = color_win
     first, result = _seed(win, section)
     if split:
-        first.panes.append(copy.deepcopy(first.panes[0]))
+        first.panes.append(type(first.panes[0]).from_dict(first.panes[0].to_dict()))
         first.compare["levels_locked"] = False
         _cache(win, section, first, result)
     second = _other(win, section, first, result)
@@ -220,7 +223,7 @@ def test_capture_keeps_unedited_double_precision(color_win, section):
 def test_pane_override_and_focused_projection_are_order_independent(color_win, section, focus):
     win = color_win
     state, result = _seed(win, section)
-    state.panes.append(copy.deepcopy(state.panes[0]))
+    state.panes.append(type(state.panes[0]).from_dict(state.panes[0].to_dict()))
     state.compare["levels_locked"] = False
     state.panes[0].chart_appearances = {"heatmap": {"title": "No Z override", "cmap": "plasma"}}
     state.panes[1].chart_appearances = {"heatmap": {"z_auto": False, "z_min": -40.0, "z_max": 10.0}}
@@ -306,17 +309,6 @@ def test_project_roundtrip_keeps_request_and_reference_basis(
     def unexpected_submit(*args, **kwargs):
         pytest.fail("project color restore submitted DSP work")
 
-    def seed_restored_result(view_id):
-        # Projects store source references, not DSP arrays. Substitute only
-        # the scheduled compute boundary with the same deterministic result;
-        # project deserialization, fid remapping and rendering stay real.
-        restored_manager = reopened_win.analysis_managers[section]
-        target = next(view for view in restored_manager.views if view.view_id == view_id)
-        _cache(reopened_win, section, target, result)
-
-    restore_compute = ("_recompute_restored_fft_time_view" if section == "fft_time"
-                       else "_recompute_restored_order_view")
-    monkeypatch.setattr(reopened_win, restore_compute, seed_restored_result)
     monkeypatch.setattr(reopened_win._analysis_jobs, "submit_batch", unexpected_submit)
     reopened_win.open_project(project)
     qapp.processEvents()
@@ -325,6 +317,10 @@ def test_project_roundtrip_keeps_request_and_reference_basis(
     assert (restored.params["z_floor"], restored.params["z_ceiling"]) == requested
     reopened_win.toolbar._set_mode(section)
     reopened_win._on_analysis_view_switched(section, manager.views.index(restored))
+    assert not reopened_win._analysis_page(section).pane_canvas(0).has_result()
+    assert restored.panes[0].result_binding is None
+    # Projects keep display intent but no arrays/acceptance. Model a later
+    # explicit calculation using the same deterministic result before render.
     _cache(reopened_win, section, restored, result)
     reopened_win._render_analysis_view_from_cache(section, restored)
     actual = _levels(reopened_win._analysis_page(section).pane_canvas(0))
@@ -357,7 +353,7 @@ def test_comparison_focus_rebind_and_exit_keep_each_owners_levels(color_win, qap
 def test_locked_union_does_not_replace_each_panes_request(color_win, section):
     win = color_win
     state, result = _seed(win, section)
-    state.panes.append(copy.deepcopy(state.panes[0]))
+    state.panes.append(type(state.panes[0]).from_dict(state.panes[0].to_dict()))
     override = {"z_auto": False, "z_min": -40.0, "z_max": 10.0}
     state.panes[1].chart_appearances = {"heatmap": dict(override)}
     state.compare["levels_locked"] = True
@@ -448,7 +444,7 @@ def test_preset_patch_owns_only_explicit_color_fields(
 ):
     win = color_win
     state, result = _seed(win, section)
-    state.panes.append(copy.deepcopy(state.panes[0]))
+    state.panes.append(type(state.panes[0]).from_dict(state.panes[0].to_dict()))
     state.compare["levels_locked"] = False
     for index, pane in enumerate(state.panes):
         pane.chart_appearances = {"heatmap": {

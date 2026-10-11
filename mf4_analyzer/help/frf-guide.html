@@ -20,7 +20,19 @@
     </div>
   </section>
 
-  <section class="slide">
+      <section class="slide">
+        <div class="frame">
+            <div class="topbar reveal d1"><span class="eyebrow">计算与恢复 · <b>点击计算才应用</b></span><span class="turbo-rule"></span></div>
+            <div class="step-head reveal d2"><span class="big">草稿 → 计算</span><h2>设置与结果分开保存</h2></div>
+            <div class="paths">
+                <div class="path reveal d3"><div class="tagA">调参数</div><div class="ptxt">修改算法参数、来源、时间范围或应用预设，只保存草稿；保留上次结果并提示<b>待计算</b>。点击<span class="ui">计算</span>才应用新请求，已有缓存可直接复用。</div></div>
+                <div class="path reveal d4"><div class="tagA g">调显示</div><div class="ptxt">Linear/dB、参考值、坐标、色图和相位等显示设置只调整已应用结果；保存 dB 参考目录、切换 View 或对比焦点都不重新计算。没有结果时保持空图。</div></div>
+                <div class="path reveal d5"><div class="tagA">重开项目</div><div class="ptxt">项目保存来源、参数、预设、布局和显示意图，<b>不保存分析结果</b>。无论之前是否计算过，打开新旧项目后都请<span class="ui">点击计算</span>。FFT 源信号时域预览可以先显示。</div></div>
+            </div>
+        </div>
+    </section>
+
+<section class="slide">
     <div class="frame">
       <div class="topbar reveal d1"><span class="eyebrow">01 · <b>先选对方向</b></span><span class="turbo-rule"></span></div>
       <div class="step-head reveal d2"><span class="big">输入 → 输出</span><h2>频响有方向</h2></div>
@@ -82,7 +94,7 @@
       <div class="paths">
         <div class="path reveal d3"><div class="tagA">范围</div><div class="ptxt">选“指定范围”并填写开始、结束秒数，点计算才执行。只改一端时，另一端保留原始精度。越界提示显示精确边界和差值；有交集时可确认“对齐到可用范围”，只调整超出的端点。选“全时段”用完整数据，起止框只读。切换不重算、不 Home；图上缩放只查看。</div></div>
         <div class="path reveal d4"><div class="tagA g">custom-X</div><div class="ptxt"><b>custom-X</b> 不是秒；FRF 分析时间仍应按真实时间轴的秒数填写。</div></div>
-        <div class="path reveal d5"><div class="tagA">查看</div><div class="ptxt">“在时域查看”会先复用同一签名的时域 View；没有时才新建，并带回输入、输出和已选范围，不覆盖无关 View。同一频响模块里，右键其他 View 可以<span class="ui">与此 View 并排</span>；<span class="ui">结束 View 对比</span>只取消对照，不删除 View。</div></div>
+        <div class="path reveal d5"><div class="tagA">查看</div><div class="ptxt">“在时域查看”会先复用同一签名的时域 View；没有时才新建，并带回输入、输出和已选范围，不覆盖无关 View。同一频响模块里，右键其他 View 可以<span class="ui">与此 View 并排</span>；<span class="ui">结束 View 对比</span>只取消对照，不删除 View。并排的两个 View 独立设置 H1/H2、窗长及显示参数，共用工具栏；Home 和标注操作焦点侧，频响参数在右侧面板独立调整。主标签色标两半代表两个 View。<span class="ui">添加同参数窗格</span>仍共享同一 View 的算法参数，仅来源与时间范围独立。 窄窗口中，联动、锁色阶和展开操作集中到“对比选项”，为当前 View 标签保留空间。</div></div>
       </div>
       <div class="tip reveal d5"><span class="ic">!</span><p>输入与输出必须严格同时间轴：长度、每个时刻和采样间隔都要一致。时间戳抖动超限时，系统会按建议采样率自动重建均匀网格再计算（不做静默改幅值）；缺失或自动生成的时间轴仍会阻断。系统真实延迟默认保留，不做自动补偿；相位曲线会如实显示这部分延迟。</p></div>
     </div>

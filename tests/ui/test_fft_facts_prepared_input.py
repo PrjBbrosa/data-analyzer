@@ -58,32 +58,24 @@ def test_fft_facts_reuses_prepared_signal_once_per_source(two_file_win, monkeypa
     assert len(calls) == 2
     assert all(call[3] is not None for call in calls)
     first_groups, first_keys = groups[:], keys[:]
-    if scenario in ('missing', 'result_miss'):
-        assert first_groups == [('clear', ())]
-    else:
-        assert len(first_groups[0][0]) == 2
+    # Facts belong to the explicitly applied result. Draft changes (even a
+    # blocked draft) never rerun effective-parameter resolution or look up a
+    # different cache key; the two health fetches still use the applied range.
+    assert len(first_groups[0][0]) == 2
+    assert first_keys == []
+    assert all(call[2] is None for call in calls)
     if scenario == 'health':
         assert first_groups[0][0][0][1].is_constant
         assert first_groups[0][0][1][1].nan_count == 1
-        assert first_groups[0][1]  # Different source Fs remains visible.
-    if scenario == 'blocked':
-        assert all(facts is None and lines for _, facts, lines in first_groups[0][0])
-
-    # The legacy helper path fetches again. Its exact facts and cache keys must
-    # agree with the borrowed-input path, without running another calculation.
-    effective = win._fft_effective_params_for_source
-
-    def legacy_effective(params, fid, ch, time_range, **kwargs):
-        return effective(params, fid, ch, time_range)
-
-    monkeypatch.setattr(win, '_fft_effective_params_for_source', legacy_effective)
+        assert first_groups[0][1]
+    monkeypatch.setattr(win, '_fft_effective_params_for_source',
+                        lambda *a, **k: pytest.fail("facts recomputed draft parameters"))
     calls.clear()
     groups.clear()
-    keys.clear()
     win._sync_fft_effective_facts()
-    assert len(calls) == 4
+    assert len(calls) == 2
     assert groups == first_groups
-    assert keys == first_keys
+    assert keys == []
 
 
 @pytest.mark.parametrize('nfft', [None, 128])

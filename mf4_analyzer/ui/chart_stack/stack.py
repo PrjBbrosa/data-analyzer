@@ -569,7 +569,7 @@ class ChartStack(QWidget):
         for page in (
             self.page_fft, self.page_fft_time, self.page_frf, self.page_order,
         ):
-            cards.extend(page.peek_cards())
+            cards.extend(page.all_cards())
         return [card for card in cards if card is not None]
 
     def _on_card_tick_density_changed(self, x, y):
@@ -802,7 +802,7 @@ class ChartStack(QWidget):
         _apply_mdi_icons(toolbar, active_key=key)
 
     def _card_for_canvas(self, canvas):
-        """Owning time card for a cursor-emitting ``canvas`` (primary fallback)."""
+        """Owning card for a cursor-emitting canvas, including comparison peers."""
         for card in self._all_cards():
             if getattr(card, 'canvas', None) is canvas:
                 return card
@@ -2125,14 +2125,7 @@ class ChartStack(QWidget):
         if mode not in self.page_for_mode:
             return None
         page = self.page_for_mode[mode]
-        cards = page.peek_cards() if hasattr(page, "peek_cards") else []
-        if not cards:
-            return None
-        if len(cards) == 1:
-            return cards[0]
-        idx = page.focused_index()
-        idx = max(0, min(int(idx), len(cards) - 1))
-        return cards[idx]
+        return page.focused_card()
 
     def set_annotation_enabled(self, mode, enabled, notify=False):
         if mode == "time":

@@ -23,7 +23,19 @@
         </div>
     </section>
 
-    <section class="slide">
+        <section class="slide">
+        <div class="frame">
+            <div class="topbar reveal d1"><span class="eyebrow">计算与恢复 · <b>点击计算才应用</b></span><span class="turbo-rule"></span></div>
+            <div class="step-head reveal d2"><span class="big">草稿 → 计算</span><h2>设置与结果分开保存</h2></div>
+            <div class="paths">
+                <div class="path reveal d3"><div class="tagA">调参数</div><div class="ptxt">修改算法参数、来源、时间范围或应用预设，只保存草稿；保留上次结果并提示<b>待计算</b>。点击<span class="ui">计算</span>才应用新请求，已有缓存可直接复用。</div></div>
+                <div class="path reveal d4"><div class="tagA g">调显示</div><div class="ptxt">Linear/dB、参考值、坐标、色图和相位等显示设置只调整已应用结果；保存 dB 参考目录、切换 View 或对比焦点都不重新计算。没有结果时保持空图。</div></div>
+                <div class="path reveal d5"><div class="tagA">重开项目</div><div class="ptxt">项目保存来源、参数、预设、布局和显示意图，<b>不保存分析结果</b>。无论之前是否计算过，打开新旧项目后都请<span class="ui">点击计算</span>。FFT 源信号时域预览可以先显示。</div></div>
+            </div>
+        </div>
+    </section>
+
+<section class="slide">
         <div class="frame">
             <div class="topbar reveal d1"><span class="eyebrow">先认准位置 · <b>在哪点什么</b></span><span class="turbo-rule"></span></div>
             <div class="map-grid">
@@ -43,7 +55,7 @@
                     <div class="li reveal d3"><span class="b">3</span><p>右栏中 · 谱参数 <span>（3 个预设）</span></p></div>
                     <div class="li reveal d4"><span class="b">4</span><p>右栏下 · 计算阶次图</p></div>
                     <div class="li reveal d4"><span class="b">5</span><p>中间 · 彩图 + colorbar</p></div>
-                    <div class="li reveal d5"><span class="b">6</span><p>图下 · View 标签 <span>（右键加对比窗格）</span></p></div>
+                    <div class="li reveal d5"><span class="b">6</span><p>图下 · View 标签 <span>（右键加同参数窗格）</span></p></div>
                     <div class="li reveal d5"><span class="b x">✕</span><p>左侧列表 <b>不在这选信号</b> <span>（时域才用）</span></p></div>
                 </div>
             </div>
@@ -127,13 +139,13 @@
             <div class="topbar reveal d1"><span class="eyebrow">05 · <b>一屏对比两个通道</b></span><span class="turbo-rule"></span></div>
             <div class="cmp-grid">
                 <div>
-                    <h2 class="title reveal d2" style="margin-bottom:30px">右键 View → 添加对比窗格</h2>
+                    <h2 class="title reveal d2" style="margin-bottom:30px">右键 View → 添加同参数窗格</h2>
                     <div class="cmp-steps">
-                        <div class="c reveal d3"><span class="k">①</span><p><b>右键底部</b> <span class="ui">View 1</span> 标签 → 选<span class="ui">添加对比窗格</span>。</p></div>
+                        <div class="c reveal d3"><span class="k">①</span><p><b>右键底部</b> <span class="ui">View 1</span> 标签 → 选<span class="ui">添加同参数窗格</span>。</p></div>
                         <div class="c reveal d4"><span class="k">②</span><p>点窗格 → 右栏<span class="ui">信号</span>各选<br>方向盘扭矩 / 电机扭矩。</p></div>
                         <div class="c reveal d5"><span class="k">③</span><p>点<span class="ui">计算阶次图</span> → 左右并排比。</p></div>
                     </div>
-                    <p class="note reveal d5"><b>注：</b>底部 <span class="ui">＋</span> 可新建一个 View（页）。同一模块里，右键其他 View 选<span class="ui">与此 View 并排</span>，或在当前 View 选<span class="ui">与其他 View 并排…</span>，把两个 View 左右对照。<span class="ui">结束 View 对比</span>只拿掉对照，不删除 View，也不开始计算。<span class="ui">添加对比窗格</span>仍是当前 View 里再加一格。</p>
+                    <p class="note reveal d5"><b>注：</b>底部 <span class="ui">＋</span> 可新建一个 View（页）。同一模块里，右键其他 View 选<span class="ui">与此 View 并排</span>，或在当前 View 选<span class="ui">与其他 View 并排…</span>，把两个 View 左右对照。<span class="ui">结束 View 对比</span>只拿掉对照，不删除 View，也不开始计算。<span class="ui">添加同参数窗格</span>仍是当前 View 里再加一格，共享算法参数，来源与时间范围独立。两个 View 并排则各自调参，共用上方工具栏；Home、标注和图表选项操作焦点侧。主标签色标两半分别代表两个 View。 窄窗口中，联动、锁色阶和展开操作集中到“对比选项”，为当前 View 标签保留空间。</p>
                 </div>
                 <div class="reveal d3">
                     <div class="vscene">
@@ -142,7 +154,7 @@
                             <div class="mi">重命名</div>
                             <div class="mi">复制此 View</div>
                             <div class="mi">改标签颜色…</div>
-                            <div class="mi sel">添加对比窗格</div>
+                            <div class="mi sel">添加同参数窗格</div>
                             <div class="sep"></div>
                             <div class="mi danger">删除</div>
                         </div>

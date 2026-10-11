@@ -4,6 +4,8 @@ Constructs a real MainWindow (offscreen), loads two CSV files, and exercises
 the FFT section's whole-view compute, overlay rendering, empty-state on a fresh
 view, and cache-hit rendering on view switch-back (no recompute).
 """
+from mf4_analyzer.ui.analysis_result_state import bind_result, snapshot_request
+
 import numpy as np
 import pytest
 
@@ -174,9 +176,11 @@ def test_fft_split_cache_render_uses_channel_swatch_colors(two_file_win):
 
     freq = np.asarray([0.0, 1.0, 2.0], dtype=float)
     amp = np.asarray([1.0, 0.5, 0.25], dtype=float)
-    for fid, ch in (state.panes[0].sources + state.panes[1].sources):
+    for pane in state.panes:
+        fid, ch = pane.sources[0]
         key = win._analysis_cache_key("fft", fid, ch)
         win.analysis_caches["fft"].put(key, (freq, amp, amp ** 2))
+        bind_result(pane, snapshot_request(state, pane), (key,))
 
     # The currently focused/navigator-checked source is only pane 1. Pane 0
     # still has to render with its own left-side channel swatch color.
@@ -251,6 +255,7 @@ def test_fft_cache_hit_render_clears_cache_miss_empty_hint(two_file_win):
     freq = np.asarray([0.0, 1.0, 2.0], dtype=float)
     amp = np.asarray([1.0, 0.5, 0.25], dtype=float)
     win.analysis_caches["fft"].put(key, (freq, amp, amp ** 2))
+    bind_result(state.panes[0], snapshot_request(state, state.panes[0]), (key,))
 
     win._render_analysis_view_from_cache("fft", state)
 
@@ -474,6 +479,7 @@ def test_fft_cached_render_uses_each_pane_time_range_for_preview(two_file_win):
     for pane_idx in (0, 1):
         key = win._analysis_cache_key("fft", fid, "speed", pane_idx=pane_idx)
         win.analysis_caches["fft"].put(key, (freq, amp, amp ** 2))
+        bind_result(state.panes[pane_idx], snapshot_request(state, state.panes[pane_idx]), (key,))
 
     win.inspector.top.set_range_from_span(0.40, 0.45)
 
@@ -3305,6 +3311,7 @@ def _seed_heatmap_cache(win, section):
         key = win._analysis_cache_key("fft_time", fid, "speed", pane_idx=0)
     state.params.update(ctx.current_params())
     win.analysis_caches[section].put(key, result)
+    bind_result(pane, snapshot_request(state, pane), (key,))
     return state, result, key
 
 

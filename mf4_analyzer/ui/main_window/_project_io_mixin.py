@@ -83,6 +83,7 @@ class ProjectIOMixin:
     #: Views. Only this mixin writes it -- the default lives here as a class
     #: attribute so the guard has exactly one owning file (spec D-E2).
     _restoring_project = False
+    _opening_project = False
     #: Contextual copy for the shared Save/Discard/Cancel prompt. ``leave``
     #: keeps the existing window-close / open-replace wording; ``close`` and
     #: ``new`` are product session-end intents and default to Cancel.
@@ -2752,21 +2753,16 @@ class ProjectIOMixin:
         self.view_manager.views_changed.emit()
 
         # Hold this through analysis-view apply AND the Time-view plot so
-        # live navigator capture cannot overwrite persisted FFT sources, and
-        # so processEvents during time plot cannot drain restore compute
-        # before every source-bearing View has been queued. See
-        # docs/lessons-learned/signal-processing/2026-07-12-processevents-
-        # drains-queued-recompute-during-restore.md.
+        # live navigator capture cannot overwrite persisted FFT sources.
+        # Project restore applies intent only; numeric results require an
+        # explicit Compute click, including for previously computed Views.
         self._opening_project = True
         try:
             # Restore each analysis section's view list (fids remapped to the
             # freshly minted ids). An old project without analysis_views yields
             # an empty remapped dict -> every section keeps its default view.
             from ..project_io import remap_analysis_view_fids
-            from ..analysis_view_state import (
-                AnalysisViewState,
-                analysis_view_has_sources,
-            )
+            from ..analysis_view_state import AnalysisViewState
             coord = getattr(self, "_startup_coordinator", None)
             if coord is not None:
                 # Drop project-A ready closures; prepared charts may stay.
@@ -2783,15 +2779,8 @@ class ProjectIOMixin:
                 _payload, dropped = self._install_analysis_comparisons(sec, block)
                 if dropped:
                     dropped_comparison = True
-                # Queue every source-bearing view. Numeric results are not in
-                # the project file; after the window finishes opening we
-                # recompute all of them by view_id (not only the active tab).
-                for v in mgr.views:
-                    if analysis_view_has_sources(sec, v):
-                        self._analysis_restore_pending.add((sec, v.view_id))
                 mgr.views_changed.emit()
-                # Apply restored structure/params/sources. Compute waits until
-                # _dispatch_pending_analysis_restore after this try block.
+                # Restore structure/params/sources without submitting work.
                 mgr.active_changed.emit(mgr.active)
             if dropped_comparison:
                 self.toast(
@@ -2875,9 +2864,9 @@ class ProjectIOMixin:
                 return
         finally:
             self._opening_project = False
-            self._dispatch_pending_analysis_restore()
 
-        self.statusBar.showMessage(f"已打开项目: {path.name}")
+        self.statusBar.showMessage(
+            f"已打开项目: {path.name}；分析结果未保存，请点击计算")
 
     def _project_filter_payload(self):
         fp = getattr(getattr(self, "inspector", None), "filter_panel", None)

@@ -91,7 +91,22 @@ def _seed_frf_cache(win, state, pane_idx, result):
     key = win._frf_cache_key_for_pane(state, pane)
     assert key is not None
     win.analysis_caches["frf"].put(key, result)
+    # This helper represents a completed explicit run, not merely shared cache.
+    from mf4_analyzer.ui.analysis_result_state import bind_result, snapshot_request
+    assert bind_result(pane, snapshot_request(state, pane), (key,))
     return key
+
+
+def _publish_frf_test_result(win, state, result, cache_hit=False):
+    from mf4_analyzer.ui.analysis_result_state import snapshot_request
+    pane = state.panes[0]
+    key = _seed_frf_cache(win, state, 0, result)
+    context = {
+        "view_id": state.view_id, "pane_idx": 0, "analysis_key": key,
+        "request_snapshot": snapshot_request(state, pane), "request_pane": pane,
+    }
+    win._on_frf_render_requested(context, result, cache_hit)
+    return context
 
 
 def _ensure_frf_charts(win):
@@ -497,15 +512,7 @@ def test_display_change_does_not_invalidate_and_completion_uses_latest_params(
     )
 
     win._on_frf_display_params_changed({"magnitude_scale": "linear"})
-    win._on_frf_render_requested(
-        {
-            "view_id": state.view_id,
-            "pane_idx": 0,
-            "render_params": {"magnitude_scale": "db"},
-        },
-        _result(time, 1000.0),
-        False,
-    )
+    _publish_frf_test_result(win, state, _result(time, 1000.0))
 
     assert invalidated == []
     assert rendered[-1]["magnitude_scale"] == "linear"
@@ -625,7 +632,7 @@ def test_restored_frf_view_dispatches_every_complete_pane_without_live_capture(
     assert [candidate["pane_idx"] for candidate in requested] == [0, 1]
 
 
-def test_restore_pending_uses_stable_view_id_across_reorder(qapp, qtbot, monkeypatch):
+def test_cache_restore_never_dispatches_legacy_pending_after_reorder(qapp, qtbot, monkeypatch):
     win, _fid, _state, _time = _window_with_pair(qtbot)
     manager = win.analysis_managers["frf"]
     target_idx = manager.new_view()
@@ -644,7 +651,8 @@ def test_restore_pending_uses_stable_view_id_across_reorder(qapp, qtbot, monkeyp
     manager.reorder(target_idx, 0)
     qapp.processEvents()
 
-    assert dispatched == [target.view_id]
+    assert dispatched == []
+    assert not win.canvas_frf.has_result()
 
 
 def test_frf_mode_does_not_enter_heatmap_levels_or_db_reference(qtbot, monkeypatch):
@@ -675,7 +683,7 @@ def test_frf_file_invalidation_clears_pair_and_coordinator(qtbot, monkeypatch):
     assert invalidated == [fid]
 
 
-def test_project_restore_recomputes_directional_frf_pair(
+def test_project_restore_preserves_directional_frf_pair_without_compute(
     qapp, qtbot, tmp_path, monkeypatch
 ):
     time = np.arange(2000, dtype=float) / 1000.0
@@ -721,10 +729,10 @@ def test_project_restore_recomputes_directional_frf_pair(
     assert restored_pane.cursor_mode == "single"
     restored.toolbar._set_mode("frf")
     assert restored.chart_stack.page_frf._cards[0].cursor_mode() == "single"
-    assert restored.analysis_managers["frf"].get(0).view_id in recomputed
+    assert recomputed == []
 
 
-def test_project_restore_dispatches_each_complete_frf_pane(
+def test_project_restore_preserves_complete_frf_panes_until_compute(
     qapp, qtbot, tmp_path, monkeypatch
 ):
     time = np.arange(4000, dtype=float) / 1000.0
@@ -761,6 +769,16 @@ def test_project_restore_dispatches_each_complete_frf_pane(
     qapp.processEvents()
 
     restored_state = restored.analysis_managers["frf"].get(0)
+    assert requested == []
+    assert len(restored_state.panes) == 2
+    for pane in restored_state.panes:
+        assert pane.input_source[1] == "input"
+        assert pane.output_source[1] == "output"
+    restored.toolbar._set_mode("frf")
+    restored.inspector.frf_ctx.btn_compute.click()
+    assert [candidate["pane_idx"] for candidate in requested] == [0]
+    restored.chart_stack.page_frf.set_focused_index(1)
+    restored.inspector.frf_ctx.btn_compute.click()
     assert [candidate["pane_idx"] for candidate in requested] == [0, 1]
     assert {candidate["view_id"] for candidate in requested} == {
         restored_state.view_id
@@ -879,9 +897,8 @@ def test_frf_fresh_and_cached_renders_both_fill_the_inspector_facts(qtbot):
 
     for cache_hit in (False, True):
         ctx.clear_effective_facts()
-        win._on_frf_render_requested(
-            {"view_id": state.view_id, "pane_idx": 0},
-            _result(
+        _publish_frf_test_result(
+            win, state, _result(
                 time,
                 1000.0,
                 segments=2,
@@ -920,9 +937,7 @@ def test_frf_display_only_change_leaves_the_effective_facts_untouched(qtbot):
     win, _fid, state, time = _window_with_pair(qtbot)
     _ensure_frf_charts(win)
     ctx = win.inspector.frf_ctx
-    win._on_frf_render_requested(
-        {"view_id": state.view_id, "pane_idx": 0}, _result(time, 1000.0), False
-    )
+    _publish_frf_test_result(win, state, _result(time, 1000.0))
     before = ctx.effective_facts_text()
     assert before
 
@@ -936,9 +951,7 @@ def test_frf_compute_param_change_marks_the_effective_facts_stale(qtbot):
     win, _fid, state, time = _window_with_pair(qtbot)
     _ensure_frf_charts(win)
     ctx = win.inspector.frf_ctx
-    win._on_frf_render_requested(
-        {"view_id": state.view_id, "pane_idx": 0}, _result(time, 1000.0), False
-    )
+    _publish_frf_test_result(win, state, _result(time, 1000.0))
 
     win._on_frf_compute_params_changed({"t_win_s": 1.0})
 
@@ -957,9 +970,7 @@ def test_frf_focus_switch_follows_each_panes_effective_facts(qtbot):
     state.panes[1].input_source = (fid, "input")
     state.panes[1].output_source = (fid, "output")
     _seed_frf_cache(win, state, 0, _result(time, 1000.0))
-    win._on_frf_render_requested(
-        {"view_id": state.view_id, "pane_idx": 0}, _result(time, 1000.0), True
-    )
+    _publish_frf_test_result(win, state, _result(time, 1000.0), True)
     assert "完整段数" in ctx.effective_facts_text()
 
     page.set_focused_index(1)
@@ -973,9 +984,7 @@ def test_switching_to_a_frf_view_without_results_clears_the_facts_card(qtbot):
     win, _fid, state, time = _window_with_pair(qtbot)
     _ensure_frf_charts(win)
     ctx = win.inspector.frf_ctx
-    win._on_frf_render_requested(
-        {"view_id": state.view_id, "pane_idx": 0}, _result(time, 1000.0), False
-    )
+    _publish_frf_test_result(win, state, _result(time, 1000.0))
     assert ctx.effective_facts_text()
 
     manager = win.analysis_managers["frf"]
@@ -1135,8 +1144,8 @@ def test_display_only_preset_keeps_frf_cache_and_current_facts(qtbot):
     )
 
 
-def test_frf_compute_param_revert_restores_current_facts(qtbot):
-    """0.3 → 0.4 → 0.3 must hit the cached job and clear the stale mark."""
+def test_frf_compute_param_revert_stays_pending_until_explicit_compute(qtbot):
+    """Returning to the old request still requires explicit acceptance."""
     win, _fid, state, _time, ctx, _context, result = _frf_section_with_real_job(
         qtbot
     )
@@ -1150,6 +1159,8 @@ def test_frf_compute_param_revert_restores_current_facts(qtbot):
 
     assert win._frf_cached_result_for_pane(state, state.panes[0]) is result
     assert state.params["t_win_s"] == pytest.approx(0.3)
+    assert ctx.effective_facts_is_stale()
+    assert win.do_frf() is False  # explicit acceptance reuses the cached job
     assert not ctx.effective_facts_is_stale()
 
 
@@ -1197,7 +1208,7 @@ def test_cached_nonuniform_frf_round_trip_submits_no_job(qtbot, monkeypatch):
 def test_cached_nonuniform_frf_dual_pane_copy_and_tour_submit_no_job(
     qtbot, monkeypatch,
 ):
-    """Split, copy, and a full analysis-view tour reuse the cached results."""
+    """View tours restore accepted results; duplicates remain uncomputed."""
     from mf4_analyzer.ui.view_state import MAX_VIEWS
 
     win, fid, state, original, original_fs, context, result = (
@@ -1227,8 +1238,9 @@ def test_cached_nonuniform_frf_dual_pane_copy_and_tour_submit_no_job(
             win._on_analysis_switch("frf", idx)
         viewed = manager.get(idx)
         assert page.pane_count() == 2
-        assert page.pane_canvas(0).has_result()
-        assert page.pane_canvas(1).has_result()
+        # A duplicate copies intent, not authorization to display old results.
+        assert page.pane_canvas(0).has_result() is (idx == 0)
+        assert page.pane_canvas(1).has_result() is (idx == 0)
         assert win._frf_cache_key_for_pane(viewed, viewed.panes[0]) == (
             context["analysis_key"]
         )

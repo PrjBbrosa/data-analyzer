@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import numpy as np
 import pandas as pd
 import pytest
+from mf4_analyzer.ui.analysis_result_state import bind_result, snapshot_request
 from PyQt5.QtCore import QEvent, QPointF, Qt
 from PyQt5.QtGui import QMouseEvent
 from PyQt5.QtWidgets import QApplication, QSplitter
@@ -206,6 +207,7 @@ def test_cached_results_follow_each_views_params(two_file_win, monkeypatch):
             "fft", state, state.panes[pane_idx], pane_idx, fid, channel,
         )
         win.analysis_caches["fft"].put(key, result)
+        bind_result(state.panes[pane_idx], snapshot_request(state, state.panes[pane_idx]), (key,))
         seeded[(state.view_id, pane_idx)] = (key, result, marker)
 
     calls = _arm_compute_spies(monkeypatch, win)
@@ -618,6 +620,8 @@ def test_every_section_uses_one_comparison_owner(two_file_win, monkeypatch):
             peer_result = _frf_result(2.0)
             win.analysis_caches["frf"].put(host_key, host_result)
             win.analysis_caches["frf"].put(peer_key, peer_result)
+            bind_result(host.panes[0], snapshot_request(host, host.panes[0]), (host_key,))
+            bind_result(peer.panes[0], snapshot_request(peer, peer.panes[0]), (peer_key,))
             win._render_comparison_view("frf", host)
             win._render_comparison_view("frf", peer)
             assert page.pane_canvas(0)._result is host_result
@@ -630,7 +634,8 @@ def test_every_section_uses_one_comparison_owner(two_file_win, monkeypatch):
                 section, peer, peer.panes[0], 0, fid_b, "torque",
             )
             assert host_key != peer_key
-            assert host_key in looked and peer_key in looked
+            assert host_key not in looked and peer_key not in looked
+            # Draft Views have no accepted result, even if a global key exists.
         assert not owner.axis_linked(section)
         assert win.chart_stack.current_mode() == section
         assert win._ultraview_sheet is None
@@ -693,7 +698,17 @@ def test_cross_view_link_buttons_do_not_write_view_compare(two_file_win):
     win.resize(1400, 800)
     win.show()
     QApplication.processEvents()
-    assert page.btn_view_levels.isVisible()
+    if page.btn_compare_options.isVisible():
+        page.btn_compare_options.menu().aboutToShow.emit()
+        levels_action = next(
+            action for button, action in page._compare_menu_actions
+            if button is page.btn_view_levels
+        )
+        assert levels_action.isVisible()
+        assert levels_action.isEnabled() == page.btn_view_levels.isEnabled()
+        assert levels_action.isChecked() is False
+    else:
+        assert page.btn_view_levels.isVisible()
     fft_page = _enter(win, "fft")
     QApplication.processEvents()
     assert not fft_page.btn_view_levels.isVisible()

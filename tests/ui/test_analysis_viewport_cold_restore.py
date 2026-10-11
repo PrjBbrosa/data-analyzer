@@ -79,7 +79,7 @@ def test_heatmap_cold_worker_restore_preserves_axis_origins(viewport_win, qtbot,
     assert actual[1] == pytest.approx(saved[1])
 
 
-def test_project_open_recomputes_heatmap_and_preserves_axis_origins(viewport_win, qtbot, tmp_path, monkeypatch):
+def test_project_open_waits_for_compute_and_preserves_axis_origins(viewport_win, qtbot, tmp_path, monkeypatch):
     win = viewport_win
     canvas = _compute(win, 'fft_time', qtbot)
     _state, saved = _save_user_x_home_y(win, 'fft_time', canvas)
@@ -91,11 +91,17 @@ def test_project_open_recomputes_heatmap_and_preserves_axis_origins(viewport_win
     submissions = _watch_worker_submission(restored, monkeypatch)
     restored.open_project(path)
     canvas = restored._analysis_page('fft_time').pane_canvas(0)
-    qtbot.waitUntil(lambda: canvas.has_result() and not restored._analysis_jobs.is_running('fft_time'), timeout=20000)
-    assert submissions, 'opening the saved project must regenerate its heatmap'
+    qtbot.wait(100)
+    assert submissions == []
+    assert not canvas.has_result()
     mgr = restored.analysis_managers['fft_time']
     pane = mgr.get(mgr.active).panes[0]
     assert pane.viewport_origin == {'x': 'user', 'y': 'home'}
-    actual = canvas.capture_xy_viewport()
-    assert actual[0] == pytest.approx(saved[0])
-    assert actual[1] == pytest.approx(saved[1])
+    assert pane.xlim == pytest.approx(saved[0])
+    assert pane.ylim == pytest.approx(saved[1])
+    restored.inspector.fft_time_ctx.btn_compute.click()
+    qtbot.waitUntil(lambda: canvas.has_result() and not restored._analysis_jobs.is_running('fft_time'), timeout=20000)
+    assert submissions, 'an explicit Compute click regenerates the heatmap'
+    # Explicit Compute retains its existing camera contract: apply parameter
+    # ranges rather than the prior browsing viewport.
+    assert pane.viewport_origin == {'x': 'auto', 'y': 'auto'}

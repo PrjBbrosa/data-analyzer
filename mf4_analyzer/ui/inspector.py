@@ -257,6 +257,13 @@ class Inspector(QWidget):
         self.contextual_stack.addWidget(self.fft_time_ctx)
         self.contextual_stack.addWidget(self.frf_ctx)
         self.contextual_stack.addWidget(self.order_ctx)
+        self._analysis_target_titles = {}
+        for section, context in (
+            ('fft', self.fft_ctx), ('fft_time', self.fft_time_ctx),
+            ('frf', self.frf_ctx), ('order', self.order_ctx),
+        ):
+            title = context.findChild(QLabel, "inspectorGroupTitle")
+            self._analysis_target_titles[section] = (title, title.text())
         body_lay.addWidget(self.contextual_stack)
         self.contextual_stack.setVisible(False)
 
@@ -300,6 +307,16 @@ class Inspector(QWidget):
             self.frf_view_in_time_requested
         )
         self.frf_ctx.preset_bar.acknowledged.connect(self.preset_acknowledged)
+
+    def set_analysis_target(self, section, view_name, pane_index):
+        """Name the projected View in the existing source-group heading."""
+        title, base = self._analysis_target_titles[section]
+        target = f"{view_name} · 窗格 {int(pane_index) + 1}"
+        # Reserve room for the FRF SISO badge; full names stay in the tooltip.
+        display = title.fontMetrics().elidedText(target, Qt.ElideMiddle, 190)
+        title.setText(f"{base}\n{display}")
+        title.setToolTip(target)
+        title.setAccessibleName(f"{base} · {target}")
 
     def set_mode(self, mode):
         if mode not in ('time', 'fft', 'fft_time', 'frf', 'order'):

@@ -17,8 +17,8 @@ from functools import partial
 
 import numpy as np
 
-from PyQt5.QtWidgets import QColorDialog, QMessageBox
-from PyQt5.QtCore import QTimer
+from PyQt5.QtWidgets import QApplication, QColorDialog, QMessageBox
+from PyQt5.QtCore import QSignalBlocker, QTimer
 
 from .ultraview_coordinator import notify_ultraview_plot
 from . import view_activation
@@ -56,6 +56,7 @@ def _disconnect_signal(signal, slot) -> None:
 
 from ... import db_reference
 from ..compute_feedback import summarize_compute
+from ..analysis_result_state import mark_pending
 from .analysis_comparison import AnalysisViewTarget
 from .analysis_context import AnalysisContext
 from .analysis_time_range import (
@@ -320,11 +321,20 @@ class AnalysisMixin:
         mgr.rename(idx, name)
         if self.chart_stack.current_mode() != section:
             return
-        if idx != mgr.active:
-            return
         if not (0 <= idx < len(mgr.views)):
             return
         state = mgr.get(idx)
+        target = self._analysis_state_for_dispatch(section)
+        if state.view_id != target.view_id:
+            return
+        pane_idx = self._dispatch_focus_index(section, state)
+        self.inspector.set_analysis_target(section, state.name, pane_idx)
+        attachment_context = getattr(self.navigator, 'set_attachment_context', None)
+        if callable(attachment_context):
+            attachment_context(
+                section_label=self._analysis_section_label(section),
+                view_name=state.name,
+            )
         empty = getattr(self.navigator, 'set_empty_state_context', None)
         if callable(empty):
             empty(
@@ -562,22 +572,23 @@ class AnalysisMixin:
         return committed
 
     def _analysis_params_for_canvas(self, section, canvas, fallback):
-        """Resolve display intent from the bound View, never the other side's UI."""
+        """Resolve presentation and accepted compute labels for this canvas."""
         comp = self._comparison()
         target = comp.target_for_canvas(canvas) if comp is not None else None
         if target is not None and target.section == section:
             state = self._analysis_state_by_id(section, target.view_id)
-            if state is not None:
-                return dict(state.params)
-        if section in {"fft_time", "order"}:
-            mgr = self.analysis_managers.get(section)
-            if mgr is not None and mgr.views:
-                params = dict(fallback)
-                state = mgr.get(mgr.active)
-                for key in ("z_auto", "z_floor", "z_ceiling"):
-                    if key in state.params:
-                        params[key] = state.params[key]
-                return params
+            if state is not None and 0 <= target.pane_index < len(state.panes):
+                return self._analysis_bound_display_params(
+                    section, state, state.panes[target.pane_index],
+                )
+        mgr = self.analysis_managers.get(section)
+        if mgr is not None and mgr.views:
+            state = mgr.get(mgr.active)
+            page = self._analysis_page(section)
+            if page is not None:
+                for idx, pane in enumerate(state.panes):
+                    if idx < page.pane_count() and page.pane_canvas(idx) is canvas:
+                        return self._analysis_bound_display_params(section, state, pane)
         return fallback
 
     def _analysis_canvas_updates_controls(self, section, canvas):
@@ -933,6 +944,7 @@ class AnalysisMixin:
         if previous is not None and not same:
             old_state = self._analysis_state_by_id(section, previous[0])
             if old_state is not None and self.chart_stack.current_mode() == section:
+                self._flush_pending_analysis_param_edit(section)
                 capture_params_to_state(self._analysis_ctx(section), old_state)
                 self._capture_analysis_sources(
                     section, old_state, pane_idx=int(previous[1]),
@@ -962,15 +974,23 @@ class AnalysisMixin:
             refresh = getattr(self, "_refresh_analysis_candidates", None)
             if callable(refresh):
                 refresh(section)
-            apply_params_from_state(self._analysis_ctx(section), state)
+            # Restoring the shared Inspector must not emit the legacy FFT
+            # remark toggle and overwrite the target card's live gesture mode.
+            ctx = self._analysis_ctx(section)
+            with QSignalBlocker(ctx):
+                apply_params_from_state(ctx, state)
             if section in {"fft", "frf"}:
                 self._apply_frequency_cursor_controls(section, state)
             self._apply_analysis_sources(section, state)
             self._apply_analysis_time_range(section, state)
+            self.inspector.set_analysis_target(section, state.name, pane_index)
             page = self._analysis_page(section)
             marker = getattr(page, "mark_comparison_focus", None)
             if callable(marker):
                 marker(state.view_id, pane_index)
+            self._on_annotation_enabled_changed(
+                section, page.focused_card().annotation_enabled(),
+            )
             x_linked = bool((state.compare or {}).get("x_linked", True))
             levels_locked = bool((state.compare or {}).get("levels_locked", True))
             page.sync_compare_buttons(x_linked=x_linked, levels_locked=levels_locked)
@@ -1006,11 +1026,18 @@ class AnalysisMixin:
         for pane_idx, card in enumerate(page.peer_cards()):
             if pane_idx >= len(peer.panes):
                 break
+            canvas = getattr(card, "canvas", None)
+            newly_bound = not getattr(canvas, "_comparison_peer_wired", False)
             comp.bind_canvas(
-                getattr(card, "canvas", None),
+                canvas,
                 AnalysisViewTarget(section, peer.view_id, pane_idx),
             )
             self._wire_peer_card(section, card)
+            if canvas is not None and newly_bound:
+                # A fresh peer has no live overlays yet. Rebind persisted pins
+                # before painting cached data, just like a normal View restore;
+                # an existing canvas keeps any not-yet-captured live edits.
+                self._rebind_pane_overlay(canvas, peer.panes[pane_idx])
         page.set_linked(bool((host.compare or {}).get("x_linked", True)))
         page.set_levels_locked(bool((host.compare or {}).get("levels_locked", True)))
         peer_host = getattr(page, "_peer_host", None)
@@ -1304,128 +1331,18 @@ class AnalysisMixin:
             comp.propagating_levels = False
 
     def _render_comparison_view(self, section, state):
-        """Paint one view from its own cache entry onto its bound canvases.
-
-        Misses stay empty. This path does not arm project restore and does
-        not copy result arrays into the other region.
-        """
+        """Restore only this View's explicitly accepted results."""
         comp = self._comparison()
         if comp is None or state is None:
             return False
         self._validate_comparison_links(section)
         focus = comp.focused(section)
         is_focus = focus is not None and str(focus[0]) == str(state.view_id)
-        if section == "frf":
-            self._render_frf_comparison_view(state, sync_facts=is_focus)
-            return bool(is_focus)
-        any_missing = False
-        for pane_idx, pane in enumerate(state.panes):
-            canvas = comp.canvas_for(section, state.view_id, pane_idx)
-            if canvas is None:
-                continue
-            cache = self.analysis_caches[section]
-            if section == "fft":
-                entries = []
-                pane_keys = []
-                colors = self._analysis_channel_color_map()
-                for fid, ch in pane.sources:
-                    key = self._analysis_cache_key_for_view_source(
-                        section, state, pane, pane_idx, fid, ch,
-                    )
-                    pane_keys.append(key)
-                    result = cache.get(key)
-                    if result is None:
-                        any_missing = True
-                        continue
-                    entries.append(self._fft_entry_from_cache(
-                        result, fid, ch, colors.get((fid, ch)),
-                        time_range=self._normalize_analysis_time_range(pane.time_range),
-                        display_params=state.params,
-                    ))
-                self._replace_analysis_pane_pins(
-                    section, state.view_id, pane_idx, pane_keys,
-                )
-                self._publish_line_chart_appearance(canvas, pane)
-                if entries:
-                    self._plot_fft_entries(entries, canvas)
-                else:
-                    self._clear_analysis_canvas(canvas)
-                    self._rebind_pane_overlay(canvas, pane)
-                    if pane.sources:
-                        self._show_analysis_empty_hint(canvas)
-                self._restore_analysis_pane_viewport(
-                    section, state, pane_idx, canvas,
-                )
-                continue
-            if not pane.sources:
-                self._clear_analysis_canvas(canvas)
-                self._project_heatmap_pane_appearance(section, canvas, pane)
-                self._rebind_pane_overlay(canvas, pane)
-                self._replace_analysis_pane_pins(
-                    section, state.view_id, pane_idx, (),
-                )
-                continue
-            fid, ch = pane.sources[0]
-            key = self._analysis_cache_key_for_view_source(
-                section, state, pane, pane_idx, fid, ch,
-            )
-            self._replace_analysis_pane_pins(
-                section, state.view_id, pane_idx, (key,),
-            )
-            result = cache.get(key)
-            if result is None:
-                any_missing = True
-                self._clear_analysis_canvas(canvas)
-                self._project_heatmap_pane_appearance(section, canvas, pane)
-                self._rebind_pane_overlay(canvas, pane)
-                self._show_analysis_empty_hint(canvas)
-            else:
-                self._render_cached_heatmap(
-                    section, canvas, result, source=(fid, ch),
-                )
-                self._restore_analysis_pane_viewport(
-                    section, state, pane_idx, canvas,
-                )
-        if is_focus and any_missing:
-            self.statusBar.showMessage("参数/源已就绪，点击计算")
-        if is_focus:
-            self._sync_section_effective_facts(section, state)
+        self._render_bound_analysis_panes(section, state, sync_facts=is_focus)
         return bool(is_focus)
 
     def _render_frf_comparison_view(self, state, *, sync_facts) -> None:
-        comp = self._comparison()
-        missing = False
-        for pane_idx, pane in enumerate(state.panes):
-            canvas = comp.canvas_for("frf", state.view_id, pane_idx)
-            if canvas is None:
-                continue
-            key = self._frf_cache_key_for_pane(state, pane)
-            if key is None:
-                canvas.full_reset()
-                self._rebind_pane_overlay(canvas, pane)
-                self._replace_analysis_pane_pins("frf", state.view_id, pane_idx, ())
-                if pane.input_source is not None or pane.output_source is not None:
-                    missing = True
-                    canvas.show_empty_hint("点击『计算频响』生成")
-                continue
-            self._replace_analysis_pane_pins("frf", state.view_id, pane_idx, (key,))
-            result = self.analysis_caches["frf"].get(key)
-            if result is None:
-                missing = True
-                canvas.full_reset()
-                self._rebind_pane_overlay(canvas, pane)
-                canvas.show_empty_hint("点击『计算频响』生成")
-                continue
-            canvas.set_result(
-                result,
-                display_params=self._frf_display_params_for_state(state),
-                context=self._frf_render_context_for_pane(pane),
-            )
-            self._restore_frf_canvas_ranges(canvas, pane)
-        if sync_facts:
-            self._sync_frf_effective_facts(state)
-            if missing:
-                self.statusBar.showMessage("参数/输入输出已就绪，点击计算频响")
+        self._render_bound_analysis_panes("frf", state, sync_facts=sync_facts)
 
     def _teardown_comparison_display(self) -> None:
         comp = self._comparison()
@@ -1732,9 +1649,22 @@ class AnalysisMixin:
         canvas._fft_preview_range_wired = True
 
     # -- view-switch pipeline (capture → switch → apply → render) -------
+    def _flush_pending_analysis_param_edit(self, section):
+        """Commit the old Inspector editor before changing its View binding.
+
+        Saving via a shortcut does not send FocusOut. Use the editor's normal
+        focus-out path so custom validation (notably the dB reference editor)
+        runs before reading current_params, without interpreting raw text here.
+        """
+        focused = QApplication.focusWidget()
+        ctx = self._analysis_ctx(section)
+        if focused is not None and ctx.isAncestorOf(focused):
+            focused.clearFocus()
+
     def _capture_active_analysis_view(self, section, *, capture_sources=True):
         from ..analysis_view_bridge import capture_params_to_state
         mgr = self.analysis_managers[section]
+        self._flush_pending_analysis_param_edit(section)
         state = self._analysis_state_for_capture(section)
         capture_params_to_state(self._analysis_ctx(section), state)
         routed_pane = None
@@ -1973,32 +1903,13 @@ class AnalysisMixin:
         self._reconcile_section_result_validity(section, visible=True)
 
     def _reconcile_section_result_validity(self, section, *, visible):
-        """One owner: cache hit republishes the result; a miss stays stale.
-
-        Validity is whether the current request matches a stored result, not
-        an event dirty bit. This path never submits DSP.
-        """
-        if not visible:
-            self._mark_section_effective_facts_stale(section)
-            return
-        if section == 'frf':
-            reconcile = getattr(self, '_reconcile_frf_result_validity', None)
-            mgr = (getattr(self, 'analysis_managers', None) or {}).get('frf')
-            if callable(reconcile) and mgr is not None and mgr.views:
-                reconcile(self._analysis_state_for_dispatch(section))
-            else:
-                self._mark_section_effective_facts_stale(section)
-            return
+        """Editing changes intent, never permission to publish a cache entry."""
         mgr = (getattr(self, 'analysis_managers', None) or {}).get(section)
         if mgr is None or not mgr.views:
-            self._mark_section_effective_facts_stale(section)
             return
         state = self._analysis_state_for_dispatch(section)
-        if (section, state.view_id) in getattr(self, '_analysis_restore_pending', ()):
-            self._mark_retained_analysis_result_stale(section, state)
-            return
-        if self._analysis_focused_request_is_cached(section, state):
-            self._render_analysis_view_from_cache(section, state)
+        if section == 'frf':
+            self._reconcile_frf_result_validity(state)
             return
         self._mark_retained_analysis_result_stale(section, state)
 
@@ -2027,8 +1938,21 @@ class AnalysisMixin:
         )
         return cache.get(key) is not None
 
+    def _mark_analysis_pane_pending(self, section, state, pane_idx):
+        if section == 'frf':
+            self._dirty_frf_pane(state, pane_idx, clear_effective=True)
+            return
+        mark_pending(state.panes[pane_idx])
+        if self._dispatch_focus_index(section, state) == pane_idx:
+            self._mark_section_effective_facts_stale(section)
+        canvas = self._canvas_for_view_pane(section, state, pane_idx)
+        if section == 'fft' and canvas is not None:
+            canvas.mark_spectrum_stale()
+
     def _mark_retained_analysis_result_stale(self, section, state):
         """Keep the previous picture and say the numbers are the last result."""
+        for pane in state.panes:
+            mark_pending(pane)
         self._mark_section_effective_facts_stale(section)
         if section != 'fft':
             return
@@ -2064,9 +1988,10 @@ class AnalysisMixin:
         slot = (section, str(view_id), pane_idx)
         if pins is None or slot not in pins:
             return
+        state = self._analysis_state_by_id(section, view_id)
+        binding = state.panes[pane_idx].result_binding if 0 <= pane_idx < len(state.panes) else None
         self._replace_analysis_pane_pins(
-            section, view_id, pane_idx,
-            [item for item in pins[slot] if item != key],
+            section, view_id, pane_idx, binding.keys if binding is not None else (),
         )
 
     def _effective_facts_health(self, sig, fid=None, sources=None):
@@ -2250,6 +2175,9 @@ class AnalysisMixin:
             )
             self._apply_analysis_time_range(section, state)
             self._apply_analysis_overlay(section, state)
+            self.inspector.set_analysis_target(
+                section, state.name, page.focused_index(),
+            )
         finally:
             self._applying_analysis_view = False
             if dirty is not None:
@@ -2334,6 +2262,7 @@ class AnalysisMixin:
         self._capture_analysis_time_range(section, state, pane_idx=old_idx)
         self._apply_analysis_sources(section, state)
         self._apply_analysis_time_range(section, state)
+        self.inspector.set_analysis_target(section, state.name, idx)
         if section in {'fft', 'frf'}:
             self._apply_frequency_cursor_controls(section, state)
         self._sync_section_effective_facts(section, state)
@@ -3031,8 +2960,6 @@ class AnalysisMixin:
         if candidates is None:
             return False
         ctrl = self._analysis_context.time_range
-        dirty = getattr(self, "_dirty_frf_pane", None)
-        frf_changed = []
         for item in candidates:
             pane = item["pane"]
             idx = item["pane_idx"]
@@ -3046,13 +2973,8 @@ class AnalysisMixin:
             else:
                 pane.time_range = None
                 ctrl.convert_to_full(section, state.view_id, idx)
-            if section == "frf" and pane.time_range != before:
-                frf_changed.append(idx)
-        if section == "frf" and frf_changed and callable(dirty):
-            first = True
-            for idx in frf_changed:
-                dirty(state, idx, clear_effective=first)
-                first = False
+            if pane.time_range != before:
+                self._mark_analysis_pane_pending(section, state, idx)
         self._apply_analysis_time_range(section, state)
         return True
 
@@ -3263,10 +3185,8 @@ class AnalysisMixin:
         intent = ctrl.note_enabled(
             section, view_id, idx, pane.time_range, signature,
         )
-        if section == "frf" and pane.time_range != before:
-            dirty = getattr(self, "_dirty_frf_pane", None)
-            if callable(dirty):
-                dirty(state, idx, clear_effective=True)
+        if pane.time_range != before:
+            self._mark_analysis_pane_pending(section, state, idx)
         return intent
 
     def _flush_pending_analysis_range_edit(
@@ -3473,6 +3393,7 @@ class AnalysisMixin:
             if not valid:
                 return
             pane.time_range = parsed
+            self._mark_analysis_pane_pending(section, state, idx)
             signature = self._analysis_source_signature_for_pane(
                 section, pane, state
             )
@@ -3480,7 +3401,9 @@ class AnalysisMixin:
                 section, state.view_id, idx, pane.time_range, signature,
             )
             return
-        pane.time_range = None
+        if pane.time_range is not None:
+            pane.time_range = None
+            self._mark_analysis_pane_pending(section, state, idx)
 
     def _set_top_range_enabled_silently(self, enabled, *, mode=None):
         top = self.inspector.top
@@ -3615,6 +3538,7 @@ class AnalysisMixin:
             pane_idx = page.focused_index()
         idx = min(int(pane_idx), len(state.panes) - 1)
         pane = state.panes[idx]
+        before_sources = (tuple(pane.sources), pane.rpm_source)
         if section == 'frf':
             self._capture_frf_sources(state, idx)
             self._sync_analysis_time_range_after_sources(
@@ -3645,6 +3569,8 @@ class AnalysisMixin:
             if section == 'order':
                 rpm = ctx.current_rpm()
                 pane.rpm_source = tuple(rpm) if rpm else None
+        if before_sources != (tuple(pane.sources), pane.rpm_source):
+            self._mark_analysis_pane_pending(section, state, idx)
         self._sync_analysis_time_range_after_sources(
             section, state, idx, project=False,
         )
@@ -3867,9 +3793,7 @@ class AnalysisMixin:
         """Dispatch the active view's compute for ``section``.
 
         Used by tests and as a fallback for an explicit section-wide
-        recompute. Project restore uses ``_recompute_restored_analysis_view``
-        keyed by persisted ``view_id`` so inactive Views are not redirected
-        onto live Inspector state.
+        compute action. Project restore never invokes this entry point.
         """
         try:
             if section == 'fft':
@@ -4267,147 +4191,93 @@ class AnalysisMixin:
             return self._render_analysis_view_from_cache_impl(section, state)
 
     def _render_analysis_view_from_cache_impl(self, section, state):
-        """Render each pane from cached results; panes whose sources are not all
-        cached show an empty state and a 'click 计算' status hint.
-
-        Normally never computes (spec §4). After ``open_project`` every
-        source-bearing View is dispatched by ``view_id``. If this View is
-        still pending when it first becomes visible (tab switch before the
-        timer), schedule that same restore once, then fall back to cache.
-
-        Returns ``True`` only after this call has synchronized the final
-        effective facts itself.  A deferred project restore returns falsey so
-        its caller retains the one current-state sync; direct callers continue
-        to get the existing default sync at the end of a completed render.
-        """
-        from ..analysis_view_state import analysis_view_has_sources
-
-        # Canvas-backed restore/render must explicitly request readiness; do not
-        # rely on the user having visited the section (Task 3).
+        """Restore accepted bindings only; a render never queues computation."""
         ensure = getattr(self.chart_stack, "ensure_analysis_page_ready", None)
         if callable(ensure):
             ensure(section)
-
-        mgr = self.analysis_managers.get(section)
-        if mgr is not None:
-            # Persisted view identity, not a mutable list position, owns a
-            # restore task. Reordering an inactive view before its deferred
-            # callback runs must not redirect compute to another View.
-            restore_key = (section, state.view_id)
-            if restore_key in self._analysis_restore_pending:
-                if getattr(self, "_opening_project", False):
-                    # open_project dispatches every pending View after the
-                    # window finishes opening. Do not compute mid-restore.
-                    pass
-                elif analysis_view_has_sources(section, state):
-                    QTimer.singleShot(
-                        0,
-                        lambda s=section, v=state.view_id:
-                        self._recompute_restored_analysis_view(s, v),
-                    )
-                    return
         if self._comparison_render_bound(section, state):
             return self._render_comparison_view(section, state)
-        if section == 'frf':
-            self._render_frf_view_from_cache(state)
-            return True
-        page = self._analysis_page(section)
-        any_missing = False
-        enumerated_panes = set()
-        heatmap_panes = 0
-        retained_panes = 0
-        for pane_idx in range(page.pane_count()):
-            if pane_idx >= len(state.panes):
-                break
-            enumerated_panes.add(pane_idx)
-            pane = state.panes[pane_idx]
-            canvas = page.pane_canvas(pane_idx)
-            cache = self.analysis_caches[section]
-            if section == 'fft':
-                entries = []
-                pane_keys = []
-                colors = self._analysis_channel_color_map()
-                time_range = self._pane_time_range_for(section, pane_idx)
-                for fid, ch in pane.sources:
-                    key = self._analysis_cache_key(
-                        section, fid, ch, pane_idx=pane_idx)
-                    pane_keys.append(key)
-                    result = cache.get(key)
-                    if result is None:
-                        any_missing = True
-                        continue
-                    entries.append(self._fft_entry_from_cache(
-                        result, fid, ch, colors.get((fid, ch)),
-                        time_range=time_range))
-                self._replace_analysis_pane_pins(
-                    section, state.view_id, pane_idx, pane_keys)
-                self._publish_line_chart_appearance(canvas, pane)
-                if entries:
-                    self._plot_fft_entries(entries, canvas)
-                else:
-                    # No cached curves (empty sources, or all sources missing
-                    # from the cache) -> empty canvas state.  A source can be
-                    # intentionally selected before its first FFT compute;
-                    # returning to that View must still restore its lower
-                    # time-domain preview after the pane sources are applied.
-                    self._clear_analysis_canvas(canvas)
-                    self._rebind_pane_overlay(canvas, pane)
-                    if pane.sources:
-                        if pane_idx == page.focused_index():
-                            self._refresh_fft_time_preview(
-                                clear_spectrum=False)
-                        self._show_analysis_empty_hint(canvas)
-            else:
-                if not pane.sources:
-                    self._clear_analysis_canvas(canvas)
-                    self._project_heatmap_pane_appearance(section, canvas, pane)
-                    self._rebind_pane_overlay(canvas, pane)
-                    self._replace_analysis_pane_pins(
-                        section, state.view_id, pane_idx, ())
-                    continue
-                fid, ch = pane.sources[0]
-                key = self._analysis_cache_key(
-                    section, fid, ch,
-                    rpm_source=pane.rpm_source if section == 'order' else None,
-                    pane_idx=pane_idx)
-                # Record binding intent even on miss so a later put is already
-                # protected (spec §4).
-                self._replace_analysis_pane_pins(
-                    section, state.view_id, pane_idx, (key,))
-                result = cache.get(key)
-                if result is None:
-                    any_missing = True
-                    self._clear_analysis_canvas(canvas)
-                    self._project_heatmap_pane_appearance(section, canvas, pane)
-                    self._rebind_pane_overlay(canvas, pane)
-                    self._show_analysis_empty_hint(canvas)
-                else:
-                    heatmap_panes += 1
-                    source = (fid, ch)
-                    if self._heatmap_picture_is_current(
-                        section, page, canvas, result, source,
-                    ):
-                        retained_panes += 1
-                        # The image stays. The saved viewport can still move
-                        # the existing picture; that is not a cache replot.
-                        self._restore_analysis_canvas_viewport(section, canvas)
-                        self._project_heatmap_pane_appearance(
-                            section, canvas, pane,
-                        )
-                    else:
-                        self._render_cached_heatmap(
-                            section, canvas, result, source=source)
-        # Panes not visited this render (e.g. split cleared) drop their pins.
-        for pane_idx in range(len(state.panes)):
-            if pane_idx not in enumerated_panes:
-                self._replace_analysis_pane_pins(
-                    section, state.view_id, pane_idx, ())
-        if any_missing:
-            self.statusBar.showMessage("参数/源已就绪，点击计算")
-        if heatmap_panes == 0 or retained_panes != heatmap_panes:
-            notify_ultraview_plot(self, section, "analysis-restore-plot")
-        self._sync_section_effective_facts(section, state)
+        self._render_bound_analysis_panes(section, state, sync_facts=True)
         return True
+
+    def _render_bound_analysis_panes(self, section, state, *, sync_facts):
+        """One cache/display path for ordinary and cross-View canvases.
+
+        Keys and source labels belong to the last accepted request. Display
+        intent belongs to the current View. A shared-cache hit alone never
+        creates a binding, including on mode entry and after project restore.
+        """
+        page = self._analysis_page(section)
+        missing = False
+        changed = False
+        colors = self._analysis_channel_color_map() if section == 'fft' else {}
+        for pane_idx, pane in enumerate(state.panes):
+            canvas = self._canvas_for_view_pane(section, state, pane_idx)
+            if canvas is None:
+                continue
+            if section == 'frf':
+                missing |= not self._render_bound_frf_pane(state, pane_idx, canvas)
+                continue
+            if section == 'fft':
+                self._publish_line_chart_appearance(canvas, pane)
+            binding = pane.result_binding
+            pairs = () if binding is None else zip(binding.request.sources, binding.keys)
+            results = [
+                (source, key, self.analysis_caches[section].get(key))
+                for source, key in pairs
+            ]
+            found = [(source, key, result) for source, key, result in results
+                     if result is not None]
+            self._replace_analysis_pane_pins(
+                section, state.view_id, pane_idx, [key for _, key, _ in found],
+            )
+            if not found:
+                self._clear_analysis_canvas(canvas)
+                if section in {'fft_time', 'order'}:
+                    self._project_heatmap_pane_appearance(section, canvas, pane)
+                self._rebind_pane_overlay(canvas, pane)
+                if pane.sources or binding is not None:
+                    missing = True
+                    if section == 'fft' and sync_facts and pane_idx == self._dispatch_focus_index(section, state):
+                        self._refresh_fft_time_preview(clear_spectrum=False)
+                    self._show_analysis_empty_hint(canvas)
+                changed = True
+                continue
+            if section == 'fft':
+                params = self._analysis_bound_display_params(section, state, pane)
+                entries = [self._fft_entry_from_cache(
+                    result, source[0], source[1], colors.get(source),
+                    time_range=binding.request.time_range, display_params=params,
+                ) for source, _key, result in found]
+                self._plot_fft_entries(entries, canvas)
+                if binding.stale:
+                    canvas.mark_spectrum_stale()
+                changed = True
+            else:
+                source, _key, result = found[0]
+                if self._heatmap_picture_is_current(section, page, canvas, result, source):
+                    self._project_heatmap_pane_appearance(section, canvas, pane)
+                else:
+                    self._render_cached_heatmap(section, canvas, result, source=source)
+                    changed = True
+            self._restore_analysis_pane_viewport(section, state, pane_idx, canvas)
+        if sync_facts:
+            self._sync_section_effective_facts(section, state)
+            if missing:
+                self.statusBar.showMessage("参数/源已就绪，点击计算")
+        if changed:
+            notify_ultraview_plot(self, section, "analysis-restore-plot")
+
+    def _analysis_bound_display_params(self, section, state, pane):
+        """Combine current presentation with the calculation behind the picture."""
+        params = dict(state.params)
+        binding = pane.result_binding
+        if binding is not None:
+            requested = binding.request.params
+            for key in self._requested_compute_projection(section, requested):
+                if key in requested:
+                    params[key] = requested[key]
+        return params
 
     def _rebind_pane_overlay(self, canvas, pane) -> None:
         from ..analysis_view_bridge import apply_overlay_to_canvas
@@ -4592,19 +4462,10 @@ class AnalysisMixin:
             self._rerender_analysis_section_from_cache(section)
 
     def _rerender_analysis_section_from_cache(self, section):
-        """Redraw ``section``'s active view from whatever the cache already
-        holds -- zero compute dispatch (spec §8.3). Reuses each section's
-        OWN existing cache-hit render entry point instead of a new one, so
-        no cache-consumer logic is duplicated (fft: the spectrum-preserving
-        mode-entry gate; fft_time/order: their own do_* entry points, which
-        already no-op the worker on a cache hit -- see the existing
-        db_reference-editor valueChanged wiring in window._connect)."""
-        if section == 'fft':
-            self._enter_fft_mode()
-        elif section == 'fft_time':
-            self.do_fft_time(force=False)
-        else:
-            self.do_order_time()
+        """Display-only refresh; never call a calculation entry point."""
+        state = self._sync_active_analysis_params(section)
+        if state is not None and self.chart_stack.current_mode() == section:
+            self._render_analysis_view_from_cache(section, state)
 
     def _on_db_reference_catalog_saved(self, section=None):
         """The shared ``DbReferenceDefaultsDialog`` committed a catalog save
