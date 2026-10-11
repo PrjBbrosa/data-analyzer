@@ -6,6 +6,7 @@ import pytest
 
 from mf4_analyzer.io.file_data import FileData
 from mf4_analyzer.io.head_hdf import (
+    build_time_axis,
     classify_saved_hdf_sampling,
     legacy_simultaneous_dt,
     parse_head_hdf,
@@ -215,6 +216,60 @@ def test_zero_scans_parse_but_do_not_import(tmp_path):
     assert parsed.channels[0].fs == pytest.approx(1000.0)
     with pytest.raises(ValueError, match="0 个 scan"):
         DataLoader.load_hdf(str(path))
+
+
+def test_huge_scan_count_on_a_tiny_file_is_a_data_error(tmp_path, monkeypatch):
+    """A corrupt scan count is a data error before any time-axis allocation."""
+    path = _write(
+        tmp_path / "huge.hdf",
+        n_scans=4,
+        delta=1e-3,
+        scan_mode="simultaneous",
+        channels=[_channel("A", 1, np.arange(4, dtype=float))],
+    )
+    start = 4096
+    raw = path.read_bytes()
+    text = raw[:start].decode("cp936").rstrip(" ")
+    old = "nbr of scans:                      4\r\n"
+    new = "nbr of scans:                      1000000000000\r\n"
+    assert old in text
+    text = text.replace(old, new, 1)
+    header = text.encode("cp936")
+    assert len(header) <= start
+    path.write_bytes(header.ljust(start, b" ") + raw[start:])
+
+    calls = {"arange": 0}
+    real_arange = np.arange
+
+    def _counted_arange(*args, **kwargs):
+        calls["arange"] += 1
+        return real_arange(*args, **kwargs)
+
+    monkeypatch.setattr("mf4_analyzer.io.head_hdf.np.arange", _counted_arange)
+    with pytest.raises(ValueError, match="截断") as exc:
+        parse_head_hdf(path)
+    assert not isinstance(exc.value, MemoryError)
+    assert calls["arange"] == 0
+
+
+def test_build_time_axis_allocates_one_array(monkeypatch):
+    calls = {"arange": 0}
+    real_arange = np.arange
+
+    def _counted_arange(*args, **kwargs):
+        calls["arange"] += 1
+        return real_arange(*args, **kwargs)
+
+    def _forbidden_diff(*_args, **_kwargs):
+        raise AssertionError("时间轴校验不能再分配整段差分")
+
+    monkeypatch.setattr("mf4_analyzer.io.head_hdf.np.arange", _counted_arange)
+    monkeypatch.setattr("mf4_analyzer.io.head_hdf.np.diff", _forbidden_diff)
+    axis = build_time_axis(0.25, 1e-3, 1000)
+    assert calls["arange"] == 1
+    assert axis.shape == (1000,)
+    assert axis[0] == pytest.approx(0.25)
+    assert axis[-1] == pytest.approx(0.25 + 999 * 1e-3)
 
 
 def test_invalid_delta_and_precision_loss_are_data_errors(tmp_path):
