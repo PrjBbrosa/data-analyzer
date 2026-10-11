@@ -12,7 +12,7 @@ from mf4_analyzer.ui.chart_stack.cursor_pill import CursorPill
 from mf4_analyzer.ui.chart_stack.cursor_display import (
     build_cursor_presentation, build_fft_cursor_presentation,
     build_frf_cursor_presentation, frf_live_primary_html,
-    pin_live_primary_html, pin_primary_html,
+    pin_live_primary_html, pin_primary_html, pin_status_primary_html,
 )
 from mf4_analyzer.ui.cursor_display_model import (
     CursorDisplayBranch, CursorDisplayChannel, CursorDisplayOptions,
@@ -183,6 +183,27 @@ def test_transient_body_changes_do_not_shrink_or_leave_stale_text(qapp, card, ch
     assert "X↓" not in text and "9.876" not in text
     assert "区间内无数据" not in text
     assert "1.234e-308" not in text
+
+
+def test_pending_projection_releases_detail_and_restores_ready_size(qapp, card):
+    _host, pill = card
+    _update(qapp, pill)
+    ready = pill.size()
+    assert pill.has_detail() is True
+    assert pill._primary.minimumHeight() > 0
+    intent = PinnedCursorIntent(
+        record_id="sequence", ordinal=3, mode="single", domain="time",
+        x=31.581, x_unit="s",
+    )
+    pill.set_display_projection(None)
+    pill.set_primary(pin_status_primary_html(intent, "更新中"))
+    qapp.processEvents()
+    assert pill._primary.minimumHeight() == 0
+    assert pill.has_detail() is False
+    assert pill.height() < ready.height()
+    _update(qapp, pill)
+    assert pill.size() == ready
+    assert pill.has_detail() is True
 
 
 def test_clear_releases_size_retention(qapp, card):

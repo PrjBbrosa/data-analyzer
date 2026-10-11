@@ -16,6 +16,7 @@ from PyQt5.QtWidgets import QApplication, QWidget
 from ..cursor_display_model import PinnedCursorSample
 from ..pinned_cursor_facts import (
     HIDDEN_CHANNEL_TEXT,
+    SOURCE_CHANGED_TEXT,
     UNCHECKED_TEXT,
     UNAVAILABLE_TEXT,
     _binding_key as _facts_binding_key,
@@ -1890,6 +1891,21 @@ class PinnedCursorController(QObject):
         generation, revision = self._canvas_generations(canvas)
         bound = self._bound_identity_keys(canvas)
         hidden = self._hidden_identity_keys(canvas)
+        # One transaction: content updates must not arrange or publish
+        # connector lines. Placement and the single tether publish happen
+        # after every pin has its final sample.
+        with self._projector.suppress_reproject_layout(id(canvas)):
+            self._reproject_records(
+                owner, kept, generation, revision, bound, hidden,
+            )
+            if tuple(kept) != owner.collection.records:
+                owner.collection = replace(owner.collection, records=tuple(kept))
+            owner.projected_generation = (generation, revision)
+            self._sync_overlay(owner)
+        self._arrange_pinned_panels(owner)
+
+    def _reproject_records(self, owner, kept, generation, revision, bound, hidden):
+        canvas = owner.canvas
         for intent in owner.collection.records:
             status = self._axis_status(canvas, intent)
             sample = None
@@ -1916,6 +1932,27 @@ class PinnedCursorController(QObject):
                 ):
                     kept.append(intent)
                     continue
+                if intent.domain == "frf" and (
+                    sample is None or getattr(sample, "frf_sample", None) is None
+                ):
+                    # Source mismatch and empty FRF reads stay one diagnostic
+                    # sample. Do not fall through into time-domain placeholders.
+                    changed = self._sampling.frf_sources_differ(canvas, intent)
+                    existing = str(getattr(sample, "diagnostic", "") or "").strip()
+                    sample = PinnedCursorSample(
+                        binding_generation=generation,
+                        data_revision=revision,
+                        domain="frf",
+                        mode=intent.mode,
+                        x=intent.x,
+                        ax=intent.ax,
+                        bx=intent.bx,
+                        diagnostic=(
+                            SOURCE_CHANGED_TEXT if changed
+                            else existing or UNAVAILABLE_TEXT
+                        ),
+                        channels=(),
+                    )
                 sample, next_intent, _dropped_record = self._reconcile_sample(
                     intent, sample, bound=bound, hidden=hidden,
                 )
@@ -1946,11 +1983,6 @@ class PinnedCursorController(QObject):
                 owner, next_intent, owner.samples.get(next_intent.record_id),
                 availability=status,
             )
-        if tuple(kept) != owner.collection.records:
-            owner.collection = replace(owner.collection, records=tuple(kept))
-        owner.projected_generation = (generation, revision)
-        self._sync_overlay(owner)
-        self._arrange_pinned_panels(owner)
 
     def _axis_status(self, canvas, intent) -> str:
         return self._sampling.axis_status(canvas, intent)

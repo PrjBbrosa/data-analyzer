@@ -101,6 +101,35 @@ def test_content_update_publishes_only_final_bottom_anchor(qtbot, qapp, monkeypa
     assert collection.records[0].anchor == intent.anchor
 
 
+def test_display_update_keeps_avoidance_after_apply_anchor(qtbot, qapp):
+    stack, canvas, controller, collection = _stack_with_pins(qtbot, qapp)
+    projector = controller._projector
+    intent = replace(collection.records[0], anchor=PinnedCursorAnchor(
+        h_edge="right", v_edge="top", nx=1.0, ny=0.0,
+    ), presentation="full")
+    collection = replace(collection, records=(intent,))
+    pill = projector.pill_for(id(canvas), intent.record_id)
+    pill.mark_user_placed(True)
+    projector.apply_anchor(pill, collection, pill_record_id=intent.record_id)
+    anchored = QRect(pill.geometry())
+    pill.avoid_rect(anchored, gap=8)
+    avoided = QRect(pill.geometry())
+    assert avoided != anchored
+    assert not avoided.intersects(anchored.adjusted(-8, -8, 8, 8))
+    sample = controller._owner(canvas).samples.get(intent.record_id)
+    projector.update_display_projection(
+        id(canvas), canvas, replace(intent, presentation="mini"),
+        sample, "ready", collection,
+    )
+    qapp.processEvents()
+    assert not pill.geometry().intersects(anchored.adjusted(-8, -8, 8, 8))
+    projector.update_display_projection(
+        id(canvas), canvas, intent, sample, "ready", collection,
+    )
+    qapp.processEvents()
+    assert not pill.geometry().intersects(anchored.adjusted(-8, -8, 8, 8))
+
+
 def test_display_update_preserves_saved_bottom_anchor(qtbot, qapp):
     from types import SimpleNamespace
     from mf4_analyzer.ui.cursor_display_model import CursorDisplayChannel
@@ -127,6 +156,33 @@ def test_display_update_preserves_saved_bottom_anchor(qtbot, qapp):
     )
     assert pill.height() > old_height
     assert pill.geometry().bottomRight() == previous_bottom_right
+
+
+def test_reproject_arranges_and_publishes_tethers_once(qtbot, qapp, monkeypatch):
+    stack, canvas, controller, _collection = _stack_with_pins(qtbot, qapp, 4)
+    projector = controller._projector
+    arrange_calls = []
+    original_arrange = projector.arrange_pinned_panels
+
+    def record_arrange(*args, **kwargs):
+        arrange_calls.append(args)
+        return original_arrange(*args, **kwargs)
+
+    monkeypatch.setattr(projector, "arrange_pinned_panels", record_arrange)
+    published = []
+    overlay = canvas._pinned_overlay
+    original_tethers = type(overlay).set_tethers
+
+    def record_tethers(target, tethers):
+        if target is overlay:
+            published.append(tuple(tethers))
+        original_tethers(target, tethers)
+
+    monkeypatch.setattr(type(overlay), "set_tethers", record_tethers)
+    controller._reproject_now(controller._owner(canvas))
+    assert len(arrange_calls) == 1
+    assert len(published) == 1
+    assert len(published[0]) == 4
 
 
 def test_grown_panel_near_safe_edge_relocates_without_overflow(qtbot, qapp):
