@@ -409,6 +409,24 @@ def test_windows_builders_keep_qt_splash_unless_native_launcher_is_opted_in():
     assert "no early splash" in launcher
     assert "0xAA64" in launcher
     assert "0x8664" in launcher
+    assert 'Join-Path $RepoRoot "build\\startup-launcher"' in launcher
+    assert "/Fo" in launcher
+    assert "startup-launcher-generated" not in launcher
+    source = (ROOT / "native" / "startup_launcher" / "launcher_win32.cc").read_text(
+        encoding="utf-8"
+    )
+    assert "#define _CRT_RAND_S" in source or "BCryptGenRandom" in source
+    assert source.find("#define _CRT_RAND_S") < source.find("#include")
+    assert "ERROR_BROKEN_PIPE" in source and "ERROR_NO_DATA" in source
+    assert "pipe_eof" in source
+    assert "kStartupHandoverFallbackTimeoutMs" in source
+    assert "VK_ESCAPE" in source
+    assert "coordinate_space" in source and "logical" in source
+    assert "GDI+ Graphics must be destroyed before DeleteDC." in source
+    assert source.find("GDI+ Graphics must be destroyed before DeleteDC.") < source.find(
+        "DeleteDC(memory)"
+    )
+    assert "if (thread == nullptr)" in source
 
 
 def test_windows_builders_do_not_exclude_startup_splash_modules():

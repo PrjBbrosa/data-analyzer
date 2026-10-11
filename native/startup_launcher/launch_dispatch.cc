@@ -2,21 +2,41 @@
 
 namespace {
 
-std::string env_get(const std::map<std::string, std::string>& env, const std::string& key) {
-    auto found = env.find(key);
-    if (found == env.end()) {
-        return "";
-    }
-    const std::string& raw = found->second;
+bool ascii_space(unsigned char ch) {
+    return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\v' || ch == '\f' || ch == '\r';
+}
+
+std::string trim_ascii(const std::string& raw) {
     size_t begin = 0;
     size_t end = raw.size();
-    while (begin < end && (raw[begin] == ' ' || raw[begin] == '\t')) {
+    while (begin < end && ascii_space(static_cast<unsigned char>(raw[begin]))) {
         ++begin;
     }
-    while (end > begin && (raw[end - 1] == ' ' || raw[end - 1] == '\t')) {
+    while (end > begin && ascii_space(static_cast<unsigned char>(raw[end - 1]))) {
         --end;
     }
     return raw.substr(begin, end - begin);
+}
+
+std::string lower_copy(std::string text);  // defined below
+
+std::string env_get(const std::map<std::string, std::string>& env, const std::string& key) {
+    // An exact key wins. Otherwise the lookup is case-insensitive, matching
+    // Windows environment blocks.
+    auto found = env.find(key);
+    if (found == env.end()) {
+        std::string folded = lower_copy(key);
+        for (const auto& item : env) {
+            if (lower_copy(item.first) == folded) {
+                found = env.find(item.first);
+                break;
+            }
+        }
+    }
+    if (found == env.end()) {
+        return "";
+    }
+    return trim_ascii(found->second);
 }
 
 std::string lower_copy(std::string text) {

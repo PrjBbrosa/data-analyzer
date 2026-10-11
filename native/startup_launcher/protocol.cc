@@ -2,6 +2,8 @@
 
 #include "json_value.h"
 
+#include <climits>
+#include <cmath>
 #include <sstream>
 
 namespace {
@@ -9,6 +11,17 @@ namespace {
 bool known_type(const std::string& type) {
     return type == "stage" || type == "finish" || type == "presented" ||
            type == "hidden" || type == "diagnostic";
+}
+
+bool finite_int(double value, int& out) {
+    if (!std::isfinite(value)) {
+        return false;
+    }
+    if (value < static_cast<double>(INT_MIN) || value > static_cast<double>(INT_MAX)) {
+        return false;
+    }
+    out = static_cast<int>(value);
+    return true;
 }
 
 std::string escape_json(const std::string& text) {
@@ -59,7 +72,10 @@ ProtocolMessage parse_protocol_line(const std::string& line) {
         message.error = "missing protocol fields";
         return message;
     }
-    message.version = static_cast<int>(version->number);
+    if (!finite_int(version->number, message.version)) {
+        message.error = "protocol number out of range";
+        return message;
+    }
     if (message.version != kProtocolVersion) {
         message.error = "unsupported protocol version";
         return message;
@@ -69,7 +85,10 @@ ProtocolMessage parse_protocol_line(const std::string& line) {
         return message;
     }
     message.session = session->text;
-    message.seq = static_cast<int>(seq->number);
+    if (!finite_int(seq->number, message.seq)) {
+        message.error = "protocol number out of range";
+        return message;
+    }
     message.type = type->text;
     if (const Json* stage = parsed.value.find("stage")) {
         if (stage->type == Json::String) {
@@ -94,7 +113,12 @@ ProtocolMessage parse_protocol_line(const std::string& line) {
                     numbers = false;
                     break;
                 }
-                message.screen[i] = static_cast<int>(screen->array[static_cast<size_t>(i)].number);
+                int coord = 0;
+                if (!finite_int(screen->array[static_cast<size_t>(i)].number, coord)) {
+                    numbers = false;
+                    break;
+                }
+                message.screen[i] = coord;
             }
             message.has_screen = numbers;
         }
@@ -105,6 +129,18 @@ ProtocolMessage parse_protocol_line(const std::string& line) {
     }
     message.ok = true;
     return message;
+}
+
+bool protocol_buffer_append(std::string& buffer, const char* data, size_t size) {
+    if (size == 0) {
+        return buffer.size() <= static_cast<size_t>(kProtocolBufferCap);
+    }
+    if (data == nullptr || size > static_cast<size_t>(kProtocolBufferCap) ||
+        buffer.size() > static_cast<size_t>(kProtocolBufferCap) - size) {
+        return false;
+    }
+    buffer.append(data, size);
+    return true;
 }
 
 std::string format_protocol_line(

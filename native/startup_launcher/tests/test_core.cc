@@ -76,6 +76,65 @@ void check_protocol_and_session() {
     expect(quoted == "\"a\\b\\\"c\"", "quote escapes got [" + quoted + "]");
     expect(quote_windows_argument("trail\\") == "trail\\", "unquoted trailing slash");
     expect(quote_windows_argument("a b\\") == "\"a b\\\\\"", "quoted trailing slash");
+
+    std::string depth32;
+    std::string depth33;
+    for (int i = 0; i < 32; ++i) {
+        depth32 += "{\"a\":";
+    }
+    depth32 += "1";
+    for (int i = 0; i < 32; ++i) {
+        depth32 += "}";
+    }
+    for (int i = 0; i < 33; ++i) {
+        depth33 += "{\"a\":";
+    }
+    depth33 += "1";
+    for (int i = 0; i < 33; ++i) {
+        depth33 += "}";
+    }
+    expect(parse_json(depth32).ok, "json depth 32");
+    expect(!parse_json(depth33).ok, "json depth 33");
+    expect(!parse_protocol_line(
+               "{\"v\":1e300,\"session\":\"s\",\"seq\":1,\"type\":\"stage\",\"stage\":\"preparing\"}")
+               .ok,
+           "1e300 version");
+
+    std::string capped;
+    std::string chunk(1000, 'x');
+    int accepted = 0;
+    while (protocol_buffer_append(capped, chunk.data(), chunk.size())) {
+        ++accepted;
+    }
+    expect(capped.size() <= static_cast<size_t>(kProtocolBufferCap), "buffer cap");
+    expect(accepted > 0, "buffer accepted a prefix");
+    expect(!protocol_buffer_append(capped, chunk.data(), chunk.size()), "buffer rejects overflow");
+    std::string exact(static_cast<size_t>(kProtocolBufferCap), 'y');
+    expect(!protocol_buffer_append(exact, "z", 1), "full buffer rejects one byte");
+
+    SessionState eof_state;
+    expect(session_stage(eof_state, "loading_components", false) == SessionApply::Applied,
+           "stage before eof");
+    expect(session_pipe_eof(eof_state) == SessionApply::Applied, "pipe eof");
+    expect(eof_state.hidden && eof_state.hidden_reason == "pipe_eof", "pipe eof reason");
+    expect(session_pipe_eof(eof_state) == SessionApply::AlreadyHidden, "pipe eof once");
+
+    SessionState timeout_state;
+    expect(session_handover_timeout(timeout_state) == SessionApply::IgnoredTerminal,
+           "timeout before stage");
+    expect(session_stage(timeout_state, "loading_components", false) == SessionApply::Applied,
+           "stage before timeout");
+    expect(session_handover_timeout(timeout_state) == SessionApply::Applied, "timeout after stage");
+    expect(timeout_state.hidden_reason == "timeout", "timeout reason");
+
+    SessionState finished;
+    expect(session_stage(finished, "loading_components", false) == SessionApply::Applied,
+           "stage before finish");
+    expect(session_finish(finished) == SessionApply::Applied, "finish before timeout");
+    expect(session_handover_timeout(finished) == SessionApply::IgnoredTerminal,
+           "no timeout after finish");
+    expect(session_pipe_eof(finished) == SessionApply::Applied, "eof still hides after finish");
+    expect(finished.hidden_reason == "pipe_eof", "eof reason after finish");
 }
 
 void check_fixture(const std::string& path) {

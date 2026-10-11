@@ -16,6 +16,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from mf4_analyzer.app_meta import APP_VERSION
+from mf4_analyzer.startup_feedback import HANDOVER_FALLBACK_TIMEOUT_S
 from mf4_analyzer.startup_launch_policy import PASSTHROUGH_FLAGS
 from mf4_analyzer.startup_visual_contract import (
     SPECTRUM_LAYERS,
@@ -62,6 +63,9 @@ def render_header(payload: dict, digest: str) -> str:
         f"static const int kStartupRailPeriodMs = {int(payload['motion']['rail_period_ms'])};",
         f"static const int kStartupLargeMinHeight = {int(payload['geometry']['large_scale_min_available_height'])};",
         f"static const int kStartupWorkAreaMargin = {int(payload['geometry']['work_area_margin'])};",
+        f"static const double kStartupShadowPad = {float(payload['geometry']['shadow_pad'])};",
+        f"static const double kStartupDisplayScaleLarge = {float(payload['geometry']['display_scale_large'])};",
+        f"static const int kStartupHandoverFallbackTimeoutMs = {int(round(float(HANDOVER_FALLBACK_TIMEOUT_S) * 1000))};",
         f"static const int kStartupTipCount = {len(TIP_RECORDS)};",
         "static const char* kStartupTipIds[] = {",
     ]

@@ -1,4 +1,6 @@
+#define _CRT_RAND_S
 // Windows public launcher. Compiled only by tools/build_startup_launcher.ps1.
+// _CRT_RAND_S must precede every system header so rand_s is declared.
 #include "launch_dispatch.h"
 #include "protocol.h"
 #include "session_machine.h"
@@ -36,6 +38,7 @@ constexpr UINT WM_APP_STAGE = WM_APP + 1;
 constexpr UINT WM_APP_FINISH = WM_APP + 2;
 constexpr UINT WM_APP_EXIT = WM_APP + 3;
 constexpr UINT WM_APP_PIPE = WM_APP + 4;
+constexpr UINT WM_APP_TIMEOUT = WM_APP + 5;
 constexpr UINT_PTR kFrameTimer = 1;
 
 struct LaunchState {
@@ -188,10 +191,16 @@ double product_scale_for(int logical_w, int logical_h) {
     if (max_h < 160) {
         max_h = 160;
     }
+    // Same card-plus-shadow basis as Python display_scale_for_work_area.
+    // kStartupShadowPad is 0 in the current contract, so the 1.5x threshold
+    // matches the previous card-only check. Both numbers come from the
+    // generated header; this function does not keep a second copy.
+    double card_w = static_cast<double>(kStartupCardWidth) + 2.0 * kStartupShadowPad;
+    double card_h = static_cast<double>(kStartupCardHeight) + 2.0 * kStartupShadowPad;
     if (logical_h >= kStartupLargeMinHeight &&
-        kStartupCardWidth * 1.5 <= max_w &&
-        kStartupCardHeight * 1.5 <= max_h) {
-        return 1.5;
+        card_w * kStartupDisplayScaleLarge <= max_w &&
+        card_h * kStartupDisplayScaleLarge <= max_h) {
+        return kStartupDisplayScaleLarge;
     }
     if (kStartupCardWidth <= max_w && kStartupCardHeight <= max_h) {
         return 1.0;
@@ -308,6 +317,8 @@ void paint_panel(LaunchState& state) {
     void* bits = nullptr;
     HBITMAP bitmap = CreateDIBSection(screen, &info, DIB_RGB_COLORS, &bits, nullptr, 0);
     HGDIOBJ previous = SelectObject(memory, bitmap);
+    // GDI+ Graphics must be destroyed before DeleteDC.
+    {
     Gdiplus::Graphics graphics(memory);
     graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
     graphics.SetTextRenderingHint(Gdiplus::TextRenderingHintAntiAlias);
@@ -388,6 +399,7 @@ void paint_panel(LaunchState& state) {
         Gdiplus::PointF(32 * scale, 366 * scale),
         &ink);
     graphics.DrawString(utf8_to_wide(kStartupCreditLeft).c_str(), -1, &caption, Gdiplus::PointF(32 * scale, static_cast<float>(height) - 28 * scale), &ink);
+    }
 
     POINT origin{state.screen_x + (state.screen_w - width) / 2, state.screen_y + (state.screen_h - height) / 2};
     SIZE size{width, height};
@@ -518,13 +530,35 @@ DWORD WINAPI runtime_thread(LPVOID param) {
     state.child_read = nullptr;
     state.child_write = nullptr;
     std::string buffer;
+    bool stage_seen = false;
+    bool finish_seen = false;
+    bool eof_posted = false;
+    bool timeout_posted = false;
+    bool buffer_capped = false;
+    ULONGLONG stage_tick = 0;
     while (WaitForSingleObject(process.hProcess, 0) == WAIT_TIMEOUT) {
         DWORD available = 0;
-        if (PeekNamedPipe(state.parent_read, nullptr, 0, nullptr, &available, nullptr) && available > 0) {
+        BOOL peeked = PeekNamedPipe(state.parent_read, nullptr, 0, nullptr, &available, nullptr);
+        if (!peeked) {
+            DWORD err = GetLastError();
+            // ERROR_BROKEN_PIPE / ERROR_NO_DATA is EOF, not a spin.
+            if (!eof_posted && (err == ERROR_BROKEN_PIPE || err == ERROR_NO_DATA)) {
+                eof_posted = true;
+                PostMessageW(state.hwnd, WM_APP_PIPE, 0, 0);
+            }
+        } else if (available > 0 && !buffer_capped) {
             std::string chunk(available, '\0');
             DWORD read = 0;
-            if (ReadFile(state.parent_read, chunk.data(), available, &read, nullptr) && read > 0) {
-                buffer.append(chunk.data(), read);
+            if (!ReadFile(state.parent_read, chunk.data(), available, &read, nullptr)) {
+                DWORD err = GetLastError();
+                if (!eof_posted && (err == ERROR_BROKEN_PIPE || err == ERROR_NO_DATA)) {
+                    eof_posted = true;
+                    PostMessageW(state.hwnd, WM_APP_PIPE, 0, 0);
+                }
+            } else if (read > 0) {
+                if (!protocol_buffer_append(buffer, chunk.data(), read)) {
+                    buffer_capped = true;
+                } else {
                 size_t newline = 0;
                 while ((newline = buffer.find('\n')) != std::string::npos) {
                     std::string line = buffer.substr(0, newline);
@@ -534,6 +568,10 @@ DWORD WINAPI runtime_thread(LPVOID param) {
                         continue;
                     }
                     if (message.type == "stage") {
+                        if (!stage_seen) {
+                            stage_seen = true;
+                            stage_tick = GetTickCount64();
+                        }
                         {
                             std::lock_guard<std::mutex> lock(state.outbound_mu);
                             state.pending_stage = message.stage;
@@ -542,10 +580,18 @@ DWORD WINAPI runtime_thread(LPVOID param) {
                         }
                         PostMessageW(state.hwnd, WM_APP_STAGE, 0, 0);
                     } else if (message.type == "finish") {
+                        finish_seen = true;
                         PostMessageW(state.hwnd, WM_APP_FINISH, 0, 0);
                     }
                 }
+                }
             }
+        }
+        if (stage_seen && !finish_seen && !timeout_posted &&
+            GetTickCount64() - stage_tick >=
+                static_cast<ULONGLONG>(kStartupHandoverFallbackTimeoutMs)) {
+            timeout_posted = true;
+            PostMessageW(state.hwnd, WM_APP_TIMEOUT, 0, 0);
         }
         std::vector<std::string> pending;
         {
@@ -578,23 +624,42 @@ void start_runtime(LaunchState& state) {
         return;
     }
     {
+        // state.screen_* stays in physical pixels for UpdateLayeredWindow.
+        // The protocol payload is logical pixels plus dpi. Older runtimes
+        // that only read "screen" still receive a rectangle.
+        int dpi = state.dpi <= 0 ? 96 : state.dpi;
+        int logical_x = MulDiv(state.screen_x, 96, dpi);
+        int logical_y = MulDiv(state.screen_y, 96, dpi);
+        int logical_w = MulDiv(state.screen_w, 96, dpi);
+        int logical_h = MulDiv(state.screen_h, 96, dpi);
         std::ostringstream presented;
         presented << "{\"v\":1,\"session\":\"" << state.session_id
                   << "\",\"seq\":1,\"type\":\"presented\",\"screen\":["
-                  << state.screen_x << "," << state.screen_y << ","
-                  << state.screen_w << "," << state.screen_h << "]}";
+                  << logical_x << "," << logical_y << ","
+                  << logical_w << "," << logical_h
+                  << "],\"dpi\":" << dpi
+                  << ",\"coordinate_space\":\"logical\"}";
         queue_outbound(state, presented.str());
     }
     HANDLE thread = CreateThread(nullptr, 0, runtime_thread, &state, 0, nullptr);
-    if (thread != nullptr) {
-        CloseHandle(thread);
+    if (thread == nullptr) {
+        state.exit_code = 1;
+        state.exit_known = true;
+        PostMessageW(state.hwnd, WM_APP_EXIT, 1, 0);
+        return;
     }
+    CloseHandle(thread);
 }
 
 LRESULT CALLBACK panel_wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
     LaunchState* state = g_state;
     switch (message) {
     case WM_TIMER:
+        if (state != nullptr && state->panel_live && !state->session.hidden &&
+            (GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0) {
+            // WS_EX_NOACTIVATE popups often never receive WM_KEYDOWN.
+            PostMessageW(hwnd, WM_CLOSE, 0, 0);
+        }
         if (state != nullptr && state->panel_live) {
             paint_panel(*state);
             if (!state->second_frame_sent) {
@@ -620,6 +685,17 @@ LRESULT CALLBACK panel_wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lp
             paint_panel(*state);
         }
         return 0;
+    case WM_APP_PIPE:
+        if (state != nullptr && session_pipe_eof(state->session) == SessionApply::Applied) {
+            hide_panel(*state, "pipe_eof");
+        }
+        return 0;
+    case WM_APP_TIMEOUT:
+        if (state != nullptr &&
+            session_handover_timeout(state->session) == SessionApply::Applied) {
+            hide_panel(*state, "timeout");
+        }
+        return 0;
     case WM_APP_FINISH:
         if (state != nullptr) {
             if (state->session.hidden) {
@@ -630,6 +706,12 @@ LRESULT CALLBACK panel_wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lp
             }
         }
         return 0;
+    case WM_KEYDOWN:
+        if (wparam == VK_ESCAPE && state != nullptr && !state->session.hidden) {
+            PostMessageW(hwnd, WM_CLOSE, 0, 0);
+            return 0;
+        }
+        break;
     case WM_CLOSE:
         if (state != nullptr) {
             hide_panel(*state, "user_close");

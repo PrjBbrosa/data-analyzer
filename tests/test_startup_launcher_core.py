@@ -24,10 +24,32 @@ SOURCES = [
 ]
 
 
+def _portable_compiler(tmp_path: Path) -> str | None:
+    """First of clang++, g++, c++ that can compile an empty program."""
+
+    source = tmp_path / "empty.cc"
+    source.write_text("int main(){return 0;}\n", encoding="utf-8")
+    binary = tmp_path / "empty_probe"
+    for name in ("clang++", "g++", "c++"):
+        compiler = shutil.which(name)
+        if compiler is None:
+            continue
+        probe = subprocess.run(
+            [compiler, "-std=c++17", str(source), "-o", str(binary)],
+            cwd=tmp_path,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if probe.returncode == 0 and binary.is_file():
+            return compiler
+    return None
+
+
 def test_native_core_matches_python_tip_and_dispatch(tmp_path):
-    compiler = shutil.which("clang++")
+    compiler = _portable_compiler(tmp_path)
     if compiler is None:
-        pytest.skip("clang++ is not available for the portable launcher core")
+        pytest.skip("no portable C++ compiler can build an empty program")
     tips = []
     for initial, elapsed in (
         (0, 0),
@@ -60,6 +82,10 @@ def test_native_core_matches_python_tip_and_dispatch(tmp_path):
         ([], {"TRACELAB_LAYOUT_PROBE": "1"}),
         (["--startup-splash-child", "x"], {}),
         (["file.mf4", "--help"], {}),
+        ([], {"TRACELAB_STARTUP_SPLASH": "0\n"}),
+        ([], {"TRACELAB_STARTUP_SPLASH": " 1 "}),
+        ([], {"tracelab_startup_splash": "0"}),
+        ([], {"TRACELAB_STARTUP_SPLASH": "1", "tracelab_startup_splash": "0"}),
     ]
     for flag in PASSTHROUGH_FLAGS:
         panel_inputs.append(([flag], {}))

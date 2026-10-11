@@ -17,9 +17,27 @@ namespace {
 struct Parser {
     const std::string& text;
     size_t index = 0;
+    int depth = 0;
     std::string error;
 
     explicit Parser(const std::string& input) : text(input) {}
+
+    struct DepthGuard {
+        Parser& owner;
+        bool armed = false;
+        explicit DepthGuard(Parser& parser) : owner(parser) {
+            // Depth 32 is the last accepted container. The 33rd fails.
+            if (parser.depth < 32) {
+                ++parser.depth;
+                armed = true;
+            }
+        }
+        ~DepthGuard() {
+            if (armed && owner.depth > 0) {
+                --owner.depth;
+            }
+        }
+    };
 
     bool fail(const std::string& message) {
         error = message;
@@ -61,6 +79,10 @@ struct Parser {
     }
 
     bool parse_object(Json& out) {
+        DepthGuard guard(*this);
+        if (!guard.armed) {
+            return fail("json depth");
+        }
         ++index;
         out.type = Json::Object;
         skip();
@@ -99,6 +121,10 @@ struct Parser {
     }
 
     bool parse_array(Json& out) {
+        DepthGuard guard(*this);
+        if (!guard.armed) {
+            return fail("json depth");
+        }
         ++index;
         out.type = Json::Array;
         skip();

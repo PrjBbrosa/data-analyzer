@@ -5,8 +5,11 @@ before ``QApplication`` is created.
 """
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 # Same inset the main window has always used from the top-left of its screen.
@@ -14,9 +17,23 @@ _WINDOW_SCREEN_MARGIN = 100
 
 
 def parse_screen_rect(detail: Any) -> tuple[int, int, int, int] | None:
-    """Read ``{"screen": [x, y, w, h]}`` from a splash IPC detail."""
+    """Read a splash screen rectangle as logical pixels.
+
+    Current native launchers send ``screen`` plus ``dpi`` and
+    ``coordinate_space: "logical"``. The numbers are already logical; this
+    function does not convert them again. A declared coordinate space other
+    than ``logical`` is rejected.
+
+    Older launchers sent only ``screen``. Those payloads stay accepted so a
+    packaged launcher from before this field does not lose window placement.
+    Missing ``dpi`` is the signal that the coordinate space was not declared,
+    and it is logged.
+    """
 
     if not isinstance(detail, dict):
+        return None
+    space = detail.get("coordinate_space")
+    if space is not None and space != "logical":
         return None
     raw = detail.get("screen")
     if not isinstance(raw, (list, tuple)) or len(raw) != 4:
@@ -27,6 +44,10 @@ def parse_screen_rect(detail: Any) -> tuple[int, int, int, int] | None:
         return None
     if width <= 0 or height <= 0:
         return None
+    if "dpi" not in detail:
+        logger.warning(
+            "startup screen rect has no dpi; treating numbers as logical pixels"
+        )
     return (x, y, width, height)
 
 

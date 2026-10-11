@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import select
 import subprocess
@@ -163,7 +164,7 @@ def test_hidden_ack_is_once_and_a_late_copy_does_not_reveal_again(monkeypatch):
         _close_many(launcher_read, launcher_write)
 
 
-def test_silent_launcher_records_handover_failure_without_a_second_panel(monkeypatch):
+def test_silent_launcher_records_handover_failure_without_a_second_panel(monkeypatch, caplog):
     app_read, app_write, launcher_read, launcher_write = _pair()
     feedback = None
     try:
@@ -172,20 +173,78 @@ def test_silent_launcher_records_handover_failure_without_a_second_panel(monkeyp
         reveals = []
         feedback.add_listener(reveals.append)
         feedback.start()
-        feedback.finish()
-        deadline = time.monotonic() + 1.0
-        while time.monotonic() < deadline and not reveals:
-            time.sleep(0.01)
+        with caplog.at_level(logging.WARNING):
+            feedback.finish()
+            deadline = time.monotonic() + 1.0
+            while time.monotonic() < deadline and not reveals:
+                time.sleep(0.01)
         assert len(reveals) == 1
         assert reveals[0]["handover_failed"] is True
         assert feedback.process is None
+        assert "timed out" in caplog.text
     finally:
         if feedback is not None:
             feedback.close()
         _close_many(launcher_read, launcher_write)
 
 
-def test_pipe_eof_before_hide_reveals_without_a_qt_child(monkeypatch):
+def test_non_numeric_version_does_not_stop_the_reader(monkeypatch, caplog):
+    feedback, fds = _native_feedback(monkeypatch)
+    try:
+        reveals = []
+        feedback.add_listener(_native_reveals(reveals))
+        feedback.start()
+        with caplog.at_level(logging.WARNING):
+            os.write(
+                fds[3],
+                encode_frame(
+                    {
+                        "v": "nope",
+                        "session": feedback.session,
+                        "seq": 1,
+                        "type": "hidden",
+                        "reason": "user_close",
+                    }
+                ),
+            )
+            os.write(fds[3], encode_frame(_native_hidden(feedback)))
+            deadline = time.monotonic() + 1.0
+            while time.monotonic() < deadline and not reveals:
+                time.sleep(0.01)
+        assert reveals
+        assert "non-numeric" in caplog.text
+    finally:
+        feedback.close()
+        _close_many(*fds)
+
+
+def test_presented_screen_without_dpi_warns_and_keeps_the_rect(caplog):
+    from mf4_analyzer.qt_app_support import parse_screen_rect
+
+    with caplog.at_level(logging.WARNING):
+        assert parse_screen_rect({"screen": [-1920, 0, 1920, 1080]}) == (
+            -1920,
+            0,
+            1920,
+            1080,
+        )
+    assert "no dpi" in caplog.text
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        assert parse_screen_rect(
+            {
+                "screen": [0, 0, 800, 600],
+                "dpi": 144,
+                "coordinate_space": "logical",
+            }
+        ) == (0, 0, 800, 600)
+    assert "no dpi" not in caplog.text
+    assert parse_screen_rect(
+        {"screen": [0, 0, 800, 600], "dpi": 144, "coordinate_space": "physical"}
+    ) is None
+
+
+def test_pipe_eof_before_hide_reveals_without_a_qt_child(monkeypatch, caplog):
     app_read, app_write, launcher_read, launcher_write = _pair()
     feedback = None
     try:
@@ -194,15 +253,17 @@ def test_pipe_eof_before_hide_reveals_without_a_qt_child(monkeypatch):
         reveals = []
         feedback.add_listener(reveals.append)
         feedback.start()
-        os.close(launcher_write)
-        launcher_write = -1
-        feedback.finish()
-        deadline = time.monotonic() + 1.0
-        while time.monotonic() < deadline and not reveals:
-            time.sleep(0.01)
+        with caplog.at_level(logging.WARNING):
+            os.close(launcher_write)
+            launcher_write = -1
+            feedback.finish()
+            deadline = time.monotonic() + 1.0
+            while time.monotonic() < deadline and not reveals:
+                time.sleep(0.01)
         assert len(reveals) == 1
         assert reveals[0]["handover_failed"] is True
         assert feedback.process is None
+        assert "EOF" in caplog.text
     finally:
         if feedback is not None:
             feedback.close()

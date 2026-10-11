@@ -32,7 +32,22 @@ PASSTHROUGH_FLAGS = (
 
 
 def _env(env: Mapping[str, str], name: str) -> str:
-    value = env.get(name)
+    """Read one launch variable.
+
+    An exact key wins. Any other spelling is matched case-insensitively so a
+    Windows environment block and a lowercase test fixture agree. Values are
+    stripped of surrounding whitespace, including newlines.
+    """
+
+    if name in env:
+        value = env.get(name)
+    else:
+        folded = name.casefold()
+        value = None
+        for key, item in env.items():
+            if str(key).casefold() == folded:
+                value = item
+                break
     if value is None:
         return ""
     return str(value).strip()

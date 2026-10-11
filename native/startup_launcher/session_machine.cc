@@ -22,6 +22,7 @@ SessionApply session_stage(SessionState& state, const std::string& stage, bool s
     }
     state.stage = stage;
     state.slow = slow;
+    state.stage_seen = true;
     return SessionApply::Applied;
 }
 
@@ -59,6 +60,20 @@ SessionApply session_dpi(SessionState& state, int x, int y, int w, int h) {
     state.opening_index = opening;
     state.animation_origin_ms = origin;
     return SessionApply::Applied;
+}
+
+SessionApply session_pipe_eof(SessionState& state) {
+    if (state.hidden) {
+        return SessionApply::AlreadyHidden;
+    }
+    return session_hide(state, "pipe_eof");
+}
+
+SessionApply session_handover_timeout(SessionState& state) {
+    if (!state.stage_seen || state.hidden || state.finish_requested) {
+        return SessionApply::IgnoredTerminal;
+    }
+    return session_hide(state, "timeout");
 }
 
 SessionApply session_present_failed(SessionState& state) {

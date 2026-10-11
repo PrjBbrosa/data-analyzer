@@ -600,6 +600,26 @@ def build_command(
     return [str(python_exe), str(SOURCE_LAUNCHER)]
 
 
+def _kill_process_tree(proc) -> None:
+    """Stop a timed-out launcher and the runtime it started.
+
+    The runtime is created with CREATE_BREAKAWAY_FROM_JOB, so killing only
+    the launcher leaves the GUI process running. On Windows, ``taskkill /T``
+    walks that tree. Other platforms keep ``proc.kill()``.
+    """
+
+    if proc is None or proc.poll() is not None:
+        return
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+            check=False,
+            capture_output=True,
+        )
+        return
+    proc.kill()
+
+
 def run_once(
     *,
     run_id: str,
@@ -730,14 +750,14 @@ def run_once(
         else:
             timed_out = True
             if proc.poll() is None:
-                proc.kill()
+                _kill_process_tree(proc)
         stdout, stderr = proc.communicate(timeout=max(1.0, timeout_s))
         exit_code = proc.returncode
     except Exception as exc:
         measurement_error = f"{type(exc).__name__}: {exc}"
         note("measurement_exception", error=measurement_error)
         if proc is not None and proc.poll() is None:
-            proc.kill()
+            _kill_process_tree(proc)
             try:
                 stdout, stderr = proc.communicate(timeout=5)
             except Exception:
