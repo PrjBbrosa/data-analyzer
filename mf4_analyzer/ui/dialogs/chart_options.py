@@ -1,5 +1,6 @@
 """Chart options dialog: per-axes appearance and scaling controls."""
 from functools import partial
+import logging
 import math
 import re
 
@@ -32,6 +33,8 @@ from .._color_utils import is_color_like as _is_color_like
 from .._color_utils import to_hex as _to_hex
 from ...colormaps import DEFAULT_HEATMAP_CMAP, list_colormap_specs
 from ..widgets.compact_spinbox import CompactDoubleSpinBox
+
+logger = logging.getLogger(__name__)
 
 
 _NUMBER_RE = re.compile(
@@ -140,7 +143,13 @@ class _ChartFloatSpin(CompactDoubleSpinBox):
         if self._loading:
             super().setValue(value)
             return
+        parsed = _parse_chart_number(self._edited_text) if self._edited_text else None
         super().setValue(value)
+        # A step or wheel moves the number. The typed text is no longer the
+        # value that should commit, so drop it when it disagrees.
+        if parsed is not None and float(parsed) != float(value):
+            self._edited_text = None
+            return
         if self._edited_text:
             return
         if self._source is not None and not self._user_edited:
@@ -154,6 +163,12 @@ class _ChartFloatSpin(CompactDoubleSpinBox):
                 return
         self._user_edited = True
         self._edited_text = None
+
+    def stepBy(self, steps):  # noqa: N802
+        parsed = _parse_chart_number(self._edited_text) if self._edited_text else None
+        super().stepBy(steps)
+        if parsed is not None and float(parsed) != float(self.value()):
+            self._edited_text = None
 
     def _on_text_edited(self, text):
         if self._loading:
@@ -583,7 +598,14 @@ class ChartOptionsDialog(QDialog):
     def _write_axis_limits(self, axis, lo, hi):
         setter = getattr(self.handle, f"set_engineering_{axis}lim", None)
         if callable(setter):
-            setter(float(lo), float(hi))
+            accepted = setter(float(lo), float(hi))
+            # None is the legacy setter contract. Only an explicit False means
+            # the engineering range was rejected and the ViewBox was left as-is.
+            if accepted is False:
+                logger.warning(
+                    "chart options rejected engineering %s range %r..%r",
+                    axis, lo, hi,
+                )
             return
         if axis == "x":
             self.handle.set_xlim(float(lo), float(hi))
@@ -926,8 +948,8 @@ class ChartOptionsDialog(QDialog):
             self._focus_first_invalid_axis()
             self._sync_restore_button()
             return
-        # Unchanged applies still reapply the analysis range policy. That
-        # decision is separate from the last committed appearance diff.
+        # An apply with no range edit does not replay the analysis range
+        # policy, so a user viewport stays where it is.
         appearance_dirty = self._appearance_dirty()
         range_edited = set(self._range_axes_edited)
         self._commit_valid_draft(appearance_dirty, range_edited)
@@ -1181,17 +1203,15 @@ class ChartOptionsDialog(QDialog):
         self._committed["color_max"] = hi
 
     def _commit_analysis_policy(self, appearance_dirty, range_edited, has_policy):
-        if not has_policy:
+        # appearance_dirty stays in the signature. Color, title, and other
+        # appearance edits must not replay the range policy on their own.
+        del appearance_dirty
+        if not has_policy or not range_edited:
             return
         apply_policy = getattr(self.handle, "apply_analysis_range_policy", None)
         if not callable(apply_policy):
             return
-        if range_edited:
-            axes = set(range_edited)
-        elif not appearance_dirty:
-            axes = {"x", "y"}
-        else:
-            return
+        axes = set(range_edited)
         policies = {}
         for axis in axes:
             auto = getattr(self, f"chk_{axis}_auto").isChecked()

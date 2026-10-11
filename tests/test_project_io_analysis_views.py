@@ -658,3 +658,47 @@ def test_corrupt_heatmap_basis_remap_reports_local_loss(caplog):
     assert restored.panes[0].heatmap_color_basis is None
     assert restored.panes[0].sources == [("new-file", "vib")]
     assert sum("heatmap_color_basis" in record.message for record in caplog.records) == 1
+
+
+def test_analysis_axis_scale_round_trips_and_missing_key_means_linear(tmp_path):
+    pane = PaneState(
+        sources=[("f1", "speed")],
+        chart_appearances={
+            "spectrum": {"title": "A", "y_scale": "log", "x_scale": "linear"},
+            "preview": {"x_scale": "log"},
+            "heatmap": {"cmap": "viridis", "y_scale": "log"},
+        },
+    )
+    payload = pane.to_dict()
+    spectrum = payload["chart_appearances"]["spectrum"]
+    assert spectrum["y_scale"] == "log"
+    assert "x_scale" not in spectrum
+    assert payload["chart_appearances"]["preview"]["x_scale"] == "log"
+    assert "y_scale" not in payload["chart_appearances"]["heatmap"]
+
+    restored = PaneState.from_dict(payload)
+    assert restored.chart_appearances["spectrum"]["y_scale"] == "log"
+    assert "x_scale" not in restored.chart_appearances["spectrum"]
+    assert restored.chart_appearances["preview"]["x_scale"] == "log"
+
+    legacy = PaneState.from_dict({
+        "sources": [["f1", "speed"]],
+        "chart_appearances": {"spectrum": {"title": "old"}},
+    })
+    assert legacy.chart_appearances["spectrum"] == {"title": "old"}
+    assert "y_scale" not in legacy.chart_appearances["spectrum"]
+    assert "x_scale" not in legacy.chart_appearances["spectrum"]
+
+    doc = _doc()
+    doc.analysis_views["fft"]["views"][0]["panes"][0]["chart_appearances"] = {
+        "spectrum": {"y_scale": "log", "line_colors": {}},
+    }
+    path = tmp_path / "scale.tlproj"
+    save_project_to_json(doc, path)
+    loaded = load_project_from_json(path)
+    stored = loaded.analysis_views["fft"]["views"][0]["panes"][0]["chart_appearances"]
+    assert stored["spectrum"]["y_scale"] == "log"
+    remapped = remap_analysis_view_fids(loaded.analysis_views, {"f1": "new-file", "f2": "new-2"})
+    again = PaneState.from_dict(remapped["fft"]["views"][0]["panes"][0])
+    assert again.chart_appearances["spectrum"]["y_scale"] == "log"
+    assert "x_scale" not in again.chart_appearances["spectrum"]

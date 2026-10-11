@@ -509,6 +509,7 @@ class PgAxisHandle:
         self._apply_data_log_mode()
         if changed:
             self._notify_dense_raster_scale_changed()
+        self._note_owner_axis_scale("x", normalized)
 
     def set_yscale(self, scale: str) -> None:
         normalized = "log" if scale == "log" else "linear"
@@ -526,6 +527,20 @@ class PgAxisHandle:
         self._apply_data_log_mode()
         if changed:
             self._notify_dense_raster_scale_changed()
+        self._note_owner_axis_scale("y", normalized)
+
+    def _note_owner_axis_scale(self, axis: str, scale: str) -> None:
+        """Tell a line canvas which role just changed scale.
+
+        Chart options set the scale, then the analysis range policy replots.
+        The canvas has to know the new scale before that replot writes ranges.
+        """
+        owner = getattr(self, "_owner_canvas", None)
+        note = getattr(owner, "note_chart_axis_scale", None)
+        if not callable(note):
+            return
+        role = getattr(self, "_chart_options_target", "")
+        note(str(role or ""), axis, scale)
 
     def _notify_dense_raster_scale_changed(self) -> None:
         owner = getattr(self, "_owner_canvas", None)
