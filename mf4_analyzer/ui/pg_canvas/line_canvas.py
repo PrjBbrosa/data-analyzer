@@ -25,7 +25,9 @@ from mf4_analyzer.ui._axis_handle import (
     PG_AXIS_NEUTRAL_COLOR,
     PG_AXIS_NEUTRAL_WIDTH,
     PgAxisHandle,
+    _engineering_to_view_limits,
     _plain_axis_text,
+    _view_to_engineering_limits,
 )
 from mf4_analyzer.ui.analysis_view_state import normalize_pane_chart_appearances
 from mf4_analyzer.ui.chart_appearance_model import appearance_channel_key
@@ -314,6 +316,17 @@ class _HistoryHandle:
             self._vb.setYRange(lo, hi, padding=0)
 
 
+def _min_positive(values) -> float | None:
+    """Smallest finite value above 0, or None when the sample has none."""
+    arr = np.asarray(values, dtype=float)
+    if arr.size == 0:
+        return None
+    positive = arr[np.isfinite(arr) & (arr > 0.0)]
+    if positive.size == 0:
+        return None
+    return float(np.min(positive))
+
+
 def _xy_from_viewbox(view_box):
     """Finite non-degenerate ``((x0, x1), (y0, y1))`` from a ViewBox, else None."""
     try:
@@ -501,6 +514,9 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         self._raw_amp_title = ''
         self._raw_time_title = ''
         self._user_appearances = {}
+        # Scale edits that chart options apply before the pane spec is committed.
+        # A replot in that same click must see them; full_reset drops the session.
+        self._axis_scale_session = {}
         self._spectrum_amp_label = _AMP_LEFT_LABEL
         self._chart_title_commit = None
         self._split_title_width = None
@@ -1707,7 +1723,27 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         """
         if not self._amp_curves:
             return None
-        return _xy_from_viewbox(self._plot_amp.vb)
+        raw = _xy_from_viewbox(self._plot_amp.vb)
+        if raw is None:
+            return None
+        # Linear view coordinates already are engineering units. Log mode
+        # stores log10 in the ViewBox; callers persist the engineering pair.
+        if (
+            not self._plot_axis_is_log(self._plot_amp, "x")
+            and not self._plot_axis_is_log(self._plot_amp, "y")
+        ):
+            return raw
+        (x0, x1), (y0, y1) = raw
+        try:
+            xr = self._view_limits_as_engineering(self._plot_amp, "x", x0, x1)
+            yr = self._view_limits_as_engineering(self._plot_amp, "y", y0, y1)
+        except ValueError:
+            return None
+        xr = finite_non_degenerate_range(*xr)
+        yr = finite_non_degenerate_range(*yr)
+        if xr is None or yr is None:
+            return None
+        return xr, yr
 
     def data_xy_extents(self):
         """Full raw result extents, independent of the current viewport."""
@@ -1730,8 +1766,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             return False
         self._spectrum_y_auto = False
         with self._program_spectrum_range():
-            self._plot_amp.setXRange(xr[0], xr[1], padding=0)
-            self._plot_amp.setYRange(yr[0], yr[1], padding=0)
+            self._write_amp_engineering_limits(xr, yr)
         self._drop_spectrum_trace_cache()
         self.flush_pending_spectrum_display()
         self._arm_discrete_aa()
@@ -1797,10 +1832,12 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         fit directly on ``getData()`` rather than re-slicing a raw signal.
         """
         if plot is self._plot_amp:
-            limits = self._auto_amplitude_y_range(self._entries, plot.vb.viewRange()[0])
+            limits = self._spectrum_y_limits(
+                self._entries, self._amp_view_x_as_engineering(),
+            )
             if limits is not None:
                 with self._program_spectrum_range():
-                    plot.setYRange(*limits, padding=0)
+                    self._write_amp_engineering_limits(None, limits)
                 self._emit_viewport_intent(axes=('y',))
                 self._arm_discrete_aa()
             return
@@ -2199,12 +2236,15 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         self._last_yrange = (float(y_min), float(y_max)) if manual_y else None
 
         with self._program_spectrum_range():
-            self._plot_amp.setXRange(float(xlim[0]), float(xlim[1]), padding=0)
-            if manual_y:
-                self._plot_amp.setYRange(float(y_min), float(y_max), padding=0)
-            else:
-                yrange = self._auto_amplitude_y_range(self._entries, xlim)
-                self._plot_amp.setYRange(*(yrange or (0., 1.)), padding=0)
+            # Sync before the window is chosen: a log axis must not receive 0,
+            # and setXRange/setYRange would store engineering numbers as log10.
+            self._sync_role_log_mode("spectrum")
+            x_limits = self._spectrum_x_limits(xlim)
+            y_limits = self._spectrum_y_limits(
+                self._entries, xlim,
+                manual=(float(y_min), float(y_max)) if manual_y else None,
+            )
+            self._write_amp_engineering_limits(x_limits, y_limits)
         self._refresh_spectrum_display()
         self.manual_zoom_changed.emit(False)
 
@@ -2370,9 +2410,11 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         bounds = self._raw_spectrum_xlim or self._last_xlim
         x0, x1 = _visual_padded_bounds(*bounds)
         with self._program_spectrum_range():
-            self._plot_amp.setXRange(x0, x1, padding=0)
-            yrange = self._auto_amplitude_y_range(self._entries, bounds)
-            self._plot_amp.setYRange(*(yrange or (0., 1.)), padding=0)
+            self._sync_role_log_mode("spectrum")
+            self._write_amp_engineering_limits(
+                self._spectrum_x_limits((x0, x1)),
+                self._spectrum_y_limits(self._entries, bounds),
+            )
         self._drop_spectrum_trace_cache()
         self.flush_pending_spectrum_display()
         self._arm_discrete_aa()
@@ -2380,7 +2422,10 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         bounds = self._combined_time_bounds()
         if bounds is not None:
             tx0, tx1 = _visual_padded_bounds(bounds[0], bounds[1])
-            self._plot_time.setXRange(tx0, tx1, padding=0)
+            self._sync_role_log_mode("preview")
+            self._write_engineering_x(
+                self._plot_time, tx0, tx1, self._time_axis_samples(self._entries),
+            )
         # Re-frame Y to the shared graticule after the X reset so the left +
         # aux right axes stay aligned on the same horizontal grid lines.
         self._reframe_time_y_to_grid()
@@ -2392,7 +2437,10 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         if bounds is None:
             return
         tx0, tx1 = _visual_padded_bounds(bounds[0], bounds[1])
-        self._plot_time.setXRange(tx0, tx1, padding=0)
+        self._sync_role_log_mode("preview")
+        self._write_engineering_x(
+            self._plot_time, tx0, tx1, self._time_axis_samples(self._entries),
+        )
         # Re-frame Y to the shared graticule (was per-axis autoRange).
         self._reframe_time_y_to_grid()
 
@@ -2439,7 +2487,12 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         # Keep both plots labelled in the empty state (consistency fix).
         self._spectrum_amp_label = _AMP_LEFT_LABEL
         self._apply_default_axis_labels()
+        self._axis_scale_session = {}
         self._reapply_user_appearances()
+        # full_reset must not hand the next View a log ViewBox. The stored
+        # spec is applied again on the next plot, after this linear baseline.
+        self._set_plot_log_mode(self._plot_amp, False, False)
+        self._set_plot_log_mode(self._plot_time, False, False)
         # Spectrum still uses native Y grid, so pad empty auto-range to keep
         # the top tick line off the frame (historical spec R2). Time preview
         # Y grid is the shared k/N graticule (internal i/n lines only); pin
@@ -2553,6 +2606,250 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
     def set_user_appearances(self, appearances) -> None:
         """Install the current pane's overrides. Plot/reset reapplies them."""
         self._user_appearances = normalize_pane_chart_appearances(appearances)
+        self._merge_axis_scale_session()
+
+    def note_chart_axis_scale(self, role: str, axis: str, scale: str) -> None:
+        """Remember a scale the open chart-options dialog just applied.
+
+        The analysis range policy replots before the dialog commits the pane
+        spec. This does not emit; ``_commit_chart_options`` publishes the spec.
+        """
+        if role not in {"spectrum", "preview"} or axis not in {"x", "y"}:
+            return
+        normalized = "log" if scale == "log" else "linear"
+        session = dict(self._axis_scale_session)
+        axes = dict(session.get(role) or {})
+        axes[axis] = normalized
+        session[role] = axes
+        self._axis_scale_session = session
+        spec = dict(self._role_spec(role))
+        key = f"{axis}_scale"
+        if normalized == "log":
+            spec[key] = "log"
+        else:
+            spec.pop(key, None)
+        cleaned = normalize_pane_chart_appearances({role: spec}).get(role, {})
+        appearances = dict(self._user_appearances)
+        if cleaned:
+            appearances[role] = cleaned
+        else:
+            appearances.pop(role, None)
+        self._user_appearances = appearances
+
+    def _merge_axis_scale_session(self) -> None:
+        session = self._axis_scale_session
+        if not session:
+            return
+        appearances = dict(self._user_appearances)
+        for role, axes in session.items():
+            if role not in {"spectrum", "preview"} or not isinstance(axes, dict):
+                continue
+            spec = dict(appearances.get(role) or {})
+            for axis, scale in axes.items():
+                if axis not in {"x", "y"}:
+                    continue
+                key = f"{axis}_scale"
+                if scale == "log":
+                    spec[key] = "log"
+                else:
+                    spec.pop(key, None)
+            cleaned = normalize_pane_chart_appearances({role: spec}).get(role, {})
+            if cleaned:
+                appearances[role] = cleaned
+            else:
+                appearances.pop(role, None)
+        self._user_appearances = appearances
+
+    def _plot_axis_is_log(self, plot, axis: str) -> bool:
+        ctrl = getattr(plot, "ctrl", None)
+        name = "logXCheck" if axis == "x" else "logYCheck"
+        check = getattr(ctrl, name, None)
+        is_checked = getattr(check, "isChecked", None)
+        return bool(callable(is_checked) and is_checked())
+
+    def _set_plot_log_mode(self, plot, x_log: bool, y_log: bool) -> None:
+        """Apply log flags. Skip ``setLogMode`` when they already match.
+
+        ``PlotItem.setLogMode`` always enables auto-range, which would wipe a
+        range that was just written in engineering units.
+        """
+        current = (
+            self._plot_axis_is_log(plot, "x"),
+            self._plot_axis_is_log(plot, "y"),
+        )
+        if current == (bool(x_log), bool(y_log)):
+            return
+        plot.setLogMode(x=bool(x_log), y=bool(y_log))
+
+    def _sync_role_log_mode(self, role: str) -> None:
+        """Make the plot match the stored spec. A missing key means linear."""
+        spec = self._role_spec(role)
+        self._set_plot_log_mode(
+            self._role_plot(role),
+            spec.get("x_scale") == "log",
+            spec.get("y_scale") == "log",
+        )
+
+    def _view_limits_as_engineering(self, plot, axis: str, lo, hi):
+        lo_f, hi_f = float(lo), float(hi)
+        if not self._plot_axis_is_log(plot, axis):
+            return lo_f, hi_f
+        return _view_to_engineering_limits("log", lo_f, hi_f)
+
+    def _amp_view_x_as_engineering(self) -> tuple[float, float]:
+        lo, hi = self._plot_amp.vb.viewRange()[0]
+        try:
+            return self._view_limits_as_engineering(
+                self._plot_amp, "x", float(lo), float(hi),
+            )
+        except ValueError:
+            return float(lo), float(hi)
+
+    def _window_for_axis(self, plot, axis: str, lo, hi, samples):
+        """Engineering window for one axis.
+
+        Linear values pass through, including a negative lower bound. Log
+        mode keeps a positive manual window and, when the requested lower
+        bound is not positive, uses the smallest positive sample instead of 0.
+        """
+        try:
+            lo_f, hi_f = float(lo), float(hi)
+        except (TypeError, ValueError):
+            return None
+        if not (math.isfinite(lo_f) and math.isfinite(hi_f)):
+            return None
+        if hi_f < lo_f:
+            lo_f, hi_f = hi_f, lo_f
+        if hi_f <= lo_f:
+            return None
+        if not self._plot_axis_is_log(plot, axis):
+            return (lo_f, hi_f)
+        if lo_f > 0.0:
+            return (lo_f, hi_f)
+        floor = _min_positive(samples)
+        if floor is None:
+            return None
+        if hi_f > floor:
+            return (floor, hi_f)
+        return (floor, floor * 10.0)
+
+    def _samples_in_x_window(self, entries, xlim, *, x_key: str, y_key: str):
+        try:
+            lo, hi = float(xlim[0]), float(xlim[1])
+        except (TypeError, ValueError, IndexError):
+            return np.array([], dtype=float)
+        if hi < lo:
+            lo, hi = hi, lo
+        pieces = []
+        for entry in entries or ():
+            if not isinstance(entry, dict):
+                continue
+            xs = np.asarray(entry.get(x_key, []), dtype=float)
+            ys = np.asarray(entry.get(y_key, []), dtype=float)
+            n = min(xs.size, ys.size)
+            if n == 0:
+                continue
+            xs = xs[:n]
+            ys = ys[:n]
+            mask = np.isfinite(xs) & np.isfinite(ys) & (xs >= lo) & (xs <= hi)
+            if np.any(mask):
+                pieces.append(ys[mask])
+        if not pieces:
+            return np.array([], dtype=float)
+        return np.concatenate(pieces)
+
+    def _amplitude_samples(self, entries, xlim) -> np.ndarray:
+        return self._samples_in_x_window(entries, xlim, x_key="freq", y_key="amp")
+
+    def _frequency_samples(self, entries) -> np.ndarray:
+        pieces = []
+        for entry in entries or ():
+            if not isinstance(entry, dict):
+                continue
+            freq = np.asarray(entry.get("freq", []), dtype=float)
+            finite = freq[np.isfinite(freq)]
+            if finite.size:
+                pieces.append(finite)
+        if not pieces:
+            return np.array([], dtype=float)
+        return np.concatenate(pieces)
+
+    def _time_axis_samples(self, entries) -> np.ndarray:
+        pieces = []
+        for entry in entries or ():
+            if not isinstance(entry, dict):
+                continue
+            time = np.asarray(entry.get("time", []), dtype=float)
+            finite = time[np.isfinite(time)]
+            if finite.size:
+                pieces.append(finite)
+        if not pieces:
+            return np.array([], dtype=float)
+        return np.concatenate(pieces)
+
+    def _spectrum_x_limits(self, xlim):
+        try:
+            lo, hi = float(xlim[0]), float(xlim[1])
+        except (TypeError, ValueError, IndexError):
+            return None
+        window = self._window_for_axis(
+            self._plot_amp, "x", lo, hi, self._frequency_samples(self._entries),
+        )
+        if window is not None:
+            return window
+        if self._plot_axis_is_log(self._plot_amp, "x"):
+            return (1.0, 10.0)
+        if hi > lo:
+            return (lo, hi)
+        return None
+
+    def _spectrum_y_limits(self, entries, xlim, *, manual=None):
+        samples = self._amplitude_samples(entries, xlim)
+        log_y = self._plot_axis_is_log(self._plot_amp, "y")
+        if manual is not None:
+            window = self._window_for_axis(
+                self._plot_amp, "y", manual[0], manual[1], samples,
+            )
+            if window is not None:
+                return window
+            return (1.0, 10.0) if log_y else None
+        linear = self._auto_amplitude_y_range(entries, xlim)
+        if linear is None:
+            if not log_y:
+                return (0.0, 1.0)
+            floor = _min_positive(samples)
+            if floor is None:
+                return (1.0, 10.0)
+            return (floor, floor * 10.0)
+        window = self._window_for_axis(
+            self._plot_amp, "y", linear[0], linear[1], samples,
+        )
+        if window is not None:
+            return window
+        return (1.0, 10.0) if log_y else (0.0, 1.0)
+
+    def _write_amp_engineering_limits(self, x_limits, y_limits) -> None:
+        """Write spectrum ranges in engineering units for the current log mode."""
+        handle = PgAxisHandle(self._plot_amp, owner_canvas=self)
+        if x_limits is not None:
+            handle.set_engineering_xlim(float(x_limits[0]), float(x_limits[1]))
+        if y_limits is not None:
+            handle.set_engineering_ylim(float(y_limits[0]), float(y_limits[1]))
+
+    def _write_engineering_x(self, plot, lo, hi, samples) -> None:
+        window = self._window_for_axis(plot, "x", lo, hi, samples)
+        if window is not None:
+            PgAxisHandle(plot, owner_canvas=self).set_engineering_xlim(
+                float(window[0]), float(window[1]),
+            )
+            return
+        if self._plot_axis_is_log(plot, "x"):
+            return
+        try:
+            lo_f, hi_f = float(lo), float(hi)
+        except (TypeError, ValueError):
+            return
+        plot.setXRange(lo_f, hi_f, padding=0)
 
     def _role_spec(self, role: str) -> dict:
         spec = self._user_appearances.get(role)
@@ -2638,12 +2935,24 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
                 color = colors.get(self._curve_appearance_key(curve))
                 if isinstance(color, str) and color:
                     self._recolor_curve(curve, color)
+        # A partial spec (title only) must not reset scale. Only keys that
+        # are present change that axis; a missing key keeps the current flag.
+        if "x_scale" in cleaned or "y_scale" in cleaned:
+            x_log = self._plot_axis_is_log(plot, "x")
+            y_log = self._plot_axis_is_log(plot, "y")
+            if "x_scale" in cleaned:
+                x_log = cleaned.get("x_scale") == "log"
+            if "y_scale" in cleaned:
+                y_log = cleaned.get("y_scale") == "log"
+            self._set_plot_log_mode(plot, x_log, y_log)
 
     def _reapply_user_appearances(self) -> None:
         """Default projection, then the current pane overrides. No range change."""
         for role in ("spectrum", "preview"):
             self._restore_role_defaults(role)
             self.apply_user_appearance(self._role_spec(role), role=role)
+            # Absent scale keys mean linear, including after a log View.
+            self._sync_role_log_mode(role)
 
     def _note_chart_title(self, _handle, title) -> None:
         self._chart_title_commit = "" if title is None else str(title)
@@ -2676,6 +2985,13 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             grid = True
         if grid is not True:
             spec["grid"] = grid
+        try:
+            if handle.get_xscale() == "log":
+                spec["x_scale"] = "log"
+            if handle.get_yscale() == "log":
+                spec["y_scale"] = "log"
+        except (AttributeError, RuntimeError):
+            pass
         colors = {}
         for line in handle.get_lines():
             item = getattr(line, "plot_data_item", None)
@@ -2696,6 +3012,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         else:
             appearances.pop(role, None)
         self._user_appearances = appearances
+        self._axis_scale_session = {}
         self.user_appearance_committed.emit(role, dict(spec))
 
     def _commit_preview_curve_color(self, curve, color: str) -> None:
@@ -3344,13 +3661,15 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             curve._appearance_key = self._appearance_key_for_entry(e)
             self._time_curves.append(curve)
             x_bounds.append((float(t[0]), float(t[-1])))
+        self._sync_role_log_mode("preview")
         if x_bounds:
             lo = min(a for a, _b in x_bounds)
             hi = max(b for _a, b in x_bounds)
-            if hi > lo:
-                self._plot_time.setXRange(lo, hi, padding=0)
-            else:
-                self._plot_time.setXRange(lo - 0.5, hi + 0.5, padding=0)
+            if not (hi > lo):
+                lo, hi = lo - 0.5, hi + 0.5
+            self._write_engineering_x(
+                self._plot_time, lo, hi, self._time_axis_samples(entries),
+            )
         # Frame the left + each aux right Y axis to a shared nice graticule so
         # every axis's ticks land on the same horizontal grid lines (replaces
         # per-axis autoRange, which let each right axis pick its own scale).
@@ -3557,14 +3876,19 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
                       and policy.get('viewport_origin', {}).get('y', 'auto') == 'auto')
         if not (active and self._amp_curves):
             return False
-        limits = self._auto_amplitude_y_range(
-            self._entries, self._plot_amp.vb.viewRange()[0])
-        target = limits if limits is not None else (0.0, 1.0)
-        current = self._plot_amp.vb.viewRange()[1]
-        if tuple(map(float, current)) == tuple(map(float, target)):
+        x_window = self._amp_view_x_as_engineering()
+        target = self._spectrum_y_limits(self._entries, x_window)
+        if target is None:
+            return False
+        scale = "log" if self._plot_axis_is_log(self._plot_amp, "y") else "linear"
+        view_target = _engineering_to_view_limits(scale, target[0], target[1])
+        if view_target is None:
+            return False
+        current = tuple(map(float, self._plot_amp.vb.viewRange()[1]))
+        if current == (float(view_target[0]), float(view_target[1])):
             return False
         with self._program_spectrum_range():
-            self._plot_amp.setYRange(float(target[0]), float(target[1]), padding=0)
+            self._write_amp_engineering_limits(None, target)
         return True
 
     def _request_spectrum_refresh(self, *_args):
@@ -3701,7 +4025,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             return
         if self._spectrum_refresh_busy or not self._amp_curves:
             return
-        xlim = tuple(self._plot_amp.vb.viewRange()[0])
+        xlim = self._amp_view_x_as_engineering()
         request = self._spectrum_display_request(xlim)
         plan = plan_spectrum_display(request, self._spectrum_trace_cache)
         curves_changed = not plan.reuse
@@ -3983,24 +4307,25 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         """Hide the title row and wipe leftover text so the next dialog cannot
         read the previous view's title."""
         del title
+        # The graphics wrapper may already be deleted.
         try:
             plot.setTitle(None)
-        except Exception:
+        except RuntimeError:
             try:
                 plot.setTitle("")
-            except Exception:
+            except RuntimeError:
                 pass
         label = plot.titleLabel
         try:
             label.setText("")
-        except Exception:
+        except RuntimeError:
             try:
                 label.text = ""
-            except Exception:
+            except RuntimeError:
                 pass
         try:
             plot.setTitle(None)
-        except Exception:
+        except RuntimeError:
             pass
         for name, value in (
             ("setMinimumHeight", 0),
@@ -4011,16 +4336,16 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             if callable(setter):
                 try:
                     setter(value)
-                except Exception:
+                except RuntimeError:
                     pass
         try:
             label.setVisible(False)
-        except Exception:
+        except RuntimeError:
             pass
         try:
             label.updateMin()
             label.updateGeometry()
-        except Exception:
+        except RuntimeError:
             pass
 
     def _activate_graphics_layout(self) -> None:

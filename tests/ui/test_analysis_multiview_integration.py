@@ -3618,4 +3618,132 @@ def test_capture_heatmap_title_retains_requested_cmap(two_file_win, cmap):
     win._project_heatmap_pane_appearance("fft_time", canvas)
     canvas._set_title_override("Only title changed")
     win._capture_heatmap_chart_options("fft_time", 0, canvas)
-    assert state.panes[0].chart_appearances["heatmap"]["cmap"] == cmap
+    spec = state.panes[0].chart_appearances["heatmap"]
+    assert spec["title"] == "Only title changed"
+    if cmap == "tracelab.head-style.v1":
+        assert "cmap" not in spec
+    else:
+        assert spec["cmap"] == cmap
+
+
+def test_capture_heatmap_omits_default_cmap_and_does_not_copy_z_keys(two_file_win):
+    win = two_file_win
+    win.toolbar._set_mode("fft_time")
+    state = win._analysis_state_for_dispatch("fft_time")
+    state.panes[0].chart_appearances = {
+        "heatmap": {
+            "cmap": "tracelab.head-style.v1",
+            "z_auto": False,
+            "z_min": 1.0,
+            "z_max": 4.0,
+        },
+    }
+    canvas = win._analysis_page("fft_time").pane_canvas(0)
+    win._project_heatmap_pane_appearance("fft_time", canvas)
+    canvas._set_title_override("Kept title")
+    win._capture_heatmap_chart_options("fft_time", 0, canvas)
+    spec = state.panes[0].chart_appearances["heatmap"]
+    assert spec["title"] == "Kept title"
+    assert "cmap" not in spec
+    assert "z_auto" not in spec
+    assert "z_min" not in spec
+    assert "z_max" not in spec
+
+    state.panes[0].chart_appearances = {
+        "heatmap": {
+            "cmap": "gnuplot2",
+            "z_auto": True,
+            "z_min": 0.0,
+            "z_max": 8.0,
+        },
+    }
+    win._project_heatmap_pane_appearance("fft_time", canvas)
+    canvas._set_title_override("Other")
+    win._capture_heatmap_chart_options("fft_time", 0, canvas)
+    spec = state.panes[0].chart_appearances["heatmap"]
+    assert spec["cmap"] == "gnuplot2"
+    assert spec["title"] == "Other"
+    assert "z_auto" not in spec
+    assert "z_min" not in spec
+    assert "z_max" not in spec
+
+
+def test_fft_log_manual_range_round_trips_in_engineering_units(two_file_win, monkeypatch):
+    from PyQt5.QtWidgets import QDialog
+
+    from mf4_analyzer.ui._axis_handle import PgAxisHandle
+    from mf4_analyzer.ui.dialogs.chart_options import ChartOptionsDialog
+
+    win = two_file_win
+    win.toolbar._set_mode("fft")
+    _check_speed_in_both(win)
+    win.do_fft()
+    canvas = win.chart_stack.page_fft.pane_canvas(0)
+
+    def apply_log(self):
+        self.combo_y_scale.setCurrentText("对数")
+        self.chk_y_auto.setChecked(False)
+        self.spin_y_min.setValue(1.0)
+        self.spin_y_max.setValue(100.0)
+        self.apply_changes()
+        self.accept()
+        return QDialog.Accepted
+
+    monkeypatch.setattr(ChartOptionsDialog, "exec_", apply_log)
+    assert canvas.open_chart_options_dialog(win) is True
+    handle = PgAxisHandle(canvas._plot_amp, owner_canvas=canvas)
+    assert handle.get_yscale() == "log"
+    assert handle.get_engineering_ylim() == pytest.approx((1.0, 100.0))
+    assert handle.get_ylim() == pytest.approx((0.0, 2.0))
+
+    captured = {}
+
+    def read_back(self):
+        captured["scale"] = self.combo_y_scale.currentText()
+        captured["auto"] = self.chk_y_auto.isChecked()
+        captured["lo"] = self.spin_y_min.value_for_commit()
+        captured["hi"] = self.spin_y_max.value_for_commit()
+        self.reject()
+        return QDialog.Rejected
+
+    monkeypatch.setattr(ChartOptionsDialog, "exec_", read_back)
+    canvas.open_chart_options_dialog(win)
+    assert captured["scale"] == "对数"
+    assert captured["auto"] is False
+    assert captured["lo"] == pytest.approx(1.0)
+    assert captured["hi"] == pytest.approx(100.0)
+    pane = win.analysis_managers["fft"].get(
+        win.analysis_managers["fft"].active
+    ).panes[0]
+    assert pane.chart_appearances["spectrum"]["y_scale"] == "log"
+
+
+def test_fft_unchanged_chart_options_keeps_user_viewport(two_file_win, monkeypatch):
+    from PyQt5.QtWidgets import QDialog
+
+    from mf4_analyzer.ui.dialogs.chart_options import ChartOptionsDialog
+
+    win = two_file_win
+    win.toolbar._set_mode("fft")
+    _check_speed_in_both(win)
+    win.do_fft()
+    canvas = win.chart_stack.page_fft.pane_canvas(0)
+    manager = win.analysis_managers["fft"]
+    pane = manager.get(manager.active).panes[0]
+    canvas._plot_amp.setXRange(40.0, 120.0, padding=0)
+    canvas._plot_amp.setYRange(0.2, 0.8, padding=0)
+    canvas._emit_viewport_intent("user", ("x", "y"))
+    assert pane.viewport_origin == {"x": "user", "y": "user"}
+    before = canvas.capture_xy_viewport()
+
+    def accept_unchanged(self):
+        self.apply_changes()
+        self.accept()
+        return QDialog.Accepted
+
+    monkeypatch.setattr(ChartOptionsDialog, "exec_", accept_unchanged)
+    assert canvas.open_chart_options_dialog(win) is True
+    assert pane.viewport_origin == {"x": "user", "y": "user"}
+    after = canvas.capture_xy_viewport()
+    assert after[0] == pytest.approx(before[0])
+    assert after[1] == pytest.approx(before[1])

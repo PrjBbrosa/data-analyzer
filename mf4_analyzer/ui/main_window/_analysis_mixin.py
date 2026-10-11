@@ -2542,28 +2542,6 @@ class AnalysisMixin:
             "z_auto": bool(z_auto), "z_floor": float(lo), "z_ceiling": float(hi),
         }, "chart_options")
 
-    def _store_heatmap_color_policy(self, section, pane_idx, z_auto, lo, hi):
-        from ..analysis_view_state import normalize_pane_chart_appearances
-
-        mgr = self.analysis_managers.get(section)
-        if mgr is None or not mgr.views:
-            return
-        state = mgr.get(mgr.active)
-        if pane_idx >= len(state.panes):
-            return
-        pane = state.panes[pane_idx]
-        appearances = dict(getattr(pane, "chart_appearances", None) or {})
-        spec = dict(appearances.get("heatmap") or {})
-        spec["z_auto"] = bool(z_auto)
-        spec["z_min"] = float(lo)
-        spec["z_max"] = float(hi)
-        cleaned = normalize_pane_chart_appearances({"heatmap": spec}).get("heatmap")
-        if cleaned:
-            appearances["heatmap"] = cleaned
-        else:
-            appearances.pop("heatmap", None)
-        pane.chart_appearances = appearances
-
     def _wrap_heatmap_chart_options(self, canvas, section, pane_idx):
         if canvas is None or getattr(canvas, "_heatmap_chart_options_wrapped", False):
             return
@@ -2605,6 +2583,7 @@ class AnalysisMixin:
         """
         from .._axis_handle import PgAxisHandle, _plain_axis_text
         from ..analysis_view_state import normalize_pane_chart_appearances
+        from ...qt_analysis_shared import DEFAULT_HEATMAP_CMAP
 
         spec = {}
         plot = getattr(canvas, "_plot", None)
@@ -2637,15 +2616,12 @@ class AnalysisMixin:
             if grid is not True:
                 spec["grid"] = grid
         cmap = getattr(canvas, "_cmap_name", None)
-        if isinstance(cmap, str) and cmap.strip():
+        if isinstance(cmap, str) and cmap.strip() and cmap.strip() != DEFAULT_HEATMAP_CMAP:
             spec["cmap"] = cmap.strip()
         pane = self._analysis_pane_for_canvas(section, canvas)
         if pane is None:
             return
-        existing = dict((getattr(pane, "chart_appearances", None) or {}).get("heatmap") or {})
-        for key in ("z_auto", "z_min", "z_max"):
-            if key in existing:
-                spec[key] = existing[key]
+        # z_auto / z_min / z_max belong to the heatmap color coordinator.
         appearances = dict(getattr(pane, "chart_appearances", None) or {})
         cleaned = normalize_pane_chart_appearances({"heatmap": spec}).get("heatmap")
         if cleaned:

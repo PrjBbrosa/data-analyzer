@@ -780,3 +780,47 @@ def test_split_unfocused_recolor_keeps_focused_navigator_colors(
     assert nav_color.lower() == "#111111"
     assert w.view_manager.get(0).colors[(fid, "torque")].lower() == "#111111"
     assert w.view_manager.get(1).colors[(fid, "torque")].lower() == "#abcdef"
+
+
+def test_analysis_log_scale_does_not_leak_across_views(qapp):
+    """View A's log axis must not remain on after reset or on a linear View B."""
+    from mf4_analyzer.ui._axis_handle import PgAxisHandle
+    from mf4_analyzer.ui.pg_canvas.line_canvas import PgLineCanvas
+
+    canvas = PgLineCanvas()
+    canvas.resize(640, 480)
+    freq = np.linspace(0.0, 500.0, 64)
+    entry = {
+        "label": "speed",
+        "color": "#2563eb",
+        "freq": freq,
+        "amp": np.linspace(0.2, 4.0, freq.size),
+        "time": np.linspace(0.0, 1.0, 32),
+        "signal": np.linspace(-1.0, 1.0, 32),
+    }
+
+    def scale(plot):
+        return PgAxisHandle(plot, owner_canvas=canvas).get_yscale()
+
+    canvas.set_user_appearances({"spectrum": {"y_scale": "log"}})
+    canvas.plot_spectra(
+        [entry], xlim=(0.0, 500.0), amp_label="Amplitude", title="A",
+    )
+    assert scale(canvas._plot_amp) == "log"
+
+    canvas.full_reset()
+    assert scale(canvas._plot_amp) == "linear"
+    assert scale(canvas._plot_time) == "linear"
+
+    canvas.set_user_appearances({})
+    canvas.plot_spectra(
+        [entry], xlim=(0.0, 500.0), amp_label="Amplitude", title="B",
+    )
+    assert scale(canvas._plot_amp) == "linear"
+    assert scale(canvas._plot_time) == "linear"
+
+    canvas.set_user_appearances({"spectrum": {"y_scale": "log"}})
+    canvas.plot_spectra(
+        [entry], xlim=(0.0, 500.0), amp_label="Amplitude", title="A",
+    )
+    assert scale(canvas._plot_amp) == "log"
