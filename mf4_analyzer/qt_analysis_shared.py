@@ -44,7 +44,6 @@ from mf4_analyzer.ui_kit.ticks_math import _DEGENERATE_SPAN_RATIO
 
 
 from mf4_analyzer.colormaps import (
-    ColormapResourceError,
     DEFAULT_HEATMAP_CMAP,
     FALLBACK_HEATMAP_CMAP,
     SUPPORTED_HEATMAP_COLORMAPS,
@@ -138,7 +137,12 @@ def _warn_unknown_colormap(requested: str) -> None:
 
 
 def _resolve_colormap(name: str | None) -> pg.ColorMap:
-    """Return an independent map; registered resource errors must propagate."""
+    """Return an independent map.
+
+    A missing catalog is already fail-soft in ``list_colormap_specs``. A
+    pyqtgraph provider that returns ``None`` logs and uses gnuplot2. RGB LUT
+    resource errors, including a SHA-256 mismatch, still propagate.
+    """
     requested = _normalise_colormap_name(name)
     spec = get_colormap_spec(requested)
     if spec.provider == "legacy_gnuplot2":
@@ -148,7 +152,13 @@ def _resolve_colormap(name: str | None) -> pg.ColorMap:
         return pg.ColorMap(np.linspace(0.0, 1.0, len(rgb)), rgb, name=spec.id)
     native = pg.colormap.get(spec.name)
     if native is None:
-        raise ColormapResourceError(f"{spec.id}: pyqtgraph provider returned no colormap")
+        _LOGGER.error(
+            "Heatmap colormap %s: pyqtgraph provider returned no colormap; using %s",
+            spec.id, FALLBACK_HEATMAP_CMAP,
+        )
+        return pg.ColorMap(
+            np.linspace(0.0, 1.0, 256), _gnuplot2_lut(), name=FALLBACK_HEATMAP_CMAP,
+        )
     # pyqtgraph caches its native maps, including writable position/color arrays.
     # Never hand that shared object to consumers that may reverse or edit it.
     result = deepcopy(native)

@@ -726,7 +726,9 @@ def _resolve_heatmap_colormap(
 ) -> tuple[pg.ColorMap, np.ndarray]:
     # The shipping default and renderer come from the same neutral catalog as
     # GUI. Unknown persisted IDs retain the legacy fallback, independent of the
-    # default for newly created heatmaps; registered resource failures propagate.
+    # default for newly created heatmaps. A missing catalog or a pyqtgraph
+    # provider that returns None resolves to gnuplot2 inside _resolve_colormap.
+    # RGB LUT hash failures still propagate.
     requested = params.get("cmap", DEFAULT_HEATMAP_CMAP)
     if str(requested) not in SUPPORTED_HEATMAP_COLORMAPS:
         # 保留既有语义：名字不认识要出警告，不静默改配色。

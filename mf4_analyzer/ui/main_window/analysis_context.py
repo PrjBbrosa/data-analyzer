@@ -30,9 +30,12 @@ override one step -- ``tests/ui/test_task4_cache_invalidation.py`` builds a
 
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 
 from ... import db_reference
+from ...heatmap_color_policy import HeatmapColorPolicyError
 from ..heatmap_color_coordinator import HeatmapColorCoordinator
 from .analysis_comparison import AnalysisComparisonDisplay
 from .analysis_time_range import (
@@ -42,6 +45,33 @@ from .analysis_time_range import (
     axis_facts_from_files,
     bounds_from_axes,
 )
+
+logger = logging.getLogger(__name__)
+
+
+def _report_committed_preset_rejection(context, section, canvas, error) -> None:
+    """Route a bad preset color edit through the window rejection path.
+
+    ``AnalysisContext.sync_committed_preset`` is sometimes invoked unbound on
+    a namespace that is not an ``AnalysisContext``. This helper only uses
+    attributes the namespace actually has, and it logs once when the window
+    rejection path is unavailable.
+    """
+    inspector = getattr(context, "_inspector", None)
+    window_fn = getattr(inspector, "window", None)
+    window = window_fn() if callable(window_fn) else None
+    reject = getattr(window, "_reject_heatmap_color_render", None)
+    if callable(reject):
+        reject(section, canvas, None, error)
+        return
+    logger.warning(
+        "Rejected heatmap color preset: section=%s: %s",
+        section, error,
+    )
+    status = getattr(window, "statusBar", None) if window is not None else None
+    show = getattr(status, "showMessage", None)
+    if callable(show):
+        show("色阶范围无效，请设置有限数值且下限小于上限")
 
 
 class AnalysisContext:
@@ -114,7 +144,10 @@ class AnalysisContext:
                 focus = self.comparison.focused(section)
                 if self.comparison.is_open(section) and focus is not None:
                     canvas = self.comparison.canvas_for(section, focus[0], focus[1])
-                self.heatmap_color.commit(section, canvas, edit, origin="preset")
+                try:
+                    self.heatmap_color.commit(section, canvas, edit, origin="preset")
+                except HeatmapColorPolicyError as error:
+                    _report_committed_preset_rejection(self, section, canvas, error)
         capture_params_to_state(ctx, state)
 
     def page(self, section):

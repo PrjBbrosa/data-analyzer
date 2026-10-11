@@ -1822,13 +1822,21 @@ class AnalysisMixin:
         if edit is not None:
             pane_idx = self._dispatch_focus_index(section, state)
             canvas = self._canvas_for_view_pane(section, state, pane_idx)
+            from ...heatmap_color_policy import HeatmapColorPolicyError
+
             try:
                 self._commit_heatmap_color_edit(section, canvas, edit, "inspector")
-            except ValueError:
+            except HeatmapColorPolicyError as error:
                 # A half-entered boundary remains an editor draft, never a
                 # persistent request or a render input. Keep the valid plot.
+                # Returning the untouched state distinguishes this rejection
+                # from the None early-exits above, which mean "no edit".
+                logger.warning(
+                    "Rejected heatmap color edit: section=%s: %s",
+                    section, error,
+                )
                 self.statusBar.showMessage("色阶下限必须小于上限，且两个值均为有限数")
-                return None
+                return state
         state.params = requested_params_from_context(ctx, state)
         holder = getattr(self, "_project_dirty", None)
         if holder is not None:
@@ -2374,7 +2382,10 @@ class AnalysisMixin:
             return
         if pane_idx != page.focused_index():
             return
-        self._commit_heatmap_color_edit(section, page.pane_canvas(pane_idx), {
+        canvas = page.pane_canvas(pane_idx)
+        if getattr(canvas, "_cbar_drag_open", False):
+            return
+        self._commit_heatmap_color_edit(section, canvas, {
             "z_auto": False, "z_floor": float(lo), "z_ceiling": float(hi),
         }, "colorbar")
 
@@ -4186,29 +4197,50 @@ class AnalysisMixin:
 
         Split panes are excluded: level lock and linked viewboxes write pixels
         outside this input object. A pending Z-spin writeback is excluded too.
+
+        The check resolves color policy as a dry run. Order still goes through
+        its render-input builder, so that builder's ``prepare`` is forced to
+        ``dry_run`` for the duration of the probe and restored afterwards.
         """
         if page is None or page.pane_count() != 1:
             return False
+        coordinator = None
+        original_prepare = None
+        if section == "order":
+            getter = getattr(self, "_heatmap_color_coordinator", None)
+            coordinator = getter(section) if callable(getter) else None
+            if coordinator is not None:
+                original_prepare = coordinator.prepare
+
+                def _dry_prepare(*args, **kwargs):
+                    kwargs["dry_run"] = True
+                    return original_prepare(*args, **kwargs)
+
+                coordinator.prepare = _dry_prepare
         try:
-            if section == "order":
-                inputs = self._current_order_heatmap_inputs(canvas, result, source)
-            elif section == "fft_time":
-                params = self.inspector.fft_time_ctx.get_params()
-                inputs = self._current_fft_time_heatmap_inputs(
-                    canvas, result, params, source,
-                )
-            else:
+            try:
+                if section == "order":
+                    inputs = self._current_order_heatmap_inputs(canvas, result, source)
+                elif section == "fft_time":
+                    params = self.inspector.fft_time_ctx.get_params()
+                    inputs = self._current_fft_time_heatmap_inputs(
+                        canvas, result, params, source,
+                    )
+                else:
+                    return False
+            except (AttributeError, TypeError, ValueError, IndexError):
+                # A result the painter cannot snapshot is not a reason to skip.
+                # The existing render path still runs, including test doubles.
                 return False
-        except (AttributeError, TypeError, ValueError, IndexError):
-            # A result the painter cannot snapshot is not a reason to skip.
-            # The existing render path still runs, including test doubles.
-            return False
-        if heatmap_level_writeback_blocks_retain(inputs):
-            return False
-        book = self._ensure_heatmap_reveal()
-        identity = book.result_identity(result)
-        signature = heatmap_render_signature(inputs, identity)
-        return book.keeps(section, canvas, signature, identity)
+            if heatmap_level_writeback_blocks_retain(inputs):
+                return False
+            book = self._ensure_heatmap_reveal()
+            identity = book.result_identity(result)
+            signature = heatmap_render_signature(inputs, identity)
+            return book.keeps(section, canvas, signature, identity)
+        finally:
+            if coordinator is not None and original_prepare is not None:
+                coordinator.prepare = original_prepare
 
     def _store_analysis_result(self, section, view_id, pane_idx, key, result):
         """Single write funnel: cache put always, pin append only when

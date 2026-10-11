@@ -85,6 +85,17 @@ def test_resolver_does_not_share_mutable_colormap_arrays():
         np.testing.assert_array_equal(_lut(_resolve_colormap(ident)), before)
 
 
+def test_pyqtgraph_none_falls_back_to_gnuplot2(monkeypatch, caplog):
+    import mf4_analyzer.qt_analysis_shared as shared
+
+    monkeypatch.setattr(shared.pg.colormap, "get", lambda _name: None)
+    with caplog.at_level("ERROR"):
+        result = shared._resolve_colormap("viridis")
+    assert "viridis" in caplog.text
+    assert result.name == "gnuplot2"
+    np.testing.assert_array_equal(_lut(result), _lut(shared._resolve_colormap("gnuplot2")))
+
+
 def test_unknown_warns_and_uses_legacy_not_new_default(caplog):
     from mf4_analyzer.qt_analysis_shared import _resolve_colormap
 

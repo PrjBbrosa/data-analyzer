@@ -714,15 +714,31 @@ class FFTTimeMixin:
         p = self._analysis_params_for_canvas('fft_time', canvas, p)
         resolution = self._fft_time_label_resolution(source, p)
         inputs = self._fft_time_render_inputs(
-            canvas, result, p, source, resolution,
+            canvas, result, p, source, resolution, dry_run=True,
         )
         return replace(inputs, db_value=float(resolution.value))
 
-    def _fft_time_render_inputs(self, canvas, result, p, source, resolution, color_policy=None):
-        """Build the frozen display snapshot. Paint reads this object only."""
-        resolver = getattr(self, "_heatmap_color_policy_for_canvas", None)
-        if color_policy is None and callable(resolver):
-            color_policy = resolver("fft_time", canvas, p, resolution, source, p["amplitude_mode"])
+    def _fft_time_render_inputs(
+        self, canvas, result, p, source, resolution, color_policy=None, *, dry_run=False,
+    ):
+        """Build the frozen display snapshot. Paint reads this object only.
+
+        ``dry_run`` resolves the color policy without storing a coordinator
+        prepare. Picture-retain checks use it so a retain probe cannot become
+        the next paint's request.
+        """
+        if color_policy is None and dry_run:
+            coordinator_getter = getattr(self, "_heatmap_color_coordinator", None)
+            coordinator = coordinator_getter("fft_time") if callable(coordinator_getter) else None
+            if coordinator is not None:
+                color_policy = coordinator.prepare(
+                    "fft_time", canvas, p, resolution, source, p["amplitude_mode"],
+                    dry_run=True,
+                )
+        elif color_policy is None:
+            resolver = getattr(self, "_heatmap_color_policy_for_canvas", None)
+            if callable(resolver):
+                color_policy = resolver("fft_time", canvas, p, resolution, source, p["amplitude_mode"])
         if bool(p.get("freq_auto", p.get("y_auto", True))):
             freq_range = None
         else:
@@ -831,7 +847,8 @@ class FFTTimeMixin:
         echo_levels = (not inputs.levels_are_resolved
                        and self._analysis_canvas_updates_controls("fft_time", canvas))
         if echo_levels and inputs.z_auto and inputs.amplitude_mode == "amplitude_db":
-            auto_lvls = getattr(canvas, "_last_auto_levels", None)
+            automatic = getattr(canvas, "_automatic_color_window", None)
+            auto_lvls = automatic() if callable(automatic) else None
             if auto_lvls is not None:
                 ctx = self.inspector.fft_time_ctx
                 for spin, val in (
