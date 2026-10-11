@@ -82,18 +82,8 @@ class PinSampleEvaluator:
         self._canvas = canvas
         if not self.axis_compatible(canvas, intent):
             return None
-        if intent.domain == "frf":
-            sources = getattr(canvas, "cursor_source_bindings", None)
-            if callable(sources):
-                current = sources()
-                if any(binding.role for binding in intent.bindings):
-                    expected = {(b.role, b.fid, b.channel) for b in intent.bindings}
-                    actual = {(b.role, b.fid, b.channel) for b in current}
-                else:
-                    expected = {(b.fid, b.channel) for b in intent.bindings}
-                    actual = {(b.fid, b.channel) for b in current}
-                if not current or expected != actual:
-                    return None
+        if self.frf_sources_differ(canvas, intent):
+            return None
         domain = intent.domain
         if intent.mode == "single":
             sample = self.evaluate(canvas, domain, mode="single", x=intent.x)
@@ -102,6 +92,32 @@ class PinSampleEvaluator:
                 canvas, domain, mode="dual", ax=intent.ax, bx=intent.bx,
             )
         return self.stamp_sample(canvas, sample)
+
+    @staticmethod
+    def frf_sources_differ(canvas, intent) -> bool:
+        """Refuse resampling when the FRF source pair is not the saved pair.
+
+        Records that carry input/output roles compare that role set. Legacy
+        role-less records compare the ordered ``(fid, channel)`` pair, so
+        swapping input and output is a different source even when the
+        identity set is unchanged. An empty canvas context is a mismatch.
+        """
+        if getattr(intent, "domain", None) != "frf":
+            return False
+        sources = getattr(canvas, "cursor_source_bindings", None)
+        if not callable(sources):
+            return False
+        current = tuple(sources() or ())
+        if not current:
+            return True
+        bindings = tuple(getattr(intent, "bindings", ()) or ())
+        if any(str(getattr(binding, "role", "") or "") for binding in bindings):
+            expected = {(binding.role, binding.fid, binding.channel) for binding in bindings}
+            actual = {(binding.role, binding.fid, binding.channel) for binding in current}
+            return expected != actual
+        expected = tuple((binding.fid, binding.channel) for binding in bindings)
+        actual = tuple((binding.fid, binding.channel) for binding in current)
+        return expected != actual
 
     @staticmethod
     def sample_fn(canvas, name):
