@@ -1,8 +1,11 @@
 """FFTTimeMixin: FFT-vs-Time (spectrogram) compute, cache, dispatch, render."""
 
+import itertools
 from dataclasses import replace
 
 import numpy as np
+
+_FFT_TIME_PANE_TOKENS = itertools.count(1)
 
 from ... import db_reference
 from ...signal import (
@@ -29,6 +32,18 @@ from .fft_time_coordinator import make_fft_time_analysis_key
 from .ultraview_coordinator import notify_ultraview_plot
 
 
+def _fft_time_pane_token(pane):
+    """Generation stamped on the pane object. ``id(pane)`` is reused."""
+    if pane is None:
+        return None
+    token = getattr(pane, "_fft_time_pane_token", None)
+    if isinstance(token, int):
+        return token
+    token = next(_FFT_TIME_PANE_TOKENS)
+    pane._fft_time_pane_token = token
+    return token
+
+
 class FFTTimeMixin:
     """Domain adapter for FFT-vs-Time input collection and rendering.
 
@@ -37,6 +52,9 @@ class FFTTimeMixin:
     opaque context so completion never reads a mutable window-wide pending
     record.
     """
+
+    def _fft_time_pane_token(self, pane):
+        return _fft_time_pane_token(pane)
 
     @staticmethod
     def _resolve_fft_time_effective_params(p, n_samples):
@@ -320,7 +338,7 @@ class FFTTimeMixin:
                 "channel": ch,
                 "params": dict(effective_compute_p),
                 "pane_idx": pane_idx,
-                "pane_token": id(pane),
+                "pane_token": _fft_time_pane_token(pane),
                 "time_range": time_range,
                 "render_params": dict(render_p),
                 "source": (fid, ch),
@@ -395,7 +413,7 @@ class FFTTimeMixin:
                     'channel': ch,
                     'params': dict(compute_p),
                     'pane_idx': pane_idx,
-                    'pane_token': id(state.panes[pane_idx]),
+                    'pane_token': _fft_time_pane_token(state.panes[pane_idx]),
                     'time_range': time_range,
                     'job': None,
                     'render_params': dict(render_p),
@@ -412,7 +430,7 @@ class FFTTimeMixin:
                 'channel': ch,
                 'params': dict(effective_compute_p),
                 'pane_idx': pane_idx,
-                'pane_token': id(state.panes[pane_idx]),
+                'pane_token': _fft_time_pane_token(state.panes[pane_idx]),
                 'time_range': time_range,
                 'render_params': dict(render_p),
                 'source': (fid, ch),
@@ -499,7 +517,7 @@ class FFTTimeMixin:
             sources=((fid, ch),), time_range=rng,
         )
         pane_token = (
-            id(single_state.panes[pane_idx])
+            _fft_time_pane_token(single_state.panes[pane_idx])
             if 0 <= pane_idx < len(single_state.panes) else None
         )
         self._fft_time_coordinator.request_batch([{
@@ -726,15 +744,31 @@ class FFTTimeMixin:
         p = self._analysis_params_for_canvas('fft_time', canvas, p)
         resolution = self._fft_time_label_resolution(source, p)
         inputs = self._fft_time_render_inputs(
-            canvas, result, p, source, resolution,
+            canvas, result, p, source, resolution, dry_run=True,
         )
         return replace(inputs, db_value=float(resolution.value))
 
-    def _fft_time_render_inputs(self, canvas, result, p, source, resolution, color_policy=None):
-        """Build the frozen display snapshot. Paint reads this object only."""
-        resolver = getattr(self, "_heatmap_color_policy_for_canvas", None)
-        if color_policy is None and callable(resolver):
-            color_policy = resolver("fft_time", canvas, p, resolution, source, p["amplitude_mode"])
+    def _fft_time_render_inputs(
+        self, canvas, result, p, source, resolution, color_policy=None, *, dry_run=False,
+    ):
+        """Build the frozen display snapshot. Paint reads this object only.
+
+        ``dry_run`` resolves the color policy without storing a coordinator
+        prepare. Picture-retain checks use it so a retain probe cannot become
+        the next paint's request.
+        """
+        if color_policy is None and dry_run:
+            coordinator_getter = getattr(self, "_heatmap_color_coordinator", None)
+            coordinator = coordinator_getter("fft_time") if callable(coordinator_getter) else None
+            if coordinator is not None:
+                color_policy = coordinator.prepare(
+                    "fft_time", canvas, p, resolution, source, p["amplitude_mode"],
+                    dry_run=True,
+                )
+        elif color_policy is None:
+            resolver = getattr(self, "_heatmap_color_policy_for_canvas", None)
+            if callable(resolver):
+                color_policy = resolver("fft_time", canvas, p, resolution, source, p["amplitude_mode"])
         if bool(p.get("freq_auto", p.get("y_auto", True))):
             freq_range = None
         else:
@@ -843,7 +877,8 @@ class FFTTimeMixin:
         echo_levels = (not inputs.levels_are_resolved
                        and self._analysis_canvas_updates_controls("fft_time", canvas))
         if echo_levels and inputs.z_auto and inputs.amplitude_mode == "amplitude_db":
-            auto_lvls = getattr(canvas, "_last_auto_levels", None)
+            automatic = getattr(canvas, "_automatic_color_window", None)
+            auto_lvls = automatic() if callable(automatic) else None
             if auto_lvls is not None:
                 ctx = self.inspector.fft_time_ctx
                 for spin, val in (
@@ -982,7 +1017,7 @@ class FFTTimeMixin:
             return 'reject'
         pane = state.panes[pane_idx]
         token = ctx.get('pane_token')
-        if token is not None and token != id(pane):
+        if token is not None and token != _fft_time_pane_token(pane):
             return 'reject'
         request = ctx.get('request_snapshot')
         if request is not None and request.revision != pane.request_revision:

@@ -106,6 +106,21 @@ def test_live_same_precision_coordinates_keep_width_from_first_frame(card, qapp)
     assert all(size == sizes[0] for size in sizes)
 
 
+def test_measure_span_cache_is_bounded_and_structural_change_drops_it(card, qapp):
+    _host, pill = card
+    render(pill, 31.581)
+    qapp.processEvents()
+    for index in range(3000):
+        pill._measure_span(f"sample-{index}-{index * 1.0001:.8g}", "font-weight:400;")
+    assert 0 < len(pill._text_measure_cache) <= pill._TEXT_MEASURE_CACHE_LIMIT
+    sentinel = ("font-weight:400;", "structural-reset-sentinel")
+    pill._text_measure_cache[sentinel] = 3.0
+    render(pill, 31.581, mini=False)
+    qapp.processEvents()
+    assert sentinel not in pill._text_measure_cache
+    assert len(pill._text_measure_cache) <= pill._TEXT_MEASURE_CACHE_LIMIT
+
+
 def test_first_projection_retains_geometry_across_show_polish(card, qapp):
     _host, pill = card
     # New pins receive their projection before show(). The initial size is

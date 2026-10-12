@@ -5,6 +5,7 @@ import pytest
 from PyQt5.QtCore import Qt
 
 from mf4_analyzer.ui.chart_stack.pinning.sampling import PinSampleEvaluator
+from mf4_analyzer.ui.pinned_cursor_facts import SOURCE_CHANGED_TEXT, UNAVAILABLE_TEXT, UNCHECKED_TEXT
 from mf4_analyzer.ui.pinned_cursor_state import collection_from_dict, collection_to_dict, empty_collection
 from tests.ui.test_pinned_cursor_geometry import _frf_result, _make_stack
 from tests.ui.test_pinned_cursor_panels import _aim, _press_p, _records
@@ -77,6 +78,66 @@ def test_frf_pin_button_captures_physical_hz_and_source_roles(qtbot, qapp, mode,
     assert pill.isVisible() and "|H|" in pill.detail_text()
     cs.set_cursor_mode_for_canvas(canvas, "off")
     assert pill.isVisible()
+
+
+def _flush_pin_reproject(qtbot, qapp, cs, canvas):
+    qtbot.wait(20)
+    qapp.processEvents()
+    owner = cs._pinned_cursors._owner(canvas)
+    cs._pinned_cursors._reproject_now(owner)
+    qapp.processEvents()
+    return owner
+
+
+@pytest.mark.parametrize("context", [
+    {"input_source": CONTEXT["output_source"], "output_source": CONTEXT["input_source"]},
+    {**CONTEXT, "output_source": ("different-file", "same-name")},
+    {},
+], ids=["role-swap", "different-source", "empty-context"])
+def test_frf_source_change_shows_explicit_unavailable_card(qtbot, qapp, context):
+    cs, canvas = _arm(qtbot, qapp)
+    qtbot.mouseClick(cs._pill._pin_btn, Qt.LeftButton)
+    record = _records(cs, canvas)[0]
+    cs._pinned_cursors.toggle_record_panel(canvas, record.record_id)
+    qtbot.wait(20)
+    pill = cs._pinned_cursors.pills_for(canvas)[0]
+    assert "|H|" in pill.detail_text()
+    canvas.set_result(_frf_result(), {"frequency_scale": "linear"}, context)
+    owner = _flush_pin_reproject(qtbot, qapp, cs, canvas)
+    sample = owner.samples[record.record_id]
+    assert sample.frf_sample is None
+    assert sample.channels == ()
+    assert sample.diagnostic == SOURCE_CHANGED_TEXT
+    assert SOURCE_CHANGED_TEXT in pill.primary_text()
+    assert pill.has_detail() is False
+    body = pill.detail_text() or ""
+    assert UNAVAILABLE_TEXT not in pill.primary_text()
+    assert UNCHECKED_TEXT not in pill.primary_text()
+    assert UNAVAILABLE_TEXT not in body and UNCHECKED_TEXT not in body
+    assert "|H|" not in body
+    canvas.set_result(_frf_result(), {"frequency_scale": "linear"}, CONTEXT)
+    _flush_pin_reproject(qtbot, qapp, cs, canvas)
+    assert owner.samples[record.record_id].frf_sample is not None
+    assert pill.has_detail() is True
+    assert "|H|" in pill.detail_text()
+
+
+def test_legacy_roleless_swapped_pair_is_refused_and_same_order_resamples(qtbot, qapp):
+    cs, canvas = _arm(qtbot, qapp)
+    qtbot.mouseClick(cs._pill._pin_btn, Qt.LeftButton)
+    record = _records(cs, canvas)[0]
+    legacy = replace(record, bindings=tuple(replace(binding, role="") for binding in record.bindings))
+    assert all(not binding.role for binding in legacy.bindings)
+    evaluator = PinSampleEvaluator()
+    swapped = {
+        "input_source": CONTEXT["output_source"],
+        "output_source": CONTEXT["input_source"],
+    }
+    canvas.set_result(_frf_result(), {"frequency_scale": "linear"}, swapped)
+    assert evaluator.evaluate_intent(canvas, legacy) is None
+    canvas.set_result(_frf_result(), {"frequency_scale": "linear"}, CONTEXT)
+    resampled = evaluator.evaluate_intent(canvas, legacy)
+    assert resampled is not None and resampled.frf_sample is not None
 
 
 def test_frf_keyboard_p_creates_pin(qtbot, qapp):

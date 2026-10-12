@@ -72,6 +72,60 @@ def test_project_restores_analysis_comparison_by_view_id(qapp, tmp_path):
     assert any("目标 View 不在此项目中" in msg for msg, _level in notes)
 
 
+def test_save_payload_drops_dangling_comparison_hosts(qapp, tmp_path, caplog):
+    import logging
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    window = MainWindow()
+    manager = window.analysis_managers["fft"]
+    manager.new_view(activate=False)
+    host = manager.get(0)
+    peer = manager.get(1)
+    assert window.open_comparison("fft", host.view_id, peer.view_id)
+    window._comparison().replace_relations("fft", {
+        host.view_id: {
+            "peer": "missing-peer",
+            "axis_linked": True,
+            "levels_locked": False,
+        },
+        "missing-host": {
+            "peer": peer.view_id,
+            "axis_linked": False,
+            "levels_locked": False,
+        },
+        peer.view_id: {
+            "peer": host.view_id,
+            "axis_linked": False,
+            "levels_locked": False,
+        },
+    })
+    with caplog.at_level(
+        logging.INFO, logger="mf4_analyzer.ui.main_window._project_io_mixin",
+    ):
+        payload = window._analysis_views_payload()
+    rows = payload["fft"].get("comparisons") or {}
+    assert "missing-host" not in rows
+    assert host.view_id not in rows
+    assert rows[peer.view_id]["peer"] == host.view_id
+    dropped = [
+        record for record in caplog.records
+        if "Dropped analysis comparison" in record.message
+    ]
+    assert len(dropped) == 1
+
+    project = tmp_path / "dangling.tlproj"
+    assert window.save_project(project)
+    raw = json.loads(project.read_text(encoding="utf-8"))
+    saved = raw["analysis_views"]["fft"].get("comparisons") or {}
+    assert "missing-host" not in saved
+    assert all(row.get("peer") != "missing-peer" for row in saved.values())
+    notes = []
+    restored = MainWindow()
+    restored.toast = lambda msg, level="info": notes.append(msg)
+    restored.open_project(project)
+    assert not any("目标 View 不在此项目中" in msg for msg in notes)
+
+
 def test_window_title_uses_app_meta(qapp):
     from mf4_analyzer.ui.main_window import MainWindow
     mw = MainWindow()

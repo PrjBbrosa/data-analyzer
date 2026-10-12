@@ -13,7 +13,10 @@ reverse pair. Axis-link flags live on that relation, not on
 
 from __future__ import annotations
 
+import itertools
 from dataclasses import dataclass
+
+_CANVAS_TOKENS = itertools.count(1)
 
 
 @dataclass(frozen=True)
@@ -39,7 +42,7 @@ class AnalysisComparisonDisplay:
         self._relations: dict[str, dict[str, _HostRelation]] = {}
         self._displayed: dict[str, tuple[str, str]] = {}
         self._focus: dict[str, tuple[str, int]] = {}
-        self._by_canvas: dict[int, AnalysisViewTarget] = {}
+        self._by_token: dict[int, AnalysisViewTarget] = {}
         self._by_target: dict[tuple[str, str, int], object] = {}
         self._unlinks: dict[str, list] = {}
         self.hold_switch = False
@@ -227,14 +230,20 @@ class AnalysisComparisonDisplay:
         key = (target.section, str(target.view_id), int(target.pane_index))
         previous = self._by_target.get(key)
         if previous is not None and previous is not canvas:
-            self._by_canvas.pop(id(previous), None)
-        self._by_canvas[id(canvas)] = target
+            self._drop_canvas(previous)
+        token = _assign_canvas_token(canvas)
+        if token is None:
+            return
+        self._by_token[token] = target
         self._by_target[key] = canvas
 
     def target_for_canvas(self, canvas):
         if canvas is None:
             return None
-        target = self._by_canvas.get(id(canvas))
+        token = _existing_canvas_token(canvas)
+        if token is None:
+            return None
+        target = self._by_token.get(token)
         if target is None:
             return None
         if not _qt_alive(canvas):
@@ -252,14 +261,16 @@ class AnalysisComparisonDisplay:
             return None
         if not _qt_alive(canvas):
             self._by_target.pop((section, str(view_id), pane), None)
-            self._by_canvas.pop(id(canvas), None)
+            token = _existing_canvas_token(canvas)
+            if token is not None:
+                self._by_token.pop(token, None)
             return None
         return canvas
 
     def unbind_section(self, section) -> None:
-        for key, target in list(self._by_canvas.items()):
+        for key, target in list(self._by_token.items()):
             if target.section == section:
-                self._by_canvas.pop(key, None)
+                self._by_token.pop(key, None)
         for key in list(self._by_target):
             if key[0] == section:
                 self._by_target.pop(key, None)
@@ -278,7 +289,7 @@ class AnalysisComparisonDisplay:
         self._relations.clear()
         self._displayed.clear()
         self._focus.clear()
-        self._by_canvas.clear()
+        self._by_token.clear()
         self._by_target.clear()
         self.hold_switch = False
         self.propagating_levels = False
@@ -290,12 +301,37 @@ class AnalysisComparisonDisplay:
         return self._relations.get(section, {}).get(str(pair[0]))
 
     def _drop_canvas(self, canvas) -> None:
-        target = self._by_canvas.pop(id(canvas), None)
+        token = _existing_canvas_token(canvas)
+        if token is None:
+            return
+        target = self._by_token.pop(token, None)
         if target is None:
             return
         key = (target.section, str(target.view_id), int(target.pane_index))
         if self._by_target.get(key) is canvas:
             self._by_target.pop(key, None)
+
+
+def _existing_canvas_token(canvas):
+    try:
+        token = getattr(canvas, "_comparison_canvas_token", None)
+    except RuntimeError:
+        return None
+    if isinstance(token, int):
+        return token
+    return None
+
+
+def _assign_canvas_token(canvas):
+    token = _existing_canvas_token(canvas)
+    if token is not None:
+        return token
+    token = next(_CANVAS_TOKENS)
+    try:
+        canvas._comparison_canvas_token = token
+    except RuntimeError:
+        return None
+    return token
 
 
 def _qt_alive(canvas) -> bool:

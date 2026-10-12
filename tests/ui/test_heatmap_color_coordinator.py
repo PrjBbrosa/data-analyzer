@@ -1,4 +1,5 @@
 """Owner projection must not become a new request, including locked panes."""
+import copy
 from types import SimpleNamespace
 
 import pytest
@@ -347,3 +348,153 @@ def test_render_group_reset_baseline_is_final_union_and_edits_do_not_replace_it(
     owner.settle("fft_time")
     assert canvases[0].levels == canvases[1].levels == (False, -50., 10.)
     assert canvases[0].reset_baseline == canvases[1].reset_baseline == (-80., 20.)
+
+
+def test_auto_complete_uses_the_matrix_window_not_a_stale_projection():
+    owner, state, canvases, ctx = setup()
+    state.params["z_auto"] = True
+    state.compare["levels_locked"] = False
+    canvases[0]._last_auto_levels = (-1.0, 1.0)
+    canvases[0]._automatic_color_window = lambda: (-45.0, -5.0)
+    paint(owner, canvases[0], 1, ("f1", "sig"))
+    assert canvases[0].levels == (True, -45.0, -5.0)
+    assert state.panes[0].heatmap_color_basis is None
+
+
+def test_complete_false_drops_prepared_and_pending_basis():
+    owner, state, canvases, ctx = setup()
+    canvases[0]._matrix_disp = None
+    canvases[0]._matrix_amp_valid = None
+    policy = owner.prepare("fft_time", canvases[0], {}, resolution(1), ("f1", "sig"), "amplitude_db")
+    assert not owner.complete("fft_time", canvases[0], policy)
+    assert canvases[0] not in owner._prepared
+    assert canvases[0] not in owner._pending_basis
+
+    state.params["z_auto"] = True
+    canvases[0]._matrix_disp = [[1.0]]
+    canvases[0]._matrix_amp_valid = [[True]]
+    canvases[0]._automatic_color_window = lambda: (5.0, 1.0)
+    policy = owner.prepare("fft_time", canvases[0], {}, resolution(1), ("f1", "sig"), "amplitude_db")
+    assert policy.z_auto
+    assert not owner.complete("fft_time", canvases[0], policy)
+    assert canvases[0] not in owner._prepared
+    assert canvases[0] not in owner._pending_basis
+
+
+def test_dry_run_prepare_does_not_store_a_request():
+    owner, state, canvases, ctx = setup()
+    policy = owner.prepare(
+        "fft_time", canvases[0], {}, resolution(1), ("f1", "sig"), "amplitude_db", dry_run=True,
+    )
+    assert policy is not None
+    assert canvases[0] not in owner._prepared
+    assert not owner.complete("fft_time", canvases[0], policy)
+
+
+def test_fallback_reference_keeps_previous_basis(caplog):
+    owner, state, canvases, ctx = setup()
+    state.compare["levels_locked"] = False
+    basis = {
+        "version": 1, "policy_owner": "view_default", "source": ["f1", "sig"],
+        "amplitude_mode": "amplitude_db", "reference": 1.0, "unit": "N", "quantity": "force",
+    }
+    state.panes[0].heatmap_color_basis = dict(basis)
+    fallback = DbReferenceResolution(
+        value=2.0, unit="N", quantity="force", source="fallback", warning="fallback",
+    )
+    policy = owner.prepare("fft_time", canvases[0], {}, fallback, ("f1", "sig"), "amplitude_db")
+    assert policy.basis is None and not policy.z_auto
+    with caplog.at_level("INFO"):
+        assert owner.complete("fft_time", canvases[0], policy)
+    assert state.panes[0].heatmap_color_basis == basis
+    assert caplog.text.count("Keeping previous heatmap color basis") == 1
+
+
+def test_colorbar_drag_does_not_resolve_until_release(monkeypatch):
+    from mf4_analyzer.heatmap_color_policy import resolve_heatmap_color_policy
+    import mf4_analyzer.ui.heatmap_color_coordinator as coordinator_module
+
+    owner, state, canvases, ctx = setup()
+    state.compare["levels_locked"] = False
+    paint(owner, canvases[0], 1, ("f1", "sig"))
+    calls = {"n": 0}
+
+    def counting(**kwargs):
+        calls["n"] += 1
+        return resolve_heatmap_color_policy(**kwargs)
+
+    monkeypatch.setattr(coordinator_module, "resolve_heatmap_color_policy", counting)
+    canvases[0]._cbar_drag_open = True
+    edit = {"z_auto": False, "z_floor": -40.0, "z_ceiling": -10.0}
+    for _ in range(50):
+        assert owner.commit("fft_time", canvases[0], edit, origin="colorbar") is False
+    assert calls["n"] == 0
+    canvases[0]._cbar_drag_open = False
+    assert owner.commit("fft_time", canvases[0], edit, origin="colorbar") is True
+    assert calls["n"] >= 1
+
+
+def test_settle_after_view_retarget_does_not_rewrite_either_pane():
+    owner, state, canvases, ctx = setup()
+    state.compare["levels_locked"] = False
+    paint(owner, canvases[0], 1, ("f1", "sig"))
+    original = copy.deepcopy(state.panes[0].heatmap_color_basis)
+    peer = copy.deepcopy(state)
+    peer.view_id = "duplicated-view"
+    peer.panes[0].heatmap_color_basis = {"marker": True}
+    manager = owner._context._analysis_managers["fft_time"]
+    manager.views = [state, peer]
+    manager.active = 1
+    manager.get = lambda index: manager.views[index]
+    owner._context._analysis_state_for_id = lambda section, view_id: next(
+        (item for item in (state, peer) if item.view_id == view_id), None,
+    )
+    owner.settle("fft_time")
+    assert state.panes[0].heatmap_color_basis == original
+    assert peer.panes[0].heatmap_color_basis == {"marker": True}
+
+
+def test_committed_preset_policy_error_still_captures_and_warns(caplog, monkeypatch):
+    from mf4_analyzer.ui.main_window.analysis_context import AnalysisContext
+
+    owner, host, canvases, ctx = setup()
+    context = owner._context
+    context.heatmap_color = owner
+    context.section_ctx = lambda section: ctx
+    context.page("fft_time").focused_canvas = lambda: canvases[0]
+    ctx.consume_color_policy_edit = lambda: {"z_auto": False, "z_floor": 5.0, "z_ceiling": 1.0}
+    ctx.current_params = lambda: dict(host.params, x_min=3)
+    captured = {}
+
+    def capture(widget, state):
+        captured["state"] = state
+        state.params = dict(widget.current_params())
+
+    monkeypatch.setattr(
+        "mf4_analyzer.ui.analysis_view_bridge.capture_params_to_state", capture,
+    )
+    with caplog.at_level("WARNING"):
+        AnalysisContext.sync_committed_preset(context, "fft_time", host)
+    assert captured["state"] is host
+    assert host.params["x_min"] == 3
+    assert host.params["z_floor"] == -80.0
+    assert "Rejected heatmap color preset" in caplog.text
+
+
+def test_committed_preset_does_not_swallow_other_errors(monkeypatch):
+    from mf4_analyzer.ui.main_window.analysis_context import AnalysisContext
+
+    owner, host, canvases, ctx = setup()
+    context = owner._context
+    context.heatmap_color = owner
+    context.section_ctx = lambda section: ctx
+    context.page("fft_time").focused_canvas = lambda: canvases[0]
+    ctx.consume_color_policy_edit = lambda: {"z_auto": False, "z_floor": -30.0, "z_ceiling": 0.0}
+    ctx.current_params = lambda: dict(host.params)
+
+    def boom(*_args, **_kwargs):
+        raise ValueError("not a color policy")
+
+    monkeypatch.setattr(owner, "commit", boom)
+    with pytest.raises(ValueError, match="not a color policy"):
+        AnalysisContext.sync_committed_preset(context, "fft_time", host)

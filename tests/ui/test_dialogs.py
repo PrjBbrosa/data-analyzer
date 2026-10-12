@@ -1052,8 +1052,7 @@ def test_analysis_chart_options_unchanged_apply_reapplies_parameters(qapp, qtbot
     dialog = ChartOptionsDialog(None, handle)
     qtbot.addWidget(dialog)
     dialog.apply_changes()
-    assert set(applied[-1]) == {'x', 'y'}
-    assert all(policy[0] for policy in applied[-1].values())
+    assert applied == []
 
 
 def _mute_chart_warning(monkeypatch):
@@ -2027,3 +2026,53 @@ def test_chart_color_restore_callback_skips_title_only_apply(qtbot, qapp):
     dlg.restore_opened()
     assert not restored
     assert handle.get_title() == ''
+
+
+def test_chart_float_spin_arrow_and_wheel_commit_the_displayed_value(qapp):
+    """Typing then stepping must commit the number on screen, not the old text."""
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtTest import QTest
+
+    from mf4_analyzer.ui.dialogs.chart_options import _ChartFloatSpin
+
+    spin = _ChartFloatSpin()
+    spin.resize(120, 28)
+    spin.show()
+
+    def type_five():
+        spin.set_source_value(5.0)
+        spin.lineEdit().setText("5")
+        spin._on_text_edited("5")
+        assert spin.value_for_commit() == pytest.approx(5.0)
+
+    type_five()
+    QTest.keyClick(spin, Qt.Key_Up)
+    assert spin.value() == pytest.approx(6.0)
+    assert spin.value_for_commit() == pytest.approx(float(spin.text()))
+    assert spin.value_for_commit() == pytest.approx(spin.value())
+
+    type_five()
+    # Wheel input reaches the spin through stepBy.
+    spin.stepBy(1)
+    assert spin.value() == pytest.approx(6.0)
+    assert spin.value_for_commit() == pytest.approx(float(spin.text()))
+    assert spin.value_for_commit() == pytest.approx(spin.value())
+
+
+def test_color_only_restore_does_not_reapply_analysis_range_policy(qapp, qtbot):
+    from mf4_analyzer.ui.dialogs import ChartOptionsDialog
+
+    canvas, handle = _pg_heatmap_handle(qapp)
+    qtbot.addWidget(canvas)
+    applied = []
+    canvas.analysis_range_adapter = (
+        lambda: {"x_auto": True, "y_auto": True},
+        applied.append,
+    )
+    dialog = ChartOptionsDialog(None, handle)
+    qtbot.addWidget(dialog)
+    dialog.combo_cmap.setCurrentText("gnuplot2")
+    dialog.apply_changes()
+    assert applied == []
+    dialog.btn_reset.click()
+    assert applied == []

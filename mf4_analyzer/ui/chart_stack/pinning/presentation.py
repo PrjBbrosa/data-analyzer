@@ -140,6 +140,7 @@ class _PresentationState:
     capture_target: object = None
     reveal_hold: object = None
     tether_update_depth: int = 0
+    reproject_batch: int = 0
 
 
 class PinPanelProjector(QObject):
@@ -519,6 +520,8 @@ class PinPanelProjector(QObject):
             self.apply_anchor(
                 pill, collection, pill_record_id=intent.record_id,
             )
+        if self.state_for(key).reproject_batch:
+            return
         self.arrange_pinned_panels(key, canvas, collection)
 
     def pill_content(self, intent, sample, status):
@@ -598,6 +601,23 @@ class PinPanelProjector(QObject):
             state.panel_endpoints[str(record_id)] = str(endpoint)
         else:
             state.panel_endpoints.pop(str(record_id), None)
+
+    @contextmanager
+    def suppress_reproject_layout(self, key):
+        """Hold arrangement and tether publication for one reproject transaction.
+
+        Each pin may still update its own card. ``arrange_pinned_panels`` and
+        ``set_tethers`` run once after the caller leaves this block, on the
+        final geometry.
+        """
+        state = self.state_for(key)
+        state.reproject_batch += 1
+        state.tether_update_depth += 1
+        try:
+            yield
+        finally:
+            state.reproject_batch -= 1
+            state.tether_update_depth -= 1
 
     @contextmanager
     def _settle_tethers(self, key, canvas):
@@ -928,6 +948,13 @@ class PinPanelProjector(QObject):
             return
         x, y = self._pos_from_anchor(intent.anchor, pill, safe)
         pill.move(x, y)
+        # Content reflow reapplies popover avoidance, then this anchor restore
+        # would put the card back on the obstacle. Displace again from the
+        # saved anchor so value/full updates keep the clearance.
+        obstacle = getattr(pill, "_avoidance_obstacle", None)
+        if obstacle is not None:
+            rect, gap = obstacle
+            pill.avoid_rect(rect, gap=gap)
 
     @staticmethod
     def _pos_from_anchor(anchor, pill, safe):

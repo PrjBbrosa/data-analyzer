@@ -595,3 +595,140 @@ def test_capture_copy_and_ultraview_keep_effective_levels_and_owned_intent(
     assert uv.copy_card_to_clipboard(ref)
     assert len(sink.images) == 2 and sink.images[-1] == record.image
     unchanged()
+
+
+def _scaled_result(section, result, factor):
+    amplitude = np.asarray(result.amplitude, dtype=np.float32) * float(factor)
+    if section == "order":
+        return COTResult(
+            times=np.asarray(result.times, dtype=float),
+            orders=np.asarray(result.orders, dtype=float),
+            amplitude=amplitude,
+            params=result.params,
+            metadata=dict(getattr(result, "metadata", {}) or {}),
+        )
+    return SpectrogramResult(
+        times=np.asarray(result.times, dtype=float),
+        frequencies=np.asarray(result.frequencies, dtype=float),
+        amplitude=amplitude,
+        params=result.params,
+        channel_name=result.channel_name,
+        unit=result.unit,
+        metadata=dict(getattr(result, "metadata", {}) or {}),
+    )
+
+
+def _live_cache_key(win, section, state):
+    """The key a cache restore reads: live inspector params, not the overlay."""
+    pane = state.panes[0]
+    fid, channel = pane.sources[0]
+    return win._analysis_cache_key(
+        section, fid, channel,
+        rpm_source=pane.rpm_source if section == "order" else None,
+        pane_idx=0,
+    )
+
+
+@pytest.mark.parametrize("section,mode", [
+    ("order", "db"),
+    ("order", "linear"),
+    ("fft_time", "db"),
+    ("fft_time", "linear"),
+])
+def test_auto_views_keep_their_own_natural_windows(color_win, qapp, section, mode):
+    """A→B→A must not inherit the previous View's automatic color window."""
+    win = color_win
+    first, result_a = _seed(win, section)
+    first.params["z_auto"] = True
+    if mode == "linear":
+        first.params["amplitude_mode"] = "Linear" if section == "order" else "amplitude"
+    # Persisted view copy. result_binding is session-local and holds a
+    # MappingProxyType, so deepcopy of the live view is not the duplicate path.
+    second = type(first).from_dict(first.to_dict())
+    second.view_id = uuid.uuid4().hex
+    second.name = "Scaled auto window"
+    if section == "fft_time":
+        second.params["t_win_s"] = float(second.params.get("t_win_s", 1.0)) + 4.0
+    else:
+        base = second.params.get("max_order")
+        second.params["max_order"] = float(8.0 if base is None else base) + 12.0
+    win.analysis_managers[section].views.append(second)
+    # Restore looks up the live inspector key. Park View B's params there
+    # only long enough to store its own result, without writing them onto A.
+    ctx = win._analysis_ctx(section)
+    key_a = _live_cache_key(win, section, first)
+    win._applying_analysis_view = True
+    try:
+        ctx.apply_params(second.params)
+        key_b = _live_cache_key(win, section, second)
+        assert key_a != key_b
+        scaled = _scaled_result(section, result_a, 1000.0)
+        win.analysis_caches[section].put(key_b, scaled)
+        assert bind_result(
+            second.panes[0], snapshot_request(second, second.panes[0]), (key_b,),
+        )
+        ctx.apply_params(first.params)
+    finally:
+        win._applying_analysis_view = False
+    win._on_analysis_view_switched(section, 0)
+    windows = {}
+    for index in (0, 1, 0):
+        win._on_analysis_switch(section, index)
+        qapp.processEvents()
+        canvas = win._analysis_page(section).pane_canvas(0)
+        expected = canvas._automatic_color_window()
+        assert expected is not None
+        assert _levels(canvas) == pytest.approx(expected)
+        windows[index] = tuple(expected)
+    assert windows[0] != pytest.approx(windows[1])
+
+
+@pytest.mark.parametrize("section", ["fft_time", "order"])
+def test_picture_retain_check_does_not_prepare(color_win, qapp, section):
+    win = color_win
+    state, result = _seed(win, section)
+    win._on_analysis_view_switched(section, 0)
+    qapp.processEvents()
+    page = win._analysis_page(section)
+    canvas = page.pane_canvas(0)
+    coordinator = win._analysis_context.heatmap_color
+    original = coordinator.prepare
+    assert canvas not in coordinator._prepared
+    win._heatmap_picture_is_current(
+        section, page, canvas, result, state.panes[0].sources[0],
+    )
+    assert canvas not in coordinator._prepared
+    assert coordinator.prepare.__func__ is original.__func__
+
+
+def test_sync_rejects_illegal_color_without_writing_params(color_win, caplog):
+    win = color_win
+    state, _result = _seed(win, "fft_time")
+    win._on_analysis_view_switched("fft_time", 0)
+    before_floor = state.params["z_floor"]
+    ctx = win._analysis_ctx("fft_time")
+    ctx.consume_color_policy_edit = lambda: {
+        "z_auto": False, "z_floor": 5.0, "z_ceiling": 1.0,
+    }
+    with caplog.at_level("WARNING"):
+        returned = win._sync_active_analysis_params("fft_time")
+    assert returned is state
+    assert state.params["z_floor"] == before_floor
+    assert "Rejected heatmap color edit" in caplog.text
+
+
+def test_sync_propagates_non_policy_errors(color_win, monkeypatch):
+    win = color_win
+    _seed(win, "fft_time")
+    win._on_analysis_view_switched("fft_time", 0)
+    ctx = win._analysis_ctx("fft_time")
+    ctx.consume_color_policy_edit = lambda: {
+        "z_auto": False, "z_floor": -40.0, "z_ceiling": 0.0,
+    }
+
+    def boom(*_args, **_kwargs):
+        raise ValueError("sync-other")
+
+    monkeypatch.setattr(win._analysis_context.heatmap_color, "commit", boom)
+    with pytest.raises(ValueError, match="sync-other"):
+        win._sync_active_analysis_params("fft_time")

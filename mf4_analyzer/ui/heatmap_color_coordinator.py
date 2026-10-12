@@ -6,6 +6,7 @@ projection and never feeds the next pane's request or reference anchor.
 from __future__ import annotations
 
 import copy
+import logging
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, replace
 from weakref import WeakKeyDictionary
@@ -15,6 +16,8 @@ from PyQt5 import sip
 from PyQt5.QtCore import QObject
 
 from ..heatmap_color_policy import resolve_heatmap_color_policy
+
+logger = logging.getLogger(__name__)
 
 _Z_KEYS = ("z_auto", "z_floor", "z_ceiling")
 
@@ -97,7 +100,7 @@ class HeatmapColorCoordinator:
             return False
         return row.natural is not None and all(np.isfinite(row.natural)) and row.natural[0] < row.natural[1]
 
-    def prepare(self, section, canvas, params, resolution, source, amplitude_mode):
+    def prepare(self, section, canvas, params, resolution, source, amplitude_mode, *, dry_run=False):
         target = self.target(section, canvas)
         if target is None:
             return None
@@ -110,7 +113,8 @@ class HeatmapColorCoordinator:
             reference=resolution.value, unit=resolution.unit or "", quantity=resolution.quantity or "",
             reference_source=resolution.source or "",
         )
-        self._prepared[canvas] = _Record(target, policy, source, resolution, amplitude_mode)
+        if not dry_run:
+            self._prepared[canvas] = _Record(target, policy, source, resolution, amplitude_mode)
         return policy
 
     @staticmethod
@@ -126,6 +130,7 @@ class HeatmapColorCoordinator:
 
     def complete(self, section, canvas, policy):
         record = self._prepared.get(canvas)
+        # A stale policy must not drop the newer prepare that replaced it.
         if record is None or record.policy is not policy:
             return False
         self._prepared.pop(canvas, None)
@@ -135,11 +140,10 @@ class HeatmapColorCoordinator:
             return False
         levels = (policy.z_floor, policy.z_ceiling)
         if policy.z_auto:
-            levels = getattr(canvas, "_last_auto_levels", None)
-            if levels is None:
-                automatic = getattr(canvas, "_automatic_color_window", None)
-                levels = automatic() if callable(automatic) else None
+            automatic = getattr(canvas, "_automatic_color_window", None)
+            levels = automatic() if callable(automatic) else None
         if levels is None or not all(np.isfinite(levels)) or levels[0] >= levels[1]:
+            self._pending_basis.pop(canvas, None)
             return False
         record = replace(record, natural=(float(levels[0]), float(levels[1])))
         self._records[canvas] = record
@@ -206,7 +210,7 @@ class HeatmapColorCoordinator:
         for canvas, row in records:
             pending = self._pending_basis.pop(canvas, None)
             if pending is not None and pending.target == row.target:
-                self._pane(row.target).heatmap_color_basis = copy.deepcopy(row.policy.basis)
+                self._publish_basis(self._pane(row.target), row.policy, row.amplitude_mode)
                 rendered.add(canvas)
         groups = {}
         for canvas, row in records:
@@ -238,6 +242,7 @@ class HeatmapColorCoordinator:
         pane = self._pane(target)
         if pane is None:
             return
+        previous_basis = pane.heatmap_color_basis
         pane.heatmap_color_basis = None
         for canvas, row in list(self._records.items()):
             if (row.target != target or self.target(target.section, canvas) != target
@@ -249,7 +254,11 @@ class HeatmapColorCoordinator:
             row = replace(row, resolution=resolution)
             policy = self.prepare(target.section, canvas, {}, resolution, row.source, row.amplitude_mode)
             if policy is not None:
-                pane.heatmap_color_basis = copy.deepcopy(policy.basis)
+                if self._keeps_previous_basis(policy, row.amplitude_mode):
+                    pane.heatmap_color_basis = previous_basis
+                    self._log_kept_basis()
+                else:
+                    pane.heatmap_color_basis = copy.deepcopy(policy.basis)
                 if not policy.z_auto:
                     self._records[canvas] = replace(row, policy=policy, natural=(policy.z_floor, policy.z_ceiling))
                 else:
@@ -288,6 +297,8 @@ class HeatmapColorCoordinator:
     def commit(self, section, canvas, edit, origin="inspector"):
         if origin not in ("inspector", "colorbar", "chart_options", "preset"):
             raise ValueError("unknown heatmap color edit origin")
+        if origin == "colorbar" and getattr(canvas, "_cbar_drag_open", False):
+            return False
         if not self._edit_session_matches(section, canvas):
             # Canvas dialogs preview before publishing intent. Reproject the
             # current target without allowing that preview to become its request.
@@ -426,11 +437,22 @@ class HeatmapColorCoordinator:
                 if row.target.section == section and (view_id is None or row.target.view_id == str(view_id)):
                     mapping.pop(canvas, None)
 
-    def reset(self):
-        self._records.clear()
-        self._prepared.clear()
-        self._pending_basis.clear()
-        self._depth.clear()
-        self._after_settle.clear()
-        for sessions in self._edit_sessions.values():
-            sessions[:] = [(section, None) for section, _ in sessions]
+    def _keeps_previous_basis(self, policy, amplitude_mode) -> bool:
+        """Fallback and unresolved manual dB anchors must not wipe a saved basis."""
+        return (
+            policy is not None and policy.basis is None and not policy.z_auto
+            and amplitude_mode == "amplitude_db"
+        )
+
+    def _log_kept_basis(self) -> None:
+        logger.info(
+            "Keeping previous heatmap color basis; reference is fallback or unresolved",
+        )
+
+    def _publish_basis(self, pane, policy, amplitude_mode) -> None:
+        if pane is None or policy is None:
+            return
+        if self._keeps_previous_basis(policy, amplitude_mode):
+            self._log_kept_basis()
+            return
+        pane.heatmap_color_basis = copy.deepcopy(policy.basis)

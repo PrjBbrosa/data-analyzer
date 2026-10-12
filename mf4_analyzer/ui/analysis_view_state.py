@@ -203,6 +203,11 @@ CHART_APPEARANCE_ROLES = ("spectrum", "preview", "heatmap")
 _CHART_APPEARANCE_COMMON = frozenset({
     "title", "x_label", "y_label", "grid", "line_colors",
 })
+# Spectrum and preview persist axis scale. A missing key means linear, so
+# older projects stay linear without a migration.
+_CHART_APPEARANCE_LINE = _CHART_APPEARANCE_COMMON | frozenset({
+    "x_scale", "y_scale",
+})
 _CHART_APPEARANCE_HEATMAP = _CHART_APPEARANCE_COMMON | frozenset({
     "cmap", "z_auto", "z_min", "z_max",
 })
@@ -246,7 +251,7 @@ def _normalize_appearance_spec(role: str, spec: Any) -> dict[str, Any]:
     if role not in CHART_APPEARANCE_ROLES or not isinstance(spec, dict):
         return {}
     allowed = (
-        _CHART_APPEARANCE_HEATMAP if role == "heatmap" else _CHART_APPEARANCE_COMMON
+        _CHART_APPEARANCE_HEATMAP if role == "heatmap" else _CHART_APPEARANCE_LINE
     )
     cleaned: dict[str, Any] = {}
     for key in ("title", "x_label", "y_label"):
@@ -257,6 +262,11 @@ def _normalize_appearance_spec(role: str, spec: Any) -> dict[str, Any]:
             cleaned[key] = text
     if "grid" in spec and "grid" in allowed and isinstance(spec.get("grid"), bool):
         cleaned["grid"] = spec["grid"]
+    if role != "heatmap":
+        for key in ("x_scale", "y_scale"):
+            # Only "log" is stored. Absent and "linear" both mean linear.
+            if key in allowed and spec.get(key) == "log":
+                cleaned[key] = "log"
     if role == "heatmap" and "cmap" in spec:
         cmap = spec.get("cmap")
         if isinstance(cmap, str) and cmap.strip():

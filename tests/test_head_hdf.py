@@ -1,9 +1,10 @@
 # tests/test_head_hdf.py
 from __future__ import annotations
+import logging
 import numpy as np
 from tests._helpers.head_hdf_factory import write_head_hdf
 import pytest
-from mf4_analyzer.io.head_hdf import sniff_head_hdf, parse_head_hdf
+from mf4_analyzer.io.head_hdf import build_time_axis, sniff_head_hdf, parse_head_hdf
 
 
 def _two_channel_file(path, n_scans=4):
@@ -207,6 +208,81 @@ def test_missing_ch_order_raises_header_error(tmp_path):
     _strip_header_line(p, "ch order:")
     with pytest.raises(ValueError, match=r"ch order"):
         parse_head_hdf(p)
+
+
+def _one_channel(path, *, name, samples, code_page="936", header_encoding="cp936"):
+    return write_head_hdf(
+        path,
+        n_scans=len(samples),
+        delta=0.001,
+        first_value=0.25,
+        start_of_data=2048,
+        scan_mode="simultaneous",
+        code_page=code_page,
+        header_encoding=header_encoding,
+        channels=[{
+            "name": name,
+            "factor": 1,
+            "quantity": "torque",
+            "unit": "Nm",
+            "calibration": 1.0,
+            "samples": samples,
+        }],
+    )
+
+
+def test_code_page_1252_matches_the_936_twin(tmp_path):
+    """A 1252 header is a decoder choice, not a layout reject."""
+    samples = np.linspace(-2.5, 4.0, 8)
+    path_936 = _one_channel(
+        tmp_path / "cp936.hdf",
+        name="输出轴",
+        samples=samples,
+    )
+    path_1252 = _one_channel(
+        tmp_path / "cp1252.hdf",
+        name="Größe",
+        samples=samples,
+        code_page="1252",
+        header_encoding="cp1252",
+    )
+    parsed_936 = parse_head_hdf(path_936)
+    parsed_1252 = parse_head_hdf(path_1252)
+    assert parsed_1252.code_page == "1252"
+    assert parsed_1252.channels[0].name == "Größe"
+    np.testing.assert_allclose(parsed_1252.channels[0].samples, samples)
+    np.testing.assert_allclose(
+        parsed_1252.channels[0].samples,
+        parsed_936.channels[0].samples,
+    )
+    axis_936 = build_time_axis(
+        parsed_936.first_value,
+        parsed_936.channels[0].dt,
+        parsed_936.channels[0].n_samples,
+    )
+    axis_1252 = build_time_axis(
+        parsed_1252.first_value,
+        parsed_1252.channels[0].dt,
+        parsed_1252.channels[0].n_samples,
+    )
+    np.testing.assert_allclose(axis_1252, axis_936)
+
+
+def test_unknown_code_page_decodes_with_replace_and_a_warning(tmp_path, caplog):
+    samples = np.arange(4, dtype=float)
+    path = _one_channel(
+        tmp_path / "unknown-page.hdf",
+        name="Torque",
+        samples=samples,
+        code_page="99999",
+        header_encoding="latin-1",
+    )
+    with caplog.at_level(logging.WARNING, logger="mf4_analyzer.io.head_hdf"):
+        parsed = parse_head_hdf(path)
+    np.testing.assert_allclose(parsed.channels[0].samples, samples)
+    assert parsed.channels[0].name == "Torque"
+    assert any("99999" in record.message and "replace" in record.message for record in caplog.records)
+    assert any("99999" in warning for warning in parsed.warnings)
 
 
 def test_missing_nbr_of_scans_raises_header_error(tmp_path):

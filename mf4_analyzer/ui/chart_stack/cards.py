@@ -149,6 +149,7 @@ class _ChartCard(QWidget):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         self.canvas = canvas
+        self._focused = None
         self.canvas.installEventFilter(self)
         try:
             viewport = canvas._glw.viewport()
@@ -784,12 +785,7 @@ class _ChartCard(QWidget):
         provider = getattr(self, "_annotation_target_provider", None)
         if not callable(provider):
             return self
-        try:
-            card = provider()
-        except AttributeError as exc:
-            if getattr(exc, "name", None) != "_focused":
-                raise
-            card = None
+        card = provider()
         if card is None or sip.isdeleted(card):
             return self
         return card
@@ -894,14 +890,7 @@ class _ChartCard(QWidget):
     def _options_canvas(self):
         provider = self._options_canvas_provider
         if callable(provider):
-            try:
-                canvas = provider()
-            except AttributeError as exc:
-                # AnalysisSectionPage assigns this provider before ``_focused``
-                # exists. The card's own canvas is that page's pane 0.
-                if getattr(exc, "name", None) != "_focused":
-                    raise
-                canvas = None
+            canvas = provider()
             if canvas is not None:
                 return canvas
         return getattr(self, "canvas", None)

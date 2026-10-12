@@ -9,7 +9,8 @@ def write_head_hdf(path, *, channels, n_scans, delta=3.861e-06,
                    kind="Time data", scan_mode="synchronised multiple",
                    first_value=0, release="6", idx_order="1",
                    data_org="a1b1 a2b2", distribution="linear",
-                   absc_unit="s", absc_quantity="time", absc_sort="calc"):
+                   absc_unit="s", absc_quantity="time", absc_sort="calc",
+                   code_page="936", header_encoding="cp936"):
     """Write a minimal HEAD acoustics datafile-format v4 file for tests."""
     L = []
     a = L.append
@@ -18,7 +19,7 @@ def write_head_hdf(path, *, channels, n_scans, delta=3.861e-06,
     a(f"release:                           {release}")
     a(f"byte order:                        {byte_order}")
     a(f"kind:                              {kind}")
-    a(";#code page:                       936")
+    a(f";#code page:                       {code_page}")
     a(f"start of data:                     {start_of_data}")
     a("nbr of abscissa:                   1")
     a(f"nbr of channel:                    {len(channels)}")
@@ -50,7 +51,7 @@ def write_head_hdf(path, *, channels, n_scans, delta=3.861e-06,
         a(f";#dB reference:                    {c.get('db_reference', '')}")
         a(f"implementation type:               {c.get('impl_type', 'FLOAT32')}")
         a(f";#equalization:                    {c.get('equalization', 'id')}")
-    header = ("\r\n".join(L) + "\r\n").encode("cp936")
+    header = ("\r\n".join(L) + "\r\n").encode(header_encoding)
     if len(header) > start_of_data:
         raise ValueError("header exceeds start_of_data")
     header = header.ljust(start_of_data, b" ")

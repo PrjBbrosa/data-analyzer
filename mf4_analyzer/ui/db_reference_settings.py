@@ -289,12 +289,14 @@ class DbReferenceSettingsStore:
         self._custom = []
         self._hidden_builtin_ids = []
         self._prefer_channel_metadata = True
+        self._snapshot = None
         self._load()
 
     # -- load ----------------------------------------------------------
 
     def _load(self):
         self._warning = ""
+        self._snapshot = None
         raw_pref = self._settings.value(KEY_PREFER_CHANNEL_METADATA, True)
         self._prefer_channel_metadata = _coerce_bool(raw_pref, default=True)
 
@@ -335,16 +337,25 @@ class DbReferenceSettingsStore:
 
     def snapshot(self):
         """An immutable, Qt-free :class:`DbReferenceCatalogSnapshot` safe to
-        inject into worker/Batch code (Task 9)."""
+        inject into worker/Batch code (Task 9).
+
+        The result is cached until :meth:`_load`, a successful :meth:`save`,
+        or a successful :meth:`restore_factory_defaults` dirties the catalog.
+        """
+        cached = self._snapshot
+        if cached is not None:
+            return cached
         system, user = _compute_effective_catalog(
             self._overrides, self._custom, self._hidden_builtin_ids
         )
-        return DbReferenceCatalogSnapshot(
+        cached = DbReferenceCatalogSnapshot(
             system_catalog=system,
             user_catalog=user,
             prefer_channel_metadata=self._prefer_channel_metadata,
             revision=self._revision,
         )
+        self._snapshot = cached
+        return cached
 
     # -- write API ---------------------------------------------------------
 
@@ -396,6 +407,7 @@ class DbReferenceSettingsStore:
         self._prefer_channel_metadata = bool(prefer_channel_metadata)
         self._warning = ""
         self._revision += 1
+        self._snapshot = None
         return DbReferenceSaveResult(ok=True)
 
     def restore_factory_defaults(self):
@@ -417,6 +429,7 @@ class DbReferenceSettingsStore:
         self._hidden_builtin_ids = []
         self._warning = ""
         self._revision += 1
+        self._snapshot = None
         return DbReferenceSaveResult(ok=True)
 
     def _rollback_key(self, key, prev_value):

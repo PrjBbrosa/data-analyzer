@@ -2059,6 +2059,10 @@ class ProjectIOMixin:
         if ctrl is not None:
             ctrl.clear_all()
 
+        teardown_comparison = getattr(self, "_teardown_comparison_display", None)
+        if callable(teardown_comparison):
+            teardown_comparison()
+
         view_manager = getattr(self, "view_manager", None)
         if view_manager is not None:
             preserved_ids = self._ultraview_time_view_ids_to_preserve()
@@ -2488,6 +2492,7 @@ class ProjectIOMixin:
     def _analysis_views_payload(self) -> dict:
         """Analysis views plus optional cross-view relations, keyed by view id."""
         payload = {}
+        dropped_relation = False
         comp = self._comparison() if hasattr(self, "_comparison") else None
         for sec, mgr in self.analysis_managers.items():
             block = {
@@ -2495,10 +2500,22 @@ class ProjectIOMixin:
                 "views": [view.to_dict() for view in mgr.views],
             }
             if comp is not None:
+                alive = {str(view.view_id) for view in mgr.views}
                 relations = comp.relations_payload(sec)
-                if relations:
-                    block["comparisons"] = relations
+                kept = {}
+                for host_id, row in relations.items():
+                    peer_id = str((row or {}).get("peer") or "")
+                    if str(host_id) in alive and peer_id in alive:
+                        kept[host_id] = row
+                    else:
+                        dropped_relation = True
+                if kept:
+                    block["comparisons"] = kept
             payload[sec] = block
+        if dropped_relation:
+            logger.info(
+                "Dropped analysis comparison rows whose host or peer view is gone"
+            )
         return payload
 
     def _assemble_project_document(self, path, saved_mode=None):
@@ -2994,6 +3011,9 @@ class ProjectIOMixin:
     def _commit_project_session_end(self):
         """Destructive half of close/new: invalidate, clean owners, unbind."""
         self._invalidate_session_owned_deferred_work()
+        teardown_comparison = getattr(self, "_teardown_comparison_display", None)
+        if callable(teardown_comparison):
+            teardown_comparison()
         if self.files:
             self.close_all(force=True)
         else:

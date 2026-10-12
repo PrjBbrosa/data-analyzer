@@ -523,6 +523,80 @@ def test_save_dialog_cancel_does_not_grab(qapp, stack, monkeypatch):
     assert calls == []
 
 
+def test_history_step_to_baseline_emits_home(qapp, stack):
+    stack.set_mode("order")
+    card = stack.page_for_mode["order"]._cards[0]
+    canvas = card.canvas
+    toolbar = card.toolbar
+    _plot_heatmap(card)
+    qapp.processEvents()
+    canvas._plot.vb.setXRange(2.0, 4.0, padding=0)
+    canvas._plot.vb.sigRangeChangedManually.emit([True, False])
+    qapp.processEvents()
+    toolbar._flush_pending_history()
+    assert toolbar._view_pointer > 0
+    seen = []
+
+    def _record(action, _axes):
+        seen.append(action)
+
+    canvas.viewport_action_committed.connect(_record)
+    toolbar.back()
+    qapp.processEvents()
+    assert seen[-1] == "home"
+
+
+def test_rebind_clears_history_when_the_view_changes(qapp, stack):
+    stack.set_mode("order")
+    card = stack.page_for_mode["order"]._cards[0]
+    canvas = card.canvas
+    toolbar = card.toolbar
+    _plot_heatmap(card)
+    qapp.processEvents()
+    canvas._plot.vb.setXRange(2.0, 4.0, padding=0)
+    canvas._plot.vb.sigRangeChangedManually.emit([True, False])
+    qapp.processEvents()
+    toolbar._flush_pending_history()
+    assert len(toolbar._view_stack) > 1
+    canvas._result = object()
+    toolbar.rebind_history_capture()
+    assert len(toolbar._view_stack) == 1
+    assert toolbar._view_pointer == 0
+
+
+def test_exit_split_discards_the_hidden_peer_history(qapp, stack):
+    cards = _split(stack, "time")
+    toolbar = cards[1].toolbar
+    toolbar._pending_snap = {"marker": ((0.0, 1.0), (0.0, 1.0))}
+    toolbar._history_commit_armed = True
+    toolbar._history_timer.start()
+    stack.exit_split()
+    assert toolbar._history_commit_armed is False
+    assert toolbar._pending_snap is None
+    assert toolbar._history_timer.isActive() is False
+
+
+def test_card_focused_is_explicit_and_attribute_errors_propagate(qapp, stack):
+    card = stack._time_card
+    assert card._focused is None
+
+    class _Probe:
+        pass
+
+    probe = _Probe()
+
+    def _missing_focused():
+        return probe._focused
+
+    card._annotation_target_provider = _missing_focused
+    with pytest.raises(AttributeError) as exc:
+        card._annotation_target_card()
+    assert exc.value.name == "_focused"
+    with pytest.raises(AttributeError) as options_exc:
+        card._options_canvas_provider = _missing_focused
+    assert options_exc.value.name == "_focused"
+
+
 def _count_color(image, color):
     hits = 0
     target = (color.red(), color.green(), color.blue())

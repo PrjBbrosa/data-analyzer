@@ -300,6 +300,9 @@ lesson by default.
 | [Cache availability does not authorize result publication](analysis-cache-is-not-result-publication-authority.md) | Changing analysis parameter signals, cache restoration, display-only callbacks, project restoration, or asynchronous result admission. | See lesson |
 | [Comparison tabs project remembered relations through production wiring](comparison-tabs-project-remembered-relations.md) | Changing analysis View navigation, comparison focus, or half-color tab indicators. | See lesson |
 | [Result cache tokens must be unique across canvases](result-cache-tokens-must-be-unique-across-canvases.md) | Caching transformed results that can move between host, peer, or restored canvases. | See lesson |
+| [Heatmap Natural Window Comes From The Current Matrix](heatmap-natural-window-from-current-matrix.md) | Changing automatic heatmap color windows, view switching, or split color-scale lock. | See lesson |
+| [Ending A Comparison Must Reproject The Surviving View](comparison-implicit-end-reprojects-host.md) | Deleting a comparison peer, closing other views, or closing all files while a peer holds focus. | See lesson |
+| [Analysis Log Ranges Are Engineering Values](analysis-log-scale-engineering-range.md) | Changing FFT or spectrum log scale, `plot_spectra`, or chart-options range apply. | See lesson |
 
 ## Selection Rules
 

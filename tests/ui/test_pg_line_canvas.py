@@ -4253,3 +4253,70 @@ def test_chart_options_targets_are_split_and_preview_skips_spectrum_policy(
     canvas._edit_time_curve_appearance(0)
     assert captured["target"] == "preview"
     assert captured["policy"] is None
+
+
+def _amp_handle(canvas):
+    from mf4_analyzer.ui._axis_handle import PgAxisHandle
+
+    return PgAxisHandle(canvas._plot_amp, owner_canvas=canvas)
+
+
+def test_plot_spectra_log_y_manual_range_stays_engineering(canvas):
+    canvas.set_user_appearances({"spectrum": {"y_scale": "log"}})
+    canvas.plot_spectra(
+        [_entry()], xlim=(0.0, 500.0), amp_label="Amplitude", title="FFT",
+        y_auto=False, y_min=1.0, y_max=100.0,
+    )
+    handle = _amp_handle(canvas)
+    assert handle.get_yscale() == "log"
+    assert handle.get_engineering_ylim() == pytest.approx((1.0, 100.0))
+    assert handle.get_ylim() == pytest.approx((0.0, 2.0))
+
+
+def test_plot_spectra_log_auto_y_uses_minimum_positive_amplitude(canvas):
+    canvas.set_user_appearances({"spectrum": {"y_scale": "log"}})
+    entry = _entry()
+    entry["amp"] = np.linspace(0.0, 4.0, entry["freq"].size)
+    canvas.plot_spectra(
+        [entry], xlim=(0.0, 500.0), amp_label="Amplitude", title="FFT",
+    )
+    lo, hi = _amp_handle(canvas).get_engineering_ylim()
+    assert lo > 1e-300
+    assert hi > lo
+    assert hi < 1e6
+    assert lo == pytest.approx(float(np.min(entry["amp"][entry["amp"] > 0])))
+
+
+def test_plot_spectra_log_x_manual_and_auto_stay_engineering(canvas):
+    entry = _entry()
+    canvas.set_user_appearances({"spectrum": {"x_scale": "log"}})
+    canvas.plot_spectra(
+        [entry], xlim=(1.0, 100.0), amp_label="Amplitude", title="FFT",
+    )
+    handle = _amp_handle(canvas)
+    assert handle.get_xscale() == "log"
+    assert handle.get_engineering_xlim() == pytest.approx((1.0, 100.0))
+
+    canvas.plot_spectra(
+        [entry], xlim=(0.0, 500.0), amp_label="Amplitude", title="FFT",
+    )
+    lo, hi = _amp_handle(canvas).get_engineering_xlim()
+    positive = entry["freq"][entry["freq"] > 0]
+    assert lo == pytest.approx(float(np.min(positive)))
+    assert hi == pytest.approx(500.0)
+    assert lo > 0.0
+
+
+def test_fit_active_spectrum_y_on_log_axis_stays_positive(canvas):
+    canvas.set_user_appearances({"spectrum": {"y_scale": "log"}})
+    entry = _entry()
+    entry["amp"] = np.linspace(0.0, 4.0, entry["freq"].size)
+    canvas.plot_spectra(
+        [entry], xlim=(0.0, 500.0), amp_label="Amplitude", title="FFT",
+    )
+    canvas._plot_amp.setYRange(-200.0, 200.0, padding=0)
+    assert canvas._fit_active_spectrum_y() is True
+    lo, hi = _amp_handle(canvas).get_engineering_ylim()
+    assert lo > 1e-300
+    assert hi > lo
+    assert hi < 1e6

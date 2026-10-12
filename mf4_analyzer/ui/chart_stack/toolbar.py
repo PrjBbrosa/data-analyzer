@@ -529,6 +529,7 @@ class PgNavigationToolbar(QToolBar):
         # Entry shape: {channel_name: (xlim, ylim)}.
         self._view_stack: list = []
         self._view_pointer: int = -1
+        self._history_binding_token = None
         self._view_stack_max = 32
         # Guard set True while restoring (back/forward/home) so the range-
         # change signal those restores fire does NOT re-push a history entry.
@@ -713,7 +714,7 @@ class PgNavigationToolbar(QToolBar):
             return None
         return getter(key)
 
-    def _restore_view(self, snap):
+    def _restore_view(self, snap, *, baseline=False):
         """Apply a snapshot onto the current axes.
 
         Wrapped in the ``_restoring`` guard by the caller so the resulting
@@ -729,12 +730,11 @@ class PgNavigationToolbar(QToolBar):
             xlim, ylim = snap[self._XY_VIEWPORT_KEY]
             if not canvas.restore_xy_viewport(xlim, ylim):
                 return
-            # History navigation is a user viewport change. Project restore
-            # calls the canvas directly and stays silent. ``home`` is reserved
-            # for Home so a history step cannot mark the range automatic.
+            # The baseline step is a home action. Any later history step stays
+            # a user action. Project restore calls the canvas directly.
             signal = getattr(canvas, "viewport_action_committed", None)
             if signal is not None:
-                signal.emit("user", ("x", "y"))
+                signal.emit("home" if baseline else "user", ("x", "y"))
             return
         channel_lines = getattr(canvas, "_channel_lines", None) or {}
         for key, (xlim, ylim) in snap.items():
@@ -775,12 +775,47 @@ class PgNavigationToolbar(QToolBar):
                     self._range_conns.append((vb, self._on_manual_range_changed))
                 except Exception:
                     continue
+        token = self._history_content_token()
+        if token != self._history_binding_token:
+            # A new View must not replay the previous View's stack.
+            # The same channel set (a time-domain replot) keeps this token.
+            self._view_stack = []
+            self._view_pointer = -1
+            self._history_binding_token = token
         if not self._view_stack:
             snap = self._snapshot_view()
             if snap:
                 self._view_stack = [snap]
                 self._view_pointer = 0
         self._refresh_history_actions()
+
+    def _history_content_token(self):
+        """Identity of the plotted content, stable across a same-channel replot."""
+
+        canvas = self._canvas
+        result = getattr(canvas, "_result", None)
+        if result is not None:
+            return ("result", id(result))
+        entries = getattr(canvas, "_entries", None)
+        if entries:
+            return ("entries", id(entries))
+        channel_lines = getattr(canvas, "_channel_lines", None)
+        keys = ()
+        if channel_lines is not None and hasattr(channel_lines, "composite_items"):
+            keys = tuple(
+                key for key, _label, _pair in channel_lines.composite_items()
+            )
+        elif channel_lines is not None:
+            try:
+                keys = tuple(channel_lines.keys())
+            except Exception:
+                keys = ()
+        if keys:
+            return ("channels", keys)
+        image = getattr(getattr(canvas, "_img", None), "image", None)
+        if image is not None:
+            return ("image", id(image))
+        return ("canvas", id(canvas))
 
     def _connect_viewport_history(self):
         signal = getattr(self._canvas, "viewport_action_committed", None)
@@ -996,7 +1031,10 @@ class PgNavigationToolbar(QToolBar):
             self._view_pointer += 1
         self._restoring = True
         try:
-            self._restore_view(self._view_stack[self._view_pointer])
+            self._restore_view(
+                self._view_stack[self._view_pointer],
+                baseline=self._view_pointer == 0,
+            )
         finally:
             self._restoring = False
         self._refresh_history_actions()

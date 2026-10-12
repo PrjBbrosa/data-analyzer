@@ -607,6 +607,53 @@ def test_split_fft_time_heatmap_and_slice_plot_areas_align(slice_page, qapp):
         assert canvas._glw.ci.geometry().width() <= canvas._glw.width() + 1.0
 
 
+def test_split_fft_time_colorbar_drag_finish_keeps_plot_areas_aligned(slice_page, qapp):
+    """A finished colorbar drag must not locally re-pin one pane's axis."""
+    slice_page.enter_split()
+    qapp.processEvents()
+    slice_page.pane_canvas(0).plot_result(
+        _slice_result('short', fmax=500.0, scale=1.0),
+        amplitude_mode='amplitude_db',
+        z_auto=True,
+    )
+    slice_page.pane_canvas(1).plot_result(
+        _slice_result(
+            'very_long_channel_name_for_alignment_probe',
+            fmax=5000.0,
+            scale=1000.0,
+            unit='m/s^2',
+        ),
+        amplitude_mode='amplitude_db',
+        z_auto=True,
+    )
+    for _ in range(3):
+        qapp.processEvents()
+
+    pane = slice_page.pane_canvas(1)
+    assert pane._split_aligned
+    pane._cbar.setLevels((-1.0e6, 1.0e6))
+    pane._on_cbar_levels_finished(pane._cbar)
+    for _ in range(4):
+        qapp.processEvents()
+
+    c0 = slice_page.pane_canvas(0)
+    c1 = slice_page.pane_canvas(1)
+    main0 = c0._plot.vb.sceneBoundingRect()
+    main1 = c1._plot.vb.sceneBoundingRect()
+    slice0 = c0._slice_plot.vb.sceneBoundingRect()
+    slice1 = c1._slice_plot.vb.sceneBoundingRect()
+    assert main0.left() == pytest.approx(main1.left(), abs=1.0)
+    assert main0.width() == pytest.approx(main1.width(), abs=1.0)
+    assert slice0.left() == pytest.approx(slice1.left(), abs=1.0)
+    assert slice0.width() == pytest.approx(slice1.width(), abs=1.0)
+    for canvas, main_rect, slice_rect in (
+        (c0, main0, slice0),
+        (c1, main1, slice1),
+    ):
+        assert slice_rect.left() == pytest.approx(main_rect.left(), abs=1.0)
+        assert slice_rect.right() == pytest.approx(main_rect.right(), abs=1.0)
+
+
 def test_levels_lock_syncs_both_heatmaps(page):
     page.enter_split()
     for i, peak in ((0, 100.0), (1, 50.0)):

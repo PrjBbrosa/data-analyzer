@@ -364,7 +364,7 @@ def test_late_completion_paints_the_view_that_dispatched_it(two_file_win, monkey
     ctx = {
         "view_id": peer.view_id,
         "pane_idx": 1,
-        "pane_token": id(peer.panes[1]),
+        "pane_token": win._fft_time_pane_token(peer.panes[1]),
         "source": tuple(peer.panes[1].sources[0]),
     }
     win._on_fft_time_render_requested(ctx, result, False)
@@ -828,3 +828,80 @@ def test_menu_actions_keep_views_and_submit_no_compute(two_file_win, monkeypatch
     assert win._analysis_page("fft")._peer_host is None
     assert len(mgr.views) == 1
     assert calls == []
+
+
+@pytest.mark.parametrize("section", SECTIONS)
+def test_peer_pane_appearance_follows_the_bound_pane(two_file_win, section):
+    win = two_file_win
+    page = _enter(win, section)
+    _mgr, host, peer = _pair(win, section)
+    host.add_pane()
+    peer.add_pane()
+    assert win.open_comparison(section, host.view_id, peer.view_id)
+    assert win.focus_comparison(section, peer.view_id, 0)
+    canvas = page.peer_cards()[1].canvas
+    adapter = canvas.analysis_range_adapter
+    assert adapter is not None
+    assert adapter[1].args[1] == 1
+    signal = getattr(canvas, "user_appearance_committed", None)
+    if signal is None:
+        # Heatmap and FRF canvases do not emit appearance; the pane index is
+        # the range-adapter binding above.
+        return
+    role = "spectrum"
+    signal.emit(role, {"title": "peer-pane-1"})
+    assert peer.panes[1].chart_appearances[role]["title"] == "peer-pane-1"
+    assert role not in (peer.panes[0].chart_appearances or {})
+    assert role not in (host.panes[1].chart_appearances or {})
+
+
+@pytest.mark.parametrize("section", ("fft_time", "order", "frf"))
+def test_return_to_section_renders_each_comparison_side_once(two_file_win, monkeypatch, section):
+    win = two_file_win
+    _enter(win, section)
+    _mgr, host, peer = _pair(win, section)
+    assert win.open_comparison(section, host.view_id, peer.view_id)
+    QApplication.processEvents()
+    calls = []
+    original = win._render_comparison_view
+
+    def wrapped(sec, state):
+        calls.append(str(state.view_id))
+        return original(sec, state)
+
+    monkeypatch.setattr(win, "_render_comparison_view", wrapped)
+    win.toolbar._set_mode("time")
+    QApplication.processEvents()
+    calls.clear()
+    win.toolbar._set_mode(section)
+    QApplication.processEvents()
+    assert calls.count(str(host.view_id)) == 1
+    assert calls.count(str(peer.view_id)) == 1
+
+
+def test_comparison_canvas_key_is_not_object_id(two_file_win):
+    win = two_file_win
+    page = _enter(win, "fft")
+    _mgr, host, peer = _pair(win, "fft")
+    assert win.open_comparison("fft", host.view_id, peer.view_id)
+    canvas = page.pane_canvas(0)
+    comp = win._comparison()
+    store = getattr(comp, "_by_token", None)
+    if store is None:
+        store = comp._by_canvas
+    assert id(canvas) not in store
+    assert comp.target_for_canvas(canvas).view_id == host.view_id
+
+
+def test_fft_time_pane_token_is_stable_and_not_object_id(two_file_win):
+    win = two_file_win
+    _enter(win, "fft_time")
+    _mgr, host, peer = _pair(win, "fft_time")
+    pane = host.panes[0]
+    token = win._fft_time_pane_token(pane)
+    assert isinstance(token, int)
+    assert token != id(pane)
+    assert win._fft_time_pane_token(pane) == token
+    other = win._fft_time_pane_token(peer.panes[0])
+    assert other != token
+    assert other != id(peer.panes[0])

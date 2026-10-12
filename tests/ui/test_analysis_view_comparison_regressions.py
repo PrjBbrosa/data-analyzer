@@ -223,6 +223,203 @@ def test_colorbar_echo_follows_bound_pane_and_persists(win, section):
     assert peer.params['z_ceiling'] == 20.0
     assert peer.params['z_auto'] is False
 
+def _host_index(mgr, state):
+    return next(i for i, item in enumerate(mgr.views) if item.view_id == state.view_id)
+
+
+def _open_peer_focus(win, section):
+    page, mgr, host, peer = prep(win, section)
+    host.params['window'] = 'hanning'
+    host.params['t_win_s'] = 1.0
+    peer.params['window'] = 'hamming'
+    peer.params['t_win_s'] = 0.25
+    assert _host_index(mgr, host) < _host_index(mgr, peer)
+    assert win.open_comparison(section, host.view_id, peer.view_id)
+    assert win.focus_comparison(section, peer.view_id, 0)
+    assert win._analysis_ctx(section).current_params()['window'] == 'hamming'
+    return page, mgr, host, peer
+
+
+@pytest.mark.parametrize('section', ['fft', 'fft_time', 'order', 'frf'])
+def test_delete_focused_peer_restores_host_inspector(win, section):
+    page, mgr, host, peer = _open_peer_focus(win, section)
+    win._on_analysis_delete(section, _host_index(mgr, peer))
+    ctx = win._analysis_ctx(section)
+    assert ctx.current_params()['window'] == 'hanning'
+    win._capture_active_analysis_view(section)
+    assert host.params['window'] == 'hanning'
+    # Order's inspector has no segment length, so focus capture drops a key
+    # that was only stamped on the state. Sections that still carry it must
+    # keep the host value.
+    if 't_win_s' in host.params:
+        assert host.params['t_win_s'] == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize('section', ['fft', 'fft_time', 'order', 'frf'])
+def test_close_others_keeping_lower_host_restores_host_inspector(win, section, monkeypatch):
+    page, mgr, host, peer = _open_peer_focus(win, section)
+    monkeypatch.setattr(win, '_confirm_close_other_views', lambda *args, **kwargs: True)
+    win._on_analysis_close_others(section, host.view_id)
+    ctx = win._analysis_ctx(section)
+    assert ctx.current_params()['window'] == 'hanning'
+    win._capture_active_analysis_view(section)
+    assert host.params['window'] == 'hanning'
+    if 't_win_s' in host.params:
+        assert host.params['t_win_s'] == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize('section', ['fft', 'fft_time', 'order', 'frf'])
+def test_close_all_views_while_peer_focused_projects_the_surviving_view(win, section, monkeypatch):
+    page, mgr, host, peer = _open_peer_focus(win, section)
+    monkeypatch.setattr(win, '_confirm_close_all_views', lambda *args, **kwargs: True)
+    win._on_analysis_close_all(section)
+    ctx = win._analysis_ctx(section)
+    survivor = mgr.get(mgr.active)
+    visible = ctx.current_params()['window']
+    assert visible == 'hanning'
+    win._capture_active_analysis_view(section)
+    assert survivor.params['window'] == visible
+    assert survivor.params['window'] != 'hamming'
+
+
+@pytest.mark.parametrize('section', ['fft', 'fft_time', 'order', 'frf'])
+def test_host_range_adapter_does_not_copy_peer_inspector(win, section):
+    page, mgr, host, peer = _open_peer_focus(win, section)
+    peer_before = dict(peer.params)
+    host_window = host.params['window']
+    host_span = host.params.get('t_win_s')
+    adapter = getattr(page.pane_canvas(0), 'analysis_range_adapter', None)
+    assert adapter is not None
+    adapter[1]({'x': (False, (10, 100))})
+    assert host.params['window'] == host_window
+    if host_span is not None:
+        assert host.params['t_win_s'] == pytest.approx(host_span)
+    assert host.params['x_auto'] is False
+    assert host.params['x_min'] == pytest.approx(10)
+    assert host.params['x_max'] == pytest.approx(100)
+    assert peer.params == peer_before
+    peer_canvas = page.peer_cards()[0].canvas
+    peer_adapter = peer_canvas.analysis_range_adapter
+    assert peer_adapter is not None
+    peer_adapter[1]({'x': (False, (3, 30))})
+    assert peer.params['window'] == 'hamming'
+    if 't_win_s' in peer_before:
+        assert peer.params['t_win_s'] == pytest.approx(peer_before['t_win_s'])
+    assert peer.params['x_auto'] is False
+    assert peer.params['x_min'] == pytest.approx(3)
+    assert peer.params['x_max'] == pytest.approx(30)
+    assert host.params['window'] == host_window
+    assert host.params['x_min'] == pytest.approx(10)
+
+
+def test_frf_host_compute_ignores_peer_inspector(win):
+    page, mgr, host, peer = _open_peer_focus(win, 'frf')
+    host.params.pop('overlap', None)
+    win.inspector.frf_ctx.apply_params({'overlap': 0.1, 'window': 'flattop'})
+    assert win._analysis_state_for_capture('frf') is peer
+    values = win._frf_compute_values_for_state(host)
+    assert values['window'] == 'hanning'
+    assert values['t_win_s'] == pytest.approx(1.0)
+    assert values['overlap'] == pytest.approx(0.5)
+
+
+def test_two_quick_frf_computes_keep_facts_aligned(qtbot):
+    """U-C1: a second same-parameter compute must leave facts on that result."""
+    win, _fid, _state, _time = _window_with_pair(qtbot, n=4000)
+    win.toolbar._set_mode('frf')
+    win.chart_stack.ensure_analysis_page_ready('frf')
+    ctx = win.inspector.frf_ctx
+    ctx.apply_params(
+        {'t_win_s': 0.5, 'overlap': 0.5, 'window': 'hanning'},
+        emit_changes=True,
+    )
+    win.do_frf()
+    win.do_frf()
+    canvas = win._analysis_page('frf').pane_canvas(0)
+    qtbot.waitUntil(
+        lambda: canvas.has_result() and not win._analysis_jobs.is_running('frf'),
+        timeout=5000,
+    )
+    facts = ctx.effective_facts_text()
+    result = canvas._result
+    assert f'{int(result.effective.segments)}' in facts
+    assert result.effective.requested_t_win_s == pytest.approx(0.5)
+    assert not ctx.effective_facts_is_stale()
+
+
+def test_host_frf_result_while_peer_focused_keeps_host_facts(qtbot):
+    """U-C2: a late host result must not publish the peer Inspector as facts."""
+    from mf4_analyzer.signal.frf import FrfParams, compute_frf
+
+    win, fid, host, time = _window_with_pair(qtbot, n=4000)
+    win.toolbar._set_mode('frf')
+    win.chart_stack.ensure_analysis_page_ready('frf')
+    mgr = win.analysis_managers['frf']
+    mgr.new_view(activate=False)
+    peer = mgr.get(1)
+    peer.attached_file_ids = [fid]
+    peer.panes[0].input_source = (fid, 'input')
+    peer.panes[0].output_source = (fid, 'output')
+    host.params.update(window='hanning', t_win_s=1.0, overlap=0.0)
+    peer.params.update(window='hamming', t_win_s=0.25, overlap=0.1)
+    assert win.open_comparison('frf', host.view_id, peer.view_id)
+    assert win.focus_comparison('frf', peer.view_id, 0)
+    ctx = win.inspector.frf_ctx
+    ctx.apply_params(
+        {'window': 'hamming', 't_win_s': 0.25, 'overlap': 0.1},
+        emit_changes=True,
+    )
+    values = win._frf_compute_values_for_state(host)
+    frame = win.files[fid].data
+    result = compute_frf(
+        frame['input'].to_numpy(),
+        frame['output'].to_numpy(),
+        fs=1000.0,
+        params=FrfParams(**values),
+        input_time=time,
+        output_time=time,
+    )
+    pane = host.panes[0]
+    request = snapshot_request(host, pane)
+    win._on_frf_render_requested(
+        {
+            'view_id': host.view_id,
+            'pane_idx': 0,
+            'request_snapshot': request,
+            'request_pane': pane,
+            'analysis_key': ('host-late-result',),
+        },
+        result,
+        False,
+    )
+    canvas = win._comparison().canvas_for('frf', host.view_id, 0)
+    assert canvas is not None and canvas.has_result()
+    assert canvas._result.effective.requested_t_win_s == pytest.approx(
+        values['t_win_s']
+    )
+    assert canvas._result.effective.window == values['window']
+    facts = ctx.effective_facts_text()
+    # Peer focus owns the Inspector card, so this completion does not publish.
+    # The card must not be refilled from the live peer controls either.
+    assert 'hamming' not in facts.lower()
+    assert '0.25' not in facts
+    if facts:
+        assert f'{int(result.effective.segments)}' in facts
+
+
+@pytest.mark.parametrize('section', ['fft', 'fft_time', 'order', 'frf'])
+def test_duplicate_host_while_peer_focused_copies_host_params(win, section):
+    """U-C3: duplicating the host must not copy the focused peer's params."""
+    _page, mgr, host, peer = _open_peer_focus(win, section)
+    before = {state.view_id for state in mgr.views}
+    win._on_analysis_duplicate(section, _host_index(mgr, host))
+    copies = [state for state in mgr.views if state.view_id not in before]
+    assert len(copies) == 1
+    assert copies[0].params['window'] == 'hanning'
+    assert host.params['window'] == 'hanning'
+    assert peer.params['window'] == 'hamming'
+
+
 def test_comparison_orientation_does_not_compress_one_frf_pane(win, qtbot):
     from PyQt5.QtCore import Qt
     from PyQt5.QtWidgets import QApplication

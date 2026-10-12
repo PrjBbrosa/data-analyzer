@@ -566,6 +566,10 @@ class CursorPill(QFrame):
     unpin_requested = pyqtSignal()
     close_requested = pyqtSignal()
     moved = pyqtSignal()
+    # Value strings are unique per sample. The cache is an LRU so a long
+    # live update cannot grow without limit; a structural signature change
+    # still replaces the dict outright.
+    _TEXT_MEASURE_CACHE_LIMIT = 256
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1131,14 +1135,18 @@ class CursorPill(QFrame):
         shape = ''.join(part if index % 2 else re.sub(r'[0-9]', '#', part)
                         for index, part in enumerate(parts))
         key = ('primary-digits', shape, self._primary.font().key())
-        if key not in self._text_measure_cache:
-            self._text_measure_cache[key] = max(
+        cached = self._text_measure_cache.get(key)
+        if cached is None:
+            cached = max(
                 self._primary_html_width(''.join(
                     part if index % 2 else re.sub(r'[0-9]', digit, part)
                     for index, part in enumerate(parts)))
                 for digit in '0123456789'
             )
-        return self._text_measure_cache[key]
+            self._remember_text_measure(key, cached)
+        else:
+            self._remember_text_measure(key, cached)
+        return cached
 
     def _primary_doc_size(self, width=None):
         if not (self._primary.text() or "").strip():
@@ -1263,6 +1271,22 @@ class CursorPill(QFrame):
     def is_user_placed(self):
         return self._user_placed
 
+    def _release_display_projection(self):
+        """Drop a pending/unavailable projection, including retained geometry.
+
+        Hides the previous detail body and releases the primary minimum
+        height so the next ready sample measures from a clean card.
+        """
+        self._dual_rows = []
+        self._frequency_dual_rows = []
+        self._single_full_detail = ""
+        self._single_mini_detail = ""
+        self._single_tooltip = ""
+        self._clear_content_tooltip()
+        self._detail.clear()
+        self._detail.setVisible(False)
+        self._clear_display_projection()
+
     def _clear_display_projection(self):
         self._display_projection = None
         self._display_layout_category = "natural"
@@ -1329,6 +1353,9 @@ class CursorPill(QFrame):
 
     def set_display_projection(self, projection):
         """Show a structured projection and adapt it to the parent safe rect."""
+        if projection is None:
+            self._release_display_projection()
+            return
         old_right = self.geometry().right()
         old_top = self.y()
         if self._avoidance_restore_anchor is not None:
@@ -1677,15 +1704,25 @@ class CursorPill(QFrame):
         self._value_envelope_width = envelope
         return envelope
 
+    def _remember_text_measure(self, key, width):
+        cache = self._text_measure_cache
+        if key in cache:
+            del cache[key]
+        cache[key] = width
+        while len(cache) > self._TEXT_MEASURE_CACHE_LIMIT:
+            cache.pop(next(iter(cache)))
+        return width
+
     def _measure_span(self, text, style):
         key = (style, str(text))
-        if key not in self._text_measure_cache:
+        cached = self._text_measure_cache.get(key)
+        if cached is None:
             doc = QTextDocument()
             doc.setDocumentMargin(0)
             doc.setDefaultFont(self._detail.font())
             doc.setHtml(f'<span style="font-size:11px;{style}">{escape(str(text))}</span>')
-            self._text_measure_cache[key] = float(doc.idealWidth())
-        return self._text_measure_cache[key]
+            cached = float(doc.idealWidth())
+        return self._remember_text_measure(key, cached)
 
     def _measure_mono_text(self, text):
         # Delta is bold; reserve the wider variant for every shared column.

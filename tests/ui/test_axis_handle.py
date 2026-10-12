@@ -692,3 +692,22 @@ def test_autoscale_x_still_uses_owner_raw_union(qapp):
 
     assert "union" in recorded
     assert ((4.0, 9.0), True) in recorded
+
+
+def test_write_axis_limits_warns_when_engineering_range_is_rejected(qapp, caplog):
+    import logging
+
+    from mf4_analyzer.ui.dialogs.chart_options import ChartOptionsDialog
+
+    handle, _canvas = _pg_time_handle(qapp)
+    handle.set_yscale("log")
+    handle.set_engineering_ylim(1.0, 10.0)
+    before = handle.get_engineering_ylim()
+    dialog = ChartOptionsDialog(None, handle)
+    with caplog.at_level(logging.WARNING):
+        dialog._write_axis_limits("y", 0.0, 10.0)
+    assert handle.get_engineering_ylim() == pytest.approx(before)
+    assert any(
+        "rejected engineering y range" in record.message
+        for record in caplog.records
+    )

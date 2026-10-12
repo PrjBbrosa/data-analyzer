@@ -20,6 +20,7 @@ from .plot_helpers import _cursor_identity_parts
 HIDDEN_CHANNEL_TEXT = "已隐藏"
 UNCHECKED_TEXT = "未勾选"
 UNAVAILABLE_TEXT = "无数据"
+SOURCE_CHANGED_TEXT = "来源已更换"
 
 
 def _finite(value):
@@ -35,6 +36,10 @@ def _finite(value):
 
 
 def _reconcile_sample(intent, sample, *, bound, hidden):
+    if getattr(intent, "domain", None) == "frf":
+        # FRF rows are |H| / phase / coherence, not time-domain channels.
+        # A missing or replaced source pair is one unavailable sample.
+        return _reconcile_frf_sample(intent, sample)
     if not intent.bindings:
         return sample, intent, False
     evaluated = {}
@@ -90,6 +95,38 @@ def _reconcile_sample(intent, sample, *, bound, hidden):
         )
         sample = replace(sample, channels=tuple(channels), extrema=extrema)
     return sample, next_intent, False
+
+
+def _reconcile_frf_sample(intent, sample):
+    """Keep a real FRF sample, or one diagnostic sample with no channel rows."""
+    if sample is not None and getattr(sample, "frf_sample", None) is not None:
+        return sample, intent, False
+    diagnostic = SOURCE_CHANGED_TEXT
+    generation = revision = None
+    x, ax, bx = intent.x, intent.ax, intent.bx
+    if sample is not None:
+        existing = str(getattr(sample, "diagnostic", "") or "").strip()
+        if existing:
+            diagnostic = existing
+        generation = getattr(sample, "binding_generation", None)
+        revision = getattr(sample, "data_revision", None)
+        if getattr(sample, "x", None) is not None:
+            x = sample.x
+        if getattr(sample, "ax", None) is not None:
+            ax = sample.ax
+        if getattr(sample, "bx", None) is not None:
+            bx = sample.bx
+    return PinnedCursorSample(
+        binding_generation=generation,
+        data_revision=revision,
+        domain="frf",
+        mode=intent.mode,
+        x=x,
+        ax=ax,
+        bx=bx,
+        diagnostic=diagnostic,
+        channels=(),
+    ), intent, False
 
 
 def _binding_key(binding):

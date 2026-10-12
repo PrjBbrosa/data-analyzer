@@ -446,6 +446,9 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         # from their z_auto argument. Levels matching the matrix min/max is
         # not a proxy: the dB auto window is a percentile span, not nanmin/max.
         self._z_color_auto = True
+        # True from the first colorbar drag sample until sigLevelsChangeFinished.
+        # Commits wait for release; the drag itself only projects levels.
+        self._cbar_drag_open = False
         # "db" reuses _auto_db_window; "bounds" reuses _finite_data_bounds.
         self._color_window_policy = "bounds"
         self._split_title_width = None
@@ -562,11 +565,6 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         # The epoch token is stamped onto each distinct result the first time
         # it is rendered, so it travels with the object and never collides.
         self._db_cache = None   # (token, db_ref) -> ndarray
-        # Set by plot_result when z_auto=True so the caller can read back
-        # the absolute vmin/vmax that were actually applied and write them
-        # into the inspector spins (blockSignals) — eliminating the jump
-        # when the user switches from auto to manual mode.
-        self._last_auto_levels: tuple[float, float] | None = None
         # dB-reference-defaults Task 7 (spec §8.3.1): the dB reference the
         # last db-mode render on THIS canvas actually used (None until the
         # first db-mode render). reference_delta_since_last_render() diffs
@@ -577,8 +575,8 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         # The (vmin, vmax) plot_result actually applied AFTER shifting a
         # manual window for a reference change this render, or None when no
         # shift happened. _render_fft_time_on reads this to write the
-        # shifted numbers back into the inspector spins -- parity with the
-        # existing _last_auto_levels write-back for the auto branch.
+        # shifted numbers back into the inspector spins. Auto windows are
+        # re-derived from the current matrix, not stored on the canvas.
         self._last_manual_levels_shifted: tuple[float, float] | None = None
         # Latest explicit label context (spec §15 C2/C3): set by
         # plot_result / plot_or_update_heatmap from the caller-supplied
@@ -1456,6 +1454,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         self._raw_title = ''
         self._apply_title_text()
         self._z_color_auto = True
+        self._cbar_drag_open = False
         self._color_window_policy = "bounds"
         self._matrix_disp = None
         self._matrix_amp_valid = None
@@ -1886,16 +1885,12 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
                 # reference-delta shift (spec §8.3.1: "自动色阶不需处理").
                 window = _auto_db_window(m)
                 if window is None:
-                    # All-non-finite matrix: keep a display placeholder and
-                    # do not advertise auto levels for spin write-back (B5).
+                    # All-non-finite matrix: keep a display placeholder (B5).
+                    # Callers re-read _automatic_color_window(), which is None
+                    # for this matrix, and skip spin write-back.
                     vmin, vmax = 0.0, 1.0
-                    self._last_auto_levels = None
                 else:
                     vmin, vmax = window
-                    # Store the computed absolute window so the caller can
-                    # write it back to the inspector spins (blockSignals),
-                    # making auto→manual a seamless no-jump transition.
-                    self._last_auto_levels = (vmin, vmax)
                 self._last_manual_levels_shifted = None
             else:
                 vmin, vmax = float(z_floor), float(z_ceiling)
@@ -1907,7 +1902,6 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
                     self._last_manual_levels_shifted = (vmin, vmax)
                 else:
                     self._last_manual_levels_shifted = None
-                self._last_auto_levels = None
             cbar = (
                 colorbar_label if colorbar_label is not None
                 else f"Amplitude{unit} (dB re {db_ref:g})"
@@ -2244,10 +2238,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
                 pass
         metrics = {
             'left_axis_width': max(left_widths) if left_widths else 0.0,
-            'colorbar_axis_width': (
-                float(left_axis_width_for_ticks(self._cbar.axis))
-                if self._cbar is not None else 0.0
-            ),
+            'colorbar_axis_width': self._colorbar_axis_width(),
             'main_bottom_axis_height': (
                 bottom_heights[0] if bottom_heights else 0.0
             ),
@@ -2366,7 +2357,6 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
 
     def _mark_color_levels_manual(self, lo: float, hi: float) -> None:
         self._z_color_auto = False
-        self._last_auto_levels = None
         self._panel_amp_range = (float(lo), float(hi))
         self._sync_slice_to_color_policy()
 
@@ -2395,7 +2385,8 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         if reset_baseline:
             self._rendered_levels = legal
         self._z_color_auto = bool(auto)
-        self._last_auto_levels = legal if auto else None
+        # A projected union is presentation only. The natural window stays
+        # _automatic_color_window() of the current matrix.
         self._panel_amp_range = None if auto else legal
         self._sync_slice_to_color_policy()
         return True
@@ -2423,12 +2414,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         if not self._install_color_levels(lo, hi):
             return
         self._z_color_auto = auto
-        if auto:
-            self._last_auto_levels = (lo, hi)
-            self._panel_amp_range = None
-        else:
-            self._last_auto_levels = None
-            self._panel_amp_range = (lo, hi)
+        self._panel_amp_range = None if auto else (lo, hi)
         self._sync_slice_to_color_policy()
         self.color_policy_committed.emit(auto, lo, hi)
 
@@ -2830,8 +2816,9 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         self._cancel_presentation_paint_ack()
         lo, hi = float(bar.levels()[0]), float(bar.levels()[1])
         # A drag is a manual window. Chart-options auto uses a different signal.
+        # The flag stays set until release so listeners project without committing.
         self._z_color_auto = False
-        self._last_auto_levels = None
+        self._cbar_drag_open = True
         # ImageItem levels are already owned by ColorBarItem._update_items.
         # Keep the slice amplitude axis on the same window without a replot.
         if hi > lo:
@@ -2842,7 +2829,28 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         self.levels_changed.emit(lo, hi)
 
     def _on_cbar_levels_finished(self, bar) -> None:
+        # Clear before the commit signal. Listeners treat a raised flag as
+        # an in-progress drag and skip the one-shot release commit.
+        self._cbar_drag_open = False
         self._size_colorbar_value_axis()
+        try:
+            lo, hi = float(bar.levels()[0]), float(bar.levels()[1])
+        except (TypeError, ValueError, IndexError, AttributeError):
+            return
+        self.levels_changed.emit(lo, hi)
+
+    def _colorbar_axis_width(self) -> float:
+        """Tick need and the realized axis width, matching the left axis."""
+        if self._cbar is None:
+            return 0.0
+        try:
+            axis = self._cbar.axis
+            return max(
+                float(left_axis_width_for_ticks(axis)),
+                float(axis.width()),
+            )
+        except Exception:
+            return 0.0
 
     def _size_colorbar_value_axis(self) -> None:
         """Release the library's 45 px numeric-axis pin and fit real tick text.
@@ -2850,8 +2858,16 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         Vertical ``ColorBarItem`` puts values on the right axis and the title
         on the left. The colorband column is a separate fixed-width layout
         cell and must stay untouched.
+
+        While the page owns split alignment, a local pin would move only this
+        pane's colorbar and pull its main plot off the sibling. Ask the page
+        to re-run ``sync_heatmap_layouts`` instead. ``apply_split_layout_alignment``
+        does not call back into this method, so the scheduled sync cannot loop.
         """
         if self._cbar is None:
+            return
+        if self._split_aligned:
+            self.layout_geometry_changed.emit()
             return
         self._activate_graphics_layout()
         axis = getattr(self._cbar, "axis", None)

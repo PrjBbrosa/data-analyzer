@@ -2809,8 +2809,8 @@ def test_plot_result_db_auto_span_tracks_robust_ceiling(qapp):
     assert lo == pytest.approx(ceiling - _AUTO_SPAN_DB)
     assert hi == pytest.approx(min(peak, ceiling + _AUTO_CEILING_HEADROOM_DB))
     assert hi < -100.0
-    # Auto window is stored for the inspector write-back (auto→manual no jump).
-    assert c._last_auto_levels == pytest.approx((lo, hi))
+    # Auto window is the current matrix, for inspector write-back (auto→manual no jump).
+    assert c._automatic_color_window() == pytest.approx((lo, hi))
     c.deleteLater()
 
 
@@ -2849,7 +2849,7 @@ def test_plot_result_db_z_auto_window_uses_30db_span(qapp):
 
     anchor = _robust_db_ceiling(c._matrix_disp, _AUTO_CEILING_PCT)
     peak = float(np.nanmax(c._matrix_disp))
-    vmin, vmax = c._last_auto_levels
+    vmin, vmax = c._automatic_color_window()
     assert vmin == pytest.approx(anchor - _AUTO_SPAN_DB)
     assert vmax == pytest.approx(min(peak, anchor + _AUTO_CEILING_HEADROOM_DB))
     assert c._img.getLevels() == pytest.approx((vmin, vmax))
@@ -4076,10 +4076,12 @@ def test_plot_result_auto_manual_no_jump(qapp):
     auto_lo, auto_hi = (float(x) for x in c._img.getLevels())
 
     # Step 2: render in manual mode — BUT the spin values are already the
-    # values that the auto render wrote back (simulating the write-back).
-    # After the fix, _last_auto_levels must be set and equal (auto_lo, auto_hi).
-    written_lo = float(c._last_auto_levels[0])
-    written_hi = float(c._last_auto_levels[1])
+    # values the auto render derived from this matrix (simulating write-back).
+    # Capture them before the manual replot; the automatic window is the
+    # matrix, not the manual levels a later plot installs.
+    written = c._automatic_color_window()
+    written_lo = float(written[0])
+    written_hi = float(written[1])
     c.plot_result(result, amplitude_mode='amplitude_db',
                   z_auto=False, z_floor=written_lo, z_ceiling=written_hi)
     man_lo, man_hi = (float(x) for x in c._img.getLevels())
@@ -4088,6 +4090,46 @@ def test_plot_result_auto_manual_no_jump(qapp):
         f"auto→manual jump on lo: auto={auto_lo:.3f} man={man_lo:.3f}")
     assert auto_hi == pytest.approx(man_hi, abs=0.5), (
         f"auto→manual jump on hi: auto={auto_hi:.3f} man={man_hi:.3f}")
+    c.deleteLater()
+
+
+def test_projected_union_does_not_replace_the_automatic_window(qapp):
+    c = PgHeatmapCanvas(with_slice=False)
+    c.resize(320, 240)
+    c.plot_or_update_heatmap(
+        np.arange(9, dtype=float).reshape(3, 3),
+        x_extent=(0.0, 3.0),
+        y_extent=(0.0, 3.0),
+        z_auto=True,
+    )
+    natural = c._automatic_color_window()
+    assert c.project_color_levels(True, -12.0, 40.0)
+    assert tuple(float(v) for v in c._img.getLevels()) == pytest.approx((-12.0, 40.0))
+    assert c._automatic_color_window() == pytest.approx(natural)
+    assert not hasattr(c, "_last_auto_levels")
+    c.deleteLater()
+
+
+def test_colorbar_drag_projects_until_release(qapp):
+    c = PgHeatmapCanvas(with_slice=False)
+    c.resize(320, 240)
+    c.plot_or_update_heatmap(
+        np.arange(9, dtype=float).reshape(3, 3),
+        x_extent=(0.0, 3.0),
+        y_extent=(0.0, 3.0),
+        z_auto=True,
+        z_floor=0.0,
+        z_ceiling=8.0,
+    )
+    flags = []
+    c.levels_changed.connect(lambda *_args: flags.append(c._cbar_drag_open))
+    c._cbar.setLevels((1.0, 4.0))
+    c._on_cbar_levels(c._cbar)
+    assert flags == [True]
+    assert tuple(float(v) for v in c._img.getLevels()) == pytest.approx((1.0, 4.0))
+    c._on_cbar_levels_finished(c._cbar)
+    assert flags == [True, False]
+    assert c._cbar_drag_open is False
     c.deleteLater()
 
 

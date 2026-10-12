@@ -3,6 +3,9 @@
 #include <string>
 
 static const int kProtocolMaxBytes = 4096;
+// Accumulated unread bytes, not just one line. A peer that never sends a
+// newline cannot grow this without bound.
+static const int kProtocolBufferCap = 65536;
 static const int kProtocolVersion = 1;
 
 struct ProtocolMessage {
@@ -20,6 +23,8 @@ struct ProtocolMessage {
 };
 
 ProtocolMessage parse_protocol_line(const std::string& line);
+// Append up to the remaining cap. False leaves `buffer` unchanged.
+bool protocol_buffer_append(std::string& buffer, const char* data, size_t size);
 std::string format_protocol_line(
     const std::string& session,
     int seq,
