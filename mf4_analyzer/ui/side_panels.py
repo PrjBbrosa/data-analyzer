@@ -5,11 +5,13 @@ The reducer (``reduce_panel``) is intentionally Qt-free (it makes no Qt calls),
 so the transition logic is unit-testable without an event loop.
 ``SidePanelController`` executes the emitted effects against real Qt widgets.
 """
+import time
 from enum import Enum, auto
 
-from PyQt5.QtCore import QObject, QPointF, QRectF, QTimer, Qt, pyqtSignal
-from PyQt5.QtGui import QColor, QPainter, QPen
-from PyQt5.QtWidgets import QApplication, QFrame, QVBoxLayout
+from PyQt5 import sip
+from PyQt5.QtCore import QEvent, QObject, QPointF, QRectF, QTimer, Qt, pyqtSignal
+from PyQt5.QtGui import QColor, QCursor, QPainter, QPen
+from PyQt5.QtWidgets import QApplication, QFrame, QVBoxLayout, QWidget
 
 
 class PanelState(Enum):
@@ -64,6 +66,35 @@ def strip_visible_for(state):
     return state in (PanelState.HIDDEN, PanelState.PEEK)
 
 
+def _widget_alive(widget):
+    if widget is None:
+        return False
+    try:
+        return not sip.isdeleted(widget)
+    except (RuntimeError, TypeError):
+        return False
+
+
+# QEvent.Destroy is 16. This PyQt5 build does not export the name, but the
+# widget destructor still sends it while child QObjects (this controller) are
+# alive — the moment the application filter has to be removed.
+_QEVENT_DESTROY = 16
+
+# Events the peek watch has to see. Everything else returns immediately so a
+# PEEK-only application filter cannot turn into a poll or eat business input.
+_PEEK_WATCH_EVENTS = frozenset({
+    int(QEvent.Enter),
+    int(QEvent.Leave),
+    int(QEvent.MouseButtonPress),
+    int(QEvent.MouseButtonRelease),
+    int(QEvent.Hide),
+    int(QEvent.Close),
+    _QEVENT_DESTROY,
+    int(QEvent.WindowDeactivate),
+    int(QEvent.WindowStateChange),
+})
+
+
 class SidePanelStrip(QFrame):
     """A thin, faint, clickable edge rail shown when its side is collapsed.
 
@@ -109,6 +140,13 @@ class SidePanelStrip(QFrame):
         self.update()
         self._hover_timer.stop()
         super().leaveEvent(event) if event is not None else None
+
+    def hideEvent(self, event):
+        # Window hide/minimize/close hides this rail and must not let a pending
+        # 150 ms open timer peek afterwards.
+        self._hovered = False
+        self._hover_timer.stop()
+        super().hideEvent(event)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -239,10 +277,26 @@ class SidePanelController(QObject):
         self._canvas = canvas
         self.state = PanelState.PINNED
 
+        self._collapse_delay_ms = int(collapse_delay_ms)
         self._collapse_timer = QTimer(self)
         self._collapse_timer.setSingleShot(True)
-        self._collapse_timer.setInterval(collapse_delay_ms)
+        self._collapse_timer.setInterval(self._collapse_delay_ms)
         self._collapse_timer.timeout.connect(self._on_collapse_timeout)
+        # Controller-owned transient state. Initialized here and cleared in
+        # _clear_peek_tracking on exit, hide, and destroy.
+        self._app_filter_installed = False
+        self._in_strip = False
+        self._in_overlay = False
+        self._grace_deadline = None
+        self._pressed_inside = False
+        self._defer_until_release = False
+        self._ending_peek = False
+        self._deactivate_pending = False
+        self._transient_widget = None
+        self._reeval_timer = QTimer(self)
+        self._reeval_timer.setSingleShot(True)
+        self._reeval_timer.setInterval(0)
+        self._reeval_timer.timeout.connect(self._reevaluate_interaction)
 
         strip.peek_requested.connect(lambda _s: self._dispatch(Ev.HOVER))
         strip.pin_requested.connect(lambda _s: self._dispatch(Ev.CLICK))
@@ -269,12 +323,452 @@ class SidePanelController(QObject):
             self._dispatch(Ev.DRAG_COLLAPSED)
 
     def _on_collapse_timeout(self):
-        # Popup guard: a context menu opened from inside the peeked panel makes
-        # the mouse "leave" the overlay; don't auto-collapse while it's open.
-        if QApplication.activePopupWidget() is not None:
-            self._collapse_timer.start()  # re-arm; re-check shortly
+        # A Qt timer is an earliest-request hint. Re-read the clock, the
+        # pointer, an owned popup/dialog, and an in-progress drag. An unrelated
+        # activePopupWidget() must not restart this timer.
+        if self.state != PanelState.PEEK or self._ending_peek:
             return
+        if self._still_inside():
+            self._stop_collapse_timer()
+            return
+        if self._restart_remaining_grace():
+            return
+        if self._drag_blocks_collapse():
+            self._defer_until_release = True
+            self._grace_deadline = None
+            return
+        owned = self._owned_transient()
+        if owned is not None:
+            self._listen_for_transient_end(owned)
+            self._grace_deadline = None
+            return
+        self._grace_deadline = None
         self._dispatch(Ev.COLLAPSE_TIMEOUT)
+
+    def _stop_strip_hover_timer(self):
+        timer = getattr(self._strip, "_hover_timer", None)
+        if timer is not None:
+            timer.stop()
+
+    def _stop_collapse_timer(self):
+        self._collapse_timer.stop()
+        self._grace_deadline = None
+        delay = self._collapse_delay_ms
+        if self._collapse_timer.interval() != delay:
+            self._collapse_timer.setInterval(delay)
+
+    def _arm_collapse_once(self):
+        """Start the 600 ms grace unless it is already running."""
+        if self.state != PanelState.PEEK or self._ending_peek:
+            return
+        if self._collapse_timer.isActive():
+            return
+        delay = self._collapse_delay_ms
+        if self._collapse_timer.interval() != delay:
+            self._collapse_timer.setInterval(delay)
+        self._grace_deadline = time.monotonic() + delay / 1000.0
+        self._collapse_timer.start()
+
+    def _restart_remaining_grace(self):
+        """Qt woke early. Keep the original deadline; do not treat the fire as elapsed."""
+        deadline = self._grace_deadline
+        if deadline is None:
+            return False
+        remaining_ms = int((deadline - time.monotonic()) * 1000)
+        if remaining_ms <= 2:
+            return False
+        self._collapse_timer.stop()
+        self._collapse_timer.setInterval(remaining_ms)
+        self._collapse_timer.start()
+        return True
+
+    def _install_peek_watch(self):
+        if self._app_filter_installed:
+            return
+        app = QApplication.instance()
+        if app is None:
+            return
+        app.installEventFilter(self)
+        self._app_filter_installed = True
+        self._sync_regions_from_pointer()
+
+    def _remove_app_filter(self):
+        if not self._app_filter_installed:
+            return
+        self._app_filter_installed = False
+        app = QApplication.instance()
+        if app is None:
+            return
+        try:
+            app.removeEventFilter(self)
+        except RuntimeError:
+            pass
+
+    def _clear_peek_tracking(self):
+        self._stop_collapse_timer()
+        self._reeval_timer.stop()
+        self._stop_strip_hover_timer()
+        self._in_strip = False
+        self._in_overlay = False
+        self._pressed_inside = False
+        self._defer_until_release = False
+        self._deactivate_pending = False
+        self._drop_transient_listen()
+        self._remove_app_filter()
+
+    def _drop_watch_for_destroy(self):
+        self._ending_peek = True
+        try:
+            self._collapse_timer.stop()
+            self._reeval_timer.stop()
+            self._grace_deadline = None
+            self._transient_widget = None
+            self._in_strip = False
+            self._in_overlay = False
+            self._pressed_inside = False
+            self._defer_until_release = False
+            self._deactivate_pending = False
+            self._stop_strip_hover_timer()
+            self._remove_app_filter()
+        finally:
+            self._ending_peek = False
+
+    def _end_peek_lifecycle(self, collapse):
+        """Hide, minimize, deactivate, or close: drop timers and the app filter.
+
+        An owned modal/popup keeps the peeked panel mounted so it can finish.
+        The close signal re-evaluates afterwards.
+        """
+        if self._ending_peek:
+            return
+        self._ending_peek = True
+        try:
+            owned = self._owned_transient() if self.state == PanelState.PEEK else None
+            self._stop_collapse_timer()
+            self._reeval_timer.stop()
+            self._stop_strip_hover_timer()
+            self._pressed_inside = False
+            self._defer_until_release = False
+            self._deactivate_pending = False
+            self._in_strip = False
+            self._in_overlay = False
+            if owned is not None:
+                self._listen_for_transient_end(owned)
+                self._remove_app_filter()
+                return
+            self._drop_transient_listen()
+            self._remove_app_filter()
+            if collapse and self.state == PanelState.PEEK:
+                self._dispatch(Ev.COLLAPSE_TIMEOUT)
+        finally:
+            self._ending_peek = False
+
+    def _note_region(self, widget, inside):
+        if widget is self._strip:
+            self._in_strip = bool(inside)
+        elif widget is self._overlay:
+            self._in_overlay = bool(inside)
+        else:
+            return
+        if self.state != PanelState.PEEK or self._ending_peek:
+            return
+        if inside:
+            self._defer_until_release = False
+            self._dispatch(Ev.OVERLAY_ENTERED)
+            return
+        # Moving onto the other half of the union leaves the pointer inside, so
+        # that leave must not arm the grace. A stale region flag cannot swallow
+        # a leave once the pointer is actually outside the union.
+        if self._pointer_over_surface():
+            return
+        self._in_strip = False
+        self._in_overlay = False
+        self._dispatch(Ev.OVERLAY_LEFT)
+
+    def _schedule_reeval(self):
+        if self.state != PanelState.PEEK or self._ending_peek:
+            return
+        if not self._reeval_timer.isActive():
+            self._reeval_timer.start()
+
+    def _reevaluate_interaction(self):
+        if self.state != PanelState.PEEK or self._ending_peek:
+            return
+        deferred = self._defer_until_release
+        deactivate = self._deactivate_pending
+        self._defer_until_release = False
+        self._deactivate_pending = False
+        if deactivate and self._owned_transient() is None:
+            self._remove_app_filter()
+            self._dispatch(Ev.COLLAPSE_TIMEOUT)
+            return
+        if QApplication.mouseButtons() == Qt.NoButton:
+            self._pressed_inside = False
+        if self._still_inside():
+            self._stop_collapse_timer()
+            self._install_peek_watch()
+            return
+        if self._drag_blocks_collapse():
+            self._defer_until_release = True
+            self._stop_collapse_timer()
+            self._install_peek_watch()
+            return
+        owned = self._owned_transient()
+        if owned is not None:
+            self._listen_for_transient_end(owned)
+            self._stop_collapse_timer()
+            self._install_peek_watch()
+            return
+        if deferred:
+            self._dispatch(Ev.COLLAPSE_TIMEOUT)
+            return
+        self._install_peek_watch()
+        self._arm_collapse_once()
+
+    def _still_inside(self):
+        # A live hit on the strip, overlay, or panel wins. A live hit on
+        # anything else means a stale enter/leave flag must not keep the peek.
+        if self._pointer_over_surface():
+            return True
+        if self._widget_under_pointer() is not None:
+            return False
+        return self._in_strip or self._in_overlay
+
+    def _pointer_over_surface(self):
+        return self._is_surface_descendant(self._widget_under_pointer())
+
+    def _drag_blocks_collapse(self):
+        if not self._pressed_inside:
+            return False
+        return QApplication.mouseButtons() != Qt.NoButton
+
+    def _widget_under_pointer(self):
+        app = QApplication.instance()
+        if app is None:
+            return None
+        widget = app.widgetAt(QCursor.pos())
+        if _widget_alive(widget):
+            return widget
+        host = self._host
+        if not _widget_alive(host) or not host.isVisible():
+            return None
+        local = host.mapFromGlobal(QCursor.pos())
+        if not host.rect().contains(local):
+            return None
+        child = host.childAt(local)
+        return child if _widget_alive(child) else None
+
+    def _sync_regions_from_pointer(self):
+        widget = self._widget_under_pointer()
+        self._in_strip = self._is_descendant_of(widget, self._strip)
+        self._in_overlay = (
+            self._is_descendant_of(widget, self._overlay)
+            or self._is_descendant_of(widget, self._panel)
+        )
+
+    def _host_window(self):
+        host = self._host
+        if not _widget_alive(host):
+            return None
+        window = host.window()
+        return window if _widget_alive(window) else None
+
+    def _is_host_or_window(self, widget):
+        if not _widget_alive(widget):
+            return False
+        if widget is self._host:
+            return True
+        return widget is self._host_window()
+
+    def _is_descendant_of(self, widget, ancestor):
+        if not _widget_alive(widget) or not _widget_alive(ancestor):
+            return False
+        seen = set()
+        current = widget
+        while _widget_alive(current) and id(current) not in seen:
+            if current is ancestor:
+                return True
+            seen.add(id(current))
+            current = current.parentWidget()
+        return False
+
+    def _is_surface_descendant(self, widget):
+        return (
+            self._is_descendant_of(widget, self._strip)
+            or self._is_descendant_of(widget, self._overlay)
+            or self._is_descendant_of(widget, self._panel)
+        )
+
+    def _owned_transient(self):
+        app = QApplication.instance()
+        if app is None:
+            return None
+        for widget in (app.activePopupWidget(), app.activeModalWidget()):
+            if self._transient_belongs(widget):
+                return widget
+        return None
+
+    def _transient_belongs(self, widget):
+        if not _widget_alive(widget):
+            return False
+        if self._is_surface_descendant(widget):
+            return True
+        return self._popup_owned_by_editors(widget)
+
+    def _is_owned_transient_window(self, widget):
+        if not isinstance(widget, QWidget) or not _widget_alive(widget):
+            return False
+        if not widget.isWindow():
+            return False
+        if self._is_host_or_window(widget):
+            return False
+        return self._transient_belongs(widget)
+
+    def _popup_owned_by_editors(self, widget):
+        panel = self._panel
+        if not _widget_alive(panel):
+            return False
+        from PyQt5.QtWidgets import QComboBox, QLineEdit
+
+        try:
+            edits = panel.findChildren(QLineEdit)
+            combos = panel.findChildren(QComboBox)
+        except RuntimeError:
+            return False
+        panel_window = panel.window()
+        for edit in edits:
+            completer = edit.completer()
+            if completer is None:
+                continue
+            popup = completer.popup()
+            if not _widget_alive(popup):
+                continue
+            if widget is popup or self._is_descendant_of(widget, popup):
+                return True
+            popup_window = popup.window()
+            if (
+                _widget_alive(popup_window)
+                and popup_window is not panel_window
+                and (widget is popup_window or widget.window() is popup_window)
+            ):
+                return True
+        for combo in combos:
+            view = combo.view()
+            if not _widget_alive(view):
+                continue
+            if widget is view or self._is_descendant_of(widget, view):
+                return True
+            view_window = view.window()
+            if (
+                _widget_alive(view_window)
+                and view_window is not panel_window
+                and (widget is view_window or widget.window() is view_window)
+            ):
+                return True
+        return False
+
+    def _listen_for_transient_end(self, widget):
+        if not _widget_alive(widget) or widget is self._transient_widget:
+            return
+        self._drop_transient_listen()
+        self._transient_widget = widget
+        about = getattr(widget, "aboutToHide", None)
+        if about is not None:
+            about.connect(self._on_transient_about_to_hide)
+        finished = getattr(widget, "finished", None)
+        if finished is not None:
+            finished.connect(self._on_transient_finished)
+        widget.destroyed.connect(self._on_transient_destroyed)
+
+    def _drop_transient_listen(self):
+        widget = self._transient_widget
+        self._transient_widget = None
+        if not _widget_alive(widget):
+            return
+        for name, slot in (
+            ("aboutToHide", self._on_transient_about_to_hide),
+            ("finished", self._on_transient_finished),
+            ("destroyed", self._on_transient_destroyed),
+        ):
+            signal = getattr(widget, name, None)
+            if signal is None:
+                continue
+            try:
+                signal.disconnect(slot)
+            except TypeError:
+                pass
+
+    def _on_transient_about_to_hide(self):
+        self._schedule_reeval()
+
+    def _on_transient_finished(self, _result=0):
+        self._drop_transient_listen()
+        self._schedule_reeval()
+
+    def _on_transient_destroyed(self, _obj=None):
+        self._transient_widget = None
+        if self.state == PanelState.PEEK and not self._ending_peek:
+            self._schedule_reeval()
+
+    def eventFilter(self, watched, event):  # noqa: N802 - Qt override
+        if not self._app_filter_installed or self._ending_peek:
+            return False
+        # The application filter also sees QWindow and other non-widgets.
+        if not isinstance(watched, QWidget):
+            return False
+        etype = int(event.type())
+        if etype not in _PEEK_WATCH_EVENTS:
+            return False
+        if etype == QEvent.Enter and (
+            watched is self._strip or watched is self._overlay
+        ):
+            self._note_region(watched, True)
+            return False
+        if etype == QEvent.Leave and (
+            watched is self._strip or watched is self._overlay
+        ):
+            self._note_region(watched, False)
+            return False
+        if etype == QEvent.MouseButtonPress:
+            if self._is_surface_descendant(watched):
+                self._pressed_inside = True
+            return False
+        if etype == QEvent.MouseButtonRelease:
+            if self._pressed_inside or self._defer_until_release:
+                self._schedule_reeval()
+            return False
+        if etype in (QEvent.Hide, QEvent.Close):
+            if self._is_host_or_window(watched):
+                self._end_peek_lifecycle(collapse=True)
+                return False
+            if self._is_owned_transient_window(watched):
+                self._schedule_reeval()
+            return False
+        if etype == _QEVENT_DESTROY:
+            if self._is_host_or_window(watched):
+                self._drop_watch_for_destroy()
+            return False
+        if etype == QEvent.WindowDeactivate:
+            # Deactivate can arrive before an owned popup is registered. Drop
+            # the grace timer now and re-check on the next turn so a menu or
+            # dialog that belongs to this panel is not torn down under itself.
+            if watched is self._host_window() and self.state == PanelState.PEEK:
+                self._deactivate_pending = True
+                self._stop_collapse_timer()
+                self._stop_strip_hover_timer()
+                self._remove_app_filter()
+                self._schedule_reeval()
+            return False
+        if etype == QEvent.WindowStateChange:
+            window = self._host_window()
+            if (
+                watched is window
+                and _widget_alive(window)
+                and window.isMinimized()
+            ):
+                self._end_peek_lifecycle(collapse=True)
+            return False
+        return False
 
     # ---- core dispatch ----
     def _dispatch(self, event):
@@ -298,11 +792,14 @@ class SidePanelController(QObject):
             self._position_overlay()
             self._overlay.show()
             self._overlay.raise_()
+            self._install_peek_watch()
         elif eff == Effect.EXIT_PEEK:
+            self._clear_peek_tracking()
             self._overlay.take_panel()
             self._overlay.hide()
             self._dock_panel_into_splitter(width=0, visible=False)
         elif eff == Effect.DOCK:
+            self._clear_peek_tracking()
             if self._overlay.isVisible():
                 self._overlay.take_panel()
                 self._overlay.hide()
@@ -316,9 +813,14 @@ class SidePanelController(QObject):
             self._panel.setVisible(False)
             self._set_slot_width(0)
         elif eff == Effect.START_TIMER:
-            self._collapse_timer.start()
+            # OVERLAY_LEFT means the union was left. Drop stale region flags so
+            # a later timeout re-reads the live pointer instead of the old enter.
+            self._in_strip = False
+            self._in_overlay = False
+            self._arm_collapse_once()
         elif eff == Effect.STOP_TIMER:
-            self._collapse_timer.stop()
+            self._stop_collapse_timer()
+            self._defer_until_release = False
 
     # ---- helpers ----
     def _apply_strip_visibility(self):

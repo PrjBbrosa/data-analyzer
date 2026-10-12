@@ -925,6 +925,27 @@ def test_batch_result_details_discovery_stays_in_budget():
     assert hints.hint_display_width(hint.text) <= hints.HINT_MAX_WIDTH
 
 
+def test_side_panel_hover_hint_fits_and_quickref_states_peek_facts():
+    hint = next(item for item in hints.all_hints() if item.id == "panel.hover_peek")
+    assert hint.surface == "discovery"
+    assert hint.ship == "now"
+    assert not hint.modes
+    assert hint.text == "悬停边缘可操作，移开收起，点击固定"
+    assert hints.hint_display_width(hint.text) <= hints.HINT_MAX_WIDTH
+
+    from mf4_analyzer.ui import quickref
+
+    blob = "\n".join(
+        f"{row.desc}\n{row.sub}\n{row.gesture}"
+        for group in quickref.QUICKREF
+        for row in group.rows
+    )
+    assert "可操作" in blob
+    assert "离开收起" in blob
+    assert "点击固定" in blob
+    assert "悬停折叠带临时展开并可直接操作，移出后自动收起，点击折叠带或工具栏按钮才固定。" in blob
+
+
 def test_record_curve_eye_hint_points_at_owner_file_not_inspector():
     hint = next(
         item for item in hints.all_hints() if item.id == "time.record_curve_eye"

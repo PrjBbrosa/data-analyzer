@@ -246,6 +246,12 @@ _HINTS = (
         priority=90,
     ),
     Hint(
+        id="panel.hover_peek",
+        text="悬停边缘可操作，移开收起，点击固定",
+        surface="discovery",
+        priority=19,
+    ),
+    Hint(
         id="toolbar.shortcuts_exist",
         text="顶部按钮支持快捷键，悬停按钮即可查看",
         surface="discovery",
