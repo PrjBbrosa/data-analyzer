@@ -303,6 +303,7 @@ lesson by default.
 | [Heatmap Natural Window Comes From The Current Matrix](heatmap-natural-window-from-current-matrix.md) | Changing automatic heatmap color windows, view switching, or split color-scale lock. | See lesson |
 | [Ending A Comparison Must Reproject The Surviving View](comparison-implicit-end-reprojects-host.md) | Deleting a comparison peer, closing other views, or closing all files while a peer holds focus. | See lesson |
 | [Analysis Log Ranges Are Engineering Values](analysis-log-scale-engineering-range.md) | Changing FFT or spectrum log scale, `plot_spectra`, or chart-options range apply. | See lesson |
+| [Expression Functions Must Reject NumPy Output Arguments](expression-functions-reject-numpy-output-arguments.md) | Adding expression validation, trial evaluation, or functions backed by NumPy. | See lesson |
 
 ## Selection Rules
 

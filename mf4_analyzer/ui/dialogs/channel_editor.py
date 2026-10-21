@@ -1,7 +1,9 @@
 """Channel editor dialog: create/rename/remove derived channels."""
 import re
+import sys
 
 import numpy as np
+from PyQt5 import sip
 
 from PyQt5.QtWidgets import (
     QAbstractSpinBox,
@@ -28,7 +30,6 @@ from PyQt5.QtGui import QColor, QPalette
 
 from ...signal import ChannelMath
 from ...signal.expression import ExpressionError
-from ...signal.expression import evaluate as eval_expression
 from ...signal.expression import normalize as normalize_expression
 from ...signal.expression import referenced_names as expression_names
 from ...ui_kit.control_style import CONTROL_COLORS
@@ -42,6 +43,8 @@ from ..expression_help import (
     param_help_tooltip_text,
 )
 from ..widgets.compact_spinbox import CompactDoubleSpinBox
+from ..widgets.expression_check_tip import ExpressionCheckTip
+from ._expression_check import ExpressionCheckRunner
 
 # Hover text for the ? badge — same reference the pinnable help card renders,
 # so the two can never drift apart (see ui/expression_help.py).
@@ -77,6 +80,13 @@ class ChannelEditorDialog(QDialog):
         self.fd = self._files.get(self.current_fid)
         self.new_channels = {}
         self.removed_channels = set()
+        self._expr_check_token = 0
+        self._expr_check_context = None
+        self._expr_check_message = None
+        self._expr_create_pending = False
+        self._expr_check_tip = None
+        self._expr_check_runner = ExpressionCheckRunner(self)
+        self._expr_check_runner.completed.connect(self._expression_check_finished)
         self.setMinimumWidth(self.PANEL_WIDTH)
 
         root = QVBoxLayout(self)
@@ -216,9 +226,21 @@ class ChannelEditorDialog(QDialog):
         self.edit_expr.setObjectName("channelExprEdit")
         self.edit_expr.setPlaceholderText("例: sqrt(A^2 + B^2) * 0.5")
         self.edit_expr.setToolTip(EXPR_TOOLTIP)
-        self.edit_expr.setMinimumWidth(self.INPUT_WIDTH - 24)
+        self.edit_expr.setMinimumWidth(100)
         self.edit_expr.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         erl.addWidget(self.edit_expr, 1)
+        self.btn_expr_check = QToolButton()
+        self.btn_expr_check.setObjectName("channelExprCheck")
+        self.btn_expr_check.setText("✓")
+        self.btn_expr_check.setFixedSize(28, 28)
+        self.btn_expr_check.setToolTip("检查表达式")
+        self.btn_expr_check.setAccessibleName("检查表达式")
+        self.btn_expr_check.setCursor(Qt.PointingHandCursor)
+        self.btn_expr_check.clicked.connect(self._check_expression)
+        erl.addWidget(self.btn_expr_check, 0, Qt.AlignVCenter)
+        self.edit_expr.textChanged.connect(self._invalidate_expression_check)
+        self.combo_a.currentTextChanged.connect(self._invalidate_expression_check)
+        self.combo_b.currentTextChanged.connect(self._invalidate_expression_check)
         # Hover shows the reference; clicking pins it as a draggable card so
         # the user can keep reading while typing the formula.
         self.btn_expr_help = QToolButton()
@@ -384,6 +406,7 @@ class ChannelEditorDialog(QDialog):
         root.addWidget(footer)
 
         self.edit_expr.installEventFilter(self)
+        self.btn_expr_check.installEventFilter(self)
         self.export_search.installEventFilter(self)
         set_unique_default_button(self.btn_ok, self)
 
@@ -391,6 +414,10 @@ class ChannelEditorDialog(QDialog):
         QTimer.singleShot(0, self._sync_file_bar_right_edge)
 
     def eventFilter(self, obj, event):  # noqa: N802
+        if obj is self.btn_expr_check and event.type() == QEvent.ToolTip:
+            tip = self._expr_check_tip
+            if tip is not None and not sip.isdeleted(tip) and tip.isVisible():
+                return True  # the click tip already displays this explanation
         if event.type() == QEvent.KeyPress and event.key() in (
             Qt.Key_Return,
             Qt.Key_Enter,
@@ -489,6 +516,7 @@ class ChannelEditorDialog(QDialog):
         for ch in chs:
             self._append_export_item(ch, checked=True)
         self.lbl.setText("新增: 0")
+        self._invalidate_expression_check()
 
     @staticmethod
     def _paint_export_list_on_white(list_widget):
@@ -682,14 +710,16 @@ class ChannelEditorDialog(QDialog):
         """Show the 表达式 row only for the 自定义 operation."""
         custom = self.combo_op2.currentIndex() == self.CUSTOM_OP_INDEX
         for w in (self.lbl_expr, self._expr_row, self.edit_expr,
-                  self.btn_expr_help, self.lbl_expr_hint):
+                  self.btn_expr_check, self.btn_expr_help, self.lbl_expr_hint):
             w.setVisible(custom)
+        self._invalidate_expression_check()
         if not custom:
             # Leaving 自定义 takes the help card with it.
             self.btn_expr_help.setChecked(False)
 
     def _toggle_expr_help(self, checked):
         """Open / close the pinnable, draggable expression help card."""
+        self._hide_expression_tip()
         if not checked:
             if self._expr_help_popup is not None:
                 self._expr_help_popup.hide()
@@ -707,6 +737,7 @@ class ChannelEditorDialog(QDialog):
         self._expr_help_popup.show_beside(self.edit_expr)
 
     def hideEvent(self, event):
+        self._invalidate_expression_check()
         # The cards are separate top-level windows; they must not outlive the
         # editor they document. hideEvent also fires while the editor is being
         # torn down, when a child popup's C++ side may already be gone —
@@ -741,54 +772,147 @@ class ChannelEditorDialog(QDialog):
         self._apply_export_filters()
 
     def _create_expression(self, ch_a, ch_b):
-        """Build a channel from the user's free-form expression.
+        # A previous green check is presentation, not authority to register an
+        # old array: FileData has no general data-content revision counter.
+        self._start_expression_check(create=True)
 
-        Only the variables the expression actually references are required, so
-        an ``A``-only formula does not care what 通道B is set to.
-        """
+    def _clear_expression_tip(self):
+        self._expr_check_tip = None
+
+    def _hide_expression_tip(self):
+        if self._expr_check_tip is not None:
+            if sip.isdeleted(self._expr_check_tip):
+                self._expr_check_tip = None
+            else:
+                self._expr_check_tip.hide()
+
+    def _show_expression_tip(self):
+        if self._expr_check_message is None:
+            return
+        if self._expr_check_tip is None or sip.isdeleted(self._expr_check_tip):
+            self._expr_check_tip = ExpressionCheckTip(self, self.btn_expr_check, self._expr_row)
+            self._expr_check_tip.destroyed.connect(self._clear_expression_tip)
+        self._expr_check_tip.show_message(*self._expr_check_message)
+
+    def _set_expression_check_state(self, state, title="检查表达式", body=""):
+        for widget in (self.edit_expr, self.btn_expr_check):
+            widget.setProperty("checkState", state)
+            widget.style().unpolish(widget)
+            widget.style().polish(widget)
+            widget.update()
+        self.btn_expr_check.setText({"busy": "…", "error": "!"}.get(state, "✓"))
+        self.btn_expr_check.setEnabled(state != "busy")
+        tip = f"{title}\n{body}" if body else title
+        self.btn_expr_check.setToolTip(tip)
+        self.btn_expr_check.setAccessibleName(title)
+        self.edit_expr.setAccessibleDescription(tip)
+
+    def _invalidate_expression_check(self, *_):
+        self._expr_check_token += 1
+        self._expr_check_runner.invalidate()
+        self._expr_check_context = None
+        self._expr_check_message = None
+        self._expr_create_pending = False
+        self._hide_expression_tip()
+        self._set_expression_check_state("")
+        self.btn_create_dual.setEnabled(True)
+
+    def _expression_context(self):
+        fd = self.fd
+        return (
+            self.current_fid, id(fd), id(fd.data) if fd is not None else None,
+            fd.time_axis_revision if fd is not None else None,
+            self.edit_expr.text(), self.combo_a.currentText(), self.combo_b.currentText(),
+        )
+
+    def _check_expression(self):
+        if self._expr_check_message is not None and self._expr_check_context == self._expression_context():
+            if self._expr_check_tip is not None and not sip.isdeleted(self._expr_check_tip) and self._expr_check_tip.isVisible():
+                self._hide_expression_tip()
+            else:
+                self._show_expression_tip()
+            return
+        self._start_expression_check(create=False)
+
+    def _start_expression_check(self, *, create):
+        self._invalidate_expression_check()
+        self.btn_expr_help.setChecked(False)
+        token = self._expr_check_token
+        self._expr_check_context = self._expression_context()
+        self._expr_create_pending = create
+        self._set_expression_check_state("busy", "正在检查表达式", "使用当前文件全量数据")
+        self.btn_create_dual.setEnabled(False)
         expr = self.edit_expr.text().strip()
-        if not expr:
-            QMessageBox.warning(self, "无法创建", "请先输入表达式，例如 sqrt(A^2 + B^2)")
-            return
         try:
-            used = {n.lower() for n in expression_names(expr)}
-        except ExpressionError as e:
-            QMessageBox.warning(self, "表达式错误", str(e))
+            used = {name.lower() for name in expression_names(expr)}
+            if self.fd is None:
+                raise ExpressionError("请先选择源文件")
+            # Workers only see owned snapshots, never a live dataframe or
+            # staged array that can disappear on a file change.
+            t = np.array(self.fd.time_array, copy=True)
+            channels = {}
+            for key, name in (("A", self.combo_a.currentText()), ("B", self.combo_b.currentText())):
+                if key.lower() not in used:
+                    continue
+                if name in self.removed_channels or (name not in self.fd.data.columns and name not in self.new_channels):
+                    raise ExpressionError(f"通道{key} 不存在")
+                try:
+                    raw = self.new_channels[name][0] if name in self.new_channels else self.fd.data[name].values
+                    channels[key] = np.array(raw, copy=True)
+                except (TypeError, ValueError, OverflowError) as exc:
+                    raise ExpressionError(f"通道{key} 必须是数值信号") from exc
+        except (ExpressionError, MemoryError) as exc:
+            self._expression_check_finished(token, None, exc)
             return
+        self._expr_check_runner.submit(token, expr, t, channels)
 
-        t = np.asarray(self.fd.time_array, dtype=float)
-        variables = {"t": t, "time": t}
-        for key, ch in (("A", ch_a), ("B", ch_b)):
-            if key.lower() not in used:
-                # Still expose the name so a typo reports "未知变量" against the
-                # full variable list, but skip the existence/length checks.
-                variables[key] = np.zeros(t.size)
-                continue
-            if ch not in self.fd.data.columns and ch not in self.new_channels:
-                QMessageBox.warning(self, "无法创建", f"通道{key} 不存在")
-                return
-            sig = self._channel_signal(ch)
-            if sig.size != t.size:
-                QMessageBox.warning(
-                    self, "错误", f"通道{key} 长度不匹配: {sig.size} vs {t.size}")
-                return
-            variables[key] = sig
-
-        try:
-            r = eval_expression(expr, variables, size=t.size)
-        except ExpressionError as e:
-            QMessageBox.warning(self, "表达式错误", str(e))
+    def _expression_check_finished(self, token, result, error):
+        if token != self._expr_check_token:
             return
-        except Exception as e:
-            QMessageBox.critical(self, "错误", f"表达式计算失败：{e}")
+        if self._expr_check_context != self._expression_context():
+            self._invalidate_expression_check()
             return
-        if not np.any(np.isfinite(r)):
-            QMessageBox.warning(self, "无法创建", "表达式结果全为 NaN/Inf，请检查公式")
+        create, self._expr_create_pending = self._expr_create_pending, False
+        if error is not None:
+            if isinstance(error, ExpressionError):
+                self._expr_check_message = ("检查未通过", str(error), "error")
+                self.btn_create_dual.setEnabled(False)
+            else:
+                self._expr_check_message = ("检查未完成", "内存不足，请缩小数据规模后重试。" if isinstance(error, MemoryError)
+                                            else "内部错误，请查看诊断日志后重试。", "")
+                self.btn_create_dual.setEnabled(True)
+            title, body, state = self._expr_check_message
+            self._set_expression_check_state(state, title, body)
+            self._show_expression_tip()
+            if not isinstance(error, (ExpressionError, MemoryError)):
+                sys.excepthook(type(error), error, error.__traceback__)
+            if not isinstance(error, ExpressionError):
+                self._expr_check_message = None  # the next click must retry
             return
-
-        name = self.edit_name2.text().strip() or self._auto_expr_name(expr)
-        self._register_new(self._unique_name(name), r, '')
-        self.edit_name2.clear()
+        n = result.values.size
+        if result.ok:
+            title, state = "检查通过", "ok"
+            body = f"当前文件全量试算，{n:,} / {n:,} 点有效。"
+            if np.all(result.values == result.values[0]):
+                body += "结果为常量通道。"
+            used = {name.lower() for name in expression_names(self.edit_expr.text())}
+            if {"a", "b"} <= used and self.combo_a.currentText() == self.combo_b.currentText():
+                body += "A、B 绑定同一通道。"
+        else:
+            title, state = "检查发现无效点" if result.can_create else "检查未通过", "error"
+            body = (f"{result.invalid_count:,} / {n:,} 点为 NaN/Inf，"
+                    f"首个在第 {result.first_invalid_index + 1:,} 点，t = {result.first_invalid_time:.9g} s。")
+            body += "仍可创建，曲线在无效点处断开。" if result.can_create else "结果全部无效，无法创建。"
+        if result.input_invalid_counts:
+            body += "输入无效点：" + "、".join(f"{key}={count:,}" for key, count in result.input_invalid_counts.items()) + "。"
+        self._expr_check_message = (title, body, state)
+        self._set_expression_check_state(state, title, body)
+        self.btn_create_dual.setEnabled(result.can_create)
+        self._show_expression_tip()
+        if create and result.can_create:
+            name = self.edit_name2.text().strip() or self._auto_expr_name(self.edit_expr.text())
+            self._register_new(self._unique_name(name), result.values, '')
+            self.edit_name2.clear()
 
     @staticmethod
     def _auto_expr_name(expr):
@@ -876,3 +1000,4 @@ class ChannelEditorDialog(QDialog):
                 self.list_export.takeItem(row)
         self.lbl.setText(f"新增: {len(self.new_channels)}")
         self._apply_export_filters()
+        self._invalidate_expression_check()

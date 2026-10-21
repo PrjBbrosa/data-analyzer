@@ -13,6 +13,7 @@ Everything here is pure numeric (no PyQt5 / matplotlib import), per the
 from __future__ import annotations
 
 import ast
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -23,6 +24,8 @@ __all__ = [
     "normalize",
     "referenced_names",
     "evaluate",
+    "ExpressionCheck",
+    "check_channel_expression",
 ]
 
 # An expression is a one-liner typed into a narrow input; these caps exist to
@@ -114,6 +117,14 @@ FUNCTIONS = {
     "rms": _rms,
 }
 
+# Only mathematical positional arguments belong to this language. In
+# particular, NumPy ufuncs' optional ``out`` argument can mutate a source.
+_FUNCTION_ARITY = {name: (1, 1) for name in FUNCTIONS}
+_FUNCTION_ARITY.update({
+    "atan2": (2, 2), "hypot": (2, 2), "round": (1, 2),
+    "clip": (3, 3), "where": (3, 3), "min": (1, None), "max": (1, None),
+})
+
 _BIN_OPS = {
     ast.Add: np.add,
     ast.Sub: np.subtract,
@@ -176,7 +187,13 @@ def _parse(expr: str) -> ast.Expression:
     try:
         tree = ast.parse(text, mode="eval")
     except SyntaxError as exc:
-        raise ExpressionError(f"表达式语法错误：{exc.msg}") from exc
+        if "was never closed" in exc.msg:
+            message = "括号未闭合，请补齐括号"
+        elif "unmatched" in exc.msg:
+            message = "括号不匹配，请检查多余的右括号"
+        else:
+            message = "请检查运算符、括号和函数参数"
+        raise ExpressionError(f"表达式语法错误：{message}") from exc
     if sum(1 for _ in ast.walk(tree)) > MAX_NODES:
         raise ExpressionError("表达式过于复杂，请拆成多个通道分步计算")
     return tree
@@ -269,6 +286,9 @@ def _eval_node(node, variables, lowered):
         if any(isinstance(a, ast.Starred) for a in node.args):
             raise ExpressionError("函数调用不支持 * 展开")
         func = _resolve_function(node.func.id)
+        minimum, maximum = _FUNCTION_ARITY[node.func.id.lower()]
+        if len(node.args) < minimum or (maximum is not None and len(node.args) > maximum):
+            raise ExpressionError(f"函数 “{node.func.id}” 参数数量不对")
         args = [_eval_node(a, variables, lowered) for a in node.args]
         if not args:
             raise ExpressionError(f"函数 “{node.func.id}” 至少需要一个参数")
@@ -336,3 +356,80 @@ def evaluate(expr: str, variables, size=None):
         arr = np.array(arr, dtype=float, copy=True)
         arr[~np.isfinite(arr)] = np.nan
     return arr
+
+
+@dataclass(frozen=True)
+class ExpressionCheck:
+    """One full-data trial; values are never registered by checking alone."""
+
+    values: np.ndarray
+    invalid_count: int
+    first_invalid_index: int | None
+    first_invalid_time: float | None
+    input_invalid_counts: dict[str, int]
+
+    @property
+    def ok(self):
+        return self.invalid_count == 0
+
+    @property
+    def can_create(self):
+        return self.invalid_count < self.values.size
+
+
+def _numeric_vector(value, label):
+    try:
+        if np.iscomplexobj(value):
+            raise ExpressionError(f"{label} 必须是实数数值信号")
+        arr = np.asarray(value, dtype=float)
+    except ExpressionError:
+        raise
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ExpressionError(f"{label} 必须是数值信号") from exc
+    if arr.ndim != 1:
+        raise ExpressionError(f"{label} 必须是一维信号")
+    return arr
+
+
+def check_channel_expression(expr: str, time, channels) -> ExpressionCheck:
+    """Check exactly the arrays used to create a derived channel.
+
+    ``channels`` contains A/B arrays (only referenced channels are required).
+    The existing file time axis is retained without resampling or truncation.
+    Empty/non-finite time, nonnumeric/multidimensional/misaligned inputs fail
+    explicitly. Non-finite signal values remain valid input data; their counts
+    are reported separately from invalid output. Scalars broadcast normally.
+    """
+    used = {name.lower() for name in referenced_names(expr)}
+    t = _numeric_vector(time, "时间轴")
+    if not t.size:
+        raise ExpressionError("时间轴为空，无法检查表达式")
+    if not np.isfinite(t).all():
+        raise ExpressionError("时间轴含无效值，无法定位表达式结果")
+    variables = {"t": t, "time": t}
+    input_invalid = {}
+    for key in ("A", "B"):
+        if key.lower() not in used:
+            continue
+        if key not in channels:
+            raise ExpressionError(f"通道{key} 不存在")
+        values = _numeric_vector(channels[key], f"通道{key}")
+        if values.size != t.size:
+            raise ExpressionError(f"通道{key} 长度不匹配: {values.size} vs {t.size}")
+        variables[key] = values
+        invalid = int(values.size - np.count_nonzero(np.isfinite(values)))
+        if invalid:
+            input_invalid[key] = invalid
+    try:
+        result = evaluate(expr, variables, size=t.size)
+    except ExpressionError:
+        raise
+    except (ValueError, TypeError, OverflowError) as exc:
+        raise ExpressionError(f"表达式计算失败，请检查函数参数或数值范围：{exc}") from exc
+    invalid_mask = ~np.isfinite(result)
+    count = int(np.count_nonzero(invalid_mask))
+    first = int(np.argmax(invalid_mask)) if count else None
+    return ExpressionCheck(
+        result, count, first, float(t[first]) if first is not None else None,
+        input_invalid,
+    )

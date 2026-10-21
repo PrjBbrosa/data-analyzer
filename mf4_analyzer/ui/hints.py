@@ -287,6 +287,12 @@ _HINTS = (
         priority=70,
     ),
     Hint(
+        id="channel.expression_check",
+        text="表达式旁 ✓ 可检查，点击看原因",
+        surface="discovery",
+        priority=35,
+    ),
+    Hint(
         id="file.wwt_create_views",
         text="WWT 按 WinWert 窗口创建时域 View",
         surface="discovery",

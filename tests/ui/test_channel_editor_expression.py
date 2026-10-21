@@ -124,7 +124,7 @@ def test_scalar_expression_fills_whole_channel(qapp, tmp_path):
     ("nope * 2", "未知变量"),
     ("A[0]", "语法"),
 ])
-def test_bad_expression_warns_and_creates_nothing(qapp, tmp_path, monkeypatch, expr, match):
+def test_bad_expression_shows_click_tip_and_creates_nothing(qapp, tmp_path, monkeypatch, expr, match):
     dlg = _select_custom(_editor(tmp_path))
     seen = []
     monkeypatch.setattr(QMessageBox, "warning",
@@ -132,7 +132,9 @@ def test_bad_expression_warns_and_creates_nothing(qapp, tmp_path, monkeypatch, e
     dlg.edit_expr.setText(expr)
     dlg._create_dual()
     assert dlg.new_channels == {}
-    assert seen and match in seen[0]
+    assert not seen  # the lightweight check replaces blocking message boxes
+    assert dlg.edit_expr.property("checkState") == "error"
+    assert match in dlg._expr_check_tip.body_label.text()
 
 
 def test_all_nan_result_is_refused(qapp, tmp_path, monkeypatch):
@@ -143,7 +145,9 @@ def test_all_nan_result_is_refused(qapp, tmp_path, monkeypatch):
     dlg.edit_expr.setText("sqrt(-1 + 0*A)")
     dlg._create_dual()
     assert dlg.new_channels == {}
-    assert seen and "NaN" in seen[0]
+    assert not seen
+    assert "NaN" in dlg._expr_check_tip.body_label.text()
+    assert not dlg.btn_create_dual.isEnabled()
 
 
 def test_expression_only_needing_A_ignores_B_length(qapp, tmp_path, monkeypatch):
