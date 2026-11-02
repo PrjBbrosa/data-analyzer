@@ -339,6 +339,8 @@ def test_analysis_page_user_click_interpolates_and_program_snaps(qtbot):
     _click_tab_body(bar.tabBar(), 0)
     assert manager.active == 0
     assert bar._marker_driver.is_active()
+    bar.refresh_fit()
+    assert bar._marker_driver.is_active()
     assert bar._marker_rect.height() == 2
 
 

@@ -902,6 +902,50 @@ def test_close_while_deferred_section_callback_pending_does_not_mutate_destroyed
     assert "deleted-window" not in mutated
 
 
+@pytest.mark.parametrize("comparison", [False, True])
+def test_nonfocused_fft_render_does_not_stamp_focused_signature(two_file_win, qapp, monkeypatch, comparison):
+    win = two_file_win
+    _switch(win, qapp, "fft")
+    _seed_active_analysis_attachments(win)
+    fids = list(win.files)
+    manager = win.analysis_managers["fft"]
+    host = manager.get(0)
+    host.panes[0].sources = [(fids[0], "speed")]
+    if comparison:
+        win._apply_active_analysis_context("fft")
+        win.do_fft()
+        manager.new_view()
+        peer = manager.get(manager.active)
+        peer.attached_file_ids = [fids[1]]
+        peer.panes[0].sources = [(fids[1], "speed")]
+        win._apply_active_analysis_context("fft")
+        win.do_fft()
+        manager.set_active(0)
+        assert win.open_comparison("fft", host.view_id, peer.view_id)
+        assert win.focus_comparison("fft", host.view_id, 0)
+        other_pane = peer.panes[0]
+        other_canvas = win.chart_stack.page_fft.peer_cards()[0].canvas
+    else:
+        win._on_analysis_split("fft", True)
+        host.panes[1].sources = [(fids[1], "speed")]
+        win._apply_active_analysis_context("fft")
+        win.do_fft()
+        other_pane = host.panes[1]
+        other_canvas = win.chart_stack.page_fft.pane_canvas(1)
+    _flush(qapp)
+    before = win._fft_last_render_sig
+    binding = other_pane.result_binding
+    assert binding is not None
+    source = binding.request.sources[0]
+    result = win.analysis_caches["fft"].get(binding.keys[0])
+    entry = win._fft_entry_from_cache(result, *source, "#123456")
+    monkeypatch.setattr(win, "_fft_render_signature", lambda: ("unpainted-focused-draft",))
+
+    win._plot_fft_entries([entry], other_canvas)
+
+    assert win._fft_last_render_sig == before
+
+
 def test_fft_history_survives_section_round_trip(two_file_win, qapp):
     win = two_file_win
     _switch(win, qapp, "fft")

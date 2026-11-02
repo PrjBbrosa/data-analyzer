@@ -11,6 +11,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from tests.ui._accepted_result import accept_cached_result
 from PyQt5.QtCore import QPoint, QRect, Qt
 from PyQt5.QtGui import QColor, QPainter, QPixmap
 from PyQt5.QtWidgets import QWidget
@@ -689,6 +690,7 @@ def _seed_frf_view_cache(window, state, fid):
     key = window._frf_cache_key_for_pane(state, pane)
     assert key is not None
     window.analysis_caches["frf"].put(key, result)
+    accept_cached_result(state, (key,))
     return result
 
 
@@ -809,9 +811,9 @@ def test_e1_fft_cache_hit_light_fade(
     restores = []
     orig_restore = window._render_analysis_view_from_cache
 
-    def restore(section, state):
+    def restore(section, state, rendered_ids=None):
         restores.append(section)
-        return orig_restore(section, state)
+        return orig_restore(section, state, rendered_ids)
 
     monkeypatch.setattr(window, "_render_analysis_view_from_cache", restore)
     _admit_fft_page_transition_for_test(window)
@@ -899,9 +901,9 @@ def test_e1_fft_preview_only_retained_path(
     restores = []
     orig_restore = window._render_analysis_view_from_cache
 
-    def restore(section, state):
+    def restore(section, state, rendered_ids=None):
         restores.append(section)
-        return orig_restore(section, state)
+        return orig_restore(section, state, rendered_ids)
 
     monkeypatch.setattr(window, "_render_analysis_view_from_cache", restore)
     _admit_fft_page_transition_for_test(window)
@@ -991,9 +993,9 @@ def test_e1_fft_retained_reveal_ready_path(
     restores = []
     orig_restore = window._render_analysis_view_from_cache
 
-    def restore(section, state):
+    def restore(section, state, rendered_ids=None):
         restores.append(section)
-        return orig_restore(section, state)
+        return orig_restore(section, state, rendered_ids)
 
     monkeypatch.setattr(window, "_render_analysis_view_from_cache", restore)
     armed = []
@@ -1231,9 +1233,9 @@ def test_e2_time_to_fft_and_back_user_navigation(
     restores = []
     orig_restore = window._render_analysis_view_from_cache
 
-    def restore(section, state):
+    def restore(section, state, rendered_ids=None):
         restores.append(section)
-        return orig_restore(section, state)
+        return orig_restore(section, state, rendered_ids)
 
     monkeypatch.setattr(window, "_render_analysis_view_from_cache", restore)
 
@@ -1411,9 +1413,9 @@ def test_e3_frf_multi_subplot_internal_switch(
     restores = []
     orig_restore = window._render_analysis_view_from_cache
 
-    def restore(section, state):
+    def restore(section, state, rendered_ids=None):
         restores.append(section)
-        return orig_restore(section, state)
+        return orig_restore(section, state, rendered_ids)
 
     monkeypatch.setattr(window, "_render_analysis_view_from_cache", restore)
     _admit_frf_page_transition_for_test(window)
@@ -1719,6 +1721,7 @@ def _seed_fft_view_cache(window, state, fid, channel="speed"):
     freq = np.asarray([0.0, 1.0, 2.0], dtype=float)
     amp = np.asarray([1.0, 0.5, 0.25], dtype=float)
     window.analysis_caches["fft"].put(key, (freq, amp, amp ** 2))
+    accept_cached_result(state, (key,))
     assert key is not None
     return key
 
@@ -1734,6 +1737,7 @@ def _seed_fft_time_view_cache(window, state, fid, channel="speed"):
     key = window._analysis_cache_key("fft_time", fid, channel, pane_idx=0)
     result = _fft_time_spec_result(channel)
     window.analysis_caches["fft_time"].put(key, result)
+    accept_cached_result(state, (key,))
     assert key is not None
     return result
 
@@ -1751,6 +1755,7 @@ def _seed_order_view_cache(window, state, fid, *, signal="torque", rpm="speed"):
     )
     result = _order_cot_result()
     window.analysis_caches["order"].put(key, result)
+    accept_cached_result(state, (key,))
     assert key is not None
     return result
 
@@ -1879,9 +1884,9 @@ def test_e4_heatmap_slice_and_colorbar_invalidation(
     restores = []
     orig_restore = window._render_analysis_view_from_cache
 
-    def restore(section, state):
+    def restore(section, state, rendered_ids=None):
         restores.append(section)
-        return orig_restore(section, state)
+        return orig_restore(section, state, rendered_ids)
 
     monkeypatch.setattr(window, "_render_analysis_view_from_cache", restore)
     _admit_heatmap_page_transition_for_test(window, "fft_time")
@@ -2533,9 +2538,9 @@ def test_analysis_admission_uses_target_params(
     restores = []
     orig_restore = window._render_analysis_view_from_cache
 
-    def restore(sec, state):
+    def restore(sec, state, rendered_ids=None):
         restores.append((sec, state.view_id))
-        return orig_restore(sec, state)
+        return orig_restore(sec, state, rendered_ids)
 
     monkeypatch.setattr(window, "_render_analysis_view_from_cache", restore)
     dirty_before = window._project_dirty.is_dirty

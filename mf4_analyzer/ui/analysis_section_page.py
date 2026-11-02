@@ -404,7 +404,9 @@ class AnalysisSectionPage(QWidget):
                 self._configure_shared_toolbar()
         lay.addWidget(self._split, stretch=1)
 
-        self.manager.active_changed.connect(self.refresh_focus_style)
+        # ViewTabBar owns the confirmed switch marker. A focus-only refresh
+        # must not snap it before/after that slot starts its interpolation.
+        self.manager.active_changed.connect(self._apply_focus_style)
         self.manager.views_changed.connect(self.refresh_focus_style)
         # Swallows the toggled(bool) edge during programmatic
         # sync_compare_buttons so state→button seeding never loops back as a
@@ -1214,7 +1216,7 @@ class AnalysisSectionPage(QWidget):
         self._apply_focus_style()
         self.tabbar.refresh_comparison_presentation()
 
-    def _apply_focus_style(self) -> None:
+    def _apply_focus_style(self, *_args) -> None:
         focus_accent = self._active_view_focus_accent()
         comparison = self._peer_host is not None
         host_focused = self._comparison_focus_is_host or not comparison

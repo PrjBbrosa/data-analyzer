@@ -7,8 +7,8 @@ new report renderer and the existing single-file pyqtgraph canvases, derives
 plot crops from live scene geometry, and records structural + visual tokens.
 
 Reference levels / colormap names must come from the product helpers
-(``_auto_db_window`` / ``DEFAULT_HEATMAP_CMAP``), never a re-declared
-percentile formula — see
+(``_auto_db_window`` / ``DEFAULT_HEATMAP_CMAP`` / ``FALLBACK_HEATMAP_CMAP``),
+never a re-declared percentile formula — see
 ``docs/analyzer/specs/2026-08-12-guideline-hardening-spec.md`` §3.3
 (C2/C3 verify-tool contract).
 """
@@ -46,6 +46,7 @@ from mf4_analyzer.batch_render_qt._dispatch import ensure_app
 from mf4_analyzer.batch_render_qt._export import render_scene_image
 from mf4_analyzer.qt_analysis_shared import (
     DEFAULT_HEATMAP_CMAP,
+    FALLBACK_HEATMAP_CMAP,
     _auto_db_window,
 )
 from mf4_analyzer.batch_render_qt._page import render_metadata
@@ -241,7 +242,7 @@ def _cases() -> list[ParityCase]:
     db_auto_levels = _auto_db_window(heatmap_db)
     db_label = "Amplitude (dB re 1×10⁰)"
     invalid_warning = (
-        f"Invalid colormap 'not-a-real-map'; using '{DEFAULT_HEATMAP_CMAP}'."
+        f"Invalid colormap 'not-a-real-map'; using '{FALLBACK_HEATMAP_CMAP}'."
     )
 
     return [

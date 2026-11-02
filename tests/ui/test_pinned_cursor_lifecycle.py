@@ -40,6 +40,124 @@ from mf4_analyzer.ui.project_io import (
 from mf4_analyzer.ui.view_state import ViewManager, ViewState, is_reusable_blank_view
 
 
+@pytest.mark.parametrize("late_signal", [None, "presentation_content_invalidated", "chart_rebuilt"])
+def test_canvas_signals_disconnect_when_controller_is_destroyed(qapp, qtbot, late_signal):
+    from PyQt5.QtCore import pyqtSignal
+    from PyQt5.QtWidgets import QWidget
+    from mf4_analyzer.ui.chart_stack.pinned_cursor_controller import PinnedCursorController
+
+    class Canvas(QWidget):
+        presentation_content_invalidated = pyqtSignal()
+        chart_rebuilt = pyqtSignal()
+
+    host = QWidget()
+    canvas = Canvas(host)
+    qtbot.addWidget(host)
+    controller = PinnedCursorController(host)
+    controller.bind_canvas(canvas)
+    assert canvas.receivers(canvas.presentation_content_invalidated) == 1
+    assert canvas.receivers(canvas.chart_rebuilt) == 1
+
+    sip.delete(controller)
+    assert sip.isdeleted(controller)
+    assert canvas.receivers(canvas.presentation_content_invalidated) == 0
+    assert canvas.receivers(canvas.chart_rebuilt) == 0
+    with qtbot.captureExceptions() as errors:
+        if late_signal is not None:
+            getattr(canvas, late_signal).emit()
+        sip.delete(canvas)
+    assert errors == []
+
+
+def test_controller_canvas_gc_does_not_call_destroyed_receiver():
+    import os
+    import subprocess
+    import sys
+    import textwrap
+    from pathlib import Path
+
+    # A fresh process avoids the UI fixture's intentional strong pin-registry
+    # references, which defer these objects' cycle collection until teardown.
+    script = textwrap.dedent("""
+        import gc
+        import sys
+        import traceback
+        import weakref
+        from PyQt5.QtCore import QCoreApplication, QEvent
+        from PyQt5.QtWidgets import QApplication, QWidget
+        from mf4_analyzer.ui.chart_stack.pinned_cursor_controller import PinnedCursorController
+
+        app = QApplication([])
+        errors = []
+        def capture(kind, value, tb):
+            errors.append(''.join(traceback.format_exception(kind, value, tb)))
+            traceback.print_exception(kind, value, tb)
+        sys.excepthook = capture
+
+        def make(controller_first, canvas_is_child):
+            host = QWidget()
+            if controller_first:
+                controller = PinnedCursorController(host)
+                canvas = QWidget(host if canvas_is_child else None)
+            else:
+                canvas = QWidget(host if canvas_is_child else None)
+                controller = PinnedCursorController(host)
+            controller.bind_canvas(canvas)
+            return [weakref.ref(obj) for obj in (host, controller, canvas)]
+
+        for canvas_is_child in (True, False):
+            for controller_first in (True, False):
+                refs = make(controller_first, canvas_is_child)
+                gc.collect()
+                QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+                app.processEvents()
+                gc.collect()
+                assert all(ref() is None for ref in refs)
+                assert errors == [], errors
+    """)
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=Path(__file__).resolve().parents[2],
+        env={**os.environ, "QT_QPA_PLATFORM": "offscreen", "TMPDIR": "/tmp",
+             "PYTHONPATH": "."},
+        capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("cleanup", ["unbind", "close", "canvas_destroyed"])
+def test_canvas_receiver_cleanup_keeps_controller_alive(qapp, qtbot, cleanup):
+    from PyQt5.QtCore import QCoreApplication, QEvent, pyqtSignal
+    from PyQt5.QtWidgets import QWidget
+    from mf4_analyzer.ui.chart_stack.pinned_cursor_controller import PinnedCursorController
+
+    class Canvas(QWidget):
+        presentation_content_invalidated = pyqtSignal()
+        chart_rebuilt = pyqtSignal()
+
+    host = QWidget()
+    qtbot.addWidget(host)
+    canvas = Canvas(host)
+    controller = PinnedCursorController(host)
+    initial_children = len(controller.children())
+    controller.bind_canvas(canvas)
+    with qtbot.captureExceptions() as errors:
+        if cleanup == "unbind":
+            controller.unbind_canvas(canvas)
+        elif cleanup == "close":
+            controller.close()
+        else:
+            sip.delete(canvas)
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+    assert errors == []
+    assert not sip.isdeleted(controller)
+    assert controller._owners == {}
+    assert len(controller.children()) == initial_children
+    if not sip.isdeleted(canvas):
+        assert canvas.receivers(canvas.presentation_content_invalidated) == 0
+        assert canvas.receivers(canvas.chart_rebuilt) == 0
+
+
 def _single_pins(
     fid="f0",
     channel="torque",

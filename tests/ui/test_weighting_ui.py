@@ -350,6 +350,7 @@ def test_fft_time_colorbar_drag_preserves_weighting(qapp, qtbot):
 
     win = MainWindow()
     qtbot.addWidget(win)
+    win.toolbar._set_mode("fft_time")
     ctx = win.inspector.fft_time_ctx
     ctx.set_weighting_default("A")
 
@@ -367,6 +368,7 @@ def test_fft_time_colorbar_drag_does_not_emit_display_params(qapp, qtbot):
 
     win = MainWindow()
     qtbot.addWidget(win)
+    win.toolbar._set_mode("fft_time")
     ctx = win.inspector.fft_time_ctx
     seen = []
     ctx.display_params_changed.connect(lambda *_: seen.append(True))
@@ -388,6 +390,7 @@ def test_order_colorbar_drag_preserves_weighting(qapp, qtbot):
 
     win = MainWindow()
     qtbot.addWidget(win)
+    win.toolbar._set_mode("order")
     ctx = win.inspector.order_ctx
     ctx.set_weighting_default("A")
 
@@ -405,6 +408,7 @@ def test_order_colorbar_drag_does_not_emit_display_params(qapp, qtbot):
 
     win = MainWindow()
     qtbot.addWidget(win)
+    win.toolbar._set_mode("order")
     ctx = win.inspector.order_ctx
     seen = []
     ctx.display_params_changed.connect(lambda *_: seen.append(True))

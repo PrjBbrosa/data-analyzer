@@ -7,9 +7,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from functools import partial
+from weakref import ref
 
 from PyQt5 import sip
-from PyQt5.QtCore import QEvent, QObject, QPoint, QTimer, Qt, pyqtSignal
+from PyQt5.QtCore import QEvent, QObject, QPoint, QTimer, Qt, pyqtSignal, pyqtSlot
 from PyQt5.QtGui import QKeyEvent
 from PyQt5.QtWidgets import QApplication, QWidget
 
@@ -120,10 +121,40 @@ class _OwnerState:
     axis_edit_timer: object = None
     axis_edit: object = None
     signal_conns: list = field(default_factory=list)
+    signal_receiver: object = None
     projected_generation: tuple | None = None
     skip_stale_invalidation: bool = False
     restore_hold: object = None
     restore_commit_waiting: object = None
+
+
+class _CanvasSignalReceiver(QObject):
+    """Give canvas callbacks the controller's Qt lifetime, including during GC."""
+
+    def __init__(self, controller, key):
+        super().__init__(controller)
+        # GC clears weak references before tearing down cyclic Python state;
+        # a QObject can still emit destroyed while that teardown is underway.
+        self._controller_ref = ref(controller)
+        self._key = key
+
+    @pyqtSlot()
+    def on_destroyed(self):
+        controller = self._controller_ref()
+        if _widget_alive(controller):
+            controller._on_canvas_destroyed(self._key)
+
+    @pyqtSlot()
+    def on_content_invalidated(self):
+        controller = self._controller_ref()
+        if _widget_alive(controller):
+            controller._on_content_invalidated(self._key)
+
+    @pyqtSlot()
+    def on_chart_rebuilt(self):
+        controller = self._controller_ref()
+        if _widget_alive(controller):
+            controller._on_chart_rebuilt(self._key)
 
 
 class _PinHostPorts:
@@ -335,19 +366,23 @@ class PinnedCursorController(QObject):
         )
         self._owners[key] = owner
         self._projector.bind_canvas(key, canvas)
+        # A partial(bound_method, key) has no QObject receiver lifetime: a
+        # surviving canvas can call it after the controller's C++ deletion.
+        receiver = _CanvasSignalReceiver(self, key)
+        owner.signal_receiver = receiver
         destroyed = getattr(canvas, "destroyed", None)
         if destroyed is not None:
-            slot = partial(self._on_canvas_destroyed, key)
+            slot = receiver.on_destroyed
             destroyed.connect(slot)
             owner.signal_conns.append((destroyed, slot))
         invalidated = getattr(canvas, "presentation_content_invalidated", None)
         if invalidated is not None:
-            slot = partial(self._on_content_invalidated, key)
+            slot = receiver.on_content_invalidated
             invalidated.connect(slot)
             owner.signal_conns.append((invalidated, slot))
         rebuilt = getattr(canvas, "chart_rebuilt", None)
         if rebuilt is not None:
-            slot = partial(self._on_chart_rebuilt, key)
+            slot = receiver.on_chart_rebuilt
             rebuilt.connect(slot)
             owner.signal_conns.append((rebuilt, slot))
 
@@ -1745,6 +1780,10 @@ class PinnedCursorController(QObject):
 
     @staticmethod
     def _disconnect_owner_signals(owner) -> None:
+        receiver = owner.signal_receiver
+        owner.signal_receiver = None
+        if _widget_alive(receiver):
+            receiver.deleteLater()
         canvas = owner.canvas
         if not _widget_alive(canvas):
             owner.signal_conns.clear()

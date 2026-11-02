@@ -305,6 +305,8 @@ lesson by default.
 | [Analysis Log Ranges Are Engineering Values](analysis-log-scale-engineering-range.md) | Changing FFT or spectrum log scale, `plot_spectra`, or chart-options range apply. | See lesson |
 | [Expression Functions Must Reject NumPy Output Arguments](expression-functions-reject-numpy-output-arguments.md) | Adding expression validation, trial evaluation, or functions backed by NumPy. | See lesson |
 | [Partial Imports Preserve Identity And Sample Gaps](partial-import-must-preserve-identity-and-sample-gaps.md) | Relaxing file-import rejection or carrying partial-import diagnostics through GUI, project reload, or Batch. | See lesson |
+| [Qt Canvas Callbacks Need Receiver Lifetime](qt-canvas-callbacks-need-receiver-lifetime.md) | Connecting canvas signals to a QObject owner that can be destroyed first, especially with `partial(bound_method, key)` or during cyclic GC. | See lesson |
+| [Unowned Test Canvases Can Steal Later Mouse Events](unowned-test-canvases-can-steal-later-mouse-events.md) | Hover or pin tests pass alone but fail in a shared QApplication although widgetAt, active window, style, and mouse buttons look correct. | See lesson |
 
 ## Selection Rules
 

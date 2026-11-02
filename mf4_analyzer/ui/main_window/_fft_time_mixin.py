@@ -1182,7 +1182,8 @@ class FFTTimeMixin:
             if state is None or not 0 <= pane_idx < len(state.panes):
                 return
             pane = state.panes[pane_idx]
-            if _ctx.get('pane_token', id(pane)) != id(pane) or request.revision != pane.request_revision:
+            if (_ctx.get('pane_token', _fft_time_pane_token(pane)) != _fft_time_pane_token(pane)
+                    or request.revision != pane.request_revision):
                 return
             mark_pending(pane)
             if (

@@ -197,6 +197,19 @@ CONTROL_QSS_TOKENS: Mapping[str, str] = MappingProxyType({
     "SURFACE_WARNING_BORDER": "#fde68a",
     "SURFACE_WARNING_DARK_TEXT": "#92400e",
     "SURFACE_DARK_TEXT": "#1e293b",
+    # Expression validation is one rest/hover/ok/error interaction family
+    # (qss-consolidation spec §3.3). Preserve its shipped RGBs while keeping
+    # the stylesheet literal palette at its existing shrink-only floor.
+    "EXPR_CHECK_OK": "#248653",
+    "EXPR_CHECK_OK_BG": "#f5fcf7",
+    "EXPR_CHECK_ERROR": "#ca414b",
+    "EXPR_CHECK_ERROR_BG": "#fff7f7",
+    "EXPR_CHECK_BORDER": "#cdd9e9",
+    "EXPR_CHECK_BG": "#f8faff",
+    "EXPR_CHECK_TEXT": "#516b8b",
+    "EXPR_CHECK_HOVER_BG": "#edf4ff",
+    "EXPR_CHECK_OK_BORDER": "#9ccbb0",
+    "EXPR_CHECK_ERROR_BORDER": "#e3acb1",
 })
 """QSS placeholders derived from :data:`CONTROL_COLORS` and height tracks."""
 

@@ -272,8 +272,16 @@ def test_spectral_presets_use_html_cards_with_parameter_summaries(qapp, qtbot):
 
 def test_batch_preset_card_qss_matches_normal_and_compact_outer_heights():
     from pathlib import Path
+    from mf4_analyzer.ui_kit.control_style import CONTROL_QSS_TOKENS
+    from mf4_analyzer.ui_kit.icons import render_qss_template
+    from mf4_analyzer.ui_kit.ultraview_style import ULTRAVIEW_QSS_TOKENS
 
-    qss = Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
+    # Assert the production colors/geometry after expanding template tokens;
+    # raw {{TOKEN}} braces would also truncate the rule-body split below.
+    qss = render_qss_template(
+        Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8"),
+        {**CONTROL_QSS_TOKENS, **ULTRAVIEW_QSS_TOKENS},
+    )
 
     normal = qss.split("QPushButton#BatchAnalysisPresetCard {")[1].split("}", 1)[0]
     compact = qss.split(

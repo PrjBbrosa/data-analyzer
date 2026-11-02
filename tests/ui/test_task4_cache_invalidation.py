@@ -368,17 +368,13 @@ class TestFallbackKeyAlignsPrimaryKey:
                 self_.inspector = types.SimpleNamespace(
                     fft_time_ctx=_Ctx(), top=_Top(),
                 )
+                from mf4_analyzer.ui.analysis_view_state import AnalysisViewState, PaneState
+                state = AnalysisViewState(name="Probe", tab_color="#123456", view_id="probe-view")
+                state.params = _Ctx().get_params()
+                state.panes = [PaneState(sources=[("f0", "sig0")]),
+                               PaneState(sources=[("f1", "sig1")])]
                 self_.analysis_managers = {
-                    'fft_time': types.SimpleNamespace(
-                        active=0,
-                        get=lambda _active: types.SimpleNamespace(
-                            view_id='probe-view',
-                            panes=[
-                                types.SimpleNamespace(sources=[('f0', 'sig0')]),
-                                types.SimpleNamespace(sources=[('f1', 'sig1')]),
-                            ]
-                        ),
-                    )
+                    "fft_time": types.SimpleNamespace(active=0, get=lambda _active: state)
                 }
                 self_._analysis_jobs = _Jobs()
                 self_._analysis_progress_tokens = {}

@@ -76,12 +76,14 @@ def test_chart_options_dialog_uses_chinese_labels_and_reads_handle(qapp):
     assert dlg.combo_y_scale.currentText() == "对数"
 
 
-def test_chart_options_dialog_fits_available_height_and_keeps_actions_visible(qapp):
+def test_chart_options_dialog_fits_available_height_and_keeps_actions_visible(qapp, qtbot):
     from PyQt5.QtWidgets import QApplication, QScrollArea
     from mf4_analyzer.ui.dialogs import ChartOptionsDialog
 
     _canvas, handle = _pg_handle_with_one_curve(qapp)
+    qtbot.addWidget(_canvas)
     dlg = ChartOptionsDialog(None, handle)
+    qtbot.addWidget(dlg)
     dlg.show()
     qapp.processEvents()
 
@@ -94,7 +96,7 @@ def test_chart_options_dialog_fits_available_height_and_keeps_actions_visible(qa
         assert dlg.rect().contains(button.mapTo(dlg, button.rect().bottomRight()))
 
 
-def test_chart_options_compact_work_area_does_not_keep_430_floor(qapp, monkeypatch):
+def test_chart_options_compact_work_area_does_not_keep_430_floor(qapp, qtbot, monkeypatch):
     from PyQt5.QtWidgets import QApplication, QScrollArea
     from mf4_analyzer.ui.dialogs import ChartOptionsDialog
     from mf4_analyzer.ui_kit.dialog_geometry import FrameInsets, IntRect, SCREEN_MARGIN
@@ -108,7 +110,9 @@ def test_chart_options_compact_work_area_does_not_keep_430_floor(qapp, monkeypat
         lambda _widget: FrameInsets(),
     )
     _canvas, handle = _pg_handle_with_one_curve(qapp)
+    qtbot.addWidget(_canvas)
     dlg = ChartOptionsDialog(None, handle)
+    qtbot.addWidget(dlg)
     dlg.show()
     qapp.processEvents()
     assert dlg.width() <= 640 - 2 * SCREEN_MARGIN
@@ -118,7 +122,7 @@ def test_chart_options_compact_work_area_does_not_keep_430_floor(qapp, monkeypat
         assert dlg.rect().contains(button.mapTo(dlg, button.rect().bottomRight()))
 
 
-def test_chart_options_tab_bar_does_not_paint_trailing_white_base(qapp):
+def test_chart_options_tab_bar_does_not_paint_trailing_white_base(qapp, qtbot):
     """Unused tab-bar strip must match dialog chrome, not a leftover white slab.
 
     Global ``QWidget { background:#ffffff }`` otherwise fills the QTabBar
@@ -132,7 +136,9 @@ def test_chart_options_tab_bar_does_not_paint_trailing_white_base(qapp):
     qapp.setStyle("Fusion")
     load_stylesheet(qapp)
     _canvas, handle = _pg_handle_with_one_curve(qapp)
+    qtbot.addWidget(_canvas)
     dlg = ChartOptionsDialog(None, handle)
+    qtbot.addWidget(dlg)
     dlg.show()
     qapp.processEvents()
 
@@ -291,12 +297,13 @@ def test_pg_chart_options_reads_grid_initial_state(qapp):
     assert dlg.chk_grid.isChecked() is True
 
 
-def test_pg_chart_options_overlay_apply_preserves_x_only_grid(qapp):
+def test_pg_chart_options_overlay_apply_preserves_x_only_grid(qapp, qtbot):
     from PyQt5.QtCore import QCoreApplication
     from mf4_analyzer.ui.dialogs import ChartOptionsDialog
     from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
 
     canvas = TimeDomainCanvasPG()
+    qtbot.addWidget(canvas)
     canvas.resize(900, 480)
     canvas.show()
     t = np.linspace(0.0, 1.0, 200)
@@ -308,6 +315,7 @@ def test_pg_chart_options_overlay_apply_preserves_x_only_grid(qapp):
 
     pi = canvas._x_master_handle.plot_item
     dlg = ChartOptionsDialog(None, canvas.axes_list[0])
+    qtbot.addWidget(dlg)
     assert dlg.chk_grid.isChecked()
     dlg.apply_changes()
     QCoreApplication.processEvents()
@@ -529,12 +537,13 @@ def test_pg_chart_options_curve_color_syncs_owning_axis_color(qapp):
     assert "#1769e0" not in seen[-1]
 
 
-def test_pg_chart_options_curve_color_updates_inside_label_badge(qapp):
+def test_pg_chart_options_curve_color_updates_inside_label_badge(qapp, qtbot):
     from PyQt5.QtCore import QCoreApplication
     from mf4_analyzer.ui.dialogs import ChartOptionsDialog
     from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
 
     canvas = TimeDomainCanvasPG()
+    qtbot.addWidget(canvas)
     canvas.resize(1200, 800)
     canvas.show()
     t = np.linspace(0.0, 1.0, 200)
@@ -554,6 +563,7 @@ def test_pg_chart_options_curve_color_updates_inside_label_badge(qapp):
 
     assert canvas._inside_label_items
     dlg = ChartOptionsDialog(None, canvas.axes_list[0])
+    qtbot.addWidget(dlg)
     dlg.edit_curve_color.setText("#123456")
     dlg.apply_changes()
     QCoreApplication.processEvents()
@@ -1865,7 +1875,7 @@ def _assert_shared_field_column(fields):
     assert min(widget.width() for widget in fields) > 180
 
 
-def test_chart_options_form_columns_track_dialog_width(qapp):
+def test_chart_options_form_columns_track_dialog_width(qapp, qtbot):
     from PyQt5.QtCore import Qt
     from PyQt5.QtWidgets import QScrollArea, QStyleFactory
     from mf4_analyzer.ui.dialogs import ChartOptionsDialog
@@ -1873,6 +1883,7 @@ def test_chart_options_form_columns_track_dialog_width(qapp):
 
     load_stylesheet(qapp)
     _canvas, handle = _pg_handle_with_one_curve(qapp)
+    qtbot.addWidget(_canvas)
     styles = [name for name in ("macintosh", "Windows", "Fusion") if name in QStyleFactory.keys()]
     assert "Fusion" in styles
     previous = qapp.style().objectName()
@@ -1880,6 +1891,7 @@ def test_chart_options_form_columns_track_dialog_width(qapp):
         for style_name in styles:
             qapp.setStyle(style_name)
             dlg = ChartOptionsDialog(None, handle)
+            qtbot.addWidget(dlg)
             dlg.show()
             qapp.processEvents()
             dlg.resize(430, max(dlg.height(), 720))

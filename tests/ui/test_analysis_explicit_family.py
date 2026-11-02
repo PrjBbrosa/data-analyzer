@@ -148,7 +148,7 @@ def test_async_failure_retains_binding_and_marks_pending(win, section, monkeypat
     pane = state.panes[0]
     bind_result(pane, snapshot_request(state, pane), ("old-applied",))
     request = snapshot_request(state, pane)
-    ctx = {"view_id": state.view_id, "pane_idx": 0, "pane_token": id(pane), "request_snapshot": request}
+    ctx = {"view_id": state.view_id, "pane_idx": 0, "pane_token": win._fft_time_pane_token(pane) if section == "fft_time" else id(pane), "request_snapshot": request}
     callback = win._on_fft_time_failed if section == "fft_time" else win._on_order_job_failed
     callback(ctx, "computation cancelled")
     assert pane.result_binding.keys == ("old-applied",)
@@ -163,7 +163,7 @@ def test_async_failure_does_not_overwrite_unrelated_context(win, section, change
     pane = state.panes[0]
     bind_result(pane, snapshot_request(state, pane), ("old-applied",))
     request = snapshot_request(state, pane)
-    context = {"view_id": state.view_id, "pane_idx": 0, "pane_token": id(pane), "request_snapshot": request}
+    context = {"view_id": state.view_id, "pane_idx": 0, "pane_token": win._fft_time_pane_token(pane) if section == "fft_time" else id(pane), "request_snapshot": request}
     manager = win.analysis_managers[section]
     if changed == "edited":
         mark_pending(pane)

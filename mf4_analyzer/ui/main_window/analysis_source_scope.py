@@ -14,6 +14,7 @@ from ..analysis_view_state import (
     normalize_analysis_attachments,
 )
 from ..time_xaxis import EXACT_SOURCE, CustomXAxisSpec
+from ..analysis_result_state import mark_pending
 
 
 @dataclass(frozen=True)
@@ -275,6 +276,14 @@ def detach_analysis_files(
     ]
 
     for pane_idx, pane in enumerate(state.panes):
+        binding = pane.result_binding
+        accepted_sources = () if binding is None else (
+            *binding.request.sources,
+            binding.request.rpm_source,
+            binding.request.input_source,
+            binding.request.output_source,
+        )
+        accepted_hit = any(key is not None and str(key[0]) in removed for key in accepted_sources)
         before_signal_sources = (tuple(pane.sources), pane.rpm_source)
         kept_sources = []
         for key in pane.sources:
@@ -310,7 +319,12 @@ def detach_analysis_files(
             pane.input_source = None
             pane.output_source = None
 
-        if before_signal_sources != (tuple(pane.sources), pane.rpm_source):
+        if (accepted_hit or input_hit or output_hit
+                or before_signal_sources != (tuple(pane.sources), pane.rpm_source)):
+            # Detaching a source revokes both the displayed request and any
+            # in-flight result. Draft roles may already differ from the picture.
+            mark_pending(pane)
+            pane.result_binding = None
             pane.xlim = pane.ylim = None
             pane.viewport_origin = {"x": "auto", "y": "auto"}
 

@@ -88,6 +88,28 @@ def test_duplicate_deep_copies_attachment_with_new_view_id():
     assert original.attached_file_ids == ["f1", "f2"]
 
 
+@pytest.mark.parametrize("role", ["sources", "rpm_source", "input_source", "output_source"])
+def test_detach_invalidates_accepted_sources_even_after_draft_changes(role):
+    from mf4_analyzer.ui.analysis_result_state import bind_result, snapshot_request
+    from mf4_analyzer.ui.analysis_view_state import AnalysisViewState
+    from mf4_analyzer.ui.main_window.analysis_source_scope import detach_analysis_files
+
+    state = AnalysisViewState(name="Detach", tab_color="#123456")
+    state.attached_file_ids = ["removed", "retained"]
+    pane = state.panes[0]
+    setattr(pane, role, [("removed", "sig")] if role == "sources" else ("removed", "sig"))
+    request = snapshot_request(state, pane)
+    assert bind_result(pane, request, ("accepted",))
+    setattr(pane, role, [("retained", "sig")] if role == "sources" else ("retained", "sig"))
+
+    detach_analysis_files(state, ["removed"])
+
+    assert pane.result_binding is None
+    assert not bind_result(pane, request, ("late",))
+    assert state.attached_file_ids == ["retained"]
+    assert getattr(pane, role) == ([("retained", "sig")] if role == "sources" else ("retained", "sig"))
+
+
 def test_detach_analysis_files_filters_one_view_roles():
     from mf4_analyzer.ui.main_window.analysis_source_scope import (
         detach_analysis_files,

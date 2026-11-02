@@ -380,7 +380,7 @@ def test_late_completion_paints_the_view_that_dispatched_it(two_file_win, monkey
     hidden = {
         "view_id": third.view_id,
         "pane_idx": 0,
-        "pane_token": id(third.panes[0]),
+        "pane_token": win._fft_time_pane_token(third.panes[0]),
         "source": tuple(third.panes[0].sources[0]),
     }
     assert win._fft_time_completion_decision(hidden) == "keep"

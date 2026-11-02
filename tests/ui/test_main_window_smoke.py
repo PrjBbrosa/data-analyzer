@@ -2080,7 +2080,9 @@ def test_order_job_failed_routes_to_toast_and_status_bar(qtbot, monkeypatch):
     )
     win.statusBar.clearMessage()
 
-    win._on_order_job_failed(None, "boom")
+    win.toolbar._set_mode("order")
+    state = win.analysis_managers["order"].get(0)
+    win._on_order_job_failed({"view_id": state.view_id, "pane_idx": 0}, "boom")
 
     assert any(level == 'error' and "boom" in msg for msg, level in captured)
     assert "阶次分析错误" in win.statusBar.currentMessage()
@@ -2098,10 +2100,48 @@ def test_frf_failed_routes_to_toast_and_status_bar(qtbot, monkeypatch):
     )
     win.statusBar.clearMessage()
 
-    win._on_frf_failed({}, "boom")
+    win.toolbar._set_mode("frf")
+    state = win.analysis_managers["frf"].get(0)
+    win._on_frf_failed({"view_id": state.view_id, "pane_idx": 0}, "boom")
 
     assert any(level == 'error' and "boom" in msg for msg, level in captured)
     assert "频响错误" in win.statusBar.currentMessage()
+
+
+@pytest.mark.parametrize("stale", [None, "token", "revision"])
+def test_fft_time_failure_uses_dispatch_generation_and_retains_binding(qtbot, monkeypatch, stale):
+    import pandas as pd
+    from mf4_analyzer.ui.analysis_result_state import bind_result, snapshot_request
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    win.toolbar._set_mode("fft_time")
+    state = win.analysis_managers["fft_time"].get(0)
+    pane = state.panes[0]
+    frame = pd.DataFrame({"Time": [0., .01, .02], "Signal": [1., 2., 3.]})
+    win._register_file_data("failure-source.csv", frame, list(frame), {})
+    fid = next(iter(win.files))
+    state.attached_file_ids = [fid]
+    pane.sources = [(fid, "Signal")]
+    state.params.update(win.inspector.fft_time_ctx.current_params())
+    request = snapshot_request(state, pane)
+    assert bind_result(pane, request, ("last-good",))
+    ctx = {"view_id": state.view_id, "pane_idx": 0,
+           "pane_token": win._fft_time_pane_token(pane), "request_snapshot": request}
+    if stale == "token":
+        ctx["pane_token"] += 1
+    elif stale == "revision":
+        pane.request_revision += 1
+    captured = []
+    monkeypatch.setattr(win, "toast", lambda message, level="info": captured.append((message, level)))
+    win.statusBar.clearMessage()
+
+    win._on_fft_time_failed(ctx, "generation failure")
+
+    assert pane.result_binding.keys == ("last-good",)
+    assert bool(captured) is (stale is None)
+    assert ("generation failure" in win.statusBar.currentMessage()) is (stale is None)
+    assert pane.result_binding.stale is (stale is None)
 
 
 def test_fft_time_failed_routes_to_toast_and_status_bar(qtbot, monkeypatch):
@@ -2116,7 +2156,9 @@ def test_fft_time_failed_routes_to_toast_and_status_bar(qtbot, monkeypatch):
     )
     win.statusBar.clearMessage()
 
-    win._on_fft_time_failed(None, "boom")
+    win.toolbar._set_mode("fft_time")
+    state = win.analysis_managers["fft_time"].get(0)
+    win._on_fft_time_failed({"view_id": state.view_id, "pane_idx": 0}, "boom")
 
     assert any(level == 'error' and "boom" in msg for msg, level in captured)
     assert "FFT vs Time 错误" in win.statusBar.currentMessage()
@@ -3132,7 +3174,8 @@ def test_render_fft_time_on_requests_smooth_heatmap_interpolation(qtbot):
     win._render_fft_time_on(canvas, result=object(), p=_fft_time_base_params())
 
     assert canvas.kwargs["interp"] == "bilinear"
-    assert canvas.kwargs["cmap"] == "gnuplot2"
+    from mf4_analyzer.colormaps.registry import DEFAULT_HEATMAP_CMAP
+    assert canvas.kwargs["cmap"] == DEFAULT_HEATMAP_CMAP
     canvas._cmap_name = "plasma"
     win._render_fft_time_on(canvas, result=object(), p=_fft_time_base_params())
     assert canvas.kwargs["cmap"] == "plasma"
@@ -3171,7 +3214,8 @@ def test_render_order_on_uses_time_coverage_extent(qtbot):
     win._render_order_on(canvas, result)
 
     assert canvas.kwargs["x_extent"] == (0.0, 12.0)
-    assert canvas.kwargs["cmap"] == "gnuplot2"
+    from mf4_analyzer.colormaps.registry import DEFAULT_HEATMAP_CMAP
+    assert canvas.kwargs["cmap"] == DEFAULT_HEATMAP_CMAP
     canvas._cmap_name = "plasma"
     win._render_order_on(canvas, result)
     assert canvas.kwargs["cmap"] == "plasma"
@@ -3450,6 +3494,7 @@ def test_fft_time_failed_compute_keeps_old_chart(qtbot, monkeypatch):
     win = MainWindow()
     qtbot.addWidget(win)
 
+    win.toolbar._set_mode("fft_time")
     # Plot a known result first so the canvas has an image.
     seed = SpectrogramResult(
         times=np.linspace(0.0, 1.0, 8),
@@ -4806,9 +4851,8 @@ def test_fft_time_db_reference_change_triggers_cached_rerender(qapp, qtbot, monk
     """FFT-vs-Time dB reference is display-only, but changing it must still
     re-render the current result from cache without forcing a recompute.
 
-    The MainWindow wiring should mirror FFT/Order: valueChanged schedules
-    ``do_fft_time(force=False)`` so the normal cache-hit path redraws with the
-    new render-time ``db_reference``.
+    The MainWindow wiring should redraw the accepted result with the new
+    render-time reference without entering the compute command.
     """
     from mf4_analyzer.ui.main_window import MainWindow
 
@@ -4817,15 +4861,18 @@ def test_fft_time_db_reference_change_triggers_cached_rerender(qapp, qtbot, monk
     win.toolbar._set_mode("fft_time")
     calls = []
 
-    def fake_do_fft_time(force=False):
-        calls.append(force)
+    state = win.analysis_managers["fft_time"].get(0)
 
-    monkeypatch.setattr(win, "do_fft_time", fake_do_fft_time)
+    def record_redraw(section, target):
+        calls.append((section, target.view_id))
+
+    monkeypatch.setattr(win, "_render_analysis_view_from_cache", record_redraw)
+    monkeypatch.setattr(win, "do_fft_time", lambda **kwargs: pytest.fail("display edit submitted compute"))
 
     win.inspector.fft_time_ctx.spin_db_ref.setValue(2.0)
 
     qtbot.waitUntil(lambda: bool(calls), timeout=1000)
-    assert calls == [False]
+    assert calls == [("fft_time", state.view_id)]
 
 
 def test_fft_time_builtin_preset_does_not_schedule_dB_reference_rerender(

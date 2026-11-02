@@ -892,6 +892,11 @@ class ViewTabBar(QWidget):
     def refresh_fit(self) -> None:
         """Public entry for hosts that changed sibling width (UltraView Dock)."""
         self._sync_tabbar_width()
+        if (self._tab_layout_key() == self._marker_layout_key
+                and self._confirmed_active_view_id() == self._marker_view_id):
+            # Deferred host fitting also runs after an ordinary tab click.
+            # If geometry did not change, keep the confirmed-switch animation.
+            return
         self._relocate_marker(interpolate=False)
 
     def minimum_active_tab_width(self) -> int:

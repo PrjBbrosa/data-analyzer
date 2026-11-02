@@ -223,9 +223,9 @@ def test_confirmed_view_marker_starts_before_real_restore_for_time_and_fft(
         fft_events.append(("marker", fft_manager.active, interpolate))
         return real_fft_marker(interpolate=interpolate)
 
-    def record_fft_restore(section, state):
+    def record_fft_restore(section, state, rendered_ids=None):
         fft_events.append(("restore", section, state.view_id))
-        return real_fft_restore(section, state)
+        return real_fft_restore(section, state, rendered_ids)
 
     monkeypatch.setattr(fft_bar, "_relocate_marker", record_fft_marker)
     monkeypatch.setattr(window, "_render_analysis_view_from_cache", record_fft_restore)

@@ -10,6 +10,8 @@ import logging
 from types import SimpleNamespace
 
 import pytest
+from tests.ui._accepted_result import accept_cached_result
+from mf4_analyzer.ui.analysis_result_state import snapshot_request
 
 from mf4_analyzer.ui.main_window import MainWindow
 
@@ -19,9 +21,20 @@ def _fake_heatmap(tag):
 
 
 @pytest.fixture
-def win(qapp, qtbot):
+def win(qapp, qtbot, monkeypatch):
     w = MainWindow()
     qtbot.addWidget(w)
+    import numpy as np
+    import pandas as pd
+    from mf4_analyzer.io import FileData
+
+    channels = ["sig", *[f"ch{i}" for i in range(12)],
+                *[f"ch{i}-{j}" for i in range(12) for j in (0, 1)]]
+    frame = pd.DataFrame({"Time": np.arange(8) / 100., **{ch: np.arange(8.) for ch in channels}})
+    w.files["f1"] = FileData("source.csv", frame, list(frame), {}, idx=0)
+    # Residency tests replace the painter; the retained-picture predicate
+    # therefore cannot claim a picture was actually painted by that mock.
+    monkeypatch.setattr(w, "_heatmap_picture_is_current", lambda *a, **k: False)
     return w
 
 
@@ -74,6 +87,7 @@ def test_render_replace_self_cleans_stale_param_pins(win, monkeypatch):
     monkeypatch.setattr(win, "_show_analysis_empty_hint", lambda *a, **k: None)
     monkeypatch.setattr(win, "_clear_analysis_canvas", lambda *a, **k: None)
 
+    accept_cached_result(state, (new_key,))
     win._render_analysis_view_from_cache(section, state)
     assert win._analysis_pins[(section, state.view_id, 0)] == {new_key}
 
@@ -99,6 +113,7 @@ def test_heatmap_tour_twelve_views_never_misses(win, monkeypatch):
         win._store_analysis_result(
             section, state.view_id, 0, key, _fake_heatmap(idx)
         )
+        accept_cached_result(state, (key,))
         win._replace_analysis_pane_pins(section, state.view_id, 0, (key,))
 
     empty_hints = []
@@ -145,12 +160,15 @@ def test_dual_pane_twenty_four_bindings_never_miss(win, monkeypatch):
             win._store_analysis_result(
                 section, state.view_id, pane_idx, key, _fake_heatmap(ch)
             )
+            accept_cached_result(state, (key,), pane_idx)
             win._replace_analysis_pane_pins(
                 section, state.view_id, pane_idx, (key,)
             )
 
     monkeypatch.setattr(page, "pane_count", lambda: 2)
-    monkeypatch.setattr(page, "pane_canvas", lambda _i: SimpleNamespace())
+    from mf4_analyzer.ui.pg_canvas.heatmap_canvas import PgHeatmapCanvas
+    canvases = [PgHeatmapCanvas(parent=page), PgHeatmapCanvas(parent=page)]
+    monkeypatch.setattr(page, "pane_canvas", lambda i: canvases[i])
     empty_hints = []
     monkeypatch.setattr(
         win, "_show_analysis_empty_hint", lambda *_a, **_k: empty_hints.append(1)
@@ -186,6 +204,7 @@ def test_param_storm_on_one_view_does_not_evict_others(win):
         win._store_analysis_result(
             section, state.view_id, 0, key, _fake_heatmap(idx)
         )
+        accept_cached_result(state, (key,))
         win._replace_analysis_pane_pins(section, state.view_id, 0, (key,))
 
     active = mgr.get(0)
@@ -273,6 +292,8 @@ def test_async_order_completion_pins_dispatch_view_not_active(win, monkeypatch):
         "view_id": dispatched.view_id,
         "source": ("f1", "sig"),
     }
+    dispatched.panes[0].sources = [("f1", "sig")]
+    ctx["request_snapshot"] = snapshot_request(dispatched, dispatched.panes[0])
     win._on_order_job_finished(ctx, _fake_heatmap("async"))
     assert key in win._analysis_pins[(section, dispatched.view_id, 0)]
     assert (section, later.view_id, 0) not in win._analysis_pins
@@ -309,6 +330,8 @@ def test_async_order_stale_view_skips_draw_keeps_dispatch_cache(win, monkeypatch
         "view_id": dispatched.view_id,
         "source": ("f1", "sig"),
     }
+    dispatched.panes[0].sources = [("f1", "sig")]
+    ctx["request_snapshot"] = snapshot_request(dispatched, dispatched.panes[0])
     win._on_order_job_finished(ctx, result)
 
     assert drawn == [], "stale completion must not paint the active View canvas"
@@ -374,6 +397,7 @@ def test_async_fft_time_stale_view_skips_draw_keeps_dispatch_cache(
         "source": ("f1", "sig"),
         "render_params": {"amplitude_mode": "Amplitude dB"},
     }
+    ctx["request_snapshot"] = snapshot_request(dispatched, dispatched.panes[0])
     win._on_fft_time_render_requested(ctx, result, False)
 
     assert drawn == [], "stale FFT-vs-Time completion must not paint active View"
@@ -458,6 +482,7 @@ def test_bulk_close_all_clears_analysis_pins_and_leaves_one_view(win, monkeypatc
         key = cache.make_key("f1", state.view_id, {"nfft": 1, "time_range": None})
         keys.append((state.view_id, key))
         win._store_analysis_result(section, state.view_id, 0, key, _fake_heatmap(state.view_id))
+        accept_cached_result(state, (key,))
         win._replace_analysis_pane_pins(section, state.view_id, 0, (key,))
     win._analysis_restore_pending.add((section, mgr.views[1].view_id))
     monkeypatch.setattr(win, "_confirm_close_all_views", lambda *_a: True)

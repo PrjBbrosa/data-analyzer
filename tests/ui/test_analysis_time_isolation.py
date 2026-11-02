@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import numpy as np
 import pandas as pd
 import pytest
+from tests.ui._accepted_result import accept_cached_result
 
 from mf4_analyzer.io.file_data import FileData
 from mf4_analyzer.ui.main_window import MainWindow
@@ -386,6 +387,8 @@ def _seed_display_facts(win, section):
         # signal combo. Set the pane source after that commit.
         ctx.set_rpm_mode('manual')
     state.panes[0].sources = [('f1', 'sig')]
+    if section in {'fft_time', 'order'}:
+        ctx.set_signal_candidates([('sig', ('f1', 'sig'))], selected=('f1', 'sig'))
     state.params = ctx.current_params()
     ctx.set_effective_facts(facts)
     pane = state.panes[0]
@@ -411,6 +414,7 @@ def _seed_display_facts(win, section):
                 params=SimpleNamespace(nfft=64),
             ),
         )
+    accept_cached_result(state, (key,))
     return ctx, facts
 
 
@@ -474,12 +478,16 @@ def test_compute_preset_marks_facts_stale_without_submitting(
     assert submitted == []
 
 
-def test_fft_time_compute_revert_restores_current_facts(source_window, monkeypatch):
+def test_fft_time_compute_revert_requires_explicit_apply(source_window, monkeypatch, qtbot):
     win, *_rest = source_window
     win.toolbar._set_mode('fft_time')
     monkeypatch.setattr(win, '_render_fft_time_on', lambda *args, **kwargs: None)
     ctx, _facts = _seed_display_facts(win, 'fft_time')
     state = win.analysis_managers['fft_time'].get(0)
+    original_binding = state.panes[0].result_binding
+    original_result = win.analysis_caches['fft_time'].get(original_binding.keys[0])
+    submitted = []
+    monkeypatch.setattr(win._analysis_jobs, 'submit_batch', lambda *a, **k: submitted.append(a))
     original = float(ctx.compute_params()['t_win_s'])
     ctx.apply_params({'t_win_s': original + 0.25})
     win._on_analysis_compute_params_changed('fft_time', ctx.compute_params())
@@ -488,8 +496,17 @@ def test_fft_time_compute_revert_restores_current_facts(source_window, monkeypat
     ctx.apply_params({'t_win_s': original})
     win._on_analysis_compute_params_changed('fft_time', ctx.compute_params())
     assert state.params['t_win_s'] == pytest.approx(original)
-    assert not ctx.effective_facts_is_stale()
+    # Editing back does not implicitly accept a request: Calculate is the
+    # explicit apply boundary even when a result is already cached.
+    assert ctx.effective_facts_is_stale()
     assert '实际 Fs' in ctx.effective_facts_text()
+    assert state.panes[0].result_binding.keys == original_binding.keys
+    assert win.analysis_caches['fft_time'].get(original_binding.keys[0]) is original_result
+    assert submitted == []
+    win.do_fft_time(force=False)
+    qtbot.waitUntil(lambda: not ctx.effective_facts_is_stale())
+    assert win.analysis_caches['fft_time'].get(original_binding.keys[0]) is original_result
+    assert submitted == []
 
 
 def test_frf_job_reports_processing_without_touching_either_source_signal(source_window):

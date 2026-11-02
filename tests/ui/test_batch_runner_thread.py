@@ -248,9 +248,9 @@ def test_sheet_run_passes_db_reference_catalog_snapshot_from_parent(qtbot, tmp_p
     ``open_batch`` call site.
 
     Proven end-to-end: a channel carries a quantity/unit
-    (``torque``/``Nm``) absent from the factory catalog, so an unwired Run
-    path would resolve the neutral ``generic`` default (``1.0``, no
-    warning) -- resolving instead to the ISOLATED store's custom override
+    (``force``/``N``) present in the factory catalog, so an unwired Run
+    path would resolve the factory force reference (``1e-6``) -- resolving
+    instead to the ISOLATED store's user override
     value (``3.0``, source ``user``) is only possible if the live click
     handler actually forwarded the snapshot.
     """
@@ -267,15 +267,14 @@ def test_sheet_run_passes_db_reference_catalog_snapshot_from_parent(qtbot, tmp_p
     ini_path = tmp_path / "isolated-db-reference.ini"
     store = DbReferenceSettingsStore(settings=QSettings(str(ini_path), QSettings.IniFormat))
     result = store.save(
-        overrides=[],
-        custom=[{
-            "id": "user.torque_custom",
-            "quantity": "torque",
-            "label": "自定义扭矩基准",
-            "unit": "Nm",
-            "aliases": ["Nm"],
+        overrides=[{
+            "builtin_id": "force.si",
+            "label": "自定义力基准",
+            "unit": "N",
+            "aliases": ["N"],
             "reference": 3.0,
         }],
+        custom=[],
         hidden_builtin_ids=[],
         prefer_channel_metadata=True,
     )
@@ -290,7 +289,7 @@ def test_sheet_run_passes_db_reference_catalog_snapshot_from_parent(qtbot, tmp_p
     df = pd.DataFrame({"Time": t, "sig": np.sin(2 * np.pi * 50 * t)})
     fd = FileData(
         tmp_path / "x.csv", df, list(df.columns), {}, idx=0,
-        channel_metadata={"sig": {"quantity": "torque", "unit": "Nm"}},
+        channel_metadata={"sig": {"quantity": "force", "unit": "N"}},
     )
 
     sheet = BatchSheet(parent, files={0: fd})

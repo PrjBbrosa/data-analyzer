@@ -3314,34 +3314,34 @@ QDialog#DrawerSurface #ChannelEditorDialog {
     font-size: 12px;
 }
 #ChannelEditorDialog QLineEdit#channelExprEdit[checkState="ok"] {
-    border-color: #248653;
-    background-color: #f5fcf7;
+    border-color: {{EXPR_CHECK_OK}};
+    background-color: {{EXPR_CHECK_OK_BG}};
 }
 #ChannelEditorDialog QLineEdit#channelExprEdit[checkState="error"] {
-    border-color: #ca414b;
-    background-color: #fff7f7;
+    border-color: {{EXPR_CHECK_ERROR}};
+    background-color: {{EXPR_CHECK_ERROR_BG}};
 }
 #ChannelEditorDialog QToolButton#channelExprCheck {
     /* Qt QSS sizes the content; the two 1px borders make 28px outside. */
     min-width: 26px; max-width: 26px;
     min-height: 26px; max-height: 26px;
     padding: 0;
-    border: 1px solid #cdd9e9;
+    border: 1px solid {{EXPR_CHECK_BORDER}};
     border-radius: 5px;
-    background-color: #f8faff;
-    color: #516b8b;
+    background-color: {{EXPR_CHECK_BG}};
+    color: {{EXPR_CHECK_TEXT}};
     font-size: 16px;
 }
 #ChannelEditorDialog QToolButton#channelExprCheck:hover {
-    background-color: #edf4ff;
+    background-color: {{EXPR_CHECK_HOVER_BG}};
 }
 #ChannelEditorDialog QToolButton#channelExprCheck[checkState="ok"] {
-    color: #248653;
-    border-color: #9ccbb0;
+    color: {{EXPR_CHECK_OK}};
+    border-color: {{EXPR_CHECK_OK_BORDER}};
 }
 #ChannelEditorDialog QToolButton#channelExprCheck[checkState="error"] {
-    color: #ca414b;
-    border-color: #e3acb1;
+    color: {{EXPR_CHECK_ERROR}};
+    border-color: {{EXPR_CHECK_ERROR_BORDER}};
 }
 /* Bare ? glyph next to the expression input — no chrome, just the accent
  * color as the "there is help here" cue. Hover shows the reference through

@@ -1,6 +1,7 @@
 """Actual MainWindow render entries retain full result axes and slice masks."""
 import numpy as np
 import pytest
+from tests.ui._accepted_result import accept_cached_result
 from mf4_analyzer.ui.main_window import MainWindow
 from mf4_analyzer.signal.spectrogram import SpectrogramParams, SpectrogramResult
 
@@ -17,6 +18,7 @@ def test_fft_time_production_auto_frequency_and_home_slice(qtbot):
         amplitude=amp, params=SpectrogramParams(fs=24000., nfft=240), channel_name='test', unit='Pa')
     params = win.inspector.fft_time_ctx.get_params()
     params.update(freq_auto=True, y_auto=True, z_auto=True, amplitude_mode='amplitude')
+    win.analysis_managers["fft_time"].get(0).params.update(params)
     win._render_fft_time_on(canvas, r, params)
     assert canvas._plot.vb.viewRange()[1] == pytest.approx((0., 12000.))
     assert canvas._panel_freq_range is None
@@ -42,6 +44,7 @@ def test_order_production_slice_uses_transposed_source_valid_mask(qtbot, mode, r
     r = SimpleNamespace(times=np.array([0., 1.]), orders=np.arange(5.),
         amplitude=np.tile(raw, (2, 1)), params=SimpleNamespace(order_res=1., weighting='None', fs=10., nfft=8))
     c = win.chart_stack.page_order.pane_canvas(0)
+    win.analysis_managers["order"].get(0).params.update(ctx.current_params())
     win._render_order_on(c, r)
     c.select_time_index(0)
     assert c._slice_plot.vb.viewRange()[1] == pytest.approx(expected)
@@ -102,6 +105,7 @@ def test_order_and_fft_time_second_cache_restore_does_not_replot(qtbot):
         rpm_source=order_pane.rpm_source, pane_idx=0,
     )
     win.analysis_caches["order"].put(order_key, order_result)
+    accept_cached_result(order_state, (order_key,))
     order_canvas = win.chart_stack.page_order.pane_canvas(0)
     order_plots = _spy(order_canvas, "plot_or_update_heatmap")
     win._render_analysis_view_from_cache("order", order_state)
@@ -142,6 +146,7 @@ def test_order_and_fft_time_second_cache_restore_does_not_replot(qtbot):
     )
     fft_key = win._analysis_cache_key("fft_time", "fid-fft", "speed", pane_idx=0)
     win.analysis_caches["fft_time"].put(fft_key, fft_result)
+    accept_cached_result(fft_state, (fft_key,))
     fft_canvas = win.chart_stack.page_fft_time.pane_canvas(0)
     fft_plots = _spy(fft_canvas, "plot_result")
     win._render_analysis_view_from_cache("fft_time", fft_state)

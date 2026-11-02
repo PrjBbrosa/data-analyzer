@@ -1104,9 +1104,11 @@ class ChartOptionsDialog(QDialog):
             )
         self._commit_grid()
         self._commit_curves()
-        self._commit_cmap()
         self._commit_color_policy()
         self._commit_analysis_policy(appearance_dirty, range_edited, has_policy)
+        # Range/color policy may synchronously redraw from the accepted View.
+        # Apply the dialog's colormap after that redraw, before owner capture.
+        self._commit_cmap()
         self.handle.request_redraw()
         self._refresh_spin_sources()
 
@@ -1178,7 +1180,7 @@ class ChartOptionsDialog(QDialog):
         if not self._mappables or not self.combo_cmap.isEnabled():
             return
         name = self.combo_cmap.currentData()
-        if name == self._committed.get("cmap"):
+        if name == self._current_mappable().get_cmap().name:
             return
         self._current_mappable().set_cmap(name)
         self._committed["cmap"] = name

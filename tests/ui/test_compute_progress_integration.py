@@ -333,6 +333,7 @@ def test_fft_multi_source_progress_wraps_cache_misses_only(
         lambda fid, ch, _params, _time_range: (fid, ch),
     )
 
+    win.analysis_managers["fft"].get(0).params.update(win.inspector.fft_ctx.current_params())
     seen_params = []
 
     def fetch(fid, _ch, time_range=None, *, params=None):
@@ -1157,7 +1158,14 @@ def test_order_job_closure_passes_progress_callback_and_cancel_token(
             return False
 
     assert job(Worker()) is fake_result
+    from mf4_analyzer.ui.analysis_result_state import AnalysisRequestSnapshot
+    request = ctx["request_snapshot"]
+    assert isinstance(request, AnalysisRequestSnapshot)
+    assert request.sources == (("f1", "torque"),)
+    assert request.rpm_source == ("f1", "rpm")
+    assert request.revision == win.analysis_managers["order"].get(0).panes[0].request_revision
     assert ctx == {
+        "request_snapshot": request,
         "analysis_key": ("order", "f1", "torque"),
         "pane_idx": 0,
         "pane_token": id(win.analysis_managers["order"].get(0).panes[0]),

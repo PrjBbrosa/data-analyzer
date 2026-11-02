@@ -17,6 +17,13 @@ from mf4_analyzer.ui_kit.ultraview_style import ULTRAVIEW_QSS_TOKENS
 QSS_PATH = Path("mf4_analyzer/ui_kit/style.qss")
 
 
+def _rendered_qss():
+    return render_qss_template(
+        QSS_PATH.read_text(encoding="utf-8"),
+        {**CONTROL_QSS_TOKENS, **ULTRAVIEW_QSS_TOKENS},
+    )
+
+
 def _apply_widget_qss(widget):
     """Apply production QSS only to the visual tree under test.
 
@@ -28,10 +35,7 @@ def _apply_widget_qss(widget):
     # ``style.qss`` is a template now.  Keep this test's local-root cascade
     # (rather than repolishing every live qapp widget), but resolve the shared
     # control tokens exactly as the production stylesheet loader does.
-    widget.setStyleSheet(render_qss_template(
-        QSS_PATH.read_text(encoding="utf-8"),
-        {**CONTROL_QSS_TOKENS, **ULTRAVIEW_QSS_TOKENS},
-    ))
+    widget.setStyleSheet(_rendered_qss())
     return widget
 
 
@@ -80,7 +84,7 @@ def test_surface_shell_uses_porcelain_tray_and_real_statusbar(qapp, qtbot):
 
 
 def test_surface_qss_contract_has_porcelain_bars_and_flat_chart_toolbar():
-    qss = QSS_PATH.read_text(encoding="utf-8")
+    qss = _rendered_qss()
 
     assert "QMainWindow { background-color: #f2f4f7;" in qss
     assert "QWidget#centralTray { background-color: #f2f4f7;" in qss
@@ -103,7 +107,7 @@ def test_surface_qss_contract_has_porcelain_bars_and_flat_chart_toolbar():
 
 
 def test_surface_global_scrollbars_are_slim_and_quiet():
-    qss = QSS_PATH.read_text(encoding="utf-8")
+    qss = _rendered_qss()
 
     vertical = _qss_block(qss, "QScrollBar:vertical")
     horizontal = _qss_block(qss, "QScrollBar:horizontal")

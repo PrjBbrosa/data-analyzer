@@ -1913,6 +1913,14 @@ class MainWindow(
         xt, yt = self.inspector.top.tick_density()
         canvas.set_tick_density(xt, yt)
         self._restore_analysis_canvas_viewport('fft', canvas)
+        if self.chart_stack.current_mode() == 'fft':
+            # Computing a new selection paints the spectrum without going
+            # through the preview path. Remember that picture too, so a mode
+            # round-trip retains its toolbar history instead of replotting it.
+            focused = self._analysis_state_for_dispatch('fft')
+            focused_idx = self._dispatch_focus_index('fft', focused)
+            if canvas is self._dispatch_canvas('fft', focused, focused_idx):
+                self._fft_last_render_sig = self._fft_render_signature()
 
     def _render_cached_heatmap(self, section, canvas, result, source=None):
         """Render a cached heatmap result on ``canvas`` using the current
