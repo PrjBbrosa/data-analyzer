@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from .fft import get_analysis_window, one_sided_amplitude
+from .validation import require_finite_samples
 
 
 # Chunk size for vectorized FFT batching. Bounded to keep
@@ -167,6 +168,7 @@ class OrderAnalyzer:
             arr = arr.reshape(-1)
         if arr.size == 0:
             raise ValueError(f"{name} is empty")
+        require_finite_samples(arr, name)
         return arr
 
     @staticmethod

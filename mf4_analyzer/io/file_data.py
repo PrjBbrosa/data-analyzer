@@ -304,6 +304,15 @@ class FileData:
             apply_verified_zfd_sampling(self)
             apply_verified_hdf_sampling(self)
 
+            if (self.source_metadata.get("source_kind") in {"csv", "excel", "ascii", "tdms"}
+                    and "verified_sample_rate" in self.source_metadata):
+                rate = self.source_metadata["verified_sample_rate"]
+                # A single table timestamp is viewable, but does not imply a
+                # rate. The verified formats explicitly mark that as unknown.
+                self.fs = 0.0 if rate is None else float(rate)
+                if self.time_array is not None:
+                    self._time_source = "column"
+
             # 如果没有时间列，根据采样率生成
             if self.time_array is None:
                 self.time_array = np.arange(frame_row_count(df), dtype=float) / self.fs

@@ -307,6 +307,12 @@ _HINTS = (
         priority=44,
     ),
     Hint(
+        id="file.import_details",
+        text="文件卡片 ⓘ 可查看导入异常与缺口",
+        surface="discovery",
+        priority=43,
+    ),
+    Hint(
         id="file.zfd_timebase",
         text="ZFD 时基无效则拒绝导入",
         surface="discovery",

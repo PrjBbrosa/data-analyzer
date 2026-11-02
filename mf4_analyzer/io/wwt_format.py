@@ -21,6 +21,7 @@ char[256] + u16 记录总数），随后是「156 字节记录头 + 内联数据
   不得挡掉真实 ``Zeit``。
 """
 from __future__ import annotations
+import math
 import struct
 
 import numpy as np
@@ -63,28 +64,48 @@ def _looks_like_record_header(data: bytes, pos: int) -> bool:
     """重同步用的记录头结构判定。判据要严——扫描是在未知记录的数据区里
     逐字节踩点，宽了会把数据区里的假标签当记录头、让游标错位：
     - 5 字节标签 ∈ 已知集合（第 5 字节必须是 NUL）；
-    - 样本数 u32 在 (0, 50_000_000) 内；
+    - 样本数 u32 在 (0, 50_000_000) 内；零点 Zeit 另需可验证的后继边界；
     - 名称[40] / 单位[17] 的 **NUL 前缀**是可打印 latin-1（字节 ∈ {0}∪[0x20,0xFF]）。
 
     NUL **之后**的填充不检查：WinWert 有时在 ``Time\\0`` / ``s\\0`` 后面留下
     未初始化脏字节（DC2E_0011 第二段 Zeit）。若要求整段 40/17 字节洁净，
     Pars 重同步会假阴性跳过真实 Zeit，后续主测量通道全部因 n 不匹配被丢。
     """
-    if pos + _REC_HEADER_SIZE > len(data):
-        return False
-    if data[pos:pos + 5] not in _SCAN_TAGS:
-        return False
-    (n,) = struct.unpack_from("<I", data, pos + 5)
-    if not 0 < n < 50_000_000:
-        return False
-    for off, length in ((0x1b, 40), (0x43, 17)):
-        field = data[pos + off:pos + off + length]
-        end = field.find(b"\0")
-        prefix = field if end < 0 else field[:end]
-        for byte in prefix:
-            if byte < 0x20:
+    # Walk contiguous empty Zeit headers without recursion. A zero count alone
+    # is not evidence of a boundary inside a variable-length Pars payload.
+    empty_seen = False
+    while True:
+        if pos + _REC_HEADER_SIZE > len(data):
+            return False
+        tag = data[pos:pos + 5]
+        if tag not in _SCAN_TAGS:
+            return False
+        (n,) = struct.unpack_from("<I", data, pos + 5)
+        if n >= 50_000_000 or (n == 0 and tag != b"Zeit\0"):
+            return False
+        for off, length in ((0x1b, 40), (0x43, 17)):
+            field = data[pos + off:pos + off + length]
+            end = field.find(b"\0")
+            prefix = field if end < 0 else field[:end]
+            if any(byte < 0x20 for byte in prefix):
                 return False
-    return True
+        if n > 0:
+            dtype = _TAG_DTYPES.get(_cstr(tag))
+            if empty_seen and dtype is not None:
+                return pos + _REC_HEADER_SIZE + n * dtype.itemsize <= len(data)
+            return True
+        _a, dt, t0 = struct.unpack_from("<ddd", data, pos + 0x84)
+        if (not _cstr(data[pos + 0x1b:pos + 0x43])
+                or not math.isfinite(dt) or dt <= 0 or not math.isfinite(t0)):
+            return False
+        empty_seen = True
+        pos += _REC_HEADER_SIZE
+        if pos == len(data):
+            return True
+        if data[pos:pos + len(_TRAILER_PREFIX)] == _TRAILER_PREFIX:
+            # Lazy because wwt_display imports the constants from this module.
+            from .wwt_display import trailer_is_structurally_valid
+            return trailer_is_structurally_valid(data, pos, len(data))
 
 
 def load_wwt_groups(fp):

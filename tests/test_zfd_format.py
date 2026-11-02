@@ -549,6 +549,64 @@ def test_zfd_a7_nonzero_x_and_count_mismatch_rejected(tmp_path):
         DataLoader.load_zfd(str(p))
 
 
+@pytest.mark.parametrize("kind", ["empty", "short", "long", "x"])
+@pytest.mark.parametrize("bad_first", [False, True])
+def test_zfd_complete_structure_skips_only_incompatible_measurement(tmp_path, kind, bad_first):
+    bad_count = {"empty": 0, "short": 5, "long": 11, "x": 8}[kind]
+    bad = pack_float32_record(values=range(bad_count), name="A2: Bad", x=1 if kind == "x" else 0)
+    good = pack_float32_record(values=range(8), name="A1: Good", unit="N")
+    measurements = (bad, good) if bad_first else (good, bad)
+    p = write_zfge2(tmp_path / "partial.zfd", records=(pack_time_record(count=8, t0=2.0), *measurements))
+    group, = DataLoader.load_zfd(p)
+    assert group["channels"] == ["Time", "Good"]
+    np.testing.assert_array_equal(group["data"]["Good"], np.arange(8))
+    np.testing.assert_array_equal(group["data"]["Time"], 2 + np.arange(8) * 0.001)
+    assert group["channel_metadata"]["Good"]["record_index"] == (2 if bad_first else 1)
+    meta = group["source_metadata"]
+    facts = meta["import_diagnostics"]
+    assert facts["state"] == "partial"
+    assert len(facts["issues"]) == 1
+    issue = facts["issues"][0]
+    assert issue["record_index"] == (1 if bad_first else 2)
+    assert issue["offset"] > 0
+    assert issue["declared_count"] == bad_count
+    assert meta["zfd_import"]["structure_records_complete"] is True
+    assert meta["zfd_import"]["measurement_records_complete"] is False
+    assert meta["zfd_import"]["declared_measurement_count"] == 2
+    assert meta["zfd_import"]["imported_measurement_count"] == 1
+    assert meta["zfd_import"]["skipped_measurement_count"] == 1
+
+
+def test_zfd_partial_candidate_does_not_hide_later_truncation(tmp_path):
+    p = write_zfge2(tmp_path / "cut-after-skipped.zfd", records=(
+        pack_time_record(count=8),
+        pack_float32_record(values=range(8), name="Good"),
+        pack_float32_record(values=[], name="Empty"),
+        pack_float32_record(values=range(8), name="Truncated"),
+    ), truncate=4)
+    with pytest.raises(ValueError, match="数据不完整") as caught:
+        DataLoader.load_zfd(p)
+    assert caught.value.record_index == 3
+
+
+def test_zfd_negative_measurement_count_is_never_skipped(tmp_path):
+    p = write_zfge2(tmp_path / "negative-measurement.zfd", records=(
+        pack_time_record(count=8),
+        pack_float32_record(values=range(8), name="Good"),
+        pack_float32_record(values=[], name="Negative", declared_count=-1),
+    ))
+    with pytest.raises(ValueError, match="声明 -1 点"):
+        DataLoader.load_zfd(p)
+
+
+def test_zfd_empty_measurements_only_still_fail(tmp_path):
+    p = write_zfge2(tmp_path / "only-empty.zfd", records=(
+        pack_time_record(count=8), pack_float32_record(values=[], name="Empty"),
+    ))
+    with pytest.raises(ValueError, match="没有可导入"):
+        DataLoader.load_zfd(p)
+
+
 def test_zfd_a7_time_overflow_and_non_increasing_rejected(tmp_path):
     p = write_minimal_zfd(
         tmp_path / "overflow.zfd",

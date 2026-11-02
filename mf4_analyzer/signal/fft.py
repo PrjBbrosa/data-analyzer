@@ -30,6 +30,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from .weighting import _validate_weighting, a_weighting_gain_linear
+from .validation import require_finite_samples
 
 
 # App-owned alias normalization. Keeps "hann" and "hanning" pointing at
@@ -497,6 +498,7 @@ class FFTAnalyzer:
         ``nfft`` regardless.
         """
         sig = np.asarray(sig, dtype=float)
+        require_finite_samples(sig)
         n = len(sig)
         if nfft is None or nfft <= 0:
             nfft = n
@@ -538,6 +540,8 @@ class FFTAnalyzer:
         and the numerical result is byte-for-byte unchanged.
         """
         weighting = _validate_weighting(weighting)
+        sig = np.asarray(sig, dtype=float)
+        require_finite_samples(sig)
         n = len(sig)
         if n == 0:
             empty = np.array([], dtype=float)
@@ -615,6 +619,7 @@ class FFTAnalyzer:
         """
         weighting = _validate_weighting(weighting)
         sig = np.asarray(sig, dtype=float)
+        require_finite_samples(sig)
         n = len(sig)
         from .adaptive import non_tail_frame_count, segmented_analysis_hop
 

@@ -79,6 +79,30 @@ def sniff_fixed_width_ascii(path) -> FixedWidthLayout | None:
     if decoded is None:
         return None
     lines, encoding = decoded
+    if lines and lines[0].strip().casefold() == "winwertasciidaten":
+        # A verified WinWert header already fixes the slots. Requiring eight
+        # pristine samples would turn one local signal gap into whole-file
+        # failure. Count/zero metadata align the right edges independently of
+        # any measurement values, including a bad first or last sample.
+        for row in range(8, len(lines)):
+            try:
+                columns = int(lines[row - 5].strip())
+            except ValueError:
+                continue
+            interval = _metadata_interval(lines, row, columns)
+            if interval is None:
+                continue
+            counts = _numeric_spans(lines[row - 4])
+            zeros = _numeric_spans(lines[row - 3])
+            ends = [end for _, end in counts]
+            if ends != [end for _, end in zeros]:
+                continue
+            colspecs = tuple(zip([0] + ends[:-1], ends))
+            if (not _is_units(_cells(lines[row - 1], colspecs))
+                    or any(not cell or _NUMBER.fullmatch(cell)
+                           for cell in _cells(lines[row - 2], colspecs))):
+                continue
+            return FixedWidthLayout(encoding, row - 2, row - 1, row, colspecs, interval)
     for row in range(0, max(0, len(lines) - 7)):
         run = [_numeric_spans(line) for line in lines[row:row + 8]]
         if not run or not run[0] or any(len(item) != len(run[0]) for item in run):

@@ -105,6 +105,17 @@ class _FileRow(QFrame):
         self._lbl_name.setFocusPolicy(Qt.NoFocus)
         self.setAccessibleName(full_name)
         top.addWidget(self._lbl_name, stretch=1)
+        self._btn_import_details = QToolButton(self)
+        self._btn_import_details.setObjectName("fileRowImportDetails")
+        self._btn_import_details.setIcon(qta.icon("mdi6.information-outline", color="#899db5"))
+        self._btn_import_details.setIconSize(QSize(16, 16))
+        self._btn_import_details.setFixedSize(24, 24)
+        self._btn_import_details.setProperty("role", "icon")
+        self._btn_import_details.setAutoRaise(True)
+        self._btn_import_details.setToolTip("导入详情")
+        self._btn_import_details.setAccessibleName("导入详情")
+        self._btn_import_details.clicked.connect(self._show_import_details)
+        top.addWidget(self._btn_import_details)
         lay.addLayout(top)
 
         meta = QHBoxLayout()
@@ -238,12 +249,39 @@ class _FileRow(QFrame):
     def _on_close_clicked(self):
         self.close_requested.emit(self._rows_key)
 
+    def _show_import_details(self):
+        from .widgets.import_diagnostics import ImportDiagnosticsDialog
+
+        existing = next(
+            (dialog for dialog in self.findChildren(ImportDiagnosticsDialog)
+             if dialog.isVisible()), None,
+        )
+        if existing is not None:
+            existing.show()
+            existing.raise_()
+            existing.activateWindow()
+            return
+        sources = [
+            (str(fid), f"{fd.filename}{getattr(fd, 'label_suffix', '')}",
+             getattr(fd, "source_metadata", {}) or {})
+            for fid, fd in zip(self._fids, self._fds)
+        ]
+        dialog = ImportDiagnosticsDialog(sources, self)
+        dialog.show()
+
+    def _close_import_details(self):
+        from .widgets.import_diagnostics import ImportDiagnosticsDialog
+
+        for dialog in self.findChildren(ImportDiagnosticsDialog):
+            dialog.close()
+
     def _on_attach_clicked(self):
         if self._attachment_available:
             self.attach_requested.emit(tuple(str(fid) for fid in self._fids))
 
     def add_fid(self, fid, fd):
         """Merge a new fid into this group card and refresh the meta label."""
+        self._close_import_details()
         self._fids.append(fid)
         self._fds.append(fd)
         self._refresh_meta()
@@ -251,6 +289,7 @@ class _FileRow(QFrame):
 
     def remove_fid(self, fid):
         """Remove a fid from this group. Returns True if the group is now empty."""
+        self._close_import_details()
         try:
             idx = self._fids.index(fid)
             self._fids.pop(idx)

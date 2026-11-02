@@ -3,6 +3,7 @@
 import inspect
 import json
 import logging
+import math
 import os
 from pathlib import Path
 from time import monotonic
@@ -25,6 +26,10 @@ from ...io import (
     DEFAULT_SOURCE_ADAPTER_REGISTRY, DataLoader, FileData, HAS_ASAMMDF,
 )
 from ...io.file_data import TimeAxisProvenance
+from ...io.import_diagnostics import (
+    aggregate_import_diagnostics, format_import_summary,
+    uncovered_legacy_metadata,
+)
 from ...io.loader import (
     AUDIO_VIDEO_EXTS,
     NO_CAN_FRAMES_MESSAGE,
@@ -536,6 +541,7 @@ class ProjectIOMixin:
             batch_load = len(data_files) > 1
             batch_attached = []
             loaded_files = 0
+            diagnostic_files = 0
             for index, fp in enumerate(data_files):
                 before_fids = set(self.files)
                 self._load_one(
@@ -553,13 +559,19 @@ class ProjectIOMixin:
                 )
                 if added:
                     loaded_files += 1
+                    imported = aggregate_import_diagnostics(
+                        self.files[fid].source_metadata
+                        for fid in self.files if fid not in before_fids
+                    )
+                    if imported is not None and imported["state"] != "complete":
+                        diagnostic_files += 1
                     self._recent_files.record_file(fp)
                 if batch_load:
                     batch_attached.extend(
                         getattr(self, "_last_source_load_attached", ()) or ()
                     )
             announced = False
-            if batch_load and batch_attached:
+            if batch_load and batch_attached and not diagnostic_files:
                 mode = self.chart_stack.current_mode()
                 if mode in self.analysis_managers:
                     resolved = self._active_analysis_view_state(mode)
@@ -570,10 +582,15 @@ class ProjectIOMixin:
                         )
                         announced = True
             if batch_load and loaded_files and not announced:
-                self.statusBar.showMessage(
-                    f"✅ 已加载 {loaded_files} 个文件 | 共 {len(self.files)} 文件"
-                )
-                self.toast(f"已加载 {loaded_files} 个文件", "success")
+                if diagnostic_files:
+                    summary = f"已打开 {loaded_files} 个文件，{diagnostic_files} 个文件有导入提示；可在文件卡片查看详情"
+                    self.statusBar.showMessage(summary)
+                    self.toast(summary, "warning")
+                else:
+                    self.statusBar.showMessage(
+                        f"✅ 已加载 {loaded_files} 个文件 | 共 {len(self.files)} 文件"
+                    )
+                    self.toast(f"已加载 {loaded_files} 个文件", "success")
         finally:
             self._wwt_import.end_open_batch()
             self._finish_compute_progress(token=token)
@@ -738,6 +755,12 @@ class ProjectIOMixin:
         Aggregates across multi-group loads into one toast per diagnostic
         kind; file-level lists copied into every raster group are deduped.
         """
+        if getattr(self, "_restoring_project", False):
+            return
+        aggregate = aggregate_import_diagnostics(source_metadatas)
+        summary = format_import_summary({"import_diagnostics": aggregate})
+        if summary:
+            self.toast(summary, "warning")
         dropped = []
         skipped_channels = []
         skipped_vars = []
@@ -752,6 +775,7 @@ class ProjectIOMixin:
         for smeta in source_metadatas:
             if not smeta:
                 continue
+            smeta = uncovered_legacy_metadata(smeta)
             for entry in smeta.get("dropped_channels") or []:
                 key = (
                     entry.get("name") if isinstance(entry, dict) else entry
@@ -805,11 +829,26 @@ class ProjectIOMixin:
             if notice:
                 self.toast(notice, "warning")
 
-    def _consume_wwt_import_outcome(self, outcome):
+    def _consume_wwt_import_outcome(self, outcome, *, source_metadatas=(), document=None):
         """Surface degraded-data diagnostics from a WWT View import."""
         if outcome is None or getattr(self, "_restoring_project", False):
             return
         summary = getattr(outcome, "summary", "") or ""
+        structured = aggregate_import_diagnostics(source_metadatas)
+        if structured is not None:
+            from ...io.wwt_document import format_wwt_import_summary
+
+            covered = {
+                (issue["code"], issue.get("wwt_detail", ""))
+                for issue in structured["issues"]
+            }
+            remaining = [
+                issue for issue in outcome.issues
+                if (issue.code, issue.detail) not in covered
+            ]
+            summary = format_wwt_import_summary(
+                remaining, document=document, accepted=outcome.accepted,
+            )
         if summary:
             self.toast(summary, "warning")
 
@@ -835,6 +874,7 @@ class ProjectIOMixin:
         blf_dbc_validated=False,
         progress_callback=None,
         notify=True,
+        sampling_rate=None,
     ):
         """Load one path and run the shared post-load attach step.
 
@@ -854,6 +894,7 @@ class ProjectIOMixin:
                 blf_dbc_validated=blf_dbc_validated,
                 progress_callback=progress_callback,
                 notify=notify,
+                sampling_rate=sampling_rate,
             )
         finally:
             new_fids = [fid for fid in self.files if fid not in before_fids]
@@ -870,13 +911,19 @@ class ProjectIOMixin:
         blf_dbc_validated=False,
         progress_callback=None,
         notify=True,
+        sampling_rate=None,
     ):
         def report(fraction, phase):
             if callable(progress_callback):
                 progress_callback(float(fraction), str(phase))
 
-        def announce_loaded(status, toast_msg):
-            if not notify:
+        def announce_loaded(status, toast_msg, *source_metadatas):
+            if not notify or getattr(self, "_restoring_project", False):
+                return
+            diagnostic = aggregate_import_diagnostics(source_metadatas)
+            if diagnostic is not None and diagnostic["state"] != "complete":
+                self.statusBar.showMessage(format_import_summary({"import_diagnostics": diagnostic}))
+                # The shared diagnostics exit supplies the one warning toast.
                 return
             self.statusBar.showMessage(status)
             self.toast(toast_msg, "success")
@@ -909,7 +956,10 @@ class ProjectIOMixin:
                 )
             elif ext in ('.xlsx', '.xls'):
                 report(-1.0, "读取 Excel")
-                data, chs, units = DataLoader.load_excel(fp)
+                data, chs, units = (
+                    DataLoader.load_excel(fp, sampling_rate=sampling_rate)
+                    if sampling_rate is not None else DataLoader.load_excel(fp)
+                )
             elif ext in AUDIO_VIDEO_EXTS:
                 report(-1.0, "读取音视频")
                 data, chs, units, fs, smeta = DataLoader.load_audio_video(fp)
@@ -1015,6 +1065,7 @@ class ProjectIOMixin:
                 announce_loaded(
                     f"✅ 已加载 TDMS: {p.name} ({len(data)} 行) | 共 {len(self.files)} 文件",
                     f"已加载 TDMS {p.name} · {len(data)} 行",
+                    smeta,
                 )
                 self._toast_io_load_diagnostics(smeta)
                 return
@@ -1044,7 +1095,9 @@ class ProjectIOMixin:
                 announce_loaded(
                     f"✅ 已加载 ASCII: {p.name} ({len(data)} 行) | 共 {len(self.files)} 文件",
                     f"已加载 ASCII {p.name} · {len(data)} 行",
+                    smeta,
                 )
+                self._toast_io_load_diagnostics(smeta)
                 return
             elif ext == '.wwt':
                 report(-1.0, "读取 WWT")
@@ -1067,6 +1120,7 @@ class ProjectIOMixin:
                 announce_loaded(
                     f"✅ 已加载 WWT: {p.name} → {len(groups)} 组 | 共 {self.navigator.file_list_count()} 个源文件",
                     f"已加载 {p.name} · {len(groups)} 组",
+                    *(g.get("source_metadata") for g in groups),
                 )
                 restoring = bool(getattr(self, "_restoring_project", False))
                 if not restoring:
@@ -1085,7 +1139,9 @@ class ProjectIOMixin:
                         offer(loaded.document, new_fids, reuse_blank=reuse_blank)
                         if callable(offer) else None
                     )
-                    self._consume_wwt_import_outcome(outcome)
+                    self._consume_wwt_import_outcome(
+                        outcome, source_metadatas=toast_metas, document=loaded.document,
+                    )
                 return
             elif ext == '.zfd':
                 report(-1.0, "读取 ZFD")
@@ -1100,6 +1156,7 @@ class ProjectIOMixin:
                 announce_loaded(
                     f"✅ 已加载 ZFD: {p.name} → {len(groups)} 组 | 共 {self.navigator.file_list_count()} 个源文件",
                     f"已加载 {p.name} · {len(groups)} 组",
+                    *(g.get("source_metadata") for g in groups),
                 )
                 self._toast_io_load_diagnostics(
                     *(g.get("source_metadata") for g in groups))
@@ -1123,7 +1180,14 @@ class ProjectIOMixin:
                 return
             else:
                 report(-1.0, "读取表格")
-                data, chs, units = DataLoader.load_csv(fp)
+                data, chs, units = (
+                    DataLoader.load_csv(fp, sampling_rate=sampling_rate)
+                    if sampling_rate is not None else DataLoader.load_csv(fp)
+                )
+            if load_metadata is None:
+                load_metadata = dict(
+                    getattr(data, "attrs", {}).get("source_metadata") or {}
+                )
             fd = self._register_file_data(
                 fp, data, chs, units, source_metadata=load_metadata,
             )
@@ -1136,6 +1200,7 @@ class ProjectIOMixin:
             announce_loaded(
                 f"✅ 已加载: {p.name} ({len(data)} 行) | 共 {len(self.files)} 文件",
                 f"已加载 {p.name} · {len(data)} 行",
+                load_metadata,
             )
             self._toast_io_load_diagnostics(load_metadata)
             report(1.0, "已加载")
@@ -2604,7 +2669,14 @@ class ProjectIOMixin:
             if not pending_by_path.get(key):
                 before = set(self.files.keys())
                 dbc_paths = pio.resolve_dbc_paths(ref, path)
-                self._load_one(key, blf_dbc_paths=dbc_paths)
+                load_kwargs = {"blf_dbc_paths": dbc_paths}
+                if (resolved.suffix.lower() in {".csv", ".xlsx", ".xls"}
+                        and ref.time_source == "manual"
+                        and math.isfinite(float(ref.fs)) and float(ref.fs) > 0):
+                    # Carry explicit saved intent into the loader; generated
+                    # historical 1 kHz must never become a verified sample rate.
+                    load_kwargs["sampling_rate"] = float(ref.fs)
+                self._load_one(key, **load_kwargs)
                 new_fids = [f for f in self.files.keys() if f not in before]
                 if not new_fids:
                     missing_paths.append(ref.path_abs)

@@ -39,6 +39,7 @@ import numpy as np
 
 from .fft import one_sided_amplitude
 from .weighting import _validate_weighting, a_weighting_gain_linear
+from .validation import require_finite_samples
 
 
 # Hard ceiling on the rendered float32 amplitude matrix size.
@@ -338,6 +339,7 @@ class SpectrogramAnalyzer:
             raise ValueError('time axis must be one-dimensional')
         if arr.size < 2:
             raise ValueError('time axis is too short')
+        require_finite_samples(arr, "time")
         nominal_dt = 1.0 / float(fs)
         dt = np.diff(arr)
         if np.any(dt <= 0):
@@ -432,6 +434,7 @@ class SpectrogramAnalyzer:
         sig = np.asarray(signal, dtype=float)
         if sig.ndim != 1:
             raise ValueError('signal must be one-dimensional')
+        require_finite_samples(sig)
         t = SpectrogramAnalyzer._validate_time_axis(time, fs, time_jitter_tolerance)
         if sig.size != t.size:
             raise ValueError('signal and time must have the same length')

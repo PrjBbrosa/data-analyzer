@@ -788,27 +788,50 @@ def test_project_restore_preserves_complete_frf_panes_until_compute(
 def test_project_restore_does_not_relabel_generated_axis_as_real(
     qapp, qtbot, tmp_path, monkeypatch
 ):
+    from mf4_analyzer.ui.main_window import _project_io_mixin
+
     csv_path = tmp_path / "generated.csv"
-    pd.DataFrame({
+    frame = pd.DataFrame({
         "input": np.arange(4000, dtype=float),
         "output": np.arange(4000, dtype=float) * 2.0,
-    }).to_csv(csv_path, index=False)
+    })
+    frame.to_csv(csv_path, index=False)
     project = tmp_path / "generated.tlproj"
 
     source = MainWindow()
     qtbot.addWidget(source)
-    source._load_one(str(csv_path))
+    # Recreate an old project whose importer silently generated a 1 kHz axis.
+    # The current CSV importer must not be used to manufacture that history.
+    fd = source._register_file_data(
+        str(csv_path), frame, list(frame.columns), {},
+    )
     old_fid = next(iter(source.files))
-    assert source.files[old_fid]._time_source == "generated"
+    assert fd._time_source == "generated"
     frf_state = source.analysis_managers["frf"].get(0)
     frf_state.attached_file_ids = [old_fid]
     pane = frf_state.panes[0]
     pane.input_source = (old_fid, "input")
     pane.output_source = (old_fid, "output")
-    source.save_project(project)
+
+    good_path = tmp_path / "verified.csv"
+    good_time = np.arange(40, dtype=float) / 200.0
+    pd.DataFrame({"Time": good_time, "signal": np.arange(40.)}).to_csv(
+        good_path, index=False,
+    )
+    source._load_one(str(good_path))
+    assert source.save_project(project)
 
     restored = MainWindow()
     qtbot.addWidget(restored)
+    diagnostics = []
+    monkeypatch.setattr(
+        _project_io_mixin.QMessageBox, "critical",
+        lambda _parent, title, message: diagnostics.append((title, message)),
+    )
+    monkeypatch.setattr(
+        _project_io_mixin.QMessageBox, "warning",
+        lambda _parent, title, message: diagnostics.append((title, message)),
+    )
     monkeypatch.setattr(
         restored, "_recompute_restored_analysis_view",
         lambda _section, _view_id: None,
@@ -816,31 +839,39 @@ def test_project_restore_does_not_relabel_generated_axis_as_real(
     restored.open_project(project)
     qapp.processEvents()
 
-    new_fid = next(iter(restored.files))
-    assert restored.files[new_fid]._time_source == "generated"
-    with pytest.raises(FrfPreflightError, match="真实时间轴"):
-        restored._build_frf_candidate(
-            restored.analysis_managers["frf"].get(0), 0
-        )
+    assert any("无法确定时间轴" in message for _title, message in diagnostics)
+    assert old_fid in restored._project_restore_health.missing_old_fids
+    assert len(restored.files) == 1
+    retained = next(iter(restored.files.values()))
+    assert retained.filepath == good_path
+    np.testing.assert_allclose(retained.time_array, good_time)
+    assert retained._time_source not in {"generated", "manual"}
+    restored_pane = restored.analysis_managers["frf"].get(0).panes[0]
+    assert restored_pane.input_source is None
+    assert restored_pane.output_source is None
 
 
 def test_project_restore_preserves_explicit_manual_time_axis(
     qapp, qtbot, tmp_path, monkeypatch
 ):
     csv_path = tmp_path / "manual.csv"
-    pd.DataFrame({
+    frame = pd.DataFrame({
         "input": np.arange(4000, dtype=float),
         "output": np.arange(4000, dtype=float) * 2.0,
-    }).to_csv(csv_path, index=False)
+    })
+    frame.to_csv(csv_path, index=False)
     project = tmp_path / "manual.tlproj"
 
     source = MainWindow()
     qtbot.addWidget(source)
-    source._load_one(str(csv_path))
-    old_fid = next(iter(source.files))
-    source.files[old_fid].rebuild_time_axis(2000.0)
-    assert source.files[old_fid]._time_source == "manual"
-    source.save_project(project)
+    # Preserve explicit calibration in a legacy project without asking the
+    # current importer to invent an axis before the calibration is applied.
+    fd = source._register_file_data(
+        str(csv_path), frame, list(frame.columns), {},
+    )
+    fd.rebuild_time_axis(2000.0)
+    assert fd._time_source == "manual"
+    assert source.save_project(project)
 
     restored = MainWindow()
     qtbot.addWidget(restored)
@@ -854,6 +885,9 @@ def test_project_restore_preserves_explicit_manual_time_axis(
     new_fid = next(iter(restored.files))
     assert restored.files[new_fid]._time_source == "manual"
     assert restored.files[new_fid].fs == pytest.approx(2000.0)
+    np.testing.assert_allclose(
+        restored.files[new_fid].time_array, np.arange(4000) / 2000.0,
+    )
 
 
 def test_frf_completion_publishes_resident_effective_facts_and_warnings(qtbot):

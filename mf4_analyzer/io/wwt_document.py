@@ -9,6 +9,7 @@ from pathlib import Path
 
 import numpy as np
 
+from .import_diagnostics import make_import_issue, set_import_diagnostics
 from .wwt_display import (
     WwtCurveDisplay,
     WwtDisplayWindow,
@@ -60,6 +61,8 @@ CODE_EXACT_OVERLAP_RELOCATED = "exact_overlap_relocated"
 CODE_MISSING_FORMULA_REF = "missing_formula_ref"
 CODE_DROPPED_CURVE = "dropped_curve"
 CODE_DROPPED_WINDOW = "dropped_window"
+CODE_EMPTY_TIME_RECORD = "empty_time_record"
+CODE_EMPTY_AXIS_CHANNEL = "empty_axis_channel"
 
 _LOG = logging.getLogger(__name__)
 _RECORD_INDEX_RE = re.compile(r"\brecord\s+(\d+)\b", re.I)
@@ -346,6 +349,12 @@ def format_wwt_issue_for_user(issue, *, document=None) -> str | None:
         return None
     if code in _USER_SILENT_CODES:
         return None
+    if code == CODE_EMPTY_TIME_RECORD:
+        index = _issue_record_index(issue)
+        label = f"（记录 {index + 1}）" if index is not None else ""
+        return f"发现空时间轴记录{label}，未参与数据生成。"
+    if code == CODE_EMPTY_AXIS_CHANNEL:
+        return "部分通道所属时间轴为空，已跳过这些通道。"
     if code == CODE_VIEW_CAP:
         return _format_view_cap(issue)
     if code == CODE_MISSING_FORMULA_REF:
@@ -451,7 +460,10 @@ def format_wwt_import_summary(
     parts: list[str] = []
     for code in order:
         bucket = grouped[code]
-        if code == CODE_MISSING_FORMULA_REF:
+        if code == CODE_EMPTY_TIME_RECORD:
+            count = len({(_issue_record_index(item), item.detail) for item in bucket})
+            parts.append(f"发现 {count} 条空时间轴记录，未参与数据生成。")
+        elif code == CODE_MISSING_FORMULA_REF:
             parts.append(_format_missing_formula_refs(bucket, document))
         elif code == CODE_UNSUPPORTED_FORMULA:
             parts.append(_format_unsupported_formula(bucket, document))
@@ -749,7 +761,7 @@ def parse_wwt_document(fp: str | Path) -> WwtDocument:
         values: np.ndarray | None
         dt: float | None = None
         if tag == "Zeit":
-            if not 0 < n < _MAX_ZEIT_SAMPLES:
+            if not 0 <= n < _MAX_ZEIT_SAMPLES:
                 raise ValueError(
                     f"WWT 文件截断/损坏: 通道 {ch_name!r} 声明点数 {n} 超出范围"
                     f"（偏移 0x{pos:x}）: {name}")
@@ -761,6 +773,11 @@ def parse_wwt_document(fp: str | Path) -> WwtDocument:
                 + np.arange(n, dtype=np.float64) * b
             )
             _append_zeit_block(blocks, n, float(b), float(c), rec_index)
+            if n == 0:
+                diagnostics.append(format_wwt_issue(
+                    CODE_EMPTY_TIME_RECORD,
+                    f"record {rec_index}: {ch_name}（偏移 0x{pos:x}）",
+                ))
         else:
             if not blocks:
                 raise ValueError(
@@ -777,7 +794,17 @@ def parse_wwt_document(fp: str | Path) -> WwtDocument:
                 axis_record = current_zeit
             else:
                 axis_record = None
-            if blk["curve_def"] or n != blk["n"]:
+            if blk["n"] == 0 and n > 0:
+                # Preserve the record slot but do not expose an orphaned array
+                # as a record-only curve or formula input with another axis.
+                values = None
+                axis_record = None
+                skipped.append(ch_name)
+                diagnostics.append(format_wwt_issue(
+                    CODE_EMPTY_AXIS_CHANNEL,
+                    f"record {rec_index}: {ch_name}（偏移 0x{pos:x}）",
+                ))
+            elif blk["curve_def"] or n != blk["n"]:
                 auxiliary.append({
                     "name": ch_name,
                     "record_index": rec_index,
@@ -997,4 +1024,47 @@ def load_wwt_document(fp: str | Path) -> WwtLoadResult:
         windows=parsed.windows,
         diagnostics=parsed.diagnostics + formula_diagnostics,
     )
+    issues = []
+    diagnosed_records = set()
+    seen_issues = set()
+    for text in document.diagnostics:
+        issue = parse_wwt_issue(text)
+        record_index = _issue_record_index(issue)
+        issue_key = (issue.code, record_index if record_index is not None else issue.detail)
+        if issue_key in seen_issues:
+            continue
+        seen_issues.add(issue_key)
+        details = {"wwt_detail": issue.detail}
+        offset_match = re.search(r"偏移 0x([0-9a-f]+)", issue.detail)
+        if offset_match:
+            details["offset"] = int(offset_match.group(1), 16)
+        if record_index is not None:
+            details["record_index"] = record_index
+            diagnosed_records.add(record_index)
+            if 0 <= record_index < len(records):
+                details["channel"] = records[record_index].name
+        partial = issue.code == CODE_EMPTY_AXIS_CHANNEL or "formula" in issue.code
+        retained = issue.code in {CODE_EMPTY_TIME_RECORD, "formula_nonfinite_values"}
+        issues.append(make_import_issue(
+            issue.code,
+            format_wwt_issue_for_user(issue, document=document) or issue.detail,
+            severity="partial" if partial else "warning",
+            action="retained" if retained else "skipped",
+            **details,
+        ))
+    for record in records:
+        if (record.tag not in _TAG_DTYPES and record.values is None
+                and record.index not in diagnosed_records):
+            issues.append(make_import_issue(
+                CODE_SKIPPED_CHANNEL, f"通道 {record.name} 无法解析，已跳过。",
+                severity="partial", action="skipped",
+                record_index=record.index, channel=record.name,
+            ))
+    imported_channels = sum(len(group["channels"]) - 1 for group in groups)
+    for group in groups:
+        set_import_diagnostics(
+            group["source_metadata"], issues, source_kind="wwt",
+            imported_channels=imported_channels,
+            declared_records=len(records), count_scope="file",
+        )
     return WwtLoadResult(groups=tuple(groups), document=document)

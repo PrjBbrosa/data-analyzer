@@ -314,6 +314,27 @@ def test_all_v2_samples_load():
 
 # ------------------------------------------------------ 合成容错/错误路径
 
+def test_empty_zeit_resync_requires_successor_boundary(tmp_path):
+    from mf4_analyzer.io.wwt_format import _looks_like_record_header
+    from mf4_analyzer.io.wwt_document import load_wwt_document
+
+    n = 128
+    empty = _make_record(b"Zeit", 0, name=b"Time", unit=b"s")
+    good = _make_record(b"Zeit", n, name=b"Time", unit=b"s")
+    values = _make_record(b"Real", n, name=b"Good", payload=np.arange(n, dtype="<f8").tobytes())
+    assert not _looks_like_record_header(empty + b"not a record", 0)
+    assert _looks_like_record_header(empty + good + values, 0)
+    body = _make_record(b"Zeit", n, name=b"Time", unit=b"s")
+    body += _make_record(b"Pars", n, name=b"Formula", payload=b"unsupported\0params")
+    body += empty + good + values
+    path = tmp_path / "resync-empty.wwt"
+    path.write_bytes(_make_header(5) + body)
+    loaded = load_wwt_document(path)
+    assert [record.tag for record in loaded.document.records] == ["Zeit", "Pars", "Zeit", "Zeit", "Real"]
+    assert loaded.document.records[2].declared_n == 0
+    assert loaded.document.records[4].axis_record == 3
+
+
 def test_unlisted_version_with_compatible_layout_parses(tmp_path):
     """版本白名单已放宽：任意 WinWert* 版本号 + 合法布局 → 正常解析。"""
     n = 200

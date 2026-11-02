@@ -6,6 +6,26 @@ import pytest
 from mf4_analyzer.batch_preprocess import preprocess_batch_signal
 
 
+def test_preserve_policy_keeps_gap_and_time_alignment_for_original_export():
+    result = preprocess_batch_signal(
+        [1., np.nan, 3.], [0., 1., 2.], 1., {}, nonfinite_policy="preserve",
+    )
+    np.testing.assert_array_equal(result.time, [0., 1., 2.])
+    np.testing.assert_array_equal(result.signal, [1., np.nan, 3.])
+    assert result.effective["finite_samples_dropped"] == 0
+
+
+def test_reject_policy_checks_after_requested_range_before_cleanup():
+    with pytest.raises(ValueError, match="non-finite"):
+        preprocess_batch_signal([1., 2., np.nan], [0., 1., 2.], 1., {},
+                                nonfinite_policy="reject")
+    result = preprocess_batch_signal(
+        [1., 2., np.nan], [0., 1., 2.], 1., {"time_range": [0., 1.]},
+        nonfinite_policy="reject",
+    )
+    np.testing.assert_array_equal(result.signal, [1., 2.])
+
+
 def _tone_amplitude(values, fs, frequency):
     values = np.asarray(values, dtype=float)
     spectrum = np.fft.rfft(values)

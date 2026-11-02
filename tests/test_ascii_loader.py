@@ -78,3 +78,19 @@ def test_load_ascii_rejects_canoe_asc_with_actionable_message(tmp_path):
     path = write_sample_asc(tmp_path / "canoe.asc", n=2)
     with pytest.raises(ValueError, match="CANoe CAN 总线日志"):
         DataLoader.load_ascii(path)
+
+
+@pytest.mark.parametrize("sample_index", [0, 7])
+def test_verified_fixed_width_layout_keeps_bad_signal_sample(tmp_path, sample_index):
+    import numpy as np
+
+    lines = _fixed_width_text().splitlines()
+    lines[13 + sample_index] = f"{'broken':>17}{float(sample_index * 10):17.6E}"
+    path = tmp_path / "gap.asc"
+    path.write_text("\n".join(lines) + "\n")
+    data, channels, _, fs, metadata = DataLoader.load_ascii(path)
+    assert channels == ["Load", "Speed"]
+    assert len(data) == 8 and fs == pytest.approx(2000.)
+    assert np.isnan(data["Load"].iloc[sample_index])
+    assert data["Speed"].tolist() == [i * 10 for i in range(8)]
+    assert metadata["import_diagnostics"]["state"] == "partial"

@@ -19,6 +19,7 @@ from typing import Any, Mapping
 import numpy as np
 
 from .signal.filters import FilterSpec, apply as apply_filter, nyquist_guard
+from .signal.validation import require_finite_samples
 
 
 _SAMPLE_MODES = frozenset({"original", "target_fs", "decimate"})
@@ -223,13 +224,20 @@ def preprocess_batch_signal(
     *,
     rpm=None,
     x_values=None,
+    nonfinite_policy="drop",
 ) -> BatchPreprocessResult:
     """Apply the canonical batch preprocessing pipeline.
 
     Upsampling is intentionally rejected.  ``target_fs`` and ``decimate``
     both use the repository's zero-phase FFT-domain low-pass filter before
     interpolation onto a new uniform grid; neither path is a simple slice.
+    ``drop`` retains the standalone legacy helper contract. Product runners
+    explicitly use ``reject`` for calculations and ``preserve`` for original
+    time exports; gaps must never silently disappear before spectral checks.
     """
+
+    if nonfinite_policy not in {"drop", "reject", "preserve"}:
+        raise ValueError("unknown nonfinite_policy")
 
     if not _positive_number(fs):
         raise ValueError("fs must be finite and > 0")
@@ -285,6 +293,8 @@ def preprocess_batch_signal(
     input_samples = len(signal_arr)
 
     # 1. Time range.
+    if nonfinite_policy != "drop":
+        require_finite_samples(time_arr, "time")
     range_mask = _time_range_mask(time_arr, params.get("time_range"))
     signal_arr = signal_arr[range_mask]
     time_arr = time_arr[range_mask]
@@ -294,6 +304,19 @@ def preprocess_batch_signal(
         x_values_arr = x_values_arr[range_mask]
     after_time_range_samples = len(signal_arr)
 
+    if nonfinite_policy != "drop":
+        if rpm_arr is not None:
+            require_finite_samples(rpm_arr, "rpm")
+        if x_values_arr is not None:
+            require_finite_samples(x_values_arr, "X")
+        transforms_gaps = (
+            bool(time_preprocess.get("remove_mean", False))
+            or str(time_preprocess.get("sample_mode", "original")) != "original"
+            or bool(filter_raw.get("enabled", False))
+        )
+        if nonfinite_policy == "reject" or transforms_gaps:
+            require_finite_samples(signal_arr)
+
     # 2. Finite cleanup.  Include both aligned companions in the same mask so
     # no downstream consumer receives arrays for different physical rows.
     finite_mask = np.isfinite(time_arr) & np.isfinite(signal_arr)
@@ -302,6 +325,11 @@ def preprocess_batch_signal(
     if x_values_arr is not None:
         finite_mask &= np.isfinite(x_values_arr)
     finite_samples_dropped = int(len(signal_arr) - np.count_nonzero(finite_mask))
+    if nonfinite_policy == "preserve":
+        if finite_samples_dropped:
+            warnings.append(f"保留 {finite_samples_dropped} 个信号缺口，未补值或删除采样点")
+        finite_mask = np.ones(len(signal_arr), dtype=bool)
+        finite_samples_dropped = 0
     signal_arr = signal_arr[finite_mask]
     time_arr = time_arr[finite_mask]
     if rpm_arr is not None:
@@ -395,6 +423,7 @@ def preprocess_batch_signal(
         "input_samples": input_samples,
         "after_time_range_samples": after_time_range_samples,
         "finite_samples_dropped": finite_samples_dropped,
+        "nonfinite_policy": nonfinite_policy,
         "output_samples": len(signal_arr),
         "scale": scale,
         "offset": offset,

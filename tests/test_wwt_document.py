@@ -22,6 +22,98 @@ from tests._helpers import wwt_factory as wwt
 _ROOT = Path(__file__).resolve().parent.parent
 
 
+@pytest.mark.parametrize("position,empty_count", [(0, 1), (2, 1), (2, 2), (4, 1)])
+def test_empty_zeit_preserves_catalog_and_measurement_groups(tmp_path, position, empty_count):
+    n = wwt.CHANNEL_N
+    records = [
+        wwt.WwtRecordSpec("Zeit", "TimeA", "s", n=n, dt=0.001),
+        wwt.WwtRecordSpec("Real", "A", "N", values=np.arange(n, dtype=float)),
+        wwt.WwtRecordSpec("Zeit", "TimeB", "s", n=n, dt=0.002),
+        wwt.WwtRecordSpec("Real", "B", "N", values=np.arange(n, dtype=float) + 10),
+    ]
+    records[position:position] = [
+        wwt.WwtRecordSpec("Zeit", "Empty", "s", n=0, dt=0.001)
+    ] * empty_count
+    path = wwt.write_wwt_file(tmp_path / "empty-zeit.wwt", records)
+    loaded = load_wwt_document(path)
+    assert len(loaded.document.records) == len(records)
+    assert [r.index for r in loaded.document.records] == list(range(len(records)))
+    assert len(loaded.groups) == 2
+    by_name = {r.name: r for r in loaded.document.records}
+    for name in ("A", "B"):
+        rec = by_name[name]
+        assert rec.axis_record == next(i for i, spec in enumerate(records) if spec.name == f"Time{name}")
+        np.testing.assert_array_equal(rec.values, np.arange(n) + (10 if name == "B" else 0))
+    for group in loaded.groups:
+        facts = group["source_metadata"]["import_diagnostics"]
+        assert facts["state"] == "warning"
+        assert facts["counts"]["imported_channels"] == 2
+        assert facts["counts"]["count_scope"] == "file"
+        assert sum(issue["code"] == "empty_time_record" for issue in facts["issues"]) == empty_count
+
+
+def test_empty_zeit_does_not_reuse_previous_axis(tmp_path):
+    n = wwt.CHANNEL_N
+    path = wwt.write_wwt_file(tmp_path / "orphan.wwt", (
+        wwt.WwtRecordSpec("Zeit", "Time", "s", n=n),
+        wwt.WwtRecordSpec("Real", "Good", values=np.arange(n)),
+        wwt.WwtRecordSpec("Zeit", "Empty", "s", n=0),
+        wwt.WwtRecordSpec("Real", "Orphan", values=np.arange(n)),
+    ))
+    loaded = load_wwt_document(path)
+    assert loaded.groups[0]["channels"] == ["Time", "Good"]
+    orphan = loaded.document.records[3]
+    assert orphan.axis_record is None
+    assert orphan.values is None
+    assert loaded.groups[0]["source_metadata"]["import_diagnostics"]["state"] == "partial"
+
+
+def test_empty_zeit_only_has_no_importable_channels(tmp_path):
+    path = wwt.write_wwt_file(tmp_path / "empty.wwt", (
+        wwt.WwtRecordSpec("Zeit", "Time", "s", n=0),
+    ))
+    with pytest.raises(ValueError, match="没有可导入"):
+        load_wwt_document(path)
+
+
+def test_formula_referencing_empty_axis_keeps_good_measurements(tmp_path):
+    n = wwt.CHANNEL_N
+    path = wwt.write_wwt_file(tmp_path / "empty-formula.wwt", (
+        wwt.WwtRecordSpec("Zeit", "Time", "s", n=n),
+        wwt.WwtRecordSpec("Real", "Good", values=np.arange(n)),
+        wwt.WwtRecordSpec("Zeit", "Empty", "s", n=0),
+        wwt.WwtRecordSpec("Pars", "BadFormula", n=n, formula="k2"),
+    ), (wwt._single_channel_window(1, "Good", ""),))
+    loaded = load_wwt_document(path)
+    assert loaded.groups[0]["channels"] == ["Time", "Good"]
+    assert loaded.document.records[3].values is None
+    assert any(issue["code"].startswith("formula_") for issue in loaded.groups[0]["source_metadata"]["import_diagnostics"]["issues"])
+
+
+def test_partially_nonfinite_formula_diagnostic_records_retained_action(tmp_path):
+    n = wwt.CHANNEL_N
+    path = wwt.write_wwt_file(tmp_path / "partial-formula.wwt", (
+        wwt.WwtRecordSpec("Zeit", "Time", "s", n=n),
+        wwt.WwtRecordSpec("Real", "Input", values=np.arange(n)),
+        wwt.WwtRecordSpec("Pars", "Ratio", n=n, formula="k1/k1"),
+    ), (wwt._single_channel_window(1, "Input", ""),))
+    loaded = load_wwt_document(path)
+    assert "Ratio" in loaded.groups[0]["channels"]
+    issue, = [item for item in loaded.groups[0]["source_metadata"]["import_diagnostics"]["issues"]
+              if item["code"] == "formula_nonfinite_values"]
+    assert issue["action"] == "retained"
+
+
+def test_empty_time_summary_counts_distinct_records():
+    from mf4_analyzer.io.wwt_document import WwtIssue, format_wwt_import_summary
+
+    summary = format_wwt_import_summary([
+        WwtIssue("empty_time_record", "record 1: Time"),
+        WwtIssue("empty_time_record", "record 2: Time"),
+    ])
+    assert "2 条空时间轴记录" in summary
+
+
 def test_channel_xy_with_auxiliaries_roundtrip(tmp_path):
     path = wwt.channel_xy_with_auxiliaries(tmp_path / "xy.wwt")
     doc = parse_wwt_document(path)

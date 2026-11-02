@@ -292,10 +292,15 @@ def _loader_source_diagnostic(fd):
     meta = getattr(fd, "source_metadata", None)
     if not isinstance(meta, Mapping):
         return None
-    if "warnings" not in meta and "mf4_alignment" not in meta:
+    from .io.import_diagnostics import (
+        get_import_diagnostics, format_import_summary, uncovered_legacy_metadata,
+    )
+
+    imported = get_import_diagnostics(meta)
+    if "warnings" not in meta and "mf4_alignment" not in meta and imported is None:
         return None
     warnings = []
-    for raw in meta.get("warnings") or ():
+    for raw in uncovered_legacy_metadata(meta).get("warnings") or ():
         text = str(raw).strip()
         if text and text not in warnings:
             warnings.append(text)
@@ -303,6 +308,11 @@ def _loader_source_diagnostic(fd):
     if isinstance(alignment, Mapping) and _LOAD_ALIGNMENT_NOTICE not in warnings:
         warnings.append(_LOAD_ALIGNMENT_NOTICE)
     payload = {"warnings": warnings}
+    if imported is not None:
+        payload["import_diagnostics"] = imported
+        summary = format_import_summary(meta)
+        if summary and summary not in warnings:
+            warnings.append(summary)
     if isinstance(alignment, Mapping):
         payload["mf4_alignment"] = _plain_diagnostic(alignment)
     return payload
@@ -5144,6 +5154,7 @@ class BatchRunner:
                 x_values = fd.data[x_column].to_numpy(dtype=float, copy=False)
             preprocessed = preprocess_batch_signal(
                 signal, time, fs, params, x_values=x_values,
+                nonfinite_policy="preserve",
             )
             raise_for_issues(validate_task(
                 'time',
@@ -5692,6 +5703,7 @@ class BatchRunner:
                 requested_params,
                 rpm=rpm,
                 x_values=x_values,
+                nonfinite_policy="preserve" if method == "time" else "reject",
             )
             sig = preprocessed.signal
             time = preprocessed.time

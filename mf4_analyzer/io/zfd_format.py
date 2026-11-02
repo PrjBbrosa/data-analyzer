@@ -1,8 +1,10 @@
 """Parser for ZFGE2 .zfd measurement files (ZwickRoell / TestRunPRO).
 
 Supported profile: ZFGE2, first-and-only type 0 equidistant time record,
-subsequent type 4 little-endian float32 measurements, every X reference 0,
-identical sample counts. Time units ``sec`` / ``s`` map to seconds.
+subsequent type 4 little-endian float32 measurements. Imported measurements
+have X reference 0 and matching sample counts; structurally complete but
+incompatible measurements are skipped with diagnostics. Time units ``sec`` /
+``s`` map to seconds.
 
 Ordinary measurement records use little-endian signed int16 type + signed
 int32 count (type 0 inserts one reserved byte before count). Declared
@@ -18,6 +20,8 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+
+from .import_diagnostics import make_import_issue, set_import_diagnostics
 
 _MAGIC = b"ZFGE2"
 _HEADER_LINES = 11
@@ -292,7 +296,7 @@ def _read_record(cur: _Cursor, record_index: int):
     (x,) = cur.unpack("<b", record_index=record_index, what="X 引用")
     cur.read(1, record_index=record_index, what="X 保留字节")
     disp_min, disp_max = cur.unpack("<dd", record_index=record_index, what="显示范围")
-    if count <= 0:
+    if count < 0:
         raise ZFDError(
             f"ZFD 数据不完整：第 {record_index + 1} 个记录声明 {count:,} 点，未导入此文件。"
             f"（{cur.filename}，记录 {record_index + 1}，偏移 {offset}）",
@@ -445,33 +449,45 @@ def load_zfd_groups(fp):
 
     time_rec = time_recs[0]
     sample_count = time_rec["count"]
-    for rec in meas_recs:
-        if rec["x"] != 0:
-            raise _unsupported(
-                name,
-                "暂不支持此 ZFD 的非零时间引用",
-                record_index=rec["index"],
-                offset=rec["offset"],
-                reason=f"X={rec['x']}",
-            )
-        if rec["count"] != sample_count:
-            raise ZFDError(
-                f"ZFD 各记录点数不一致，未导入此文件。"
-                f"（{name}，记录 {rec['index'] + 1}，"
-                f"时间 {sample_count:,} 点，测量 {rec['count']:,} 点）",
-                filename=name,
-                record_index=rec["index"],
-                offset=rec["offset"],
-                reason="点数不一致",
-                declared_count=rec["count"],
-            )
-
+    # Structure is fully parsed before any local recovery or DataFrame is
+    # published. A damaged later record must still reject the whole file.
     time = _build_time_axis(time_rec, name)
+    issues = []
+    skipped = []
+    usable = []
+    for rec in meas_recs:
+        if rec["count"] == 0:
+            code, reason = "empty_channel", "空通道（0 点）"
+        elif rec["x"] != 0:
+            code, reason = "unsupported_time_reference", f"不支持的时间引用 X={rec['x']}"
+        elif rec["count"] != sample_count:
+            code = "sample_count_mismatch"
+            reason = f"点数不一致（时间 {sample_count:,} 点，测量 {rec['count']:,} 点）"
+        else:
+            usable.append(rec)
+            continue
+        skipped.append({"name": rec["name"], "reason": reason,
+                        "record_index": rec["index"]})
+        issues.append(make_import_issue(
+            code, f"通道 {rec['name']}：{reason}，已跳过。",
+            severity="partial", action="skipped",
+            record_index=rec["index"], offset=rec["offset"],
+            channel=rec["name"], declared_count=rec["count"],
+            expected_count=sample_count, x_record_index=rec["x"],
+        ))
+    if not usable:
+        detail = "；".join(item["message"] for item in issues[:3])
+        first = meas_recs[0]
+        raise ZFDError(
+            f"ZFD 没有可导入的测量通道：{detail}（{name}）",
+            filename=name, record_index=first["index"], offset=first["offset"],
+            reason="没有可导入的测量通道", declared_count=first["count"],
+        )
     frame = {"Time": time}
     units = {}
     cmeta = {}
     renamed = []
-    for rec in meas_recs:
+    for rec in usable:
         marker_id, display = _split_display_name(rec["name"])
         preferred = display or marker_id or f"record_{rec['index']}"
         col = _unique_column(frame, preferred, marker_id, rec["index"], renamed)
@@ -500,7 +516,12 @@ def load_zfd_groups(fp):
         "time_step_s": float(time_rec["dt"]),
         "time_end_s": float(time[-1]),
         "duration_s": float(time[-1] - time[0]),
-        "measurement_records_complete": True,
+        "import_policy": "complete-structure-local-skip-v1",
+        "structure_records_complete": True,
+        "measurement_records_complete": not skipped,
+        "declared_measurement_count": len(meas_recs),
+        "imported_measurement_count": len(usable),
+        "skipped_measurement_count": len(skipped),
         "trailing_bytes": int(trailing_bytes),
         "time_name": time_rec["name"].strip(),
         "time_unit_original": time_rec["unit"],
@@ -512,8 +533,13 @@ def load_zfd_groups(fp):
         "source_filename": name,
         "fs_estimated": False,
         "renamed_channels": renamed,
+        "skipped_channels": skipped,
         "zfd_import": zfd_import,
     }
+    set_import_diagnostics(
+        smeta, issues, source_kind="zfd", imported_channels=len(usable),
+        declared_channels=len(meas_recs), skipped_channels=len(skipped),
+    )
     return [{
         "data": pd.DataFrame(frame),
         "channels": list(frame.keys()),

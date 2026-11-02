@@ -304,6 +304,7 @@ lesson by default.
 | [Ending A Comparison Must Reproject The Surviving View](comparison-implicit-end-reprojects-host.md) | Deleting a comparison peer, closing other views, or closing all files while a peer holds focus. | See lesson |
 | [Analysis Log Ranges Are Engineering Values](analysis-log-scale-engineering-range.md) | Changing FFT or spectrum log scale, `plot_spectra`, or chart-options range apply. | See lesson |
 | [Expression Functions Must Reject NumPy Output Arguments](expression-functions-reject-numpy-output-arguments.md) | Adding expression validation, trial evaluation, or functions backed by NumPy. | See lesson |
+| [Partial Imports Preserve Identity And Sample Gaps](partial-import-must-preserve-identity-and-sample-gaps.md) | Relaxing file-import rejection or carrying partial-import diagnostics through GUI, project reload, or Batch. | See lesson |
 
 ## Selection Rules
 

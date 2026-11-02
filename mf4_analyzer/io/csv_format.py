@@ -133,13 +133,24 @@ def _detect_decimal(rows: list[list[str]], data_row: int) -> str:
 
 
 def _resolve_below(rows: list[list[str]], header_row: int) -> tuple[int, int | None]:
-    units_row: int | None = None
-    for i in range(header_row + 1, len(rows)):
-        if _mostly_numeric(rows[i]):
-            return i, units_row
-        if units_row is None and _looks_like_units(rows[i]):
-            units_row = i
-    return header_row + 1, units_row
+    # Units are one immediately adjacent, wholly non-numeric row. A partial
+    # first sample ("0,broken") must remain data, never a units/header row.
+    below = header_row + 1
+    if below < len(rows):
+        cells = rows[below]
+        from .ascii_format import _TIME_NAMES
+        time_indices = [i for i, cell in enumerate(rows[header_row])
+                        if cell.strip().casefold() in _TIME_NAMES]
+        time_unit = not time_indices or all(
+            i < len(cells) and cells[i].strip().strip("[]").casefold()
+            in {"s", "sec", "second", "seconds", "ms", "us", "µs", "ns"}
+            for i in time_indices
+        )
+        if (_looks_like_units(cells)
+                and time_unit
+                and not any(_cell_numeric(cell) for cell in cells if cell.strip())):
+            return below + 1, below
+    return below, None
 
 
 def sniff_csv_layout(path, *, max_lines: int = 10) -> CsvLayout | None:
@@ -174,6 +185,16 @@ def sniff_csv_layout(path, *, max_lines: int = 10) -> CsvLayout | None:
                 decimal=_detect_decimal(rows, data_row),
                 known_format=name,
             )
+
+    # A named time header is stronger evidence than a later mostly-numeric
+    # sample. Otherwise leading gaps can be silently consumed as headers.
+    from .ascii_format import _TIME_NAMES
+    for header_row, cells in enumerate(rows):
+        if (any(cell.strip().casefold() in _TIME_NAMES for cell in cells)
+                and not any(_cell_numeric(cell) for cell in cells if cell.strip())):
+            data_row, units_row = _resolve_below(rows, header_row)
+            return CsvLayout(header_row, units_row, data_row, sep, encoding,
+                             _detect_decimal(rows, data_row), None)
 
     data_row = next((i for i, row in enumerate(rows) if _mostly_numeric(row)), None)
     if data_row is None or data_row == 0:

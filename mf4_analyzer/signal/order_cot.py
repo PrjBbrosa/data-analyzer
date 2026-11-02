@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import numpy as np
+from .validation import require_finite_samples
 
 from .fft import get_analysis_window
 from .weighting import _validate_weighting, a_weighting_gain_linear
@@ -79,6 +80,9 @@ class COTOrderAnalyzer:
             )
         if len(sig) < 16:
             raise ValueError("signal too short")
+        require_finite_samples(sig)
+        require_finite_samples(rpm, "rpm")
+        require_finite_samples(t, "time")
         if np.any(np.diff(t) <= 0):
             raise ValueError("time vector must be strictly monotonically increasing")
         return sig, rpm, t

@@ -756,6 +756,7 @@ class DataLoader:
             raise ImportError(
                 "nptdms is not installed; install the application's TDMS dependency"
             ) from exc
+        from .import_diagnostics import make_import_issue, set_import_diagnostics
 
         def waveform_time(properties, sample_count):
             try:
@@ -770,15 +771,24 @@ class DataLoader:
                 return None
             if not np.isfinite(offset):
                 return None
-            return offset + increment * np.arange(sample_count, dtype=np.float64)
+            with np.errstate(over="ignore", invalid="ignore"):
+                time = offset + increment * np.arange(sample_count, dtype=np.float64)
+                rate = 1.0 / increment
+            if (not np.isfinite(time).all() or not np.isfinite(rate)
+                    or (time.size > 1 and not np.all(np.diff(time) > 0))):
+                return None
+            return time, rate
 
         tdms = TdmsFile.read(str(fp))
         raw_channels = []
         skipped = []
+        issues = []
         name_counts = defaultdict(int)
-        for group in tdms.groups():
+        declared_channels = 0
+        for group_index, group in enumerate(tdms.groups()):
             group_name = str(group.name or "Group")
-            for channel in group.channels():
+            for channel_index, channel in enumerate(group.channels()):
+                declared_channels += 1
                 values = np.asarray(channel[:])
                 ch_label = str(channel.name or "Channel")
                 display_skip = (
@@ -786,14 +796,20 @@ class DataLoader:
                     if group_name and group_name != "Group"
                     else ch_label
                 )
-                if values.ndim != 1:
-                    skipped.append({"name": display_skip, "reason": "non-1d"})
-                    continue
-                if values.size == 0:
-                    skipped.append({"name": display_skip, "reason": "empty"})
-                    continue
-                if not np.issubdtype(values.dtype, np.number):
-                    skipped.append({"name": display_skip, "reason": "non-numeric"})
+                reason = ("non-1d" if values.ndim != 1 else "empty" if values.size == 0
+                          else "non-numeric" if not np.issubdtype(values.dtype, np.number)
+                          or values.dtype.kind == "c" else None)
+                if reason is not None:
+                    skipped.append({"name": display_skip, "reason": reason,
+                                    "group_index": group_index, "channel_index": channel_index})
+                    explanation = {"non-1d": "不是一维数值序列", "empty": "为空",
+                                   "non-numeric": "不是实数数值序列"}[reason]
+                    issues.append(make_import_issue(
+                        "unsupported_channel", f"通道 {display_skip} {explanation}，已跳过",
+                        severity="partial" if reason == "non-1d" else "warning", action="skipped",
+                        group=group_name, channel=ch_label, group_index=group_index,
+                        channel_index=channel_index, reason=reason,
+                    ))
                     continue
                 base_name = ch_label
                 name_counts[base_name] += 1
@@ -801,27 +817,51 @@ class DataLoader:
                     "group": group_name,
                     "base_name": base_name,
                     "values": values.astype(np.float64, copy=False),
-                    "time": waveform_time(channel.properties, values.size),
+                    "timing": waveform_time(channel.properties, values.size),
                     "unit": str(channel.properties.get("unit_string", "") or ""),
+                    "group_index": group_index, "channel_index": channel_index,
                 })
 
         if not raw_channels:
             raise ValueError("TDMS file has no non-empty numeric channels")
 
-        untimed = [entry["base_name"] for entry in raw_channels if entry["time"] is None]
-        if untimed:
+        def skip_entry(entry, code, reason):
+            label = f"{entry['group']}.{entry['base_name']}"
+            skipped.append({"name": label, "reason": reason,
+                            "group_index": entry["group_index"], "channel_index": entry["channel_index"]})
+            issues.append(make_import_issue(
+                code, f"通道 {label} {reason}，已跳过", severity="partial", action="skipped",
+                group=entry["group"], channel=entry["base_name"],
+                group_index=entry["group_index"], channel_index=entry["channel_index"],
+            ))
+
+        timed = []
+        for entry in raw_channels:
+            if entry["timing"] is None:
+                skip_entry(entry, "invalid_channel_time", "缺少或具有无效时间信息")
+            else:
+                timed.append(entry)
+        if not timed:
             raise ValueError(
-                "TDMS numeric channels have no waveform timing metadata: "
-                + ", ".join(untimed)
+                "TDMS numeric channels have no valid waveform timing metadata: "
+                + ", ".join(entry["base_name"] for entry in raw_channels)
             )
 
-        reference = max(raw_channels, key=lambda entry: entry["values"].size)
-        reference_time = reference["time"]
+        reference = max(timed, key=lambda entry: entry["values"].size)
+        reference_time, reference_rate = reference["timing"]
         data = {"Time": reference_time}
         units = {}
         used_names = {"Time"}
         renamed = []
-        for index, entry in enumerate(raw_channels, 1):
+        for index, entry in enumerate(timed, 1):
+            channel_time, _rate = entry["timing"]
+            values = entry["values"]
+            if reference_time.size > 1 and values.size == 1:
+                skip_entry(entry, "single_sample", "仅有单点，不能扩展到共享时间轴")
+                continue
+            if channel_time[-1] < reference_time[0] or channel_time[0] > reference_time[-1]:
+                skip_entry(entry, "no_time_overlap", "与参考时间轴无重叠")
+                continue
             base_name = entry["base_name"]
             preferred = (
                 base_name
@@ -831,16 +871,38 @@ class DataLoader:
             display_name = preferred
             if display_name in used_names:
                 display_name = f"{display_name} [{index}]"
+                while display_name in used_names:
+                    display_name += "_"
             if display_name != base_name:
                 renamed.append({"original": base_name, "renamed": display_name})
             used_names.add(display_name)
 
-            channel_time = entry["time"]
-            values = entry["values"]
             if np.array_equal(channel_time, reference_time):
                 data[display_name] = values
             else:
                 data[display_name] = np.interp(reference_time, channel_time, values)
+                endpoint_fill = int(np.count_nonzero(
+                    (reference_time < channel_time[0]) | (reference_time > channel_time[-1])
+                ))
+                outside = int(np.count_nonzero(
+                    (channel_time < reference_time[0]) | (channel_time > reference_time[-1])
+                ))
+                issues.append(make_import_issue(
+                    "resampled_channel",
+                    f"通道 {display_name} 已对齐到共享时间轴（端点填充 {endpoint_fill} 点，范围外 {outside} 点）",
+                    severity="partial" if outside else "warning", action="resampled",
+                    group=entry["group"], channel=entry["base_name"],
+                    group_index=entry["group_index"], channel_index=entry["channel_index"],
+                    endpoint_fill_count=endpoint_fill, outside_reference_count=outside,
+                ))
+            nonfinite = int(np.count_nonzero(~np.isfinite(data[display_name])))
+            if nonfinite:
+                issues.append(make_import_issue(
+                    "nonfinite_samples", f"通道 {display_name} 含 {nonfinite} 个无效样本，已保留缺口",
+                    severity="partial", action="gap_preserved", group=entry["group"],
+                    channel=entry["base_name"], group_index=entry["group_index"],
+                    channel_index=entry["channel_index"], sample_count=nonfinite,
+                ))
             units[display_name] = entry["unit"]
 
         smeta = {
@@ -848,7 +910,13 @@ class DataLoader:
             "source_filename": Path(fp).name,
             "skipped_channels": skipped,
             "renamed_channels": renamed,
+            "time_column": "Time",
+            "verified_sample_rate": reference_rate,
         }
+        set_import_diagnostics(smeta, issues, imported_channels=len(data) - 1,
+                               declared_channels=declared_channels,
+                               skipped_channels=declared_channels - (len(data) - 1),
+                               sample_count=len(reference_time))
         pd = _pandas()
         return pd.DataFrame(data), list(data.keys()), units, None, smeta
 
@@ -1090,16 +1158,16 @@ class DataLoader:
         return data, names, units, fs, source_metadata
 
     @staticmethod
-    def load_csv(fp):
-        from mf4_analyzer.io.csv_format import sniff_csv_layout
+    def load_csv(fp, *, sampling_rate=None):
+        from mf4_analyzer.io.csv_format import CsvLayout, sniff_csv_layout
 
         layout = None
         try:
             layout = sniff_csv_layout(fp)
         except Exception:
             layout = None
-        if layout is not None and not layout.is_trivial:
-            return DataLoader._load_csv_with_layout(fp, layout)
+        if layout is not None:
+            return DataLoader._load_csv_with_layout(fp, layout, sampling_rate=sampling_rate)
 
         pd = _pandas()
         df = None
@@ -1108,15 +1176,13 @@ class DataLoader:
                 try:
                     df = pd.read_csv(fp, encoding=enc, sep=sep)
                     if len(df.columns) > 1: break
-                except:
+                except (UnicodeError, pd.errors.ParserError, pd.errors.EmptyDataError):
                     continue
             if df is not None and len(df.columns) > 1: break
-        if df is None: raise ValueError("Cannot parse CSV")
-        for col in df.columns: df[col] = pd.to_numeric(df[col], errors='coerce')
-        df = df.dropna(axis=1, how='all').interpolate().dropna()
-        if df.empty or len(df.columns) < 1:
+        if df is None:
             raise ValueError("Cannot parse CSV")
-        return df, list(df.columns), {}
+        layout = CsvLayout(0, None, 1, sep, enc, ".", None)
+        return DataLoader._load_csv_with_layout(fp, layout, sampling_rate=sampling_rate)
 
     @staticmethod
     def load_ascii(fp):
@@ -1138,9 +1204,11 @@ class DataLoader:
                 raise ValueError("Cannot detect a supported ASCII table layout") from exc
             if not has_time_column(channels):
                 raise ValueError("ASCII file has no time column or verified sampling rate")
-            return data, channels, units, None, {
-                "source_kind": "ascii", "ascii_kind": "delimited", "ascii_confidence": "high",
-            }
+            metadata = dict(data.attrs.get("source_metadata") or {})
+            metadata.update(source_kind="ascii", ascii_kind="delimited", ascii_confidence="high")
+            metadata["import_diagnostics"]["source_kind"] = "ascii"
+            data.attrs["source_metadata"] = metadata
+            return data, channels, units, None, metadata
 
         header_line = Path(fp).read_text(encoding=layout.encoding, errors="replace").splitlines()
         raw_headers = [header_line[layout.header_row][a:b].strip() for a, b in layout.colspecs]
@@ -1159,28 +1227,58 @@ class DataLoader:
                     units[name] = unit
         pd = _pandas()
         data = pd.read_fwf(fp, colspecs=list(layout.colspecs), skiprows=layout.data_row,
-                           header=None, names=channels, encoding=layout.encoding)
-        for channel in channels:
-            data[channel] = pd.to_numeric(data[channel], errors="coerce")
-        if data.empty or data.notna().all(axis=1).sum() == 0:
-            raise ValueError("Cannot parse fixed-width ASCII data")
+                           header=None, names=channels, encoding=layout.encoding, skip_blank_lines=False)
+        from .tabular_data import prepare_numeric_table
+
         fs = 1.0 / layout.sample_interval if layout.sample_interval else None
-        if fs is None and not has_time_column(channels):
-            raise ValueError("ASCII file has no time column or verified sampling rate")
-        return data, channels, units, fs, {
-            "source_kind": "ascii", "ascii_kind": "fixed_width",
-            "ascii_confidence": layout.confidence, "ascii_data_row": layout.data_row,
-        }
+        data, channels, units = prepare_numeric_table(
+            data, source_kind="ascii", source_filename=Path(fp).name, units=units,
+            source_rows=range(layout.data_row + 1, layout.data_row + 1 + len(data)),
+            sampling_rate=fs, generate_time=False,
+        )
+        metadata = data.attrs["source_metadata"]
+        metadata.update(ascii_kind="fixed_width", ascii_confidence=layout.confidence,
+                        ascii_data_row=layout.data_row)
+        # A real time column wins over the header's sampling hint; passing fs
+        # would make FileData reconstruct it and discard a nonzero start time.
+        if metadata.get("time_column") is not None:
+            fs = None
+        return data, channels, units, fs, metadata
 
     @staticmethod
-    def _load_csv_with_layout(fp, layout):
+    def _load_csv_with_layout(fp, layout, *, sampling_rate=None):
         import csv as _csv
         import io as _io
+        from .tabular_data import prepare_numeric_table
 
         pd = _pandas()
         skiprows = list(range(layout.header_row))
         if layout.units_row is not None:
             skiprows.append(layout.units_row)
+
+        source_rows = []
+        width = None
+        try:
+            with open(fp, encoding=layout.encoding, newline="") as handle:
+                reader = _csv.reader(handle, delimiter=layout.sep, strict=True)
+                while True:
+                    first_line = reader.line_num
+                    try:
+                        row = next(reader)
+                    except StopIteration:
+                        break
+                    if first_line < layout.header_row:
+                        continue
+                    if first_line == layout.header_row:
+                        width = len(row)
+                        continue
+                    if first_line == layout.units_row:
+                        continue
+                    if row and len(row) != width:
+                        raise ValueError(f"Cannot parse CSV: 第 {first_line + 1} 行列数不一致，无法可靠导入")
+                    source_rows.append(first_line + 1)
+        except _csv.Error as exc:
+            raise ValueError("Cannot parse CSV: 引号或记录结构无效") from exc
 
         try:
             df = pd.read_csv(
@@ -1190,8 +1288,9 @@ class DataLoader:
                 skiprows=skiprows,
                 header=0,
                 decimal=layout.decimal,
+                skip_blank_lines=False,
             )
-        except Exception as exc:
+        except (UnicodeError, pd.errors.ParserError, pd.errors.EmptyDataError) as exc:
             raise ValueError("Cannot parse CSV") from exc
 
         units = {}
@@ -1219,15 +1318,16 @@ class DataLoader:
             except Exception:
                 units = {}
 
-        for col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-        df = df.dropna(axis=1, how='all').interpolate().dropna()
-        if df.empty or len(df.columns) < 1:
-            raise ValueError("Cannot parse CSV")
-        return df, list(df.columns), units
+        try:
+            return prepare_numeric_table(
+                df, source_kind="csv", source_filename=Path(fp).name, units=units,
+                source_rows=source_rows, sampling_rate=sampling_rate, decimal=layout.decimal,
+            )
+        except ValueError as exc:
+            raise ValueError(f"Cannot parse CSV: {exc}") from exc
 
     @staticmethod
-    def load_excel(fp):
+    def load_excel(fp, *, sampling_rate=None):
         extension = Path(fp).suffix.lower()
         if extension == '.xlsx':
             if not HAS_OPENPYXL:
@@ -1257,9 +1357,10 @@ class DataLoader:
             raise ValueError(f"unsupported Excel extension: {extension or '<none>'}")
         pd = _pandas()
         df = pd.read_excel(fp, engine=engine)
-        for col in df.columns: df[col] = pd.to_numeric(df[col], errors='coerce')
-        df = df.dropna(how='all').interpolate().ffill().bfill().reset_index(drop=True)
-        return df, list(df.columns), {}
+        from .tabular_data import prepare_numeric_table
+
+        return prepare_numeric_table(df, source_kind="excel", source_filename=Path(fp).name,
+                                     sampling_rate=sampling_rate)
 
     @staticmethod
     def load_wwt(fp):

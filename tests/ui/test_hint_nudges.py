@@ -379,6 +379,7 @@ def test_view_compact_tabs_ranks_between_coaxis_custom_action_and_batch_export()
         "batch.export_options",
         "file.wwt_batch_choice",
         "batch.recent_files",
+        "file.import_details",
         "time.custom_x_paths",
         "batch.layout_when_separate",
         "file.zfd_timebase",
@@ -394,6 +395,7 @@ def test_view_compact_tabs_ranks_between_coaxis_custom_action_and_batch_export()
         "batch.count_pending",
         "time.view_fade",
         "batch.disabled_keeps_value",
+        "channel.expression_check",
         "channel.searchable_combo",
         "preset.keep_manual_axes",
         "preset.baseline_highlight",
@@ -402,6 +404,7 @@ def test_view_compact_tabs_ranks_between_coaxis_custom_action_and_batch_export()
         "time.time_range_mode",
         "startup.splash_panel",
         "chart_options.empty_title",
+        "panel.hover_peek",
         "chart_options.reset_open",
         "chart_options.shared_axis",
     ]
