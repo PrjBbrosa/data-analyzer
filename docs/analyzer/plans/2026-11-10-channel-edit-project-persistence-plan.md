@@ -1,7 +1,7 @@
 # 通道编辑结果随项目保存：优化计划
 
 - 日期：2026-11-10。
-- 状态：**已按本计划实施。** 云端 offscreen 聚焦测试与边界护栏已通过；macOS 前台与 Windows 冻结包真机验收未在本环境执行。
+- 状态：**已按本计划实施。** 云端 offscreen 聚焦门禁里的用例全部通过，但进程在解释器退出阶段以 139 退出（基线同样如此），不能记成干净通过，详见 §10；macOS 前台与 Windows 冻结包真机验收未在本环境执行。验收发现与补丁范围见 `docs/analyzer/plans/2026-11-10-channel-edit-persistence-followup-plan.md`。
 - 源码基线：`1e4b25936913f561d0b499bb6e37e238e8c5bcd0`（TraceLab v8.4.6）。实施前重新检查 HEAD 与相关 dirty 范围；下文行号以基线为准，实施时按符号重新定位。
 - 授权范围：按本计划实施 T0–T6。不升版本号，不把样点写入项目，不回写源文件。
 - 问题：在「通道编辑」里创建派生通道后保存项目，重新打开时这些通道不存在；引用它们的 View 勾选、颜色、分析来源也随之失效，且没有任何提示。
@@ -241,5 +241,7 @@ TMPDIR=/tmp QT_QPA_PLATFORM=offscreen PYTHONPATH=. .venv/bin/python -m pytest <�
 - `tests/ui/test_channel_editor_recipes.py` 以及通道编辑表达式、对话框、抽屉、导出、hints、quickref
 - `_apply_channel_edits` 的 smoke / view-scope 节点
 - 边界：`tests/test_signal_no_gui_import.py`、`tests/ui/test_import_boundaries.py`、`tests/ui/test_main_window_state_ownership.py`、`tests/ui/test_no_lambda_signal_connections.py`
+
+结果（`689edbc3`，`-X faulthandler`）：`472 passed`，随后解释器退出阶段段错误（`<no Python frame>`），退出码 139。同一份文件清单去掉本次新增的三个测试文件后在父提交 `a8844727` 上是 `440 passed`，同样以 139 退出，所以这个非零退出不是本次改动引入的；但按仓库门禁规则，这次运行不算干净通过。实施当时的那次合并运行是 `1 failed, 471 passed` 后 139 退出，失败用例修好后只重跑了两个节点。`tests/test_packaging_imports.py`、`tests/test_native_import_boundaries.py`、`tests/test_batch_render_import_boundary.py` 事后补跑为 `15 passed, 1 skipped`，退出码 0。
 
 未跑全量套件。第 6 节的真机验收（真实 EPS 录制、打开耗时、macOS 前台、Windows 冻结包）没有在这台 Linux 云端环境执行。版本号未改；下次发版再补 changelog。
