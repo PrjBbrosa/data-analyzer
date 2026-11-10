@@ -697,10 +697,44 @@ class ChannelEditorDialog(QDialog):
             return self.new_channels[name][1]
         return self.fd.channel_units.get(name, "")
 
+    def _warn_if_source_unavailable(self, name):
+        """Reject a source the staged delete has already removed.
+
+        The file itself is unchanged until the dialog is confirmed, so a
+        column check alone still sees a channel marked for deletion.
+        """
+        if name in self.removed_channels:
+            QMessageBox.warning(
+                self,
+                "无法创建",
+                f"通道 {name} 已标记删除，请先创建派生通道，再删除源通道",
+            )
+            return True
+        if name not in self.fd.data.columns and name not in self.new_channels:
+            QMessageBox.warning(self, "无法创建", "源通道不存在或参数越界")
+            return True
+        return False
+
+    def _drop_combo_names(self, names):
+        drop = {str(name) for name in names}
+        for combo in (self.combo_src, self.combo_a, self.combo_b):
+            kept = [
+                combo.itemText(index)
+                for index in range(combo.count())
+                if combo.itemText(index) not in drop
+            ]
+            if len(kept) == combo.count():
+                continue
+            combo.blockSignals(True)
+            combo.clear()
+            if kept:
+                combo.addItems(kept)
+            combo.blockSignals(False)
+            combo.setToolTip(combo.currentText())
+
     def _create_single(self):
         src = self.combo_src.currentText()
-        if src not in self.fd.data.columns and src not in self.new_channels:
-            QMessageBox.warning(self, "无法创建", "源通道不存在或参数越界")
+        if self._warn_if_source_unavailable(src):
             return
         op = self.combo_op.currentIndex()
         if op < 0 or op >= len(_SINGLE_FNS):
@@ -965,11 +999,7 @@ class ChannelEditorDialog(QDialog):
         if op == self.CUSTOM_OP_INDEX:
             self._create_expression(ch_a, ch_b)
             return
-        if ch_a not in self.fd.data.columns and ch_a not in self.new_channels:
-            QMessageBox.warning(self, "无法创建", "源通道不存在或参数越界")
-            return
-        if ch_b not in self.fd.data.columns and ch_b not in self.new_channels:
-            QMessageBox.warning(self, "无法创建", "源通道不存在或参数越界")
+        if self._warn_if_source_unavailable(ch_a) or self._warn_if_source_unavailable(ch_b):
             return
         if op < 0 or op >= len(_DUAL_FNS):
             QMessageBox.warning(self, "无法创建", "不支持的运算类型")
@@ -1022,5 +1052,6 @@ class ChannelEditorDialog(QDialog):
             if self.list_export.item(row).text() in remove:
                 self.list_export.takeItem(row)
         self.lbl.setText(f"新增: {len(self.new_channels)}")
+        self._drop_combo_names(sel)
         self._apply_export_filters()
         self._invalidate_expression_check()

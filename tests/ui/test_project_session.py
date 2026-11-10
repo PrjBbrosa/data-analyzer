@@ -3135,10 +3135,118 @@ def test_unlogged_channel_edit_warns_and_is_absent_after_reopen(
         assert mw.save_project(proj) is True
     assert any("通道未随项目保存" in record.message and "ghost" in record.message
                for record in caplog.records)
-    assert ("部分通道未随项目保存", "warning") in toasts
+    assert toasts[-1][1] == "warning"
+    assert toasts[-1][0].startswith("已保存项目")
+    assert "1 个通道未随项目保存" in toasts[-1][0]
     raw = json.loads(proj.read_text(encoding="utf-8"))
     assert raw["schema_version"] == 4
     mw2 = MainWindow()
     qtbot.addWidget(mw2)
     mw2.open_project(proj)
     assert "ghost" not in next(iter(mw2.files.values())).channels
+
+
+def test_save_without_session_channels_toasts_saved_only(
+    qapp, qtbot, tmp_path, monkeypatch,
+):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    csv_path = tmp_path / "plain.csv"
+    proj = tmp_path / "plain.tlproj"
+    _write_eps_csv(csv_path)
+    mw = MainWindow()
+    qtbot.addWidget(mw)
+    mw._load_one(str(csv_path))
+    toasts = []
+    monkeypatch.setattr(mw, "toast", lambda text, kind="info": toasts.append((text, kind)))
+    assert mw.save_project(proj) is True
+    assert toasts[-1] == ("已保存项目", "success")
+
+
+def test_skipped_recipe_warns_with_real_counts_and_stays_clean(
+    qapp, qtbot, tmp_path, monkeypatch, caplog,
+):
+    import logging
+    import numpy as np
+    from mf4_analyzer.signal.channel_recipe import RemoveEntry, make_single
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    csv_path = tmp_path / "skip.csv"
+    _write_eps_csv(csv_path)
+    mw = MainWindow()
+    qtbot.addWidget(mw)
+    mw._load_one(str(csv_path))
+    fid = next(iter(mw.files))
+    n = len(mw.files[fid].data)
+    skipped = make_single("ghost_d", "", "abs", "no_such", None)
+    removed = RemoveEntry(("rpm",))
+    revision = mw._project_dirty.revision
+    toasts = []
+    status = []
+    monkeypatch.setattr(mw, "toast", lambda text, kind="info": toasts.append((text, kind)))
+    monkeypatch.setattr(mw, "_status_message", lambda message, timeout=0: status.append(message))
+    monkeypatch.setattr(mw, "_confirm_global_channel_delete", lambda _uses: True)
+    with caplog.at_level(logging.WARNING, logger="mf4_analyzer.ui.main_window.window"):
+        mw._apply_channel_edits(
+            fid,
+            {"ghost_d": (np.arange(n, dtype=float), "")},
+            {"rpm"},
+            [removed, skipped],
+        )
+    assert mw._project_dirty.revision == revision + 1
+    assert len(toasts) == 1
+    text, kind = toasts[0]
+    assert kind == "warning"
+    assert "新增 0" in text and "删除 1" in text
+    assert "ghost_d" in text and "输入通道不存在" in text
+    assert any("编辑: +0 -1" in message for message in status)
+    assert "ghost_d" not in mw.files[fid].channels
+    assert "rpm" not in mw.files[fid].data.columns
+    assert any("ghost_d" in record.message and "输入通道不存在" in record.message
+               for record in caplog.records)
+
+    # Nothing applied: the session stays at the same revision.
+    nowhere = [make_single(f"miss_{index}", "", "abs", "no_such", None) for index in range(4)]
+    revision = mw._project_dirty.revision
+    toasts.clear()
+    with caplog.at_level(logging.WARNING, logger="mf4_analyzer.ui.main_window.window"):
+        mw._apply_channel_edits(
+            fid,
+            {entry.name: (np.arange(n, dtype=float), "") for entry in nowhere},
+            set(),
+            nowhere,
+        )
+    assert mw._project_dirty.revision == revision
+    assert len(toasts) == 1
+    text, kind = toasts[0]
+    assert kind == "warning"
+    assert "新增 0" in text and "删除 0" in text
+    assert "未应用 4" in text and "等 4 条" in text
+    assert "miss_0" in text and "miss_2" in text
+    assert "miss_3" not in text
+
+
+def test_applied_recipe_keeps_the_success_counts(qapp, qtbot, tmp_path, monkeypatch):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    _silence_editor(monkeypatch)
+    csv_path = tmp_path / "ok.csv"
+    _write_eps_csv(csv_path)
+    mw = MainWindow()
+    qtbot.addWidget(mw)
+    mw._load_one(str(csv_path))
+    fid = next(iter(mw.files))
+    dlg = _editor(mw, fid)
+    dlg.combo_src.setCurrentText("rpm")
+    dlg.combo_op.setCurrentIndex(5)
+    dlg._create_single()
+    revision = mw._project_dirty.revision
+    toasts = []
+    status = []
+    monkeypatch.setattr(mw, "toast", lambda text, kind="info": toasts.append((text, kind)))
+    monkeypatch.setattr(mw, "_status_message", lambda message, timeout=0: status.append(message))
+    _apply_editor(mw, dlg, monkeypatch)
+    assert mw._project_dirty.revision == revision + 1
+    assert toasts == [("通道已更新: 新增 1 · 删除 0", "success")]
+    assert status == ["编辑: +1 -0"]
+    assert "abs_rpm" in mw.files[fid].channels

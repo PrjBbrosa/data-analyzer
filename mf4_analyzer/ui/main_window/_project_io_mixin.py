@@ -2546,7 +2546,7 @@ class ProjectIOMixin:
         ):
             return False
 
-        self._warn_session_only_channels()
+        session_only = self._warn_session_only_channels()
         self._capture_focused_view()
         # Flush each analysis section's live UI state into its active view so
         # the last (uncommitted) inspector edit / source / compare toggle is
@@ -2581,9 +2581,17 @@ class ProjectIOMixin:
         if dirty is not None:
             dirty.mark_saved(path, digest=digest)
         self.statusBar.showMessage(f"已保存项目: {path.name}")
-        self.toast("已保存项目", "success")
+        if session_only:
+            saved_text = f"已保存项目 · {session_only} 个通道未随项目保存"
+            self.toast(saved_text, "warning")
+        else:
+            saved_text = "已保存项目"
+            self.toast(saved_text, "success")
         if sidecar_warnings:
-            self.toast("项目已保存，预览未保存", "warning")
+            # The toast is single-slot, so the last message has to keep the
+            # session-only warning or the user only sees the preview notice.
+            extra = f" · {session_only} 个通道未随项目保存" if session_only else ""
+            self.toast(f"项目已保存，预览未保存{extra}", "warning")
         self._recent_files.record_project(str(path))
         self._refresh_project_session_chrome()
         return True
@@ -2618,16 +2626,21 @@ class ProjectIOMixin:
         return payload
 
     def _warn_session_only_channels(self):
+        """Log session-only channels and return how many are still present.
+
+        The save toast itself carries the warning. A separate toast here is
+        replaced immediately by the save result.
+        """
         names = []
         for fid, fd in self.files.items():
             for name in getattr(fd, "session_ephemeral_channels", ()) or ():
                 if name in getattr(fd, "channels", ()):
                     names.append(f"{fid}:{name}")
         if not names:
-            return
+            return 0
         names.sort()
         logger.warning("通道未随项目保存: %s", ", ".join(names))
-        self.toast("部分通道未随项目保存", "warning")
+        return len(names)
 
     def _assemble_project_document(self, path, saved_mode=None):
         """Build the save-path ``ProjectDocument`` without writing it.

@@ -1,7 +1,7 @@
 # 通道编辑随项目保存：验收结论与补丁 plan（followup）
 
 - 日期：2026-11-10。
-- 状态：**待执行。** 本文只记录验收结论与补丁范围，未改任何产品代码。
+- 状态：**T1–T3 已实施。** 云端 offscreen 聚焦用例与边界护栏进程退出码均为 0，见 §6。macOS 前台与 Windows 冻结包真机验收仍未执行。F4、F5 与退出阶段段错误不在本补丁内。
 - 验收对象：`689edbc3`（`feat(project): replay channel-editor recipes when a project reopens`），对照 `docs/analyzer/plans/2026-11-10-channel-edit-project-persistence-plan.md`。
 - 对照基线：`a8844727`（该提交的父提交，干净 worktree）。
 - 验收方法：读 diff 与 HEAD 调用点；在 HEAD 与基线上各跑一次同一份探针脚本；在 HEAD 与基线上各跑一次同一份聚焦门禁（offscreen Qt，Linux 云端，`-X faulthandler`）。未跑全量套件。
@@ -93,3 +93,27 @@ F3 的三参路径目前从界面走不到（抽屉总是带配方），所以�
 - **F5**（日志里互相抵消的条目）：不影响回放结果，只是让个别项目多停留在 schema 5。
 - **聚焦门禁退出阶段的段错误**：基线就有，不是本功能引入的。成因未定位（可能与仓库已记录的 Qt teardown 问题同类，但没有证据），应走专项排查，不在这里顺手处理。
 - macOS 前台与 Windows 冻结包的真机验收：仍未执行，沿用上一份 plan §6 的清单。
+
+## 6. 实施记录
+
+T1–T3 已按上面的做法落地，没有改 schema，没有改回放顺序，没有放宽棘轮。用户指南没有「先删后派生」的说法，hints 与 quickref 未改。
+
+取舍按 §4 T1：同一次编辑里，已标记删除的通道不能再当单通道或双通道输入，提示改为「请先创建派生通道，再删除源通道」。先派生再删除源通道的顺序保持可用。
+
+应用路径的新增 / 删除计数改取 `replay()` 实际应用的条目。有跳过时只发一条 warning toast，最多点名 3 条，更多时带上总条数，并 `logger.warning`。全部跳过时不把项目标脏。三参路径的计数仍用传入的集合。
+
+保存时不再另发「部分通道未随项目保存」。有会话内通道时，保存 toast 本身是 warning：「已保存项目 · N 个通道未随项目保存」。日志行保留。预览 sidecar 另有警告时，最后一条 toast 仍带上这句，避免被顶掉。
+
+聚焦进程（offscreen，`TMPDIR=/tmp`，`-X faulthandler`，各一次）退出码：
+
+| 进程 | 结果 | 退出码 |
+| --- | --- | --- |
+| `tests/ui/test_channel_editor_recipes.py` | 8 passed | 0 |
+| `tests/test_channel_edit_log.py` | 8 passed | 0 |
+| `tests/ui/test_project_session.py` | 81 passed | 0 |
+| `tests/ui/test_project_dirty_guard.py` | 44 passed | 0 |
+| `tests/ui/test_no_lambda_signal_connections.py` | 2 passed | 0 |
+| `tests/ui/test_import_boundaries.py` | 11 passed | 0 |
+| `tests/ui/test_main_window_state_ownership.py` | 5 passed | 0 |
+
+另外，既有的应用反馈节点 `tests/ui/test_channel_editor_export.py::test_channel_editor_apply_feedback_lands_on_main_window_after_close` 通过，退出码 0。`git diff --check` 通过。未跑全量套件。这次这几个进程没有出现上一节记录的退出阶段 139。

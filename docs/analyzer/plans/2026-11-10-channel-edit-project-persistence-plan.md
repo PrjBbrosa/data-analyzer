@@ -1,7 +1,7 @@
 # 通道编辑结果随项目保存：优化计划
 
 - 日期：2026-11-10。
-- 状态：**已按本计划实施。** 云端 offscreen 聚焦门禁里的用例全部通过，但进程在解释器退出阶段以 139 退出（基线同样如此），不能记成干净通过，详见 §10；macOS 前台与 Windows 冻结包真机验收未在本环境执行。验收发现与补丁范围见 `docs/analyzer/plans/2026-11-10-channel-edit-persistence-followup-plan.md`。
+- 状态：**已按本计划实施。** 云端 offscreen 聚焦门禁里的用例全部通过，但进程在解释器退出阶段以 139 退出（基线同样如此），不能记成干净通过，详见 §10；macOS 前台与 Windows 冻结包真机验收未在本环境执行。验收发现见 `docs/analyzer/plans/2026-11-10-channel-edit-persistence-followup-plan.md`；该补丁的 T1–T3 已实施。
 - 源码基线：`1e4b25936913f561d0b499bb6e37e238e8c5bcd0`（TraceLab v8.4.6）。实施前重新检查 HEAD 与相关 dirty 范围；下文行号以基线为准，实施时按符号重新定位。
 - 授权范围：按本计划实施 T0–T6。不升版本号，不把样点写入项目，不回写源文件。
 - 问题：在「通道编辑」里创建派生通道后保存项目，重新打开时这些通道不存在；引用它们的 View 勾选、颜色、分析来源也随之失效，且没有任何提示。
@@ -120,7 +120,7 @@
 
 ### D8 兼容缝
 
-- `_apply_channel_edits(fid, new_channels, removed_channels, edits=None)`：产品路径始终带 `edits`。不带配方的三参调用继续可用，这样加进来的通道记为「仅本次会话」；保存时如果存在这类通道，给出一条警告并写日志，不静默丢失。
+- `_apply_channel_edits(fid, new_channels, removed_channels, edits=None)`：产品路径始终带 `edits`。不带配方的三参调用继续可用，这样加进来的通道记为「仅本次会话」；保存时如果存在这类通道，写日志，并把警告并进保存结果的那一条 toast（「已保存项目 · N 个通道未随项目保存」）。toast 是单槽，不能另发一条会被结果 toast 顶掉的提示。
 - 对话框保留 `new_channels` / `removed_channels`，新增一份平行的有序暂存配方；切换文件时三者一起重置。
 - `ChannelEditorDrawer.applied` 增加第四个参数。
 
