@@ -37,3 +37,30 @@ class ChannelMath:
             # ``convolve(..., mode='same')`` would zero-pad and taper the edges.
             return np.full(sig.shape, sig.mean(), dtype=float)
         return np.convolve(sig, np.ones(ws) / ws, mode='same')
+
+    @staticmethod
+    def add(a, b):
+        return np.asarray(a, dtype=float) + np.asarray(b, dtype=float)
+
+    @staticmethod
+    def sub(a, b):
+        return np.asarray(a, dtype=float) - np.asarray(b, dtype=float)
+
+    @staticmethod
+    def mul(a, b):
+        return np.asarray(a, dtype=float) * np.asarray(b, dtype=float)
+
+    @staticmethod
+    def div(a, b):
+        left = np.asarray(a, dtype=float)
+        right = np.asarray(b, dtype=float)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            return np.where(right != 0, left / right, 0.0)
+
+    @staticmethod
+    def maximum(a, b):
+        return np.maximum(np.asarray(a, dtype=float), np.asarray(b, dtype=float))
+
+    @staticmethod
+    def minimum(a, b):
+        return np.minimum(np.asarray(a, dtype=float), np.asarray(b, dtype=float))

@@ -13,14 +13,18 @@ Field inventory
 ---------------
 Stable top-level keys (exactly :data:`PROJECT_PAYLOAD_KEYS`):
 
-* ``schema_version`` — codec version (currently 4); not user content.
+* ``schema_version`` — codec version. 4 is the default write version; 5 is
+  written only when a file row carries channel-edit recipes. Not user content.
 * ``active_file`` — navigator active fid.
 * ``current_mode`` — persisted chart mode (``time`` / analysis sections;
   UltraView is not a source workspace and falls back to ``time`` on load).
 * ``files`` — ``ProjectFileRef`` rows: ``fid``, ``path_abs``, ``path_rel``,
   ``fs``, ``time_source``, optional ``time_axis_provenance`` (additive;
   absent in older v3 documents), ``dbc_refs[{path_abs, path_rel}]``,
-  ``channel_order`` (navigator order is semantic).
+  ``channel_order`` (navigator order is semantic), optional
+  ``channel_edits`` (ordered derive/remove recipes, omitted when empty).
+  A document whose any file row has a non-empty log is written as schema 5;
+  every other document stays schema 4.
 * ``views`` — TimeDomain ``ViewState.to_dict()`` rows (name, tab_color,
   view_id, attached_file_ids, checked, hidden_channels, colors, plot_mode,
   cursor_mode, xlim, ylims, overlay_primary, axis_opts, remarks,
@@ -78,7 +82,8 @@ from .view_state import (
 )
 
 SCHEMA_VERSION = 4
-SUPPORTED_SCHEMA_VERSIONS = {1, 2, 3, 4}
+CHANNEL_EDIT_SCHEMA_VERSION = 5
+SUPPORTED_SCHEMA_VERSIONS = {1, 2, 3, 4, 5}
 _SOURCE_MODES = frozenset({"time", "fft", "fft_time", "frf", "order"})
 
 # Top-level keys of the object ``save_project_to_json`` writes. List order
@@ -220,6 +225,7 @@ class ProjectFileRef:
     dbc_refs: list = field(default_factory=list)  # list[ProjectPathRef]
     channel_order: list[str] = field(default_factory=list)
     time_axis_provenance: dict | None = None
+    channel_edits: list = field(default_factory=list)
 
 
 @dataclass
@@ -241,8 +247,11 @@ def project_document_to_payload(doc: ProjectDocument) -> dict:
     This is the canonical persistable snapshot. Dirty digest and close/replace
     review must hash this object, not a second hand-built mapping.
     """
+    has_channel_edits = any(getattr(row, "channel_edits", None) for row in doc.files)
     return {
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": (
+            CHANNEL_EDIT_SCHEMA_VERSION if has_channel_edits else SCHEMA_VERSION
+        ),
         "active_file": doc.active_file,
         "current_mode": doc.current_mode,
         "files": [
@@ -266,6 +275,11 @@ def project_document_to_payload(doc: ProjectDocument) -> dict:
                     str(name) for name in (getattr(r, "channel_order", None) or [])
                     if str(name).strip()
                 ],
+                **(
+                    {"channel_edits": list(r.channel_edits)}
+                    if getattr(r, "channel_edits", None)
+                    else {}
+                ),
             }
             for r in doc.files
         ],
@@ -377,6 +391,11 @@ def load_project_from_json(path) -> ProjectDocument:
                 for name in (f.get("channel_order") or [])
                 if str(name).strip()
             ],
+            channel_edits=(
+                list(f.get("channel_edits"))
+                if isinstance(f.get("channel_edits"), list)
+                else []
+            ),
         )
         for f in raw.get("files", [])
     ]

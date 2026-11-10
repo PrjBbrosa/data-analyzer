@@ -90,7 +90,14 @@ def _channel_tip(channel, fd):
         unit = (getattr(fd, "channel_units", None) or {}).get(channel) or ""
     except Exception:
         unit = ""
-    return f"{channel} [{unit}]" if unit else str(channel)
+    base = f"{channel} [{unit}]" if unit else str(channel)
+    log = getattr(fd, "channel_edits", None)
+    active = getattr(log, "active_derive", None)
+    entry = active(channel) if callable(active) else None
+    summary = entry.summary() if entry is not None else ""
+    if not summary:
+        return base
+    return f"{base}\n{summary}"
 
 
 def _zeit_record_indices(fd) -> tuple[int, ...]:

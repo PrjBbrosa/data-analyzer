@@ -1430,3 +1430,19 @@ def test_follow_menu_dismiss_does_not_clear_active_chrome(qapp, qtbot, monkeypat
         assert not btn.rect().contains(btn.mapFromGlobal(QCursor.pos()))
     finally:
         qapp.setStyleSheet(old_sheet)
+
+
+def test_channel_tip_appends_the_recipe_summary():
+    import pandas as pd
+    from mf4_analyzer.io.file_data import FileData
+    from mf4_analyzer.signal.channel_recipe import make_single
+    from mf4_analyzer.ui.widgets.channel_tree import _channel_tip
+
+    frame = pd.DataFrame({"time": [0.0, 0.1, 0.2], "speed": [1.0, 2.0, 4.0]})
+    fd = FileData("steer.csv", frame, list(frame.columns), {"speed": "rpm"})
+    fd.channel_edits.record_derive(
+        make_single("d_dt_speed", "rpm", "derivative", "speed", None)
+    )
+    fd.channel_units["d_dt_speed"] = "rpm"
+    assert _channel_tip("d_dt_speed", fd) == "d_dt_speed [rpm]\nd/dt(speed)"
+    assert _channel_tip("speed", fd) == "speed [rpm]"

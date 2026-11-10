@@ -700,3 +700,40 @@ def test_schema_v1_and_v2_default_missing_channel_order(tmp_path):
         path.write_text(json.dumps(raw), encoding="utf-8")
         loaded = pio.load_project_from_json(path)
         assert loaded.files[0].channel_order == []
+        assert loaded.files[0].channel_edits == []
+
+
+def test_channel_edits_roundtrip_bumps_only_edited_projects(tmp_path):
+    path = tmp_path / "plain.tlproj"
+    pio.save_project_to_json(_doc(), path)
+    plain = json.loads(path.read_text(encoding="utf-8"))
+    assert plain["schema_version"] == 4
+    assert "channel_edits" not in plain["files"][0]
+
+    edited = _doc()
+    recipe = {
+        "op": "derive",
+        "name": "d_dt_rpm",
+        "unit": "rpm",
+        "kind": "single",
+        "fn": "derivative",
+        "src": "rpm",
+        "param": None,
+    }
+    edited.files[0].channel_edits = [recipe]
+    edited_path = tmp_path / "edited.tlproj"
+    pio.save_project_to_json(edited, edited_path)
+    raw = json.loads(edited_path.read_text(encoding="utf-8"))
+    assert raw["schema_version"] == pio.CHANNEL_EDIT_SCHEMA_VERSION == 5
+    assert raw["files"][0]["channel_edits"] == [recipe]
+    assert "0.0, 1.0" not in json.dumps(raw["files"][0]["channel_edits"])
+    loaded = pio.load_project_from_json(edited_path)
+    assert loaded.files[0].channel_edits == [recipe]
+
+
+def test_schema_above_channel_edits_is_rejected(tmp_path):
+    path = tmp_path / "future.tlproj"
+    path.write_text(json.dumps({"schema_version": 6, "files": []}), encoding="utf-8")
+    with pytest.raises(pio.UnsupportedProjectVersion) as caught:
+        pio.load_project_from_json(path)
+    assert caught.value.schema_version == 6

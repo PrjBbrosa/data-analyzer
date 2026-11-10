@@ -1389,3 +1389,43 @@ def test_programmatic_preset_restore_is_clean_and_submits_no_jobs(
     qapp.processEvents()
     assert not restored._project_session_is_dirty()
     assert submitted == []
+
+
+def test_channel_edit_marks_dirty_and_reopen_without_skips_is_clean(
+    qapp, qtbot, tmp_path, loaded_csv, monkeypatch,
+):
+    """A recipe edit is persistable; a clean reopen matches the file on disk."""
+    from mf4_analyzer.signal.channel_recipe import make_single
+    from mf4_analyzer.ui import project_io as pio
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    project = tmp_path / "derived.tlproj"
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window._load_one(loaded_csv)
+    fid = next(iter(window.files))
+    assert window.save_project(project) is True
+    assert not window._project_session_is_dirty()
+
+    entry = make_single("d_dt_speed", "", "derivative", "speed", None)
+    window._apply_channel_edits(fid, {}, set(), [entry])
+    assert "d_dt_speed" in window.files[fid].channels
+    assert window._project_session_is_dirty()
+    prompts = []
+    monkeypatch.setattr(
+        window, "_prompt_unsaved_project",
+        lambda: prompts.append("prompt") or "cancel",
+    )
+    assert window.close_project() is False
+    assert prompts == ["prompt"]
+    assert window.save_project(project) is True
+    assert not window._project_session_is_dirty()
+
+    restored = MainWindow()
+    qtbot.addWidget(restored)
+    restored.open_project(project)
+    disk = pio.canonical_project_digest(pio.load_project_from_json(project))
+    live = pio.canonical_project_digest(restored._assemble_project_document(project))
+    assert disk == live
+    assert not restored._project_session_is_dirty()
+    assert "d_dt_speed" in next(iter(restored.files.values())).channels

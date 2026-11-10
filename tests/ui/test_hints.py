@@ -956,3 +956,9 @@ def test_record_curve_eye_hint_points_at_owner_file_not_inspector():
     assert "Inspector" not in joined
     assert hint.modes == frozenset({"time"})
     assert hints.hint_display_width(joined) <= hints.HINT_MAX_WIDTH
+
+
+def test_channel_project_persistence_hint_fits_the_footer():
+    hint = next(item for item in hints.all_hints() if item.id == "channel.project_persistence")
+    assert hint.text == "派生通道随项目保存"
+    assert hints.hint_display_width(hint.text) <= hints.HINT_MAX_WIDTH

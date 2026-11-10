@@ -591,6 +591,7 @@ def test_catalog_channel_editor_create_and_param_help():
     group = next(g for g in quickref.QUICKREF if g.title == "通道编辑（派生通道）")
     haystack = " ".join(f"{r.desc} {r.sub} {r.gesture}" for r in group.rows)
     assert haystack.count("创建通道") >= 2
+    assert "随项目保存" in haystack
     assert "窗长" in haystack and "样点" in haystack
     assert "?" in haystack
     time_views = _row_by_desc("时域 View")

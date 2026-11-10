@@ -152,8 +152,8 @@ def test_open_project_unsupported_schema_prompts_chinese_upgrade(
     assert warns
     assert warns[0][1] == "无法打开"
     assert warns[0][2] == (
-        "该工程由更新版本的 TraceLab 保存（工程格式 v4），"
-        "请升级到 v8.3.0 或更高"
+        "该工程由更新版本的 TraceLab 保存（工程格式 v999），"
+        "请升级到可以打开该工程的版本"
     )
     assert not mw.files
 
@@ -2665,3 +2665,588 @@ def test_mf4_time_signal_reopen_keeps_axis_names_and_manual_fs(
         channel for _fid, channel in manual.view_manager.views[0].checked
     }
     assert manual_checked == {"Time [0:1]", "sig"}
+
+
+def _write_eps_csv(path, *, torque=True, extra=()):
+    import csv
+
+    header = ["time", "rpm", *(["torque"] if torque else []), *extra]
+    with open(path, "w", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(header)
+        for index in range(16):
+            row = [index / 10.0, float(index)]
+            if torque:
+                row.append(float((index % 4) - 1))
+            row.extend(float(index + 3) for _name in extra)
+            writer.writerow(row)
+
+
+def _silence_editor(monkeypatch):
+    from PyQt5.QtWidgets import QMessageBox
+
+    monkeypatch.setattr(
+        "mf4_analyzer.ui.dialogs.channel_editor.QMessageBox.warning",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "mf4_analyzer.ui.dialogs.channel_editor.QMessageBox.critical",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "mf4_analyzer.ui.dialogs.channel_editor.QMessageBox.question",
+        lambda *args, **kwargs: QMessageBox.Yes,
+    )
+
+
+def _editor(mw, fid):
+    from mf4_analyzer.ui.dialogs import ChannelEditorDialog
+
+    return ChannelEditorDialog(None, mw.files, fid)
+
+
+def _apply_editor(mw, dlg, monkeypatch):
+    monkeypatch.setattr(mw, "_confirm_global_channel_delete", lambda _uses: True)
+    mw._apply_channel_edits(
+        dlg.current_fid,
+        dict(dlg.new_channels),
+        set(dlg.removed_channels),
+        list(dlg._edit_log.entries),
+    )
+
+
+def _check_only(dlg, names):
+    from PyQt5.QtCore import Qt
+
+    wanted = set(names)
+    for item in dlg._iter_export_items():
+        item.setCheckState(Qt.Checked if item.text() in wanted else Qt.Unchecked)
+
+
+def test_derived_channel_roundtrip_keeps_values_view_and_analysis_sources(
+    qapp, qtbot, tmp_path, monkeypatch,
+):
+    import numpy as np
+    from mf4_analyzer.ui import project_io as pio
+    from mf4_analyzer.ui.main_window import MainWindow
+    from mf4_analyzer.ui.view_state import _decode_channel_key
+
+    _silence_editor(monkeypatch)
+    csv_path = tmp_path / "steer.csv"
+    proj = tmp_path / "edited.tlproj"
+    _write_eps_csv(csv_path)
+    mw = MainWindow()
+    qtbot.addWidget(mw)
+    mw._load_one(str(csv_path))
+    fid = next(iter(mw.files))
+    fd = mw.files[fid]
+    fd.channel_units["rpm"] = "rpm"
+    fd.channel_units["torque"] = "Nm"
+    dlg = _editor(mw, fid)
+    dlg.combo_src.setCurrentText("rpm")
+    dlg.combo_op.setCurrentIndex(0)
+    dlg._create_single()
+    name = "d_dt_rpm"
+    before = np.asarray(dlg.new_channels[name][0], dtype=float)
+    _apply_editor(mw, dlg, monkeypatch)
+    assert mw._project_session_is_dirty()
+    mw.navigator.set_checked_channels([(fid, name)])
+    mw.navigator.set_channel_colors({(fid, name): "#112233"})
+    mw.plot_time()
+    qapp.processEvents()
+    visible = mw.canvas_time.get_visible_ylims()
+    ykey = next(key for key in visible if name in key)
+    mw.canvas_time.restore_visible_ylims({ykey: (1.0, 4.0)})
+    qapp.processEvents()
+    assert mw.canvas_time.get_visible_ylims()[ykey] == pytest.approx((1.0, 4.0))
+    mw.analysis_managers["fft"].get(0).panes[0].sources = [(fid, name)]
+    mw.analysis_managers["order"].get(0).panes[0].rpm_source = (fid, name)
+    frf = mw.analysis_managers["frf"].get(0).panes[0]
+    frf.input_source = (fid, "rpm")
+    frf.output_source = (fid, name)
+    order_before = list(mw.navigator_order.channel_order(fid))
+    assert mw.save_project(proj) is True
+
+    raw = json.loads(proj.read_text(encoding="utf-8"))
+    assert raw["schema_version"] == 5
+    assert "channel_edits" in raw["files"][0]
+    assert json.dumps(before.tolist()) not in proj.read_text(encoding="utf-8")
+    assert raw["files"][0]["channel_order"] == order_before
+
+    mw2 = MainWindow()
+    qtbot.addWidget(mw2)
+    mw2.open_project(proj)
+    _drain_analysis_restore(qapp, mw2)
+    fid2 = next(iter(mw2.files))
+    restored = mw2.files[fid2]
+    assert np.array_equal(
+        restored.data[name].to_numpy(dtype=float), before, equal_nan=True,
+    )
+    assert restored.channel_units[name] == "rpm"
+    assert list(mw2.navigator_order.channel_order(fid2)) == order_before
+    view = mw2.view_manager.get(0)
+    assert (fid2, name) in view.checked
+    assert view.colors[(fid2, name)] == "#112233"
+    ylims = {
+        _decode_channel_key(key)[1]: value
+        for key, value in view.ylims.items()
+        if name in str(_decode_channel_key(key)[1])
+    }
+    assert ylims, list(view.ylims)
+    assert next(iter(ylims.values())) == pytest.approx((1.0, 4.0))
+    assert mw2.analysis_managers["fft"].get(0).panes[0].sources[0][1] == name
+    assert mw2.analysis_managers["order"].get(0).panes[0].rpm_source[1] == name
+    assert mw2.analysis_managers["frf"].get(0).panes[0].output_source[1] == name
+    disk = pio.canonical_project_digest(pio.load_project_from_json(proj))
+    live = pio.canonical_project_digest(mw2._assemble_project_document(proj))
+    assert disk == live
+    assert not mw2._project_session_is_dirty()
+    mw2.toolbar._set_mode("fft")
+    qapp.processEvents()
+    assert len(mw2.chart_stack.page_fft.pane_canvas(0)._amp_curves) == 0
+
+
+def test_chain_delete_and_loader_delete_replay(qapp, qtbot, tmp_path, monkeypatch):
+    import numpy as np
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    _silence_editor(monkeypatch)
+    csv_path = tmp_path / "chain.csv"
+    proj = tmp_path / "chain.tlproj"
+    _write_eps_csv(csv_path)
+    mw = MainWindow()
+    qtbot.addWidget(mw)
+    mw._load_one(str(csv_path))
+    fid = next(iter(mw.files))
+    dlg = _editor(mw, fid)
+    dlg.combo_op2.setCurrentIndex(0)
+    dlg.combo_a.setCurrentText("rpm")
+    dlg.combo_b.setCurrentText("torque")
+    dlg.edit_name2.setText("sum_tq")
+    dlg._create_dual()
+    dlg.combo_src.setCurrentText("sum_tq")
+    dlg.combo_op.setCurrentIndex(5)
+    dlg._create_single()
+    _check_only(dlg, {"sum_tq"})
+    dlg._remove()
+    expected = np.asarray(dlg.new_channels["abs_sum_tq"][0], dtype=float)
+    assert "sum_tq" not in dlg.new_channels
+    _apply_editor(mw, dlg, monkeypatch)
+    assert "sum_tq" not in mw.files[fid].channels
+    assert mw.save_project(proj) is True
+
+    mw2 = MainWindow()
+    qtbot.addWidget(mw2)
+    mw2.open_project(proj)
+    fd = next(iter(mw2.files.values()))
+    assert "sum_tq" not in fd.channels
+    np.testing.assert_array_equal(fd.data["abs_sum_tq"].to_numpy(dtype=float), expected)
+
+    gone = tmp_path / "gone.csv"
+    gone_proj = tmp_path / "gone.tlproj"
+    _write_eps_csv(gone)
+    mw3 = MainWindow()
+    qtbot.addWidget(mw3)
+    mw3._load_one(str(gone))
+    fid3 = next(iter(mw3.files))
+    dlg3 = _editor(mw3, fid3)
+    _check_only(dlg3, {"torque"})
+    dlg3._remove()
+    _apply_editor(mw3, dlg3, monkeypatch)
+    assert mw3.save_project(gone_proj) is True
+    mw4 = MainWindow()
+    qtbot.addWidget(mw4)
+    mw4.open_project(gone_proj)
+    assert "torque" not in next(iter(mw4.files.values())).channels
+
+
+def test_delete_then_same_name_derive_replays_the_derived_values(
+    qapp, qtbot, tmp_path, monkeypatch,
+):
+    import numpy as np
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    _silence_editor(monkeypatch)
+    csv_path = tmp_path / "rename.csv"
+    proj = tmp_path / "rename.tlproj"
+    _write_eps_csv(csv_path)
+    mw = MainWindow()
+    qtbot.addWidget(mw)
+    mw._load_one(str(csv_path))
+    fid = next(iter(mw.files))
+    rpm = mw.files[fid].data["rpm"].to_numpy(dtype=float)
+    dlg = _editor(mw, fid)
+    _check_only(dlg, {"torque"})
+    dlg._remove()
+    _apply_editor(mw, dlg, monkeypatch)
+    dlg2 = _editor(mw, fid)
+    dlg2.combo_op2.setCurrentIndex(2)
+    dlg2.combo_a.setCurrentText("rpm")
+    dlg2.combo_b.setCurrentText("rpm")
+    dlg2.edit_name2.setText("torque")
+    dlg2._create_dual()
+    _apply_editor(mw, dlg2, monkeypatch)
+    assert mw.save_project(proj) is True
+
+    mw2 = MainWindow()
+    qtbot.addWidget(mw2)
+    mw2.open_project(proj)
+    got = next(iter(mw2.files.values())).data["torque"].to_numpy(dtype=float)
+    np.testing.assert_array_equal(got, rpm * rpm)
+
+
+def test_create_then_delete_does_not_write_schema_5(qapp, qtbot, tmp_path, monkeypatch):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    _silence_editor(monkeypatch)
+    csv_path = tmp_path / "empty.csv"
+    proj = tmp_path / "empty.tlproj"
+    _write_eps_csv(csv_path)
+    mw = MainWindow()
+    qtbot.addWidget(mw)
+    mw._load_one(str(csv_path))
+    fid = next(iter(mw.files))
+    dlg = _editor(mw, fid)
+    dlg.combo_src.setCurrentText("rpm")
+    dlg.combo_op.setCurrentIndex(5)
+    dlg._create_single()
+    _check_only(dlg, {"abs_rpm"})
+    dlg._remove()
+    assert dlg._edit_log.entries == []
+    _apply_editor(mw, dlg, monkeypatch)
+    assert mw.save_project(proj) is True
+    raw = json.loads(proj.read_text(encoding="utf-8"))
+    assert raw["schema_version"] == 4
+    assert "channel_edits" not in raw["files"][0]
+    assert "abs_rpm" not in raw["files"][0]["channel_order"]
+
+
+def test_hdf_edit_is_stored_on_only_the_edited_group(qapp, qtbot, tmp_path, monkeypatch):
+    import numpy as np
+    from tests._helpers.head_hdf_factory import write_head_hdf
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    _silence_editor(monkeypatch)
+    n_scans = 8
+    hdf = write_head_hdf(
+        tmp_path / "synth.hdf",
+        n_scans=n_scans,
+        start_of_data=4096,
+        channels=[
+            {"name": "Accel", "factor": 2, "quantity": "acceleration",
+             "unit": "m/s^2", "calibration": 1.0,
+             "samples": np.arange(n_scans * 2, dtype=float)},
+            {"name": "Speed", "factor": 1, "quantity": "speed of rotation",
+             "unit": "deg/s", "calibration": 1.0,
+             "samples": np.arange(n_scans, dtype=float)},
+        ],
+    )
+    mw = MainWindow()
+    qtbot.addWidget(mw)
+    mw._load_one(str(hdf))
+    fid = next(fid for fid, fd in mw.files.items() if "Accel" in fd.channels)
+    dlg = _editor(mw, fid)
+    dlg.combo_src.setCurrentText("Accel")
+    dlg.combo_op.setCurrentIndex(3)
+    dlg.spin_p.setValue(-1.0)
+    dlg._create_single()
+    _apply_editor(mw, dlg, monkeypatch)
+    proj = tmp_path / "hdf.tlproj"
+    assert mw.save_project(proj) is True
+    raw = json.loads(proj.read_text(encoding="utf-8"))
+    assert raw["schema_version"] == 5
+    edited = [row for row in raw["files"] if row.get("channel_edits")]
+    assert len(edited) == 1
+    assert len(raw["files"]) == 2
+
+    mw2 = MainWindow()
+    qtbot.addWidget(mw2)
+    mw2.open_project(proj)
+    assert len(mw2.files) == 2
+    owners = [
+        fd.label_suffix for fd in mw2.files.values() if "offset_Accel" in fd.channels
+    ]
+    assert owners == ["2x"]
+
+
+def test_skipped_recipe_is_visible_and_drops_view_refs(
+    qapp, qtbot, tmp_path, monkeypatch,
+):
+    from PyQt5.QtWidgets import QMessageBox
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    _silence_editor(monkeypatch)
+    csv_path = tmp_path / "lose.csv"
+    proj = tmp_path / "lose.tlproj"
+    _write_eps_csv(csv_path)
+    mw = MainWindow()
+    qtbot.addWidget(mw)
+    mw._load_one(str(csv_path))
+    fid = next(iter(mw.files))
+    dlg = _editor(mw, fid)
+    dlg.combo_src.setCurrentText("torque")
+    dlg.combo_op.setCurrentIndex(5)
+    dlg._create_single()
+    dlg.combo_src.setCurrentText("abs_torque")
+    dlg.combo_op.setCurrentIndex(5)
+    dlg._create_single()
+    _apply_editor(mw, dlg, monkeypatch)
+    mw.navigator.set_checked_channels([(fid, "abs_abs_torque")])
+    mw.navigator.set_channel_colors({(fid, "abs_abs_torque"): "#abcdef"})
+    mw.analysis_managers["fft"].get(0).panes[0].sources = [(fid, "abs_abs_torque")]
+    assert mw.save_project(proj) is True
+    _write_eps_csv(csv_path, torque=False)
+
+    warnings = []
+    monkeypatch.setattr(
+        "PyQt5.QtWidgets.QMessageBox.warning",
+        lambda *args, **kwargs: warnings.append(args),
+    )
+    mw2 = MainWindow()
+    qtbot.addWidget(mw2)
+    mw2.open_project(proj)
+    health = mw2._project_restore_health
+    assert health.degraded
+    reasons = [item[2] for item in health.skipped_channel_edits]
+    assert "输入通道不存在" in reasons
+    assert "依赖的上游配方被跳过" in reasons
+    fd = next(iter(mw2.files.values()))
+    assert "abs_torque" not in fd.channels
+    assert "abs_abs_torque" not in fd.channels
+    fid2 = next(iter(mw2.files))
+    assert (fid2, "abs_abs_torque") not in mw2.view_manager.get(0).checked
+    assert mw2.analysis_managers["fft"].get(0).panes[0].sources == []
+    assert health.dropped_channel_edit_refs
+    assert warnings
+    assert warnings[0][1] == "项目恢复不完整"
+    assert "未能重建的派生通道：2" in warnings[0][2]
+    assert "已移除" in warnings[0][2]
+
+    captured = {}
+
+    def _exec(box):
+        captured["title"] = box.windowTitle()
+        captured["info"] = box.informativeText()
+        box.done(0)
+
+    monkeypatch.setattr(QMessageBox, "exec_", _exec)
+    assert mw2.save_project(tmp_path / "again.tlproj") is False
+    assert captured["title"] == "项目恢复不完整"
+    assert "未能重建的派生通道：2" in captured["info"]
+
+
+def test_loader_column_with_the_derived_name_is_not_overwritten(
+    qapp, qtbot, tmp_path, monkeypatch,
+):
+    import numpy as np
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    _silence_editor(monkeypatch)
+    csv_path = tmp_path / "clash.csv"
+    proj = tmp_path / "clash.tlproj"
+    _write_eps_csv(csv_path)
+    mw = MainWindow()
+    qtbot.addWidget(mw)
+    mw._load_one(str(csv_path))
+    fid = next(iter(mw.files))
+    dlg = _editor(mw, fid)
+    dlg.combo_src.setCurrentText("rpm")
+    dlg.combo_op.setCurrentIndex(5)
+    dlg._create_single()
+    _apply_editor(mw, dlg, monkeypatch)
+    assert mw.save_project(proj) is True
+    _write_eps_csv(csv_path, extra=("abs_rpm",))
+    warnings = []
+    monkeypatch.setattr(
+        "PyQt5.QtWidgets.QMessageBox.warning",
+        lambda *args, **kwargs: warnings.append(args),
+    )
+    mw2 = MainWindow()
+    qtbot.addWidget(mw2)
+    mw2.open_project(proj)
+    fd = next(iter(mw2.files.values()))
+    np.testing.assert_array_equal(
+        fd.data["abs_rpm"].to_numpy(dtype=float),
+        np.arange(16, dtype=float) + 3,
+    )
+    assert mw2._project_restore_health.skipped_channel_edits[0][2] == "输出名已被加载器通道占用"
+    assert any("未能重建的派生通道" in args[2] for args in warnings)
+
+
+def test_expression_that_becomes_all_invalid_is_skipped(
+    qapp, qtbot, tmp_path, monkeypatch,
+):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    _silence_editor(monkeypatch)
+    csv_path = tmp_path / "expr.csv"
+    proj = tmp_path / "expr.tlproj"
+    _write_eps_csv(csv_path)
+    mw = MainWindow()
+    qtbot.addWidget(mw)
+    mw._load_one(str(csv_path))
+    fid = next(iter(mw.files))
+    dlg = _editor(mw, fid)
+    dlg.combo_op2.setCurrentIndex(dlg.CUSTOM_OP_INDEX)
+    dlg.combo_a.setCurrentText("rpm")
+    dlg.combo_b.setCurrentText("torque")
+    dlg.edit_expr.setText("A+1")
+    dlg.edit_name2.setText("expr_shift")
+    dlg._create_dual()
+    _apply_editor(mw, dlg, monkeypatch)
+    assert mw.save_project(proj) is True
+    raw = json.loads(proj.read_text(encoding="utf-8"))
+    raw["files"][0]["channel_edits"][0]["expr"] = "sqrt(-1+0*A)"
+    proj.write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
+    monkeypatch.setattr(
+        "PyQt5.QtWidgets.QMessageBox.warning",
+        lambda *args, **kwargs: None,
+    )
+    mw2 = MainWindow()
+    qtbot.addWidget(mw2)
+    mw2.open_project(proj)
+    fd = next(iter(mw2.files.values()))
+    assert "expr_shift" not in fd.channels
+    assert mw2._project_restore_health.skipped_channel_edits[0][2] == "表达式结果全部无效"
+
+
+def test_unlogged_channel_edit_warns_and_is_absent_after_reopen(
+    qapp, qtbot, tmp_path, monkeypatch, caplog,
+):
+    import logging
+    import numpy as np
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    csv_path = tmp_path / "ghost.csv"
+    proj = tmp_path / "ghost.tlproj"
+    _write_eps_csv(csv_path)
+    mw = MainWindow()
+    qtbot.addWidget(mw)
+    mw._load_one(str(csv_path))
+    fid = next(iter(mw.files))
+    n = len(mw.files[fid].data)
+    toasts = []
+    monkeypatch.setattr(mw, "toast", lambda text, kind="info": toasts.append((text, kind)))
+    mw._apply_channel_edits(fid, {"ghost": (np.arange(n, dtype=float), "u")}, set())
+    assert mw._project_session_is_dirty()
+    with caplog.at_level(
+        logging.WARNING, logger="mf4_analyzer.ui.main_window._project_io_mixin",
+    ):
+        assert mw.save_project(proj) is True
+    assert any("通道未随项目保存" in record.message and "ghost" in record.message
+               for record in caplog.records)
+    assert toasts[-1][1] == "warning"
+    assert toasts[-1][0].startswith("已保存项目")
+    assert "1 个通道未随项目保存" in toasts[-1][0]
+    raw = json.loads(proj.read_text(encoding="utf-8"))
+    assert raw["schema_version"] == 4
+    mw2 = MainWindow()
+    qtbot.addWidget(mw2)
+    mw2.open_project(proj)
+    assert "ghost" not in next(iter(mw2.files.values())).channels
+
+
+def test_save_without_session_channels_toasts_saved_only(
+    qapp, qtbot, tmp_path, monkeypatch,
+):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    csv_path = tmp_path / "plain.csv"
+    proj = tmp_path / "plain.tlproj"
+    _write_eps_csv(csv_path)
+    mw = MainWindow()
+    qtbot.addWidget(mw)
+    mw._load_one(str(csv_path))
+    toasts = []
+    monkeypatch.setattr(mw, "toast", lambda text, kind="info": toasts.append((text, kind)))
+    assert mw.save_project(proj) is True
+    assert toasts[-1] == ("已保存项目", "success")
+
+
+def test_skipped_recipe_warns_with_real_counts_and_stays_clean(
+    qapp, qtbot, tmp_path, monkeypatch, caplog,
+):
+    import logging
+    import numpy as np
+    from mf4_analyzer.signal.channel_recipe import RemoveEntry, make_single
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    csv_path = tmp_path / "skip.csv"
+    _write_eps_csv(csv_path)
+    mw = MainWindow()
+    qtbot.addWidget(mw)
+    mw._load_one(str(csv_path))
+    fid = next(iter(mw.files))
+    n = len(mw.files[fid].data)
+    skipped = make_single("ghost_d", "", "abs", "no_such", None)
+    removed = RemoveEntry(("rpm",))
+    revision = mw._project_dirty.revision
+    toasts = []
+    status = []
+    monkeypatch.setattr(mw, "toast", lambda text, kind="info": toasts.append((text, kind)))
+    monkeypatch.setattr(mw, "_status_message", lambda message, timeout=0: status.append(message))
+    monkeypatch.setattr(mw, "_confirm_global_channel_delete", lambda _uses: True)
+    with caplog.at_level(logging.WARNING, logger="mf4_analyzer.ui.main_window.window"):
+        mw._apply_channel_edits(
+            fid,
+            {"ghost_d": (np.arange(n, dtype=float), "")},
+            {"rpm"},
+            [removed, skipped],
+        )
+    assert mw._project_dirty.revision == revision + 1
+    assert len(toasts) == 1
+    text, kind = toasts[0]
+    assert kind == "warning"
+    assert "新增 0" in text and "删除 1" in text
+    assert "ghost_d" in text and "输入通道不存在" in text
+    assert any("编辑: +0 -1" in message for message in status)
+    assert "ghost_d" not in mw.files[fid].channels
+    assert "rpm" not in mw.files[fid].data.columns
+    assert any("ghost_d" in record.message and "输入通道不存在" in record.message
+               for record in caplog.records)
+
+    # Nothing applied: the session stays at the same revision.
+    nowhere = [make_single(f"miss_{index}", "", "abs", "no_such", None) for index in range(4)]
+    revision = mw._project_dirty.revision
+    toasts.clear()
+    with caplog.at_level(logging.WARNING, logger="mf4_analyzer.ui.main_window.window"):
+        mw._apply_channel_edits(
+            fid,
+            {entry.name: (np.arange(n, dtype=float), "") for entry in nowhere},
+            set(),
+            nowhere,
+        )
+    assert mw._project_dirty.revision == revision
+    assert len(toasts) == 1
+    text, kind = toasts[0]
+    assert kind == "warning"
+    assert "新增 0" in text and "删除 0" in text
+    assert "未应用 4" in text and "等 4 条" in text
+    assert "miss_0" in text and "miss_2" in text
+    assert "miss_3" not in text
+
+
+def test_applied_recipe_keeps_the_success_counts(qapp, qtbot, tmp_path, monkeypatch):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    _silence_editor(monkeypatch)
+    csv_path = tmp_path / "ok.csv"
+    _write_eps_csv(csv_path)
+    mw = MainWindow()
+    qtbot.addWidget(mw)
+    mw._load_one(str(csv_path))
+    fid = next(iter(mw.files))
+    dlg = _editor(mw, fid)
+    dlg.combo_src.setCurrentText("rpm")
+    dlg.combo_op.setCurrentIndex(5)
+    dlg._create_single()
+    revision = mw._project_dirty.revision
+    toasts = []
+    status = []
+    monkeypatch.setattr(mw, "toast", lambda text, kind="info": toasts.append((text, kind)))
+    monkeypatch.setattr(mw, "_status_message", lambda message, timeout=0: status.append(message))
+    _apply_editor(mw, dlg, monkeypatch)
+    assert mw._project_dirty.revision == revision + 1
+    assert toasts == [("通道已更新: 新增 1 · 删除 0", "success")]
+    assert status == ["编辑: +1 -0"]
+    assert "abs_rpm" in mw.files[fid].channels

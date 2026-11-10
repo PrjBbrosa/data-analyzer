@@ -240,6 +240,21 @@ class SurfaceStatusBar(QStatusBar):
                 child.move(child.x(), y)
 
 
+_SKIPPED_CHANNEL_EDIT_TOAST = 3
+
+
+def _channel_edit_feedback(added, removed, skipped):
+    """One toast for an apply. The widget keeps only the latest message."""
+    text = f"通道已更新: 新增 {added} · 删除 {removed}"
+    if not skipped:
+        return text, "success"
+    shown = skipped[:_SKIPPED_CHANNEL_EDIT_TOAST]
+    detail = "、".join(f"{name}（{reason}）" for name, reason in shown)
+    if len(skipped) > len(shown):
+        detail = f"{detail} 等 {len(skipped)} 条"
+    return f"{text} · 未应用 {len(skipped)}：{detail}", "warning"
+
+
 class MainWindow(
     DropImportMixin, AnalysisMixin, FFTMixin, OrderMixin, FFTTimeMixin, FrfMixin,
     ChannelScopeMixin, ProjectIOMixin, ViewMixin, QMainWindow,
@@ -5039,7 +5054,7 @@ class MainWindow(
             self._channel_editor_drawer = None
 
 
-    def _apply_channel_edits(self, fid, new_channels, removed_channels):
+    def _apply_channel_edits(self, fid, new_channels, removed_channels, edits=None):
         fd = self.files[fid]
         removed_channels = list(removed_channels or ())
         if removed_channels:
@@ -5072,16 +5087,39 @@ class MainWindow(
             self.canvas_time.invalidate_monotonicity_cache(
                 custom_xaxis_fid=fid, custom_xaxis_ch=name
             )
-        for name, (arr, unit) in new_channels.items():
-            fd.data[name] = arr
-            fd.channels.append(name)
-            fd.channel_units[name] = unit
-        for name in removed_channels:
-            if name in fd.data.columns:
-                fd.data = fd.data.drop(columns=[name])
-            if name in fd.channels:
-                fd.channels.remove(name)
-            fd.channel_units.pop(name, None)
+        import logging
+
+        from ...io.channel_edit_log import apply_unlogged, fold_entries, replay
+        from ...signal.channel_recipe import RemoveEntry
+
+        applied_edits = []
+        skipped = []
+        if edits:
+            added = 0
+            removed_count = 0
+            for result in replay(fd, edits):
+                if result.applied and result.entry is not None:
+                    applied_edits.append(result.entry)
+                    if isinstance(result.entry, RemoveEntry):
+                        removed_count += len(result.entry.names)
+                    else:
+                        added += 1
+                elif not result.applied:
+                    skipped.append((
+                        result.channel or "未命名",
+                        result.reason or "条目无法识别",
+                    ))
+            if applied_edits:
+                fold_entries(fd.channel_edits, applied_edits)
+            if skipped:
+                logging.getLogger(__name__).warning(
+                    "通道编辑未应用: %s",
+                    "; ".join(f"{name} ({reason})" for name, reason in skipped),
+                )
+        else:
+            apply_unlogged(fd, new_channels, removed_channels)
+            added = len(new_channels)
+            removed_count = len(removed_channels)
         self._remove_channels_from_all_time_views(fid, removed_channels)
         self._remove_channels_from_all_analysis_views(fid, removed_channels)
         nav_blocked = self.navigator.blockSignals(True)
@@ -5102,13 +5140,11 @@ class MainWindow(
             # retaining stale curves.
             mgr = self.analysis_managers[mode]
             self._render_analysis_view_from_cache(mode, mgr.get(mgr.active))
-        self._status_message(
-            f"编辑: +{len(new_channels)} -{len(removed_channels)}"
-        )
-        self.toast(
-            f"通道已更新: 新增 {len(new_channels)} · 删除 {len(removed_channels)}",
-            "success",
-        )
+        text, level = _channel_edit_feedback(added, removed_count, skipped)
+        self._status_message(f"编辑: +{added} -{removed_count}")
+        self.toast(text, level)
+        if applied_edits or (not edits and (new_channels or removed_channels)):
+            self._note_user_project_mutation()
         self._plot_time_preserving_xlim()
 
     def _do_export_channels(self, fid, channels, include_time, use_range,

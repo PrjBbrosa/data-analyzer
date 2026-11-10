@@ -28,7 +28,14 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import QEvent, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QPalette
 
-from ...signal import ChannelMath
+from ...io.channel_edit_log import REASON_TEXT, ChannelEditLog
+from ...signal.channel_recipe import (
+    RecipeError,
+    evaluate_derive,
+    make_dual,
+    make_expression,
+    make_single,
+)
 from ...signal.expression import ExpressionError
 from ...signal.expression import normalize as normalize_expression
 from ...signal.expression import referenced_names as expression_names
@@ -51,6 +58,15 @@ from ._expression_check import ExpressionCheckRunner
 EXPR_TOOLTIP = help_tooltip_text()
 PARAM_TOOLTIP = param_help_tooltip_text()
 EXPR_HELP_HINT = "点 ? 打开可拖动的帮助卡片"
+_SINGLE_FNS = ("derivative", "integral", "scale", "offset", "moving_avg", "abs")
+_SINGLE_PREFIXES = ("d_dt_", "int_", "scaled_", "offset_", "mavg_", "abs_")
+_DUAL_FNS = ("add", "sub", "mul", "div", "max", "min")
+
+
+def _recipe_error_text(exc):
+    if exc.code == "expression_error" and str(exc) not in {"", exc.code}:
+        return str(exc)
+    return REASON_TEXT.get(exc.code, str(exc))
 
 
 class ChannelEditorDialog(QDialog):
@@ -80,6 +96,7 @@ class ChannelEditorDialog(QDialog):
         self.fd = self._files.get(self.current_fid)
         self.new_channels = {}
         self.removed_channels = set()
+        self._edit_log = ChannelEditLog()
         self._expr_check_token = 0
         self._expr_check_context = None
         self._expr_check_message = None
@@ -487,6 +504,7 @@ class ChannelEditorDialog(QDialog):
         self.fd = self._files.get(fid)
         self.new_channels = {}
         self.removed_channels = set()
+        self._edit_log = ChannelEditLog()
         self._populate_channels()
 
     def _populate_channels(self):
@@ -674,37 +692,70 @@ class ChannelEditorDialog(QDialog):
             )
         self._param_help_popup.show_beside(self.spin_p)
 
+    def _unit_of(self, name):
+        if name in self.new_channels:
+            return self.new_channels[name][1]
+        return self.fd.channel_units.get(name, "")
+
+    def _warn_if_source_unavailable(self, name):
+        """Reject a source the staged delete has already removed.
+
+        The file itself is unchanged until the dialog is confirmed, so a
+        column check alone still sees a channel marked for deletion.
+        """
+        if name in self.removed_channels:
+            QMessageBox.warning(
+                self,
+                "无法创建",
+                f"通道 {name} 已标记删除，请先创建派生通道，再删除源通道",
+            )
+            return True
+        if name not in self.fd.data.columns and name not in self.new_channels:
+            QMessageBox.warning(self, "无法创建", "源通道不存在或参数越界")
+            return True
+        return False
+
+    def _drop_combo_names(self, names):
+        drop = {str(name) for name in names}
+        for combo in (self.combo_src, self.combo_a, self.combo_b):
+            kept = [
+                combo.itemText(index)
+                for index in range(combo.count())
+                if combo.itemText(index) not in drop
+            ]
+            if len(kept) == combo.count():
+                continue
+            combo.blockSignals(True)
+            combo.clear()
+            if kept:
+                combo.addItems(kept)
+            combo.blockSignals(False)
+            combo.setToolTip(combo.currentText())
+
     def _create_single(self):
         src = self.combo_src.currentText()
-        if src not in self.fd.data.columns:
-            QMessageBox.warning(self, "无法创建", "源通道不存在或参数越界")
+        if self._warn_if_source_unavailable(src):
             return
-        sig = self.fd.data[src].values.astype(float)
-        t = self.fd.time_array;
-        op = self.combo_op.currentIndex();
+        op = self.combo_op.currentIndex()
+        if op < 0 or op >= len(_SINGLE_FNS):
+            QMessageBox.warning(self, "无法创建", "不支持的运算类型")
+            return
         p = self.spin_p.value()
-        prefixes = ["d_dt_", "int_", "scaled_", "offset_", "mavg_", "abs_"]
+        fn = _SINGLE_FNS[op]
+        param = None
+        if fn in {"scale", "offset"}:
+            param = float(p)
+        elif fn == "moving_avg":
+            param = max(int(p), 3)
+        name = self._unique_name(f"{_SINGLE_PREFIXES[op]}{src}")
         try:
-            if op == 0:
-                r = ChannelMath.derivative(t, sig)
-            elif op == 1:
-                r = ChannelMath.integral(t, sig)
-            elif op == 2:
-                r = ChannelMath.scale(sig, p)
-            elif op == 3:
-                r = ChannelMath.offset(sig, p)
-            elif op == 4:
-                r = ChannelMath.moving_avg(sig, max(int(p), 3))
-            elif op == 5:
-                r = np.abs(sig)
-            else:
-                QMessageBox.warning(self, "无法创建", "不支持的运算类型")
-                return
-            name = f"{prefixes[op]}{src}"
-            while name in self.fd.data.columns or name in self.new_channels: name += "_1"
-            self._register_new(name, r, self.fd.channel_units.get(src, ''))
-        except Exception as e:
-            QMessageBox.critical(self, "错误", str(e))
+            entry = make_single(name, self._unit_of(src), fn, src, param)
+            values = evaluate_derive(entry, self.fd.time_array, self._channel_signal)
+        except RecipeError as exc:
+            QMessageBox.critical(self, "错误", _recipe_error_text(exc))
+            return
+        self._edit_log.record_derive(entry)
+        self._register_new(name, values, entry.unit)
 
     def _sync_expr_row(self, *_):
         """Show the 表达式 row only for the 自定义 operation."""
@@ -910,8 +961,29 @@ class ChannelEditorDialog(QDialog):
         self.btn_create_dual.setEnabled(result.can_create)
         self._show_expression_tip()
         if create and result.can_create:
-            name = self.edit_name2.text().strip() or self._auto_expr_name(self.edit_expr.text())
-            self._register_new(self._unique_name(name), result.values, '')
+            expr = self.edit_expr.text().strip()
+            used = {item.lower() for item in expression_names(expr)}
+            name = self._unique_name(
+                self.edit_name2.text().strip() or self._auto_expr_name(expr)
+            )
+            try:
+                entry = make_expression(
+                    name,
+                    "",
+                    expr,
+                    self.combo_a.currentText() if "a" in used else None,
+                    self.combo_b.currentText() if "b" in used else None,
+                )
+                values = evaluate_derive(entry, self.fd.time_array, self._channel_signal)
+            except RecipeError as exc:
+                self._expr_check_message = ("检查未通过", _recipe_error_text(exc), "error")
+                title, body, state = self._expr_check_message
+                self._set_expression_check_state(state, title, body)
+                self.btn_create_dual.setEnabled(False)
+                self._show_expression_tip()
+                return
+            self._edit_log.record_derive(entry)
+            self._register_new(name, values, "")
             self.edit_name2.clear()
 
     @staticmethod
@@ -927,54 +999,30 @@ class ChannelEditorDialog(QDialog):
         if op == self.CUSTOM_OP_INDEX:
             self._create_expression(ch_a, ch_b)
             return
-        if ch_a not in self.fd.data.columns and ch_a not in self.new_channels:
-            QMessageBox.warning(self, "无法创建", "源通道不存在或参数越界")
+        if self._warn_if_source_unavailable(ch_a) or self._warn_if_source_unavailable(ch_b):
             return
-        if ch_b not in self.fd.data.columns and ch_b not in self.new_channels:
-            QMessageBox.warning(self, "无法创建", "源通道不存在或参数越界")
+        if op < 0 or op >= len(_DUAL_FNS):
+            QMessageBox.warning(self, "无法创建", "不支持的运算类型")
             return
-
-        # 获取数据
-        sig_a = self._channel_signal(ch_a)
-        sig_b = self._channel_signal(ch_b)
-
-        if len(sig_a) != len(sig_b):
-            QMessageBox.warning(self, "错误", f"通道长度不匹配: {len(sig_a)} vs {len(sig_b)}")
-            return
-
-        op_symbols = ["add", "sub", "mul", "div", "max", "min"]
+        name = self.edit_name2.text().strip() or f"{_DUAL_FNS[op]}_{ch_a}_{ch_b}"
+        name = self._unique_name(name)
+        unit_a = self._unit_of(ch_a)
+        unit_b = self._unit_of(ch_b)
+        if unit_a == unit_b:
+            unit = unit_a
+        elif op == 3:
+            unit = f"{unit_a}/{unit_b}"
+        else:
+            unit = ""
         try:
-            if op == 0:
-                r = sig_a + sig_b
-            elif op == 1:
-                r = sig_a - sig_b
-            elif op == 2:
-                r = sig_a * sig_b
-            elif op == 3:
-                with np.errstate(divide='ignore', invalid='ignore'):
-                    r = np.where(sig_b != 0, sig_a / sig_b, 0)
-            elif op == 4:
-                r = np.maximum(sig_a, sig_b)
-            elif op == 5:
-                r = np.minimum(sig_a, sig_b)
-            else:
-                QMessageBox.warning(self, "无法创建", "不支持的运算类型")
-                return
-
-            # 生成名称
-            name = self.edit_name2.text().strip()
-            if not name:
-                name = f"{op_symbols[op]}_{ch_a}_{ch_b}"
-
-            # 合并单位
-            unit_a = self.fd.channel_units.get(ch_a, '')
-            unit_b = self.fd.channel_units.get(ch_b, '')
-            unit = unit_a if unit_a == unit_b else f"{unit_a}/{unit_b}" if op == 3 else ""
-
-            self._register_new(self._unique_name(name), r, unit)
-            self.edit_name2.clear()
-        except Exception as e:
-            QMessageBox.critical(self, "错误", str(e))
+            entry = make_dual(name, unit, _DUAL_FNS[op], ch_a, ch_b)
+            values = evaluate_derive(entry, self.fd.time_array, self._channel_signal)
+        except RecipeError as exc:
+            QMessageBox.critical(self, "错误", _recipe_error_text(exc))
+            return
+        self._edit_log.record_derive(entry)
+        self._register_new(name, values, unit)
+        self.edit_name2.clear()
 
     def _remove(self):
         sel = [
@@ -991,7 +1039,12 @@ class ChannelEditorDialog(QDialog):
             QMessageBox.No,
         ) != QMessageBox.Yes:
             return
-        self.removed_channels.update(sel)
+        on_file = [
+            name for name in sel
+            if name in self.fd.data.columns or name in self.fd.channels
+        ]
+        self._edit_log.record_remove(sel)
+        self.removed_channels.update(on_file)
         for name in sel:
             self.new_channels.pop(name, None)
         remove = set(sel)
@@ -999,5 +1052,6 @@ class ChannelEditorDialog(QDialog):
             if self.list_export.item(row).text() in remove:
                 self.list_export.takeItem(row)
         self.lbl.setText(f"新增: {len(self.new_channels)}")
+        self._drop_combo_names(sel)
         self._apply_export_filters()
         self._invalidate_expression_check()
