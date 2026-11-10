@@ -80,6 +80,7 @@ import mf4_analyzer.signal.frf  # noqa: F401
 import mf4_analyzer.signal.spectrogram  # noqa: F401
 import mf4_analyzer.signal.analysis_defaults  # noqa: F401
 import mf4_analyzer.signal.custom_x_paths  # noqa: F401
+import mf4_analyzer.signal.channel_recipe  # noqa: F401
 
 # A sanity smoke: the classes must exist and be callable.
 from mf4_analyzer.signal.fft import FFTAnalyzer

@@ -45,6 +45,36 @@ from ...ui_kit.message_box_buttons import fit_message_box_buttons_to_text
 logger = logging.getLogger(__name__)
 
 
+def _channel_edit_payload(fd):
+    log = getattr(fd, "channel_edits", None)
+    entries = getattr(log, "entries", None)
+    if not entries:
+        return []
+    return log.to_json()
+
+
+def _saved_order_for_sampling(fd, ref):
+    """Channel order the HDF classifier should see: loader names only.
+
+    Derived names are not on the reloaded source yet. Leaving them in the
+    saved order would make a legacy simultaneous-rate comparison fail.
+    """
+    saved = list(getattr(ref, "channel_order", ()) or ())
+    raw = getattr(ref, "channel_edits", None) or []
+    derived = set()
+    for item in raw:
+        if isinstance(item, dict) and item.get("op") == "derive":
+            name = item.get("name")
+            if isinstance(name, str) and name.strip():
+                derived.add(name.strip())
+    if not derived:
+        return saved
+    getter = getattr(fd, "get_signal_channels", None)
+    live = set(getter() or ()) if callable(getter) else set()
+    extra = derived - live
+    return [name for name in saved if name not in extra]
+
+
 DATA_FILE_GLOB = DEFAULT_SOURCE_ADAPTER_REGISTRY.file_dialog_glob
 _MEDIA_ADAPTER = next(
     adapter for adapter in DEFAULT_SOURCE_ADAPTER_REGISTRY.adapters
@@ -630,6 +660,9 @@ class ProjectIOMixin:
             summary.append(f"跳过的分析 View/Pane 来源：{n_analysis}")
         if n_time:
             summary.append(f"跳过的时域通道引用：{n_time}")
+        n_edits = len(getattr(health, "skipped_channel_edits", ()) or ())
+        if n_edits:
+            summary.append(f"未能重建的派生通道：{n_edits}")
         box = QMessageBox(self)
         box.setWindowTitle("项目恢复不完整")
         box.setIcon(QMessageBox.Warning)
@@ -2513,6 +2546,7 @@ class ProjectIOMixin:
         ):
             return False
 
+        self._warn_session_only_channels()
         self._capture_focused_view()
         # Flush each analysis section's live UI state into its active view so
         # the last (uncommitted) inspector edit / source / compare toggle is
@@ -2583,6 +2617,18 @@ class ProjectIOMixin:
             )
         return payload
 
+    def _warn_session_only_channels(self):
+        names = []
+        for fid, fd in self.files.items():
+            for name in getattr(fd, "session_ephemeral_channels", ()) or ():
+                if name in getattr(fd, "channels", ()):
+                    names.append(f"{fid}:{name}")
+        if not names:
+            return
+        names.sort()
+        logger.warning("通道未随项目保存: %s", ", ".join(names))
+        self.toast("部分通道未随项目保存", "warning")
+
     def _assemble_project_document(self, path, saved_mode=None):
         """Build the save-path ``ProjectDocument`` without writing it.
 
@@ -2629,6 +2675,7 @@ class ProjectIOMixin:
                 dbc_refs=dbc_refs,
                 channel_order=list(self.navigator_order.channel_order(fid)),
                 time_axis_provenance=provenance,
+                channel_edits=_channel_edit_payload(fd),
             ))
 
         vm = {
@@ -2658,6 +2705,7 @@ class ProjectIOMixin:
         missing_paths = []
         missing_old_fids = []
         timebase_notices = []
+        skipped_channel_edits = []
         pending_by_path = {}
         for ref in doc.files:
             resolved = pio.resolve_file_path(ref, path)
@@ -2691,7 +2739,7 @@ class ProjectIOMixin:
                 fd.channel_metadata,
                 saved_fs=ref.fs,
                 time_source=ref.time_source,
-                channel_order=getattr(ref, "channel_order", ()) or (),
+                channel_order=_saved_order_for_sampling(fd, ref),
             )
             skip_saved_rate = (
                 decision is not None
@@ -2731,8 +2779,17 @@ class ProjectIOMixin:
                 )
             else:
                 fd.time_axis_provenance = None
+            skipped_channel_edits.extend(
+                self._replay_saved_channel_edits(fd, ref, new_fid)
+            )
             if getattr(ref, "channel_order", None):
                 self.navigator_order.apply_channel_order(new_fid, ref.channel_order)
+            if getattr(ref, "channel_edits", None):
+                self.navigator.refresh_file(
+                    new_fid,
+                    fd,
+                    channel_order=self.navigator_order.channel_order(new_fid),
+                )
         desired = [
             fid_map[ref.fid] for ref in doc.files if ref.fid in fid_map
         ]
@@ -2750,7 +2807,71 @@ class ProjectIOMixin:
             missing_paths=missing_paths,
             missing_old_fids=missing_old_fids,
             timebase_notices=timebase_notices,
+            skipped_channel_edits=skipped_channel_edits,
         )
+
+    def _replay_saved_channel_edits(self, fd, ref, new_fid):
+        raw = getattr(ref, "channel_edits", None) or []
+        if not raw:
+            return []
+        from ...io.channel_edit_log import ChannelEditLog, replay
+
+        skipped = []
+        kept = []
+        for result in replay(fd, raw):
+            if result.applied and result.entry is not None:
+                kept.append(result.entry)
+            else:
+                skipped.append((
+                    new_fid,
+                    result.channel or "",
+                    result.reason or "条目无法识别",
+                ))
+        fd.channel_edits = ChannelEditLog(kept)
+        self.navigator_order.refresh_channels(new_fid, fd.get_signal_channels())
+        return skipped
+
+    def _drop_skipped_channel_edit_refs(self, skipped, health):
+        grouped = {}
+        for fid, name, _reason in skipped or ():
+            if name:
+                grouped.setdefault(str(fid), []).append(str(name))
+        dropped = []
+        for fid, names in grouped.items():
+            wanted = {(fid, name) for name in names}
+            for state in self.view_manager.views:
+                view_id = str(getattr(state, "view_id", "") or getattr(state, "name", ""))
+                for key in list(state.checked) + list(state.hidden_channels):
+                    pair = (str(key[0]), str(key[1]))
+                    if pair in wanted:
+                        dropped.append((view_id, pair[0], pair[1]))
+                for key in list(getattr(state, "colors", {}) or {}):
+                    pair = (str(key[0]), str(key[1]))
+                    if pair in wanted:
+                        dropped.append((view_id, pair[0], pair[1]))
+            for section, manager in self.analysis_managers.items():
+                for state in manager.views:
+                    view_id = str(getattr(state, "view_id", "") or "")
+                    for pane_idx, pane in enumerate(state.panes):
+                        sources = [("signal", source) for source in (pane.sources or ())]
+                        for role, source in (
+                            ("rpm", pane.rpm_source),
+                            ("input", pane.input_source),
+                            ("output", pane.output_source),
+                        ):
+                            if source:
+                                sources.append((role, source))
+                        for role, source in sources:
+                            if not isinstance(source, (list, tuple)) or len(source) < 2:
+                                continue
+                            pair = (str(source[0]), str(source[1]))
+                            if pair in wanted:
+                                dropped.append((section, view_id, pane_idx, role))
+            self._remove_channels_from_all_time_views(fid, names)
+            self._remove_channels_from_all_analysis_views(fid, names)
+        health.dropped_channel_edit_refs.extend(dropped)
+        if dropped or health.skipped_channel_edits:
+            health.degraded = True
 
     def open_project(self, path):
         """Restore a session from a ``.tlproj`` file: re-read referenced source
@@ -2767,12 +2888,14 @@ class ProjectIOMixin:
 
         try:
             doc = pio.load_project_from_json(path)
-        except pio.UnsupportedProjectVersion:
+        except pio.UnsupportedProjectVersion as exc:
+            version = getattr(exc, "schema_version", None)
+            shown = "?" if version is None else version
             QMessageBox.warning(
                 self,
                 "无法打开",
-                "该工程由更新版本的 TraceLab 保存（工程格式 v4），"
-                "请升级到 v8.3.0 或更高",
+                f"该工程由更新版本的 TraceLab 保存（工程格式 v{shown}），"
+                "请升级到可以打开该工程的版本",
             )
             return
         dirty = getattr(self, "_project_dirty", None)
@@ -2816,6 +2939,7 @@ class ProjectIOMixin:
                 dropped_time_refs=dropped_time,
                 dropped_analysis_refs=dropped_analysis,
                 timebase_notices=timebase_notices,
+                skipped_channel_edits=getattr(restore, "skipped_channel_edits", ()) or (),
             )
         for notice in timebase_notices:
             self.toast(notice, "warning")
@@ -2891,6 +3015,11 @@ class ProjectIOMixin:
             # syncs chart_stack + inspector + toolbar enabled-state together.
             self.toolbar._set_mode(doc.current_mode)
 
+            if health is not None:
+                self._drop_skipped_channel_edit_refs(
+                    getattr(health, "skipped_channel_edits", ()) or (),
+                    health,
+                )
             if health is not None and health.degraded:
                 lines = []
                 if missing:
@@ -2907,12 +3036,19 @@ class ProjectIOMixin:
                     lines.append(
                         f"另有 {n_time} 处时域通道引用因文件缺失已跳过。"
                     )
+                n_edits = len(getattr(health, "skipped_channel_edits", ()) or ())
+                if n_edits:
+                    lines.append(f"未能重建的派生通道：{n_edits}")
+                n_refs = len(getattr(health, "dropped_channel_edit_refs", ()) or ())
+                if n_refs:
+                    lines.append(f"另有 {n_refs} 处引用这些通道的 View 项已移除。")
                 lines.append(
                     "再次保存前会提示确认：Stage 1 不会保留未解析引用，"
                     "保存会固化当前缺失状态。"
                 )
                 QMessageBox.warning(
-                    self, "部分文件缺失",
+                    self,
+                    "部分文件缺失" if missing else "项目恢复不完整",
                     "\n\n".join(lines),
                 )
             elif missing:

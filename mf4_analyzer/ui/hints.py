@@ -293,6 +293,12 @@ _HINTS = (
         priority=35,
     ),
     Hint(
+        id="channel.project_persistence",
+        text="派生通道随项目保存",
+        surface="discovery",
+        priority=36,
+    ),
+    Hint(
         id="file.wwt_create_views",
         text="WWT 按 WinWert 窗口创建时域 View",
         surface="discovery",

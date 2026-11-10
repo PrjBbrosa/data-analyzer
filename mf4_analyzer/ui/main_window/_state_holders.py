@@ -206,6 +206,7 @@ class ProjectFileRestoreResult:
     missing_paths: list[str] = field(default_factory=list)
     missing_old_fids: list[str] = field(default_factory=list)
     timebase_notices: list[str] = field(default_factory=list)
+    skipped_channel_edits: list = field(default_factory=list)
 
 
 @dataclass
@@ -222,6 +223,8 @@ class ProjectRestoreHealth:
     # (section, view_id, pane_idx, role)
     dropped_analysis_refs: list[tuple] = field(default_factory=list)
     timebase_notices: list[str] = field(default_factory=list)
+    skipped_channel_edits: list = field(default_factory=list)
+    dropped_channel_edit_refs: list = field(default_factory=list)
     degraded: bool = False
 
     def clear(self) -> None:
@@ -230,6 +233,8 @@ class ProjectRestoreHealth:
         self.dropped_time_refs.clear()
         self.dropped_analysis_refs.clear()
         self.timebase_notices.clear()
+        self.skipped_channel_edits.clear()
+        self.dropped_channel_edit_refs.clear()
         self.degraded = False
 
     def adopt_restore(
@@ -240,23 +245,28 @@ class ProjectRestoreHealth:
         dropped_time_refs=(),
         dropped_analysis_refs=(),
         timebase_notices=(),
+        skipped_channel_edits=(),
     ) -> None:
         """Replace health from one restore pass and set ``degraded`` accordingly.
 
         Time-base notices are reported, but they are not missing-file
         degradation: the project file is left unchanged and ranges are not
-        rescaled.
+        rescaled. Skipped channel-edit recipes are degradation: saving would
+        otherwise freeze the missing derived channels.
         """
         self.missing_paths = list(missing_paths or ())
         self.missing_old_fids = list(missing_old_fids or ())
         self.dropped_time_refs = list(dropped_time_refs or ())
         self.dropped_analysis_refs = list(dropped_analysis_refs or ())
         self.timebase_notices = list(timebase_notices or ())
+        self.skipped_channel_edits = list(skipped_channel_edits or ())
+        self.dropped_channel_edit_refs = []
         self.degraded = bool(
             self.missing_paths
             or self.missing_old_fids
             or self.dropped_time_refs
             or self.dropped_analysis_refs
+            or self.skipped_channel_edits
         )
 
 

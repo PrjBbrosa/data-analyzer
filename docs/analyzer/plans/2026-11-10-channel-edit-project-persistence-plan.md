@@ -1,9 +1,9 @@
 # 通道编辑结果随项目保存：优化计划
 
 - 日期：2026-11-10。
-- 状态：**计划已编写，待实施；不是产品修复，也不是验收报告。**
+- 状态：**已按本计划实施。** 云端 offscreen 聚焦测试与边界护栏已通过；macOS 前台与 Windows 冻结包真机验收未在本环境执行。
 - 源码基线：`1e4b25936913f561d0b499bb6e37e238e8c5bcd0`（TraceLab v8.4.6）。实施前重新检查 HEAD 与相关 dirty 范围；下文行号以基线为准，实施时按符号重新定位。
-- 授权范围：本轮只写计划，不改任何可执行行为。
+- 授权范围：按本计划实施 T0–T6。不升版本号，不把样点写入项目，不回写源文件。
 - 问题：在「通道编辑」里创建派生通道后保存项目，重新打开时这些通道不存在；引用它们的 View 勾选、颜色、分析来源也随之失效，且没有任何提示。
 - 推荐路线：**项目里保存「怎么算出来的」（有序编辑配方），打开时在重新加载的源数据上回放**；不把波形数组写进项目。创建与回放走同一个求值函数，回放失败逐条可见。
 
@@ -233,4 +233,13 @@ TMPDIR=/tmp QT_QPA_PLATFORM=offscreen PYTHONPATH=. .venv/bin/python -m pytest <�
 
 ## 10. 本轮验证
 
-本轮只新增这份计划，没有改变可执行行为，所以不运行运行时用例。已核对的内容：文中引用的文件、符号与行号在基线上存在；`git diff --check`。当前云端环境没有仓库 venv（`.venv` 不存在，系统 Python 缺 PyQt5），上一轮「派生通道不随项目保存」的结论来自读代码与用户指南，没有做运行时复现——T0 的失败用例就是这一步的补齐。T0–T6 与真机验收全部待执行。
+实施后的聚焦门禁（offscreen Qt，`TMPDIR=/tmp`，仓库 `.venv`）覆盖：
+
+- `tests/ui/test_project_session.py`、`tests/ui/test_project_dirty_guard.py`
+- `tests/test_project_io.py`、`tests/test_project_io_analysis_views.py`
+- `tests/test_channel_edit_log.py`、`tests/signal/test_channel_recipe.py`、`tests/signal/test_channel_math.py`
+- `tests/ui/test_channel_editor_recipes.py` 以及通道编辑表达式、对话框、抽屉、导出、hints、quickref
+- `_apply_channel_edits` 的 smoke / view-scope 节点
+- 边界：`tests/test_signal_no_gui_import.py`、`tests/ui/test_import_boundaries.py`、`tests/ui/test_main_window_state_ownership.py`、`tests/ui/test_no_lambda_signal_connections.py`
+
+未跑全量套件。第 6 节的真机验收（真实 EPS 录制、打开耗时、macOS 前台、Windows 冻结包）没有在这台 Linux 云端环境执行。版本号未改；下次发版再补 changelog。

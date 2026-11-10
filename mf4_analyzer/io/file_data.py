@@ -10,6 +10,7 @@ from pathlib import Path
 import numpy as np
 
 from .._palette import FILE_PALETTES
+from .channel_edit_log import ChannelEditLog
 from .channel_frame import frame_column_names, frame_get_column, frame_row_count
 
 
@@ -278,6 +279,10 @@ class FileData:
         self.fs = 1000.0
         self._time_source = 'auto'  # 'auto', 'column', 'generated'
         self.time_axis_provenance = None
+        # Editor recipes for this logical source. Empty until the user creates
+        # or deletes a channel; closed with the source, never a second copy.
+        self.channel_edits = ChannelEditLog()
+        self.session_ephemeral_channels = set()
 
         if fs is not None:
             self.fs = float(fs)

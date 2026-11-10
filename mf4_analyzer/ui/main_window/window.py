@@ -5039,7 +5039,7 @@ class MainWindow(
             self._channel_editor_drawer = None
 
 
-    def _apply_channel_edits(self, fid, new_channels, removed_channels):
+    def _apply_channel_edits(self, fid, new_channels, removed_channels, edits=None):
         fd = self.files[fid]
         removed_channels = list(removed_channels or ())
         if removed_channels:
@@ -5072,16 +5072,17 @@ class MainWindow(
             self.canvas_time.invalidate_monotonicity_cache(
                 custom_xaxis_fid=fid, custom_xaxis_ch=name
             )
-        for name, (arr, unit) in new_channels.items():
-            fd.data[name] = arr
-            fd.channels.append(name)
-            fd.channel_units[name] = unit
-        for name in removed_channels:
-            if name in fd.data.columns:
-                fd.data = fd.data.drop(columns=[name])
-            if name in fd.channels:
-                fd.channels.remove(name)
-            fd.channel_units.pop(name, None)
+        from ...io.channel_edit_log import apply_unlogged, fold_entries, replay
+
+        applied_edits = []
+        if edits:
+            for result in replay(fd, edits):
+                if result.applied and result.entry is not None:
+                    applied_edits.append(result.entry)
+            if applied_edits:
+                fold_entries(fd.channel_edits, applied_edits)
+        else:
+            apply_unlogged(fd, new_channels, removed_channels)
         self._remove_channels_from_all_time_views(fid, removed_channels)
         self._remove_channels_from_all_analysis_views(fid, removed_channels)
         nav_blocked = self.navigator.blockSignals(True)
@@ -5109,6 +5110,8 @@ class MainWindow(
             f"通道已更新: 新增 {len(new_channels)} · 删除 {len(removed_channels)}",
             "success",
         )
+        if new_channels or removed_channels or applied_edits:
+            self._note_user_project_mutation()
         self._plot_time_preserving_xlim()
 
     def _do_export_channels(self, fid, channels, include_time, use_range,

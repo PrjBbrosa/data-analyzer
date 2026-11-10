@@ -26,7 +26,8 @@ class ChannelEditorDrawer(QDialog):
     # user had selected in the dialog's top file combo at accept time — NOT
     # necessarily the originally-active file, since the dialog lets the user
     # switch files before applying.
-    applied = pyqtSignal(str, dict, set)
+    # Fourth argument is the ordered recipe list for this dialog session.
+    applied = pyqtSignal(str, dict, set, object)
     export_requested = pyqtSignal(str, list, bool, bool, str)
 
     # Width matches the narrow "方案 A" layout; the inner dialog scrolls when
@@ -126,5 +127,6 @@ class ChannelEditorDrawer(QDialog):
             self._inner.current_fid,
             self._inner.new_channels,
             self._inner.removed_channels,
+            list(self._inner._edit_log.entries),
         )
         self.accept()

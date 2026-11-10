@@ -137,6 +137,20 @@ def test_scale_preserves_shape_and_applies_factor() -> None:
     assert result.dtype == np.float64
 
 
+def test_dual_arithmetic_matches_numpy_and_zero_divide_is_zero() -> None:
+    left = np.array([1.0, 2.0, 3.0])
+    right = np.array([2.0, 0.0, -3.0])
+
+    np.testing.assert_array_equal(ChannelMath.add(left, right), left + right)
+    np.testing.assert_array_equal(ChannelMath.sub(left, right), left - right)
+    np.testing.assert_array_equal(ChannelMath.mul(left, right), left * right)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        divided = np.where(right != 0, left / right, 0.0)
+    np.testing.assert_array_equal(ChannelMath.div(left, right), divided)
+    np.testing.assert_array_equal(ChannelMath.maximum(left, right), np.maximum(left, right))
+    np.testing.assert_array_equal(ChannelMath.minimum(left, right), np.minimum(left, right))
+
+
 def test_offset_preserves_shape_and_applies_value() -> None:
     signal = np.array([-2, 0, 4], dtype=np.int16)
 
