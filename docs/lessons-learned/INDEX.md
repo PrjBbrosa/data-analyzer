@@ -307,6 +307,7 @@ lesson by default.
 | [Partial Imports Preserve Identity And Sample Gaps](partial-import-must-preserve-identity-and-sample-gaps.md) | Relaxing file-import rejection or carrying partial-import diagnostics through GUI, project reload, or Batch. | See lesson |
 | [Qt Canvas Callbacks Need Receiver Lifetime](qt-canvas-callbacks-need-receiver-lifetime.md) | Connecting canvas signals to a QObject owner that can be destroyed first, especially with `partial(bound_method, key)` or during cyclic GC. | See lesson |
 | [Unowned Test Canvases Can Steal Later Mouse Events](unowned-test-canvases-can-steal-later-mouse-events.md) | Hover or pin tests pass alone but fail in a shared QApplication although widgetAt, active window, style, and mouse buttons look correct. | See lesson |
+| [Project Restore Matches Split Sources By Group Identity](project-restore-matches-split-sources-by-group-identity.md) | Changing project save or open for a file that expands into multiple | See lesson |
 
 ## Selection Rules
 

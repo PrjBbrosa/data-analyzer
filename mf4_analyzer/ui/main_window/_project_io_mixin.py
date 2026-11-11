@@ -75,6 +75,98 @@ def _saved_order_for_sampling(fd, ref):
     return [name for name in saved if name not in extra]
 
 
+def _persisted_source_group(fd) -> str:
+    """Group identity written on a file row. ``root`` stays omitted."""
+    metadata = getattr(fd, "source_metadata", None) or {}
+    group = str(metadata.get("group_id") or "").strip()
+    if not group or group == "root":
+        return ""
+    return group
+
+
+def _optional_rate(value):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number):
+        return None
+    return number
+
+
+def _loaded_source_label(fd) -> str:
+    name = getattr(fd, "filename", "") or Path(getattr(fd, "filepath", "")).name
+    suffix = str(getattr(fd, "label_suffix", "") or "")
+    if suffix:
+        return f"{name} ·{suffix}"
+    return str(name)
+
+
+def _missing_source_label(ref) -> str:
+    name = Path(str(getattr(ref, "path_abs", "") or "")).name
+    group = str(getattr(ref, "source_group", "") or "").strip()
+    if group and group != "root":
+        return f"{name} ({group})"
+    channels = [
+        str(item).strip()
+        for item in (getattr(ref, "channel_order", ()) or ())
+        if str(item).strip()
+    ][:3]
+    if channels:
+        return f"{name} [{', '.join(channels)}]"
+    return name
+
+
+def _skipped_edit_reason(item) -> str:
+    if isinstance(item, (list, tuple)) and len(item) >= 3:
+        return str(item[2])
+    return ""
+
+
+def _signal_name_set(fd) -> frozenset:
+    getter = getattr(fd, "get_signal_channels", None)
+    raw = getter() if callable(getter) else getattr(fd, "channels", ())
+    return frozenset(
+        str(name).strip() for name in (raw or ()) if str(name).strip()
+    )
+
+
+def _restore_load_kwargs(ref, resolved, pio, path) -> dict:
+    """Loader kwargs for the first saved row of one physical path."""
+    dbc_paths = pio.resolve_dbc_paths(ref, path)
+    load_kwargs = {"blf_dbc_paths": dbc_paths}
+    if (resolved.suffix.lower() in {".csv", ".xlsx", ".xls"}
+            and ref.time_source == "manual"
+            and math.isfinite(float(ref.fs)) and float(ref.fs) > 0):
+        # Carry explicit saved intent into the loader; generated
+        # historical 1 kHz must never become a verified sample rate.
+        load_kwargs["sampling_rate"] = float(ref.fs)
+    return load_kwargs
+
+
+def _unverified_channel_edit_skips(ref, new_fid):
+    """Report every recipe that was not replayed because the pairing is unconfirmed."""
+    from ..project_source_match import UNVERIFIED_SOURCE_REASON
+
+    skipped = []
+    for item in getattr(ref, "channel_edits", None) or []:
+        if not isinstance(item, dict):
+            continue
+        names = []
+        if item.get("op") == "derive":
+            name = item.get("name")
+            if isinstance(name, str) and name.strip():
+                names.append(name.strip())
+        elif item.get("op") == "remove":
+            for name in item.get("names") or ():
+                text = str(name).strip()
+                if text:
+                    names.append(text)
+        for name in names:
+            skipped.append((new_fid, name, UNVERIFIED_SOURCE_REASON))
+    return skipped
+
+
 DATA_FILE_GLOB = DEFAULT_SOURCE_ADAPTER_REGISTRY.file_dialog_glob
 _MEDIA_ADAPTER = next(
     adapter for adapter in DEFAULT_SOURCE_ADAPTER_REGISTRY.adapters
@@ -650,26 +742,44 @@ class ProjectIOMixin:
         Default button is Cancel. Stage 1 does not persist unresolved refs;
         saving freezes the current missing state. Tests monkeypatch this seam.
         """
+        from ..project_source_match import UNVERIFIED_SOURCE_REASON
+
         n_missing = len(getattr(health, "missing_paths", ()) or ())
+        n_sources = len(getattr(health, "missing_sources", ()) or ())
+        n_unverified = len(getattr(health, "unverified_sources", ()) or ())
         n_analysis = len(getattr(health, "dropped_analysis_refs", ()) or ())
         n_time = len(getattr(health, "dropped_time_refs", ()) or ())
         summary = []
         if n_missing:
             summary.append(f"缺失文件：{n_missing}")
+        if n_sources:
+            summary.append(f"文件中已不存在的来源：{n_sources}")
+        if n_unverified:
+            summary.append(f"对应关系无法确认的来源：{n_unverified}")
         if n_analysis:
             summary.append(f"跳过的分析 View/Pane 来源：{n_analysis}")
         if n_time:
             summary.append(f"跳过的时域通道引用：{n_time}")
-        n_edits = len(getattr(health, "skipped_channel_edits", ()) or ())
+        n_edits = sum(
+            1 for item in (getattr(health, "skipped_channel_edits", ()) or ())
+            if _skipped_edit_reason(item) != UNVERIFIED_SOURCE_REASON
+        )
         if n_edits:
             summary.append(f"未能重建的派生通道：{n_edits}")
         box = QMessageBox(self)
         box.setWindowTitle("项目恢复不完整")
         box.setIcon(QMessageBox.Warning)
-        box.setText(
-            "本次打开项目时有文件或分析来源缺失。"
-            "Stage 1 不会保存未解析的引用；继续保存会固化当前缺失状态。"
-        )
+        if n_unverified and not n_missing and not n_sources:
+            box.setText(
+                "部分来源无法确认与文件中分组的对应关系，"
+                "派生通道和保存的采样率没有套用。"
+                "继续保存会按当前的对应关系写入来源身份。"
+            )
+        else:
+            box.setText(
+                "本次打开项目时有文件或分析来源缺失。"
+                "Stage 1 不会保存未解析的引用；继续保存会固化当前缺失状态。"
+            )
         if summary:
             box.setInformativeText("\n".join(summary))
         save_btn = box.addButton("仍要保存", QMessageBox.AcceptRole)
@@ -1105,6 +1215,7 @@ class ProjectIOMixin:
             elif ext == '.hdf':
                 report(-1.0, "读取 HDF")
                 groups = DataLoader.load_hdf(fp)
+                self._stamp_split_source_identities("hdf", groups)
                 for g in groups:
                     self._register_file_data(
                         fp, g["data"], g["channels"], g["units"],
@@ -1141,6 +1252,7 @@ class ProjectIOMixin:
                 )
                 loaded = DataLoader.load_wwt_document(fp)
                 groups = list(loaded.groups)
+                self._stamp_split_source_identities("wwt", groups)
                 before = set(self.files)
                 for g in groups:
                     self._register_file_data(
@@ -1179,6 +1291,7 @@ class ProjectIOMixin:
             elif ext == '.zfd':
                 report(-1.0, "读取 ZFD")
                 groups = DataLoader.load_zfd(fp)
+                self._stamp_split_source_identities("zfd", groups)
                 for g in groups:
                     self._register_file_data(
                         fp, g["data"], g["channels"], g["units"],
@@ -1197,6 +1310,7 @@ class ProjectIOMixin:
             elif ext == '.mat':
                 report(-1.0, "读取 MAT")
                 groups = DataLoader.load_mat(fp)
+                self._stamp_split_source_identities("mat", groups)
                 for g in groups:
                     self._register_file_data(
                         fp, g["data"], g["channels"], g["units"],
@@ -2689,6 +2803,7 @@ class ProjectIOMixin:
                 channel_order=list(self.navigator_order.channel_order(fid)),
                 time_axis_provenance=provenance,
                 channel_edits=_channel_edit_payload(fd),
+                source_group=_persisted_source_group(fd),
             ))
 
         vm = {
@@ -2709,17 +2824,42 @@ class ProjectIOMixin:
             ultraview=None if uv is None else uv.to_project_payload(),
         )
 
+    def _stamp_split_source_identities(self, adapter_key, groups):
+        """Stamp Batch group ids onto loader groups before they are registered.
+
+        A duplicate identity must not fail the import. The file stays
+        loaded, and every group of that file stays unmarked so restore
+        falls through to evidence or an explicit unverified pairing.
+        """
+        from ...io.source_adapters import SourceIdentityError, stamp_group_identities
+
+        try:
+            stamp_group_identities(adapter_key, groups)
+        except SourceIdentityError as exc:
+            logger.warning("来源组身份重复，本次不记录组身份: %s", exc)
+
     def _restore_project_file_refs(self, doc, path, pio):
         from ._state_holders import ProjectFileRestoreResult
-
-        from ...io.head_hdf import classify_saved_hdf_sampling
+        from ..project_source_match import (
+            LEVEL_EVIDENCE,
+            LEVEL_IDENTITY,
+            LEVEL_SOLE,
+            SourceCandidateFact,
+            SourceRefFact,
+            loader_channel_names,
+            match_project_sources,
+        )
 
         fid_map = {}
         missing_paths = []
         missing_old_fids = []
         timebase_notices = []
         skipped_channel_edits = []
-        pending_by_path = {}
+        unverified_sources = []
+        missing_sources = []
+        refs_by_key = {}
+        loaded_fids = {}
+        key_order = []
         for ref in doc.files:
             resolved = pio.resolve_file_path(ref, path)
             if resolved is None:
@@ -2727,82 +2867,92 @@ class ProjectIOMixin:
                 missing_old_fids.append(ref.fid)
                 continue
             key = str(resolved)
-            if not pending_by_path.get(key):
+            bucket = refs_by_key.get(key)
+            if bucket is None:
+                refs_by_key[key] = [ref]
+                key_order.append(key)
                 before = set(self.files.keys())
-                dbc_paths = pio.resolve_dbc_paths(ref, path)
-                load_kwargs = {"blf_dbc_paths": dbc_paths}
-                if (resolved.suffix.lower() in {".csv", ".xlsx", ".xls"}
-                        and ref.time_source == "manual"
-                        and math.isfinite(float(ref.fs)) and float(ref.fs) > 0):
-                    # Carry explicit saved intent into the loader; generated
-                    # historical 1 kHz must never become a verified sample rate.
-                    load_kwargs["sampling_rate"] = float(ref.fs)
-                self._load_one(key, **load_kwargs)
-                new_fids = [f for f in self.files.keys() if f not in before]
-                if not new_fids:
+                self._load_one(
+                    key, **_restore_load_kwargs(ref, resolved, pio, path),
+                )
+                loaded_fids[key] = [
+                    fid for fid in self.files.keys() if fid not in before
+                ]
+            else:
+                bucket.append(ref)
+        for key in key_order:
+            refs = refs_by_key[key]
+            new_fids = loaded_fids[key]
+            if not new_fids:
+                for ref in refs:
                     missing_paths.append(ref.path_abs)
                     missing_old_fids.append(ref.fid)
+                continue
+            candidates = []
+            for fid in new_fids:
+                fd = self.files[fid]
+                metadata = getattr(fd, "source_metadata", None) or {}
+                candidates.append(SourceCandidateFact(
+                    key=str(fid),
+                    group_id=str(metadata.get("group_id") or ""),
+                    channels=_signal_name_set(fd),
+                    measured_fs=_optional_rate(getattr(fd, "fs", None)),
+                ))
+            facts = [
+                SourceRefFact(
+                    key=str(ref.fid),
+                    group_id=str(getattr(ref, "source_group", "") or ""),
+                    loader_channels=loader_channel_names(
+                        getattr(ref, "channel_order", ()),
+                        getattr(ref, "channel_edits", ()),
+                    ),
+                    fs=_optional_rate(getattr(ref, "fs", None)),
+                    time_source=str(getattr(ref, "time_source", "") or ""),
+                )
+                for ref in refs
+            ]
+            assignments = {
+                item.ref_key: item
+                for item in match_project_sources(facts, candidates)
+            }
+            for ref in refs:
+                assignment = assignments[str(ref.fid)]
+                if assignment.candidate_key is None:
+                    missing_old_fids.append(ref.fid)
+                    missing_sources.append(_missing_source_label(ref))
                     continue
-                pending_by_path[key] = new_fids
-            new_fid = pending_by_path[key].pop(0)
-            fid_map[ref.fid] = new_fid
-            fd = self.files[new_fid]
-            decision = classify_saved_hdf_sampling(
-                fd.source_metadata,
-                fd.channel_metadata,
-                saved_fs=ref.fs,
-                time_source=ref.time_source,
-                channel_order=_saved_order_for_sampling(fd, ref),
-            )
-            skip_saved_rate = (
-                decision is not None
-                and decision.action in {"keep-verified", "unproven"}
-            )
-            if decision is not None and decision.notice:
-                timebase_notices.append(decision.notice)
-            # Older projects persisted automatic analysis repair on the source.
-            # Reload original file timing instead; each analysis now prepares
-            # its own grid. Explicit legacy source calibration stays compatible.
-            # A corrected HEAD HDF axis is not divided by channel count, and a
-            # manual override is restored at the saved rate rather than scaled.
-            if not skip_saved_rate and ref.time_source != "auto_rebuilt":
-                fd.fs = float(ref.fs)
-            if not skip_saved_rate and ref.time_source in ("generated", "manual"):
-                try:
-                    fd.rebuild_time_axis(
-                        float(ref.fs), reason="project_restore",
+                new_fid = assignment.candidate_key
+                fid_map[ref.fid] = new_fid
+                fd = self.files[new_fid]
+                verified = assignment.level in {
+                    LEVEL_IDENTITY, LEVEL_EVIDENCE, LEVEL_SOLE,
+                }
+                if assignment.level == LEVEL_EVIDENCE:
+                    logger.info(
+                        "项目来源按已保存的通道对应: %s → %s",
+                        ref.fid, _loaded_source_label(fd),
                     )
-                except TypeError:
-                    fd.rebuild_time_axis(float(ref.fs))
-                # ``rebuild_time_axis(reason='manual')`` would stamp an
-                # interactive override. During project restore the persisted
-                # ``time_source`` remains authoritative: a loader-generated
-                # axis must not be promoted merely because we reconstructed
-                # it at the saved sampling rate, and ``auto_rebuilt`` must
-                # stay distinguishable from a popover Accept.
-                fd._time_source = ref.time_source
-            raw_provenance = getattr(ref, "time_axis_provenance", None)
-            if (
-                not skip_saved_rate
-                and raw_provenance
-                and ref.time_source != "auto_rebuilt"
-            ):
-                fd.time_axis_provenance = TimeAxisProvenance.from_dict(
-                    raw_provenance,
-                )
-            else:
-                fd.time_axis_provenance = None
-            skipped_channel_edits.extend(
-                self._replay_saved_channel_edits(fd, ref, new_fid)
-            )
-            if getattr(ref, "channel_order", None):
-                self.navigator_order.apply_channel_order(new_fid, ref.channel_order)
-            if getattr(ref, "channel_edits", None):
-                self.navigator.refresh_file(
-                    new_fid,
-                    fd,
-                    channel_order=self.navigator_order.channel_order(new_fid),
-                )
+                if verified:
+                    skipped_channel_edits.extend(
+                        self._apply_verified_file_ref(
+                            fd, ref, new_fid, timebase_notices,
+                        )
+                    )
+                else:
+                    unverified_sources.append(_loaded_source_label(fd))
+                    skipped_channel_edits.extend(
+                        _unverified_channel_edit_skips(ref, new_fid)
+                    )
+                if getattr(ref, "channel_order", None):
+                    self.navigator_order.apply_channel_order(
+                        new_fid, ref.channel_order,
+                    )
+                if verified and getattr(ref, "channel_edits", None):
+                    self.navigator.refresh_file(
+                        new_fid,
+                        fd,
+                        channel_order=self.navigator_order.channel_order(new_fid),
+                    )
         desired = [
             fid_map[ref.fid] for ref in doc.files if ref.fid in fid_map
         ]
@@ -2821,7 +2971,60 @@ class ProjectIOMixin:
             missing_old_fids=missing_old_fids,
             timebase_notices=timebase_notices,
             skipped_channel_edits=skipped_channel_edits,
+            unverified_sources=unverified_sources,
+            missing_sources=missing_sources,
         )
+
+    def _apply_verified_file_ref(self, fd, ref, new_fid, timebase_notices):
+        """Replay number-changing state onto a source the file confirmed."""
+        from ...io.head_hdf import classify_saved_hdf_sampling
+
+        decision = classify_saved_hdf_sampling(
+            fd.source_metadata,
+            fd.channel_metadata,
+            saved_fs=ref.fs,
+            time_source=ref.time_source,
+            channel_order=_saved_order_for_sampling(fd, ref),
+        )
+        skip_saved_rate = (
+            decision is not None
+            and decision.action in {"keep-verified", "unproven"}
+        )
+        if decision is not None and decision.notice:
+            timebase_notices.append(decision.notice)
+        # Older projects persisted automatic analysis repair on the source.
+        # Reload original file timing instead; each analysis now prepares
+        # its own grid. Explicit legacy source calibration stays compatible.
+        # A corrected HEAD HDF axis is not divided by channel count, and a
+        # manual override is restored at the saved rate rather than scaled.
+        if not skip_saved_rate and ref.time_source != "auto_rebuilt":
+            fd.fs = float(ref.fs)
+        if not skip_saved_rate and ref.time_source in ("generated", "manual"):
+            try:
+                fd.rebuild_time_axis(
+                    float(ref.fs), reason="project_restore",
+                )
+            except TypeError:
+                fd.rebuild_time_axis(float(ref.fs))
+            # ``rebuild_time_axis(reason='manual')`` would stamp an
+            # interactive override. During project restore the persisted
+            # ``time_source`` remains authoritative: a loader-generated
+            # axis must not be promoted merely because we reconstructed
+            # it at the saved sampling rate, and ``auto_rebuilt`` must
+            # stay distinguishable from a popover Accept.
+            fd._time_source = ref.time_source
+        raw_provenance = getattr(ref, "time_axis_provenance", None)
+        if (
+            not skip_saved_rate
+            and raw_provenance
+            and ref.time_source != "auto_rebuilt"
+        ):
+            fd.time_axis_provenance = TimeAxisProvenance.from_dict(
+                raw_provenance,
+            )
+        else:
+            fd.time_axis_provenance = None
+        return self._replay_saved_channel_edits(fd, ref, new_fid)
 
     def _replay_saved_channel_edits(self, fd, ref, new_fid):
         raw = getattr(ref, "channel_edits", None) or []
@@ -2953,6 +3156,8 @@ class ProjectIOMixin:
                 dropped_analysis_refs=dropped_analysis,
                 timebase_notices=timebase_notices,
                 skipped_channel_edits=getattr(restore, "skipped_channel_edits", ()) or (),
+                unverified_sources=getattr(restore, "unverified_sources", ()) or (),
+                missing_sources=getattr(restore, "missing_sources", ()) or (),
             )
         for notice in timebase_notices:
             self.toast(notice, "warning")
@@ -3034,31 +3239,60 @@ class ProjectIOMixin:
                     health,
                 )
             if health is not None and health.degraded:
+                from ..project_source_match import UNVERIFIED_SOURCE_REASON
+
+                missing_sources = list(getattr(health, "missing_sources", ()) or ())
+                unverified = list(getattr(health, "unverified_sources", ()) or ())
+                skipped = list(getattr(health, "skipped_channel_edits", ()) or ())
+                other_edits = [
+                    item for item in skipped
+                    if _skipped_edit_reason(item) != UNVERIFIED_SOURCE_REASON
+                ]
+                unverified_edits = len(skipped) - len(other_edits)
+                cause = "文件缺失" if missing else "来源已不存在"
                 lines = []
                 if missing:
                     lines.append(
                         "以下文件找不到，已跳过：\n" + "\n".join(missing)
                     )
+                if missing_sources:
+                    lines.append(
+                        "文件还在，但其中的来源已不存在：\n"
+                        + "\n".join(missing_sources)
+                    )
+                if unverified:
+                    lines.append(
+                        "来源对应关系无法确认：\n" + "\n".join(unverified)
+                    )
+                    bits = []
+                    if unverified_edits:
+                        bits.append(f"未回放派生通道 {unverified_edits} 条")
+                    bits.append(f"未套用采样率设置 {len(unverified)} 处")
+                    lines.append("因此" + "，".join(bits) + "。")
                 n_analysis = len(health.dropped_analysis_refs)
                 if n_analysis:
                     lines.append(
-                        f"另有 {n_analysis} 处分析 View/Pane 来源因文件缺失已跳过。"
+                        f"另有 {n_analysis} 处分析 View/Pane 来源因{cause}已跳过。"
                     )
                 n_time = len(health.dropped_time_refs)
                 if n_time:
                     lines.append(
-                        f"另有 {n_time} 处时域通道引用因文件缺失已跳过。"
+                        f"另有 {n_time} 处时域通道引用因{cause}已跳过。"
                     )
-                n_edits = len(getattr(health, "skipped_channel_edits", ()) or ())
-                if n_edits:
-                    lines.append(f"未能重建的派生通道：{n_edits}")
+                if other_edits:
+                    lines.append(f"未能重建的派生通道：{len(other_edits)}")
                 n_refs = len(getattr(health, "dropped_channel_edit_refs", ()) or ())
                 if n_refs:
                     lines.append(f"另有 {n_refs} 处引用这些通道的 View 项已移除。")
-                lines.append(
-                    "再次保存前会提示确认：Stage 1 不会保留未解析引用，"
-                    "保存会固化当前缺失状态。"
-                )
+                if unverified and not missing and not missing_sources:
+                    lines.append(
+                        "再次保存前会提示确认。保存会按当前对应关系写入来源身份。"
+                    )
+                else:
+                    lines.append(
+                        "再次保存前会提示确认：Stage 1 不会保留未解析引用，"
+                        "保存会固化当前缺失状态。"
+                    )
                 QMessageBox.warning(
                     self,
                     "部分文件缺失" if missing else "项目恢复不完整",

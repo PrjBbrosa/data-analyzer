@@ -312,7 +312,7 @@ def _axis_facts(data) -> tuple[int, float | None, float | None]:
     return n, dt, t0
 
 
-def _group_identity(adapter_key: str, group: Mapping[str, object]) -> str:
+def group_identity(adapter_key: str, group: Mapping[str, object]) -> str:
     data = group.get("data")
     if not is_tabular_frame(data):
         raise TypeError("group loader result requires a tabular frame in 'data'")
@@ -341,6 +341,49 @@ def _group_identity(adapter_key: str, group: Mapping[str, object]) -> str:
         f"{adapter_key}:n={n}:dt={_float_token(dt)}:"
         f"t0={_float_token(t0)}"
     )
+
+
+# Batch and the GUI both call this. The private name stays for callers that
+# already bound it; the string itself is the logical-source identity.
+_group_identity = group_identity
+
+
+def group_identities(adapter_key: str, groups) -> tuple[str, ...]:
+    """Identity of every group, in order.
+
+    A repeated identity raises :class:`SourceIdentityError` before any
+    group is treated as identified. Callers that must keep the load
+    decide what a duplicate means; this function only reports it.
+    """
+    if not isinstance(groups, (list, tuple)):
+        raise TypeError("group loader result must be a group list")
+    identities: list[str] = []
+    seen: set[str] = set()
+    for group in groups:
+        if not isinstance(group, Mapping):
+            raise TypeError("group loader result entries must be mappings")
+        identity = group_identity(adapter_key, group)
+        if identity in seen:
+            raise SourceIdentityError(f"duplicate group identity {identity}")
+        seen.add(identity)
+        identities.append(identity)
+    return tuple(identities)
+
+
+def stamp_group_identities(adapter_key: str, groups) -> tuple[str, ...]:
+    """Write ``source_metadata['group_id']`` on each group and return the ids.
+
+    Nothing is written when the identities are not unique. The raised
+    :class:`SourceIdentityError` leaves every group unmarked.
+    """
+    identities = group_identities(adapter_key, groups)
+    for group, identity in zip(groups, identities):
+        if not isinstance(group, dict):
+            continue
+        metadata = dict(group.get("source_metadata") or {})
+        metadata["group_id"] = identity
+        group["source_metadata"] = metadata
+    return identities
 
 
 def _mdf_probe_io_errors() -> tuple[type[BaseException], ...]:
@@ -759,17 +802,19 @@ class SourceAdapter:
         if not isinstance(groups, (list, tuple)):
             raise TypeError(f"{self.loader_name} must return a group list")
         canonical = canonical_source_path(path)
-        loaded = []
-        seen_group_ids = set()
-        for group in groups:
-            if not isinstance(group, Mapping):
-                raise TypeError(f"{self.loader_name} group entries must be mappings")
-            group_id = _group_identity(self.key, group)
-            if group_id in seen_group_ids:
+        try:
+            group_ids = group_identities(self.key, groups)
+        except SourceIdentityError as exc:
+            message = str(exc)
+            prefix = "duplicate group identity "
+            if message.startswith(prefix):
                 raise SourceIdentityError(
-                    f"{Path(path).name} returned duplicate group identity {group_id}"
-                )
-            seen_group_ids.add(group_id)
+                    f"{Path(path).name} returned duplicate group identity "
+                    f"{message[len(prefix):]}"
+                ) from exc
+            raise
+        loaded = []
+        for group, group_id in zip(groups, group_ids):
             data = group.get("data")
             channels = list(group.get("channels") or ())
             units = dict(group.get("units") or {})

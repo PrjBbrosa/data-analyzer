@@ -3250,3 +3250,267 @@ def test_applied_recipe_keeps_the_success_counts(qapp, qtbot, tmp_path, monkeypa
     assert toasts == [("通道已更新: 新增 1 · 删除 0", "success")]
     assert status == ["编辑: +1 -0"]
     assert "abs_rpm" in mw.files[fid].channels
+
+
+def _write_split_mat(path, *, slow_extra=0, include_slow=True):
+    """Two MAT groups: 100 Hz torque/speed, and 50 Hz rack."""
+    import numpy as np
+    from scipy.io import savemat
+
+    payload = {
+        "time": np.arange(100, dtype=float) / 100.0,
+        "torque": np.linspace(1.0, 2.0, 100),
+        "speed": np.linspace(0.0, 10.0, 100),
+    }
+    if include_slow:
+        payload["zeit"] = np.arange(200, dtype=float) / 50.0
+        payload["rack"] = np.full(200, 1.5)
+        for index in range(slow_extra):
+            payload[f"aux{index}"] = np.full(200, float(index))
+    savemat(path, payload)
+
+
+def _capture_warnings(monkeypatch):
+    warnings = []
+    monkeypatch.setattr(
+        "PyQt5.QtWidgets.QMessageBox.warning",
+        lambda *args, **kwargs: warnings.append(args),
+    )
+    return warnings
+
+
+def _fid_with(window, name):
+    return next(
+        fid for fid, fd in window.files.items() if name in fd.channels
+    )
+
+
+def test_gui_load_stamps_the_batch_group_identity(qapp, qtbot, tmp_path):
+    import numpy as np
+    from tests._helpers.head_hdf_factory import write_head_hdf
+    from mf4_analyzer.io.source_adapters import SourceAdapterRegistry
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    hdf = write_head_hdf(
+        tmp_path / "synth.hdf",
+        n_scans=8,
+        start_of_data=4096,
+        channels=[
+            {"name": "Accel", "factor": 2, "quantity": "acceleration",
+             "unit": "m/s^2", "calibration": 1.0,
+             "samples": np.arange(16, dtype=float)},
+            {"name": "Speed", "factor": 1, "quantity": "speed of rotation",
+             "unit": "deg/s", "calibration": 1.0,
+             "samples": np.arange(8, dtype=float)},
+        ],
+    )
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window._load_one(str(hdf))
+    loaded = SourceAdapterRegistry.default().adapter_for(hdf).load_sources(str(hdf))
+    gui = sorted(fd.source_metadata["group_id"] for fd in window.files.values())
+    batch = sorted(item.group_id for item in loaded)
+    assert gui == batch
+    assert all(item.startswith("hdf:") for item in gui)
+
+
+def test_reexported_mat_keeps_recipe_rate_and_view_with_its_source(
+    qapp, qtbot, tmp_path, monkeypatch,
+):
+    """A same-path MAT whose groups load in a new order stays paired by identity."""
+    from mf4_analyzer.signal.channel_recipe import make_single
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    mat = tmp_path / "eps.mat"
+    proj = tmp_path / "eps.tlproj"
+    _write_split_mat(mat)
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window._load_one(str(mat))
+    assert len(window.files) == 2
+    slow = _fid_with(window, "rack")
+    fast = _fid_with(window, "torque")
+    assert window.files[slow].fs == pytest.approx(50.0)
+    assert window.files[fast].fs == pytest.approx(100.0)
+    entry = make_single("scaled", "Nm", "scale", "rack", 2.0)
+    window._apply_channel_edits(slow, {}, set(), [entry])
+    window.navigator_order.apply_channel_order(slow, ["scaled", "rack"])
+    window.navigator.set_checked_channels([(fast, "torque"), (slow, "rack")])
+    assert window.save_project(proj) is True
+    raw = json.loads(proj.read_text(encoding="utf-8"))
+    assert all(
+        str(row.get("source_group") or "").startswith("mat:length=")
+        for row in raw["files"]
+    )
+
+    _write_split_mat(mat, slow_extra=2)
+    warnings = _capture_warnings(monkeypatch)
+    restored = MainWindow()
+    qtbot.addWidget(restored)
+    restored.open_project(proj)
+    assert warnings == []
+    assert not restored._project_restore_health.degraded
+    assert len(restored.files) == 2
+    slow2 = _fid_with(restored, "rack")
+    fast2 = _fid_with(restored, "torque")
+    assert restored.files[slow2].fs == pytest.approx(50.0)
+    assert restored.files[fast2].fs == pytest.approx(100.0)
+    assert restored.files[slow2].data["scaled"].iloc[0] == pytest.approx(3.0)
+    assert "scaled" not in restored.files[fast2].channels
+    assert list(restored.navigator_order.channel_order(slow2)[:2]) == ["scaled", "rack"]
+    checked = set(restored.view_manager.get(0).checked)
+    assert (fast2, "torque") in checked
+    assert (slow2, "rack") in checked
+
+
+def test_fewer_mat_groups_do_not_load_the_file_twice(
+    qapp, qtbot, tmp_path, monkeypatch,
+):
+    from mf4_analyzer.signal.channel_recipe import make_single
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    mat = tmp_path / "eps.mat"
+    proj = tmp_path / "eps.tlproj"
+    _write_split_mat(mat)
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window._load_one(str(mat))
+    slow = _fid_with(window, "rack")
+    fast = _fid_with(window, "torque")
+    window._apply_channel_edits(
+        slow, {}, set(), [make_single("scaled", "Nm", "scale", "rack", 2.0)],
+    )
+    window.navigator.set_checked_channels([(fast, "torque"), (slow, "rack")])
+    assert window.save_project(proj) is True
+
+    _write_split_mat(mat, include_slow=False)
+    warnings = _capture_warnings(monkeypatch)
+    restored = MainWindow()
+    qtbot.addWidget(restored)
+    restored.open_project(proj)
+    assert len(restored.files) == 1
+    only = next(iter(restored.files.values()))
+    assert "torque" in only.channels
+    assert "rack" not in only.channels
+    assert only.fs == pytest.approx(100.0)
+    health = restored._project_restore_health
+    assert health.degraded
+    assert health.missing_paths == []
+    assert health.missing_sources
+    assert "已不存在" in warnings[0][2]
+    assert (next(iter(restored.files)), "torque") in restored.view_manager.get(0).checked
+
+
+def test_block_reorder_roundtrip_keeps_the_split_source_recipe(
+    qapp, qtbot, tmp_path, monkeypatch,
+):
+    from mf4_analyzer.signal.channel_recipe import make_single
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    mat = tmp_path / "eps.mat"
+    csv_path = tmp_path / "aux.csv"
+    proj = tmp_path / "moved.tlproj"
+    _write_split_mat(mat)
+    _write_eps_csv(csv_path)
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window._load_one(str(mat))
+    window._load_one(str(csv_path))
+    slow = _fid_with(window, "rack")
+    window._apply_channel_edits(
+        slow, {}, set(), [make_single("scaled", "Nm", "scale", "rack", 2.0)],
+    )
+    mat_fids = [
+        fid for fid, fd in window.files.items() if fd.filepath.suffix == ".mat"
+    ]
+    csv_fid = next(
+        fid for fid, fd in window.files.items() if fd.filepath.suffix == ".csv"
+    )
+    assert window.navigator_order.move_file_block([csv_fid], mat_fids, "before")
+    window.navigator.project_file_order(window.navigator_order.file_fids())
+    assert window.save_project(proj) is True
+
+    warnings = _capture_warnings(monkeypatch)
+    restored = MainWindow()
+    qtbot.addWidget(restored)
+    restored.open_project(proj)
+    assert warnings == []
+    order = [
+        restored.files[fid].filepath.suffix
+        for fid in restored.navigator_order.file_fids()
+    ]
+    assert order[0] == ".csv"
+    slow2 = _fid_with(restored, "rack")
+    assert restored.files[slow2].fs == pytest.approx(50.0)
+    assert "scaled" in restored.files[slow2].channels
+    assert not restored._project_session_is_dirty()
+
+
+def test_legacy_same_name_groups_do_not_replay_onto_a_guess(
+    qapp, qtbot, tmp_path, monkeypatch,
+):
+    """An old project with no group id and identical channel names stays unverified."""
+    import pandas as pd
+    from mf4_analyzer.io.loader import DataLoader
+    from mf4_analyzer.signal.channel_recipe import make_single
+    from mf4_analyzer.ui.main_window import MainWindow
+    from mf4_analyzer.ui.project_source_match import UNVERIFIED_SOURCE_REASON
+
+    def group(t0, suffix):
+        return {
+            "data": pd.DataFrame({
+                "Time": [t0, t0 + 0.01],
+                "torque": [1.0, 3.0],
+            }),
+            "channels": ["Time", "torque"],
+            "units": {"torque": "Nm"},
+            "channel_metadata": {},
+            "source_metadata": {"source_kind": "hdf"},
+            "label_suffix": suffix,
+        }
+
+    calls = {"n": 0}
+
+    def load(_fp):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return [group(0.0, "A"), group(1.0, "B")]
+        return [group(1.0, "B"), group(0.0, "A")]
+
+    monkeypatch.setattr(DataLoader, "load_hdf", staticmethod(load))
+    dummy = tmp_path / "double.hdf"
+    dummy.write_bytes(b"")
+    proj = tmp_path / "legacy.tlproj"
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window._load_one(str(dummy))
+    second = next(fid for fid, fd in window.files.items() if fd.label_suffix == "B")
+    window._apply_channel_edits(
+        second, {}, set(), [make_single("scaled", "Nm", "scale", "torque", 2.0)],
+    )
+    window.files[second].rebuild_time_axis(80.0, reason="manual")
+    assert window.save_project(proj) is True
+    raw = json.loads(proj.read_text(encoding="utf-8"))
+    for row in raw["files"]:
+        row.pop("source_group", None)
+    proj.write_text(json.dumps(raw), encoding="utf-8")
+
+    warnings = _capture_warnings(monkeypatch)
+    before = calls["n"]
+    restored = MainWindow()
+    qtbot.addWidget(restored)
+    restored.open_project(proj)
+    assert calls["n"] == before + 1
+    assert len(restored.files) == 2
+    assert all("scaled" not in fd.channels for fd in restored.files.values())
+    assert all(fd.fs == pytest.approx(100.0) for fd in restored.files.values())
+    health = restored._project_restore_health
+    assert health.degraded
+    assert health.unverified_sources
+    assert any(
+        item[2] == UNVERIFIED_SOURCE_REASON for item in health.skipped_channel_edits
+    )
+    assert warnings
+    assert "来源对应关系无法确认" in warnings[0][2]
+    assert "未回放派生通道" in warnings[0][2]
+    assert "未套用采样率设置" in warnings[0][2]

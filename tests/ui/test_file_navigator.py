@@ -1036,6 +1036,21 @@ def test_channel_tree_file_order_uses_whole_physical_file_block(qapp, qtbot):
     assert captured == [(["f0", "f1"], ["f2"], "after")]
 
 
+def test_tree_reorder_inside_one_physical_file_is_a_noop(qapp, qtbot):
+    """Two logical sources of one file cannot be swapped from the navigator."""
+    source = "C:/data/grouped.hdf"
+    nav = _shown_file_nav(
+        qtbot,
+        ("f0", FakeFd(filepath=source, label_suffix="1 kHz")),
+        ("f1", FakeFd(filepath=source, label_suffix="2 kHz")),
+        ("f2", FakeFd(filename="other.csv")),
+    )
+    before = nav.ordered_file_fids()
+    with qtbot.assertNotEmitted(nav.file_order_requested):
+        nav._on_tree_file_order_requested("f1", "f0", "before")
+    assert nav.ordered_file_fids() == before
+
+
 def test_file_list_unknown_or_malformed_mime_is_ignored(qapp, qtbot):
     nav = _shown_file_nav(qtbot, ("f0", FakeFd()), ("f1", FakeFd()))
     last = _pos_on_row(nav._ordered_file_rows()[-1], after=True)
