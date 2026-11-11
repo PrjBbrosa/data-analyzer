@@ -1,7 +1,7 @@
 # 项目恢复按逻辑来源身份对应：优化计划
 
 - 日期：2026-11-10。
-- 状态：**待执行。** 本文只有证据与方案，未改任何产品代码。
+- 状态：**T0–T6 已实施**（2026-11-11）。offscreen Qt 上的聚焦用例与边界护栏通过。没有用真实 EPS 文件，也没有在 macOS 前台或 Windows 冻结包上验收。
 - 源码基线：`c5ed18a38bd1afffc164ceda0b3e377ce2347aab`（`main`，TraceLab v8.4.6，已含 PR #36 的通道编辑随项目保存）。
 - 问题：一个物理文件拆成多个逻辑来源时，项目重开是**按位置**把保存的来源行对应到重新加载出来的组。位置一旦对不上，这一行上挂的所有东西都落到别的来源上：派生通道配方、采样率、时间轴来源、通道顺序、View 与分析引用。
 - 推荐路线：**项目里给每个来源行存组身份，重开时按身份对应，不按位置。** 身份复用批处理已有的那一套。对不上身份时只在证据唯一的情况下推断；确认不了的来源，不把会改变数值的状态落上去，并明确告知。
@@ -71,20 +71,21 @@ P3 里两组的长度与 dt 都没变，按这套身份可以正确对应。
 
 ### D3 重开时的对应规则
 
-按物理路径分桶，每条路径只加载一次。桶内用一个不依赖 Qt 的纯函数做对应，依次三级：
+按物理路径分桶，每条路径只加载一次。桶内用一个不依赖 Qt 的纯函数做对应，按下面的顺序：
 
 1. **身份相同。** 保存的 `source_group` 等于某个已加载组的身份。
 2. **证据唯一。** 对剩下的来源行与组，用项目里已经存着的事实找候选：
    - 该行保存的加载器通道名必须全部存在于候选组。加载器通道名 = `channel_order` 里的名字，去掉该行配方产生的名字，加上该行配方删除的名字。
    - 仍有多个候选时，看保存的 `fs` 是否等于候选组从文件得到的采样率。只在该行 `time_source` 不是 `manual` / `generated` 时使用这一条。
    - 只有当剩下的行与组之间存在**唯一**的一一对应时才采用。没有可用证据（例如很旧的项目没有 `channel_order`）不算唯一。
-3. **无法确认。** 剩下的行与组数量相等时按相对位置对应，并标记为「未确认」。数量不等时，多出来的行视为「来源已不存在」，不再第二次加载文件；多出来的组留在会话里，没有引用。
+3. **只剩一行一组。** 这一组就是这个文件本身，按已确认处理：回放配方、套用保存的采样率，不提示。单来源文件改了列、或很旧的项目没有 `channel_order`，都走这里。实施时补上这一级，否则单来源项目会被误报成「无法确认」，配方的真实跳过原因也出不来。
+4. **无法确认。** 还剩下不止一个来源时，数量相等就按相对位置对应，并标记为「未确认」。数量不等时，多出来的行视为「来源已不存在」，不再第二次加载文件；多出来的组留在会话里，没有引用。
 
 第 2 级沿用了仓库里已有的做法：旧 WWT 通道绑定也是在「现场可证明」时才迁移。
 
 ### D4 不同级别带回什么
 
-| 状态 | 身份相同 / 证据唯一 | 未确认 |
+| 状态 | 身份相同 / 证据唯一 / 只剩一行一组 | 未确认 |
 | --- | --- | --- |
 | View、分析、Board 的来源引用 | 带回 | 按位置带回 |
 | 通道顺序 | 带回 | 按位置带回 |
@@ -171,6 +172,17 @@ P3 里两组的长度与 dt 都没变，按这套身份可以正确对应。
 
 - 重跑 T0–T4 的 owner 文件各一次并记录退出码；`git diff --check`。
 - 回填本文状态行与实测结果。
+
+实施时的门禁（都是退出码 0，offscreen Qt）：
+
+- `tests/test_project_source_match.py`、`tests/test_project_io.py`、`tests/test_source_adapters.py`、`tests/test_batch_source_integration.py`、`tests/test_batch_render_import_boundary.py`、`tests/test_native_import_boundaries.py`
+- `tests/ui/test_project_session.py`（含 T0 的四个新节点和既有的 HDF / WWT / 通道编辑往返）
+- `tests/ui/test_file_navigator.py::test_tree_reorder_inside_one_physical_file_is_a_noop`
+- `tests/ui/test_project_dirty_guard.py::test_channel_edit_marks_dirty_and_reopen_without_skips_is_clean`
+- `tests/ui/test_main_window_state_ownership.py`、`tests/ui/test_no_lambda_signal_connections.py`、`tests/ui/test_import_boundaries.py`
+- `git diff --check`
+
+没有跑全量套件。真实 EPS 文件、macOS 前台和 Windows 冻结包仍未验收。
 
 ## 6. 验收矩阵
 

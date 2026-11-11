@@ -207,6 +207,8 @@ class ProjectFileRestoreResult:
     missing_old_fids: list[str] = field(default_factory=list)
     timebase_notices: list[str] = field(default_factory=list)
     skipped_channel_edits: list = field(default_factory=list)
+    unverified_sources: list[str] = field(default_factory=list)
+    missing_sources: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -225,6 +227,8 @@ class ProjectRestoreHealth:
     timebase_notices: list[str] = field(default_factory=list)
     skipped_channel_edits: list = field(default_factory=list)
     dropped_channel_edit_refs: list = field(default_factory=list)
+    unverified_sources: list[str] = field(default_factory=list)
+    missing_sources: list[str] = field(default_factory=list)
     degraded: bool = False
 
     def clear(self) -> None:
@@ -235,6 +239,8 @@ class ProjectRestoreHealth:
         self.timebase_notices.clear()
         self.skipped_channel_edits.clear()
         self.dropped_channel_edit_refs.clear()
+        self.unverified_sources.clear()
+        self.missing_sources.clear()
         self.degraded = False
 
     def adopt_restore(
@@ -246,13 +252,17 @@ class ProjectRestoreHealth:
         dropped_analysis_refs=(),
         timebase_notices=(),
         skipped_channel_edits=(),
+        unverified_sources=(),
+        missing_sources=(),
     ) -> None:
         """Replace health from one restore pass and set ``degraded`` accordingly.
 
         Time-base notices are reported, but they are not missing-file
         degradation: the project file is left unchanged and ranges are not
         rescaled. Skipped channel-edit recipes are degradation: saving would
-        otherwise freeze the missing derived channels.
+        otherwise freeze the missing derived channels. An unconfirmed
+        logical source is degradation for the same reason: saving would
+        freeze a pairing the file did not prove.
         """
         self.missing_paths = list(missing_paths or ())
         self.missing_old_fids = list(missing_old_fids or ())
@@ -261,12 +271,16 @@ class ProjectRestoreHealth:
         self.timebase_notices = list(timebase_notices or ())
         self.skipped_channel_edits = list(skipped_channel_edits or ())
         self.dropped_channel_edit_refs = []
+        self.unverified_sources = list(unverified_sources or ())
+        self.missing_sources = list(missing_sources or ())
         self.degraded = bool(
             self.missing_paths
             or self.missing_old_fids
             or self.dropped_time_refs
             or self.dropped_analysis_refs
             or self.skipped_channel_edits
+            or self.unverified_sources
+            or self.missing_sources
         )
 
 

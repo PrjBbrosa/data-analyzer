@@ -731,6 +731,37 @@ def test_channel_edits_roundtrip_bumps_only_edited_projects(tmp_path):
     assert loaded.files[0].channel_edits == [recipe]
 
 
+def test_source_group_roundtrips_without_a_schema_bump(tmp_path):
+    path = tmp_path / "grouped.tlproj"
+    doc = _doc()
+    doc.files[0].source_group = "root"
+    pio.save_project_to_json(doc, path)
+    plain = json.loads(path.read_text(encoding="utf-8"))
+    assert plain["schema_version"] == 4
+    assert "source_group" not in plain["files"][0]
+    assert pio.load_project_from_json(path).files[0].source_group == ""
+
+    identity = "mat:length=100:dt=0x1.999999999999ap-7"
+    doc.files[0].source_group = identity
+    pio.save_project_to_json(doc, path)
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    assert raw["schema_version"] == 4
+    assert raw["files"][0]["source_group"] == identity
+    loaded = pio.load_project_from_json(path)
+    assert loaded.files[0].source_group == identity
+    assert pio.project_document_to_payload(loaded)["files"] == raw["files"]
+    assert pio.canonical_project_digest(loaded) == pio.canonical_project_digest(
+        pio.load_project_from_json(path)
+    )
+
+    legacy = dict(raw)
+    legacy["files"] = [dict(raw["files"][0])]
+    legacy["files"][0].pop("source_group")
+    legacy_path = tmp_path / "legacy.tlproj"
+    legacy_path.write_text(json.dumps(legacy), encoding="utf-8")
+    assert pio.load_project_from_json(legacy_path).files[0].source_group == ""
+
+
 def test_schema_above_channel_edits_is_rejected(tmp_path):
     path = tmp_path / "future.tlproj"
     path.write_text(json.dumps({"schema_version": 6, "files": []}), encoding="utf-8")

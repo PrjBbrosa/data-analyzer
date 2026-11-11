@@ -226,6 +226,10 @@ class ProjectFileRef:
     channel_order: list[str] = field(default_factory=list)
     time_axis_provenance: dict | None = None
     channel_edits: list = field(default_factory=list)
+    # Logical-source identity inside one physical file. Empty for a
+    # single-source file (``root``) and for projects saved before the
+    # field existed. Older readers ignore the key.
+    source_group: str = ""
 
 
 @dataclass
@@ -254,41 +258,42 @@ def project_document_to_payload(doc: ProjectDocument) -> dict:
         ),
         "active_file": doc.active_file,
         "current_mode": doc.current_mode,
-        "files": [
-            {
-                "fid": r.fid,
-                "path_abs": r.path_abs,
-                "path_rel": r.path_rel,
-                "fs": float(r.fs),
-                "time_source": r.time_source,
-                "time_axis_provenance": getattr(
-                    r, "time_axis_provenance", None,
-                ),
-                "dbc_refs": [
-                    {
-                        "path_abs": d.path_abs,
-                        "path_rel": d.path_rel,
-                    }
-                    for d in getattr(r, "dbc_refs", [])
-                ],
-                "channel_order": [
-                    str(name) for name in (getattr(r, "channel_order", None) or [])
-                    if str(name).strip()
-                ],
-                **(
-                    {"channel_edits": list(r.channel_edits)}
-                    if getattr(r, "channel_edits", None)
-                    else {}
-                ),
-            }
-            for r in doc.files
-        ],
+        "files": [_file_ref_to_json(r) for r in doc.files],
         "views": [_retire_view_display_fields(view) for view in doc.views],
         "view_manager": doc.view_manager,
         "analysis_views": doc.analysis_views,
         "filter": doc.filter,
         "ultraview": doc.ultraview,
     }
+
+
+def _file_ref_to_json(ref: ProjectFileRef) -> dict:
+    payload = {
+        "fid": ref.fid,
+        "path_abs": ref.path_abs,
+        "path_rel": ref.path_rel,
+        "fs": float(ref.fs),
+        "time_source": ref.time_source,
+        "time_axis_provenance": getattr(ref, "time_axis_provenance", None),
+        "dbc_refs": [
+            {
+                "path_abs": d.path_abs,
+                "path_rel": d.path_rel,
+            }
+            for d in getattr(ref, "dbc_refs", [])
+        ],
+        "channel_order": [
+            str(name) for name in (getattr(ref, "channel_order", None) or [])
+            if str(name).strip()
+        ],
+    }
+    group = str(getattr(ref, "source_group", "") or "").strip()
+    if group and group != "root":
+        payload["source_group"] = group
+    edits = getattr(ref, "channel_edits", None)
+    if edits:
+        payload["channel_edits"] = list(edits)
+    return payload
 
 
 def canonical_project_digest(source) -> str:
@@ -396,6 +401,7 @@ def load_project_from_json(path) -> ProjectDocument:
                 if isinstance(f.get("channel_edits"), list)
                 else []
             ),
+            source_group=str(f.get("source_group") or "").strip(),
         )
         for f in raw.get("files", [])
     ]

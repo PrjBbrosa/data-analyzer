@@ -13,9 +13,13 @@ from mf4_analyzer.io.source_adapters import (
     LoadedSource,
     SourceAdapterRegistry,
     SourceDescriptor,
+    SourceIdentityError,
     SourceUnavailableError,
     UnsupportedSourceFormatError,
     bind_extension_runtime,
+    group_identities,
+    group_identity,
+    stamp_group_identities,
 )
 from tests._helpers.mf4_factory import (
     write_signal_groups_mf4,
@@ -642,3 +646,34 @@ def test_mdf_probe_and_load_share_time_collision_names(tmp_path):
     assert probed.units["Time [0:1]"] == "Nm"
     assert fd.channel_units["Time [0:1]"] == "Nm"
     assert fd.channel_metadata["t"]["physical_occurrence"] == (0, 3)
+
+
+def test_public_group_identity_keeps_the_format_strings():
+    wwt = group_identity("wwt", _group(t0=0.0))
+    assert wwt.startswith("wwt:n=2:dt=") and "t0=" in wwt
+    assert group_identity("zfd", _group(t0=0.0)).startswith("zfd:count=2:dt=")
+    assert "t0=" not in group_identity("zfd", _group(t0=0.0))
+    assert group_identity("mat", _group(t0=0.0)).startswith("mat:length=2:dt=")
+    hdf = dict(_group(t0=0.0))
+    hdf["channel_metadata"] = {"sig": {"raster_factor": 2}}
+    assert group_identity("hdf", hdf).startswith("hdf:raster_factor=2:n=2:")
+    assert group_identities("wwt", [_group(t0=0.0), _group(t0=1.0)])[0] != (
+        group_identities("wwt", [_group(t0=0.0), _group(t0=1.0)])[1]
+    )
+
+
+def test_duplicate_group_identity_is_rejected_and_not_stamped():
+    groups = [_group(t0=0.0), _group(t0=0.0, label="other")]
+    with pytest.raises(SourceIdentityError, match="duplicate group identity"):
+        stamp_group_identities("wwt", groups)
+    assert "group_id" not in groups[0]["source_metadata"]
+    assert "group_id" not in groups[1]["source_metadata"]
+
+
+def test_batch_duplicate_group_identity_still_names_the_file(monkeypatch):
+    monkeypatch.setattr(DataLoader, "load_wwt", staticmethod(lambda _path: [
+        _group(t0=0.0), _group(t0=0.0),
+    ]))
+    adapter = SourceAdapterRegistry.default().adapter_for("run.wwt")
+    with pytest.raises(SourceIdentityError, match=r"run\.wwt returned duplicate group identity"):
+        adapter.load_sources("run.wwt")
