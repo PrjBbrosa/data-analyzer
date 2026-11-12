@@ -24,7 +24,7 @@ Published guide entry points:
 
 ## Current Product Baseline
 
-The current baseline is TraceLab 8.4.6. It retains the 7.6 ASCII (`.asc`),
+The current baseline is TraceLab 8.4.7. It retains the 7.6 ASCII (`.asc`),
 NI TDMS (`.tdms`), and the original 12-View expansion (time-domain is now 24
 Views; the four analysis sections stay at 12), as well as the native WinWert
 (`.wwt`), ZFGE2/TestRunPRO (`.zfd`), and MATLAB (`.mat`) imports introduced
@@ -162,6 +162,13 @@ collisions. Canvas clicks still change only the editing focus.
 8.4.6 preserves safely readable import channels with visible diagnostics, keeps
 original tabular gaps, and fixes analysis result ownership, FFT-time error
 feedback, View presentation and pinned-cursor teardown callbacks.
+8.4.7 saves channel-editor derivations and deletions with the project and
+replays them from the current source data on reopen. Projects that contain
+channel edits are written as schema 5 and need this version or newer; projects
+without edits stay schema 4. When one file splits into multiple logical
+sources, restore matches sample rate, channel order, and edit recipes by group
+identity. If that identity cannot be confirmed, those edits and the saved
+sample rate are left unapplied and the user is told.
 Update the published guides when these behaviours change; preserve each loader's
 timing and unit boundaries instead of describing inferred metadata as measured
 truth.

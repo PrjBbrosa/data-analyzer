@@ -1,7 +1,7 @@
 @echo off
 setlocal
 
-set "APPNAME=TraceLab8.4.6"
+set "APPNAME=TraceLab8.4.7"
 if not "%~1"=="" set "APPNAME=%~1"
 
 set "REPO_ROOT=%~dp0.."
