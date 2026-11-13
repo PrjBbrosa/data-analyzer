@@ -12,7 +12,11 @@ from PyQt5.QtWidgets import QApplication, QPushButton, QWidget
 
 from mf4_analyzer.ui.chart_stack.ultraview.viewport_router import ViewportGestureRouter
 from mf4_analyzer.ui.ultraview_state import add_ref, make_ref, set_layout
-from tests.ui.test_ultraview_page import _Harness, _prepare_free_grid
+from tests.ui.test_ultraview_page import (
+    _Harness,
+    _blank_board_point,
+    _prepare_free_grid,
+)
 
 
 _START_KINDS = ("template_card", "template_grid", "free_card", "free_grid", "viewport")
@@ -89,8 +93,9 @@ def test_middle_pan_continues_across_canvas_children(qtbot, kind):
 def test_middle_pan_survives_stale_foreign_active_window(qtbot, qapp):
     """Capture tests leave parentless shown widgets as activeWindow.
 
-    The router must still begin a pan on the UltraView card; WindowDeactivate
-    already uninstalls when a real foreign window takes the session.
+    setActiveWindow() can deliver WindowDeactivate without moving
+    QGuiApplication.focusWindow(). Routing stays installed and effective
+    for that leftover. A real focus-window change is what suspends it.
     """
     leftover = QWidget()
     leftover.resize(64, 48)
@@ -329,3 +334,168 @@ def test_page_keeps_exactly_one_installed_viewport_router(qtbot):
     routers = harness.page.findChildren(ViewportGestureRouter)
     assert len(routers) == 1
     assert routers[0]._installed is True
+
+
+def _send_wheel(widget, *, angle: QPoint, pixel: QPoint, modifiers) -> None:
+    pos = widget.rect().center()
+    QApplication.sendEvent(
+        widget,
+        QWheelEvent(
+            QPointF(pos),
+            QPointF(widget.mapToGlobal(pos)),
+            pixel,
+            angle,
+            Qt.NoButton,
+            modifiers,
+            Qt.NoScrollPhase,
+            False,
+        ),
+    )
+
+
+def _scroll_midpoint(page):
+    page.set_board_zoom(2.0)
+    scroll = page.board_scroll_area()
+    horizontal = scroll.horizontalScrollBar()
+    vertical = scroll.verticalScrollBar()
+    assert horizontal.maximum() > 200
+    assert vertical.maximum() > 200
+    horizontal.setValue(max(120, horizontal.maximum() // 2))
+    vertical.setValue(max(120, vertical.maximum() // 2))
+    return scroll, horizontal, vertical
+
+
+def test_shift_wheel_scrolls_horizontally_by_the_vertical_step(qtbot):
+    harness = _Harness(qtbot)
+    page = harness.page
+    card, _move = _target(harness, qtbot, "free_card")
+    _scroll, horizontal, vertical = _scroll_midpoint(page)
+    viewport = page.board_scroll_area().viewport()
+    origin_h = horizontal.value()
+    origin_v = vertical.value()
+    zoom = page.board_zoom()
+
+    _send_wheel(viewport, angle=QPoint(0, 120), pixel=QPoint(0, 0), modifiers=Qt.NoModifier)
+    plain_dh = horizontal.value() - origin_h
+    plain_dv = vertical.value() - origin_v
+    assert plain_dh == 0
+    assert plain_dv != 0
+    assert abs(plain_dv) < vertical.pageStep()
+
+    horizontal.setValue(origin_h)
+    vertical.setValue(origin_v)
+    _send_wheel(card, angle=QPoint(0, 120), pixel=QPoint(0, 0), modifiers=Qt.ShiftModifier)
+    assert vertical.value() == origin_v
+    assert horizontal.value() - origin_h == plain_dv
+    assert page.board_zoom() == zoom
+
+
+def test_pixel_delta_wheel_scrolls_both_axes(qtbot):
+    harness = _Harness(qtbot)
+    page = harness.page
+    card, _move = _target(harness, qtbot, "free_card")
+    _scroll, horizontal, vertical = _scroll_midpoint(page)
+    origin_h = horizontal.value()
+    origin_v = vertical.value()
+    zoom = page.board_zoom()
+    sign = -1 if vertical.invertedControls() else 1
+    _send_wheel(
+        card,
+        angle=QPoint(0, 0),
+        pixel=QPoint(36, -18),
+        modifiers=Qt.NoModifier,
+    )
+    assert horizontal.value() - origin_h == sign * 36
+    assert vertical.value() - origin_v == sign * -18
+    assert page.board_zoom() == zoom
+
+
+def test_pan_move_without_buttons_cancels_and_keeps_scroll(qtbot):
+    harness = _Harness(qtbot)
+    page = harness.page
+    _scroll, horizontal, vertical = _scroll_midpoint(page)
+    widget = page.board_scroll_area().viewport()
+    start = widget.rect().center()
+    QTest.mousePress(widget, Qt.MiddleButton, pos=start)
+    assert page.is_board_panning()
+    before = (horizontal.value(), vertical.value())
+    end = start + QPoint(-80, 30)
+    _send_move(widget, widget.mapToGlobal(end), buttons=Qt.NoButton)
+    assert not page.is_board_panning()
+    assert (horizontal.value(), vertical.value()) == before
+
+
+def test_right_press_during_left_pan_cancels_without_scrolling(qtbot):
+    harness = _Harness(qtbot)
+    page = harness.page
+    page.set_board_zoom(2.0)
+    widget = page.board_scroll_area().viewport()
+    widget.setFocus(Qt.OtherFocusReason)
+    QTest.keyPress(widget, Qt.Key_Space)
+    start = widget.rect().center()
+    QTest.mousePress(widget, Qt.LeftButton, pos=start)
+    assert page.is_board_panning()
+    horizontal = page.board_scroll_area().horizontalScrollBar()
+    before = horizontal.value()
+    QTest.mousePress(widget, Qt.RightButton, pos=start + QPoint(8, 4))
+    assert not page.is_board_panning()
+    assert horizontal.value() == before
+    QTest.keyRelease(widget, Qt.Key_Space)
+
+
+def test_ungrab_cancels_an_open_pan_without_scrolling(qtbot):
+    harness = _Harness(qtbot)
+    page = harness.page
+    _scroll, horizontal, _vertical = _scroll_midpoint(page)
+    widget = page.board_scroll_area().viewport()
+    QTest.mousePress(widget, Qt.MiddleButton, pos=widget.rect().center())
+    assert page.is_board_panning()
+    before = horizontal.value()
+    QApplication.sendEvent(widget, QEvent(QEvent.UngrabMouse))
+    assert not page.is_board_panning()
+    assert horizontal.value() == before
+
+
+def test_marquee_move_without_buttons_cancels_and_keeps_placements(qtbot):
+    harness = _Harness(qtbot)
+    free, _cards = _prepare_free_grid(harness, qtbot, "lost-marquee")
+    before = tuple(
+        (
+            item.ref.section,
+            item.ref.view_id,
+            item.rect.column,
+            item.rect.row,
+            item.rect.column_span,
+            item.rect.row_span,
+        )
+        for item in free.current_placements()
+    )
+    pos = _blank_board_point(free)
+    QTest.mousePress(free, Qt.LeftButton, Qt.NoModifier, pos)
+    assert free.gesture().marquee() is not None
+    far = QPoint(pos.x() + 80, pos.y() + 40)
+    QApplication.sendEvent(
+        free,
+        QMouseEvent(
+            QEvent.MouseMove,
+            far,
+            free.mapToGlobal(far),
+            Qt.NoButton,
+            Qt.NoButton,
+            Qt.NoModifier,
+        ),
+    )
+    assert free.gesture().marquee() is None
+    assert not free.gesture().is_armed()
+    after = tuple(
+        (
+            item.ref.section,
+            item.ref.view_id,
+            item.rect.column,
+            item.rect.row,
+            item.rect.column_span,
+            item.rect.row_span,
+        )
+        for item in free.current_placements()
+    )
+    assert after == before

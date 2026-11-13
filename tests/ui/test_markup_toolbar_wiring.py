@@ -16,7 +16,8 @@ tool buttons); appearance beyond that is left to real-render checks.
 """
 import pytest
 
-from PyQt5.QtGui import QColor, QPixmap
+from PyQt5.QtCore import QEvent, QPoint, Qt
+from PyQt5.QtGui import QColor, QHoverEvent, QKeySequence, QPixmap
 from PyQt5.QtWidgets import (
     QAbstractButton,
     QMenu,
@@ -73,6 +74,7 @@ EXPECTED_BUTTONS = [
     ("markupColor_059669", "", True, False),
     ("markupColor_2563eb", "", True, False),
     ("markupColor_111827", "", True, False),
+    ("markupMoreColorsButton", "更多颜色…", False, False),
     ("markupWidth_2", "", True, False),
     ("markupWidth_4", "", True, True),
     ("markupWidth_6", "", True, False),
@@ -92,11 +94,11 @@ EXPECTED_BUTTONS = [
 ]
 
 EXPECTED_TOOLTIPS = {
-    "markupCloseButton": "关闭 (Esc)",
+    "markupCloseButton": "关闭（有未完成标注时会确认）",
     "markupStyleButton": "样式（颜色 / 线宽） · [ ] 调线宽",
     "markupUndoButton": "撤销 (Ctrl+Z)",
     "markupRedoButton": "重做 (Ctrl+Y)",
-    "markupTool_select": "选择 (S)",
+    "markupTool_select": "选择 (V)",
     "markupTool_crop": "裁剪 (C)",
     "markupTool_arrow": "箭头 (A)",
     "markupTool_line": "直线 (L)",
@@ -110,6 +112,7 @@ EXPECTED_TOOLTIPS = {
     "markupColor_059669": "绿色",
     "markupColor_2563eb": "蓝色",
     "markupColor_111827": "黑色",
+    "markupMoreColorsButton": "更多颜色…",
     "markupWidth_2": "2px",
     "markupWidth_4": "4px",
     "markupWidth_6": "6px",
@@ -328,3 +331,127 @@ def test_style_menu_is_a_transparent_shell_around_the_rounded_panel(editor, styl
 
 def test_style_button_opens_the_menu_on_instant_popup(editor):
     assert editor._style_button.popupMode() == QToolButton.InstantPopup
+
+
+# ---------------------------------------------------------------------------
+# D-M4: one shortcut table, distinguishable button states
+# ---------------------------------------------------------------------------
+
+def _shortcut_letter(tooltip: str) -> str:
+    opened = tooltip.rfind("(")
+    assert opened >= 0 and tooltip.endswith(")"), tooltip
+    letter = tooltip[opened + 1:-1]
+    assert letter.isascii() and letter.isalnum() and letter == letter.upper(), tooltip
+    return letter
+
+
+@pytest.mark.parametrize("tool", MarkupEditor.TOOLS)
+def test_tooltip_key_is_the_key_that_selects_the_tool(editor, qtbot, tool):
+    """The letter in the tooltip is the key that switches to that tool.
+
+    ``select`` used to advertise S while V was the key that actually selected
+    it. Both strings have to come from the same table, so this stays true for
+    every tool, not only the one that was wrong.
+    """
+    letter = _shortcut_letter(editor._tool_buttons[tool].toolTip())
+    editor.set_tool("number" if tool != "number" else "select")
+    editor.show()
+    qtbot.keyClick(editor._view, getattr(Qt, f"Key_{letter}"))
+    assert editor._tool == tool, (
+        f"{tool} tooltip says {letter} but that key left the tool as {editor._tool}"
+    )
+
+
+def test_color_palette_ends_with_more_colors(style_panel):
+    color_row = style_panel.layout().itemAt(0).layout()
+    widgets = [
+        color_row.itemAt(index).widget() for index in range(color_row.count())
+    ]
+    assert widgets[-1].text() == "更多颜色…"
+    assert widgets[-1].objectName() == "markupMoreColorsButton"
+    assert [widget.objectName() for widget in widgets[:-1]] == [
+        "markupColor_e53935",
+        "markupColor_f97316",
+        "markupColor_eab308",
+        "markupColor_059669",
+        "markupColor_2563eb",
+        "markupColor_111827",
+    ]
+
+
+def test_one_shortcut_table_feeds_tooltips_and_keys(editor, qtbot):
+    from mf4_analyzer.ui.markup.toolbar import TOOL_SHORTCUTS
+
+    assert tuple(tool for tool, _key, _label in TOOL_SHORTCUTS) == editor.TOOLS
+    assert len({key for _tool, key, _label in TOOL_SHORTCUTS}) == len(TOOL_SHORTCUTS)
+    for tool, key, label in TOOL_SHORTCUTS:
+        letter = QKeySequence(key).toString(QKeySequence.PortableText)
+        assert editor._tool_buttons[tool].toolTip() == f"{label} ({letter})"
+        editor.set_tool("number" if tool != "number" else "select")
+        editor.show()
+        qtbot.keyClick(editor._view, key)
+        assert editor._tool == tool
+
+
+def _button_fill(button):
+    """Sample the chip fill, clear of the rounded corner and the glyph."""
+    image = button.grab().toImage()
+    ratio = float(image.devicePixelRatio() or 1.0)
+    x = min(image.width() - 1, max(0, int(round(4 * ratio))))
+    y = min(image.height() - 1, max(0, int(round(button.height() * ratio / 2.0))))
+    return QColor(image.pixel(x, y))
+
+
+def test_selected_and_hover_tool_buttons_render_different_fills(qapp, qtbot):
+    """Selected is a solid accent fill; hover is a light fill.
+
+    Offscreen pixels check the stylesheet states. They are not foreground
+    visual acceptance.
+    """
+    from mf4_analyzer.ui_kit.stylesheet import load_stylesheet
+
+    previous_sheet = qapp.styleSheet()
+    previous_style = qapp.style().objectName()
+    try:
+        qapp.setStyle("Fusion")
+        load_stylesheet(qapp)
+        editor = MarkupEditor(_pixmap())
+        qtbot.addWidget(editor)
+        editor.resize(960, 640)
+        editor.show()
+        qtbot.waitExposed(editor)
+        qapp.processEvents()
+
+        selected_button = editor._tool_buttons["select"]
+        assert selected_button.isChecked()
+        selected = _button_fill(selected_button)
+
+        editor.set_tool("rect")
+        qapp.processEvents()
+        assert not selected_button.isChecked()
+        idle = _button_fill(selected_button)
+        selected_button.setAttribute(Qt.WA_UnderMouse, True)
+        qapp.sendEvent(
+            selected_button,
+            QHoverEvent(
+                QEvent.HoverEnter,
+                selected_button.rect().center(),
+                QPoint(-1, -1),
+            ),
+        )
+        selected_button.update()
+        qapp.processEvents()
+        hovered = _button_fill(selected_button)
+    finally:
+        qapp.setStyleSheet(previous_sheet)
+        qapp.setStyle(previous_style)
+
+    assert selected != hovered
+    assert hovered != idle
+    # Solid accent (#1769E0): dark red, strong blue.
+    assert selected.red() < 80 and selected.blue() > 180, selected.name()
+    # Light fill (#e8f1ff family), not the idle white chip.
+    assert hovered.red() > 200 and hovered.green() > 210 and hovered.blue() > 220, (
+        hovered.name()
+    )
+    assert hovered.blue() > hovered.red() + 12, hovered.name()

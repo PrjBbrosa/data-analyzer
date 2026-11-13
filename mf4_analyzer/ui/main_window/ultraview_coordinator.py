@@ -43,6 +43,7 @@ from ..ultraview_state import (
 )
 from ..ultraview_edits import SelectionMutationPlan
 from ..chart_stack.ultraview.author_tools import (
+    AuthorNudgeIntent,
     SelectionDeleteIntent,
     SelectionNudgeIntent,
 )
@@ -1164,6 +1165,8 @@ class UltraViewCoordinator(QObject):
         return self._workspace_controller._on_author_create(intent)
 
     def _on_author_update(self, intent) -> None:
+        if isinstance(intent, AuthorNudgeIntent):
+            return self._workspace_controller._on_author_batch(intent)
         return self._workspace_controller._on_author_update(intent)
 
     def _on_author_delete(self, intent) -> None:

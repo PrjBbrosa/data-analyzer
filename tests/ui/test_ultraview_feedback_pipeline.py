@@ -10,8 +10,16 @@ from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication, QWidget
 
 from mf4_analyzer.ui.chart_stack.ultraview.elastic_workspace import EDGE_PAN_BAND_PX
+from mf4_analyzer.ui.chart_stack.ultraview.free_grid import translated_move_rect
 from mf4_analyzer.ui.chart_stack.ultraview.viewport_feedback import ViewportFeedbackSurface
 from mf4_analyzer.ui.chart_stack.ultraview.widgets import FreeGridBoard
+
+from tests.ui.test_ultraview_gesture_coalesce import (
+    _prepare_board,
+    _press,
+    _release,
+    _send_move,
+)
 
 from tests.ui.test_ultraview_page import (
     _Harness,
@@ -412,3 +420,78 @@ def test_pointer_coalesce_timer_is_constructed_in_feedback_controller():
         for item in class_node.body
     )
     assert [ast.unparse(base) for base in class_node.bases] == ["QWidget"]
+
+
+# Measured before D-U4: a 60 px east drag from column 0 commits one micro-cell.
+_FROZEN_60PX_COMMIT = (1, 0, 8, 6)
+
+
+def test_pixel_follow_does_not_replan_and_release_keeps_the_snapped_commit(
+    qtbot, monkeypatch
+):
+    board = _prepare_board(qtbot, "follow-commit")
+    card = board.card_for("time", "follow-commit")
+    assert card is not None
+    emits: list[tuple] = []
+
+    def _capture(*args):
+        emits.append(args)
+
+    board.geometry_requested.connect(_capture)
+    plan_calls = _wrap_plan_layout(monkeypatch)
+    present_calls: list[object] = []
+    overlay = board.ghost_overlay()
+    real_present = overlay._present
+
+    def _wrapped_present(*args, **kwargs):
+        present_calls.append(args[0] if args else kwargs.get("dirty"))
+        return real_present(*args, **kwargs)
+
+    overlay._present = _wrapped_present
+    start = QPoint(40, 36)
+    threshold = QApplication.startDragDistance()
+    _press(card, start)
+    ghost_xs: list[int] = []
+    highlight_ids: list[tuple[int, int, int, int]] = []
+    offsets: list[tuple[int, int]] = []
+    for step in range(1, 61):
+        local = QPoint(start.x() + step, start.y())
+        _send_move(card, local)
+        QApplication.processEvents()
+        ghost = overlay._ghost_rect
+        if step < threshold:
+            assert ghost is None
+            continue
+        assert ghost is not None and overlay._highlights
+        ghost_xs.append(ghost.x())
+        highlight_ids.append(
+            (
+                overlay._highlights[0].x(),
+                overlay._highlights[0].y(),
+                overlay._highlights[0].width(),
+                overlay._highlights[0].height(),
+            )
+        )
+        pointer = card.mapTo(board, local)
+        offsets.append((pointer.x() - ghost.x(), pointer.y() - ghost.y()))
+    assert offsets and all(item == offsets[0] for item in offsets)
+    assert ghost_xs == [ghost_xs[0] + index for index in range(len(ghost_xs))]
+    assert len(set(highlight_ids)) < len(highlight_ids)
+    assert len(plan_calls) == len(set(highlight_ids))
+    assert len(present_calls) == len(plan_calls)
+    assert len(plan_calls) < 60
+    session = board.gesture().session()
+    assert session is not None
+    assert session.candidate == translated_move_rect(
+        session.origin, (60, 0), board.metrics()
+    )
+    frozen = (
+        session.candidate.column,
+        session.candidate.row,
+        session.candidate.column_span,
+        session.candidate.row_span,
+    )
+    assert frozen == _FROZEN_60PX_COMMIT
+    _release(card, QPoint(start.x() + 60, start.y()))
+    QApplication.processEvents()
+    assert emits == [("time", "follow-commit", 1, 0, 8, 6, "drag-move")]

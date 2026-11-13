@@ -4,7 +4,13 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+from PyQt5.QtCore import QEvent, QPoint, QPointF, Qt
+from PyQt5.QtGui import QMouseEvent, QWheelEvent
+from PyQt5.QtTest import QTest
+from PyQt5.QtWidgets import QApplication
+
 from mf4_analyzer.ui.chart_stack.ultraview.viewport_controller import ViewportController
+from tests.ui.test_ultraview_page import _Harness
 
 
 ULTRAVIEW_ROOT = (
@@ -81,6 +87,61 @@ def test_page_composes_one_viewport_controller():
         "cancel",
         "zoom_fit",
         "handle_zoom_wheel",
+        "handle_scroll_wheel",
+        "abandon_board_pan",
         "fit_on_open",
         "begin_board_pan",
     } <= public
+
+
+def test_update_board_pan_without_buttons_does_not_scroll(qtbot):
+    harness = _Harness(qtbot)
+    page = harness.page
+    page.set_board_zoom(2.0)
+    scroll = page.board_scroll_area()
+    horizontal = scroll.horizontalScrollBar()
+    horizontal.setValue(max(40, horizontal.maximum() // 2))
+    widget = scroll.viewport()
+    start = widget.rect().center()
+    QTest.mousePress(widget, Qt.MiddleButton, pos=start)
+    assert page.is_board_panning()
+    before = horizontal.value()
+    end = start + QPoint(-70, 20)
+    event = QMouseEvent(
+        QEvent.MouseMove,
+        QPointF(end),
+        QPointF(widget.mapToGlobal(end)),
+        Qt.NoButton,
+        Qt.NoButton,
+        Qt.NoModifier,
+    )
+    page._viewport_ctrl.update_board_pan(event)
+    assert not page.is_board_panning()
+    assert horizontal.value() == before
+
+
+def test_controller_shift_wheel_does_not_move_the_vertical_bar(qtbot):
+    harness = _Harness(qtbot)
+    page = harness.page
+    page.set_board_zoom(2.0)
+    scroll = page.board_scroll_area()
+    horizontal = scroll.horizontalScrollBar()
+    vertical = scroll.verticalScrollBar()
+    horizontal.setValue(max(80, horizontal.maximum() // 2))
+    vertical.setValue(max(80, vertical.maximum() // 2))
+    origin_h = horizontal.value()
+    origin_v = vertical.value()
+    pos = QPointF(scroll.viewport().rect().center())
+    event = QWheelEvent(
+        pos,
+        pos,
+        QPoint(0, 0),
+        QPoint(0, 120),
+        Qt.NoButton,
+        Qt.ShiftModifier,
+        Qt.NoScrollPhase,
+        False,
+    )
+    assert page._viewport_ctrl.handle_scroll_wheel(event) is True
+    assert vertical.value() == origin_v
+    assert horizontal.value() != origin_h

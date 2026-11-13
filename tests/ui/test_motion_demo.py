@@ -494,3 +494,37 @@ def test_s06_logs_open_intent_without_touching_other_samples(demo_window, qtbot)
     demo_window.reset_demo()
     assert not demo_window.sample_s06.isVisible()
     assert demo_window.sample_s06.motion_policy() == POLICY_OFF
+
+
+def test_send_event_window_deactivate_hides_sample_and_snaps(demo_window, qtbot):
+    from PyQt5.QtCore import QEvent
+
+    demo_window.set_motion_policy(POLICY_LIGHT)
+    demo_window.sample_s07.request_page("b")
+    assert demo_window.sample_s07._driver.is_active()
+    demo_window.sample_s06_anchor.click()
+    qtbot.waitExposed(demo_window.sample_s06)
+    assert demo_window.sample_s06.isVisible()
+    QApplication.sendEvent(demo_window, QEvent(QEvent.WindowDeactivate))
+    assert not demo_window.sample_s06.isVisible()
+    assert not demo_window.sample_s07._driver.is_active()
+
+
+def test_embedded_demo_focus_window_hides_sample(qtbot):
+    from PyQt5.QtGui import QWindow
+    from PyQt5.QtWidgets import QWidget
+
+    from mf4_analyzer.ui.motion_demo import MotionDemoWindow
+
+    host = QWidget()
+    qtbot.addWidget(host)
+    window = MotionDemoWindow(host)
+    host.resize(900, 700)
+    host.show()
+    qtbot.wait(20)
+    assert not window.isWindow()
+    window.sample_s06_anchor.click()
+    qtbot.waitExposed(window.sample_s06)
+    assert window.sample_s06.isVisible()
+    window._on_focus_window_changed(QWindow())
+    assert not window.sample_s06.isVisible()

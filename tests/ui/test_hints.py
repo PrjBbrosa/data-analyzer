@@ -419,8 +419,9 @@ def test_markup_capabilities_is_markup_scoped_ship_now_discovery():
     assert hint.scope == "markup"
     assert hint.surface == "discovery"
     assert hint.ship == "now"
-    assert "箭头移动标注" in hint.text
-    assert "双击编辑文本" in hint.text
+    assert "按下即画" in hint.text
+    assert "Esc" in hint.text
+    assert "Ctrl+Enter" in hint.text
 
 
 def test_time_drop_hints_stay_in_budget_and_time_scoped():

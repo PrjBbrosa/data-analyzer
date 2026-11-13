@@ -181,8 +181,14 @@ def candidate_resize(
     )
 
 
-HANDLE_HIT_PX = 8
+HANDLE_OUTER_PX = 6
+HANDLE_INNER_PX = 6
+HANDLE_CORNER_PX = 14
 HANDLE_VISUAL_PX = 6
+HANDLE_SHORT_SIDE_PX = 48
+HANDLE_INNER_MIN_PX = 4
+# Outward reach of an edge band. Corners extend half of HANDLE_CORNER_PX.
+HANDLE_HIT_PX = HANDLE_OUTER_PX
 HANDLE_NAMES = ("nw", "n", "ne", "w", "e", "sw", "s", "se")
 _HANDLE_WEST = frozenset({"w", "nw", "sw"})
 _HANDLE_EAST = frozenset({"e", "ne", "se"})
@@ -191,23 +197,51 @@ _HANDLE_SOUTH = frozenset({"s", "sw", "se"})
 _HANDLE_CORNERS = ("nw", "ne", "sw", "se")
 
 
+def handle_inner_px(side: int) -> int:
+    """Inward depth of an edge band for one card side.
+
+    A side of at least 48 px uses 6 px. A shorter side uses one quarter of
+    that side, and never less than 4 px. The outward band stays 6 px.
+    """
+    length = max(0, int(side))
+    if length < HANDLE_SHORT_SIDE_PX:
+        return max(HANDLE_INNER_MIN_PX, length // 4)
+    return HANDLE_INNER_PX
+
+
 def handle_hit_rects(
     card_px: Rect, hit: int = HANDLE_HIT_PX
 ) -> dict[str, Rect]:
-    """Axis-aligned hit zones. Corners are ``hit×hit`` and take priority."""
-    x, y, width, height = (int(card_px[0]), int(card_px[1]), int(card_px[2]), int(card_px[3]))
-    zone = max(HANDLE_HIT_PX, int(hit))
-    inner_w = max(1, width - 2 * zone)
-    inner_h = max(1, height - 2 * zone)
+    """Edge-centered hit zones. Corners are 14×14 and take priority.
+
+    Each edge band is centered on the card edge: ``handle_inner_px`` on the
+    inside and ``HANDLE_OUTER_PX`` on the outside. ``hit`` is accepted so
+    existing callers keep working; the band is this contract, not a single
+    inset.
+    """
+    del hit
+    x, y, width, height = (
+        int(card_px[0]),
+        int(card_px[1]),
+        int(card_px[2]),
+        int(card_px[3]),
+    )
+    inner_x = handle_inner_px(width)
+    inner_y = handle_inner_px(height)
+    outer = HANDLE_OUTER_PX
+    corner = HANDLE_CORNER_PX
+    half = corner // 2
+    right = x + width
+    bottom = y + height
     return {
-        "nw": (x, y, zone, zone),
-        "n": (x + zone, y, inner_w, zone),
-        "ne": (x + width - zone, y, zone, zone),
-        "w": (x, y + zone, zone, inner_h),
-        "e": (x + width - zone, y + zone, zone, inner_h),
-        "sw": (x, y + height - zone, zone, zone),
-        "s": (x + zone, y + height - zone, inner_w, zone),
-        "se": (x + width - zone, y + height - zone, zone, zone),
+        "nw": (x - half, y - half, corner, corner),
+        "ne": (right - half, y - half, corner, corner),
+        "sw": (x - half, bottom - half, corner, corner),
+        "se": (right - half, bottom - half, corner, corner),
+        "n": (x + half, y - outer, max(0, width - corner), outer + inner_y),
+        "s": (x + half, bottom - inner_y, max(0, width - corner), inner_y + outer),
+        "w": (x - outer, y + half, outer + inner_x, max(0, height - corner)),
+        "e": (right - inner_x, y + half, inner_x + outer, max(0, height - corner)),
     }
 
 
@@ -228,8 +262,10 @@ def hit_handle(
 
 
 def handle_visual_rects(card_px: Rect, size: int = HANDLE_VISUAL_PX) -> dict[str, Rect]:
+    """6×6 handles centered on the card edge, inside the hit band."""
     x, y, width, height = (int(card_px[0]), int(card_px[1]), int(card_px[2]), int(card_px[3]))
-    half = max(2, int(size)) // 2
+    box = max(2, int(size))
+    half = box // 2
     anchors = {
         "nw": (x, y),
         "n": (x + width // 2, y),
@@ -240,7 +276,6 @@ def handle_visual_rects(card_px: Rect, size: int = HANDLE_VISUAL_PX) -> dict[str
         "s": (x + width // 2, y + height),
         "se": (x + width, y + height),
     }
-    box = max(2, int(size))
     return {
         name: (ax - half, ay - half, box, box) for name, (ax, ay) in anchors.items()
     }

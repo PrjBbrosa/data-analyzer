@@ -12,10 +12,12 @@ from typing import Any, Mapping, Sequence
 import math
 import time
 
+from PyQt5 import sip
 from PyQt5.QtCore import QEvent, QPoint, QRect, QSize, QTimer, Qt, pyqtSignal
 from PyQt5.QtGui import (
     QContextMenuEvent,
     QCursor,
+    QGuiApplication,
     QKeyEvent,
     QKeySequence,
     QMouseEvent,
@@ -396,6 +398,11 @@ class UltraViewPage(QWidget):
         self._prev_unplaced_count: int | None = None
         self._prev_layout_fingerprint: tuple[str, str] | None = None
         self._viewport_ctrl: ViewportController | None = None
+        # Set by deactivation cleanup. The gesture router stays installed
+        # while the page is visible; this flag is what makes it ignore new
+        # pans and zooms until focus returns or the page is shown again.
+        self._gesture_host_inactive = False
+        self._deactivation_cleanup_depth = 0
         self._rebasing_extent = False
         self._pending_viewport_restore: dict[str, float] | None = None
         # The extent is deliberately page-local session state.  Placements are
@@ -919,7 +926,8 @@ class UltraViewPage(QWidget):
         if self._already_wired("viewport_router"):
             return
         # Single ViewportGestureRouter is constructed in __init__. Install /
-        # uninstall stay on showEvent / hideEvent / changeEvent.
+        # uninstall stay on showEvent / hideEvent. Deactivation leaves the
+        # filter installed and marks the host inactive instead.
         if self._viewport_ctrl is not None:
             self._viewport_ctrl.connect()
 
@@ -955,6 +963,11 @@ class UltraViewPage(QWidget):
         app = QApplication.instance()
         if app is not None:
             app.focusChanged.connect(self._on_app_focus_changed)
+        # QApplication is the QGuiApplication. Alt-Tab changes the focus
+        # window without delivering WindowDeactivate to a child page.
+        gui_app = QGuiApplication.instance()
+        if gui_app is not None:
+            gui_app.focusWindowChanged.connect(self._on_focus_window_changed)
 
     def board_switcher(self) -> BoardSwitcher:
         return self._switcher
@@ -2799,11 +2812,15 @@ class UltraViewPage(QWidget):
     def _viewport_router_is_active(self) -> bool:
         """Limit QApplication gesture routing to a shown Board host.
 
-        ``activeWindow()`` is not part of this predicate. Offscreen tests and
-        leftover parentless widgets (capture fakes) can remain the session's
-        active window after they should have gone away; a real foreign window
-        already causes ``WindowDeactivate`` to uninstall the filter.
+        ``activeWindow()`` / ``isActiveWindow()`` are not part of this
+        predicate. Offscreen tests and leftover parentless widgets (capture
+        fakes) can remain the session's active window after they should have
+        gone away. The router stays installed while this page is visible.
+        Deactivation cleanup marks the host inactive so new gestures are
+        ignored until focus returns to this window or the page is shown.
         """
+        if self._gesture_host_inactive:
+            return False
         return bool(self.isVisible() and self._canvas_host.isVisible())
 
     def _on_app_focus_changed(self, _old, now) -> None:
@@ -2825,9 +2842,81 @@ class UltraViewPage(QWidget):
             self.note_space(False)
         # ``now is None`` also fires for transient, non-deactivation reasons
         # (a popup hiding/destroying mid-interaction) and would cancel an
-        # in-progress drag out from under the user.  Real window deactivation
-        # is already covered by changeEvent(WindowDeactivate) and hideEvent,
-        # both of which call _cancel_board_gestures() themselves.
+        # in-progress drag out from under the user. Real window deactivation
+        # is ``event(WindowDeactivate)`` together with
+        # ``QGuiApplication.focusWindowChanged`` — both call
+        # ``_release_interaction_for_deactivation``. ``changeEvent`` never
+        # sees WindowActivate / WindowDeactivate. hideEvent cancels gestures
+        # when the page itself is hidden.
+
+    def _focus_window_is_ours(self, focus_window) -> bool:
+        """True when *focus_window* is this page's top-level ``QWindow``.
+
+        Both sides being ``None`` counts as ours: an offscreen widget that
+        has not created a native window has no foreign focus window to
+        compare. ``activeWindow()`` is intentionally not consulted.
+        """
+        try:
+            if sip.isdeleted(self):
+                return False
+            host = self.window()
+            if host is None or sip.isdeleted(host):
+                return False
+            return focus_window is host.windowHandle()
+        except (RuntimeError, TypeError):
+            # sip.isdeleted / window() raise once the Python wrapper is gone
+            # or the object is no longer a sip instance.
+            return False
+
+    def _on_focus_window_changed(self, now) -> None:
+        """Clean up when the focus window leaves this page's top-level window.
+
+        The OS delivers WindowDeactivate to the top-level ``event()``, not to
+        a child page. ``focusWindowChanged`` is the path that still runs.
+        """
+        try:
+            if sip.isdeleted(self):
+                return
+        except (RuntimeError, TypeError):
+            # The app signal can fire while this wrapper is being destroyed.
+            return
+        try:
+            visible = self.isVisible()
+        except RuntimeError:
+            return
+        if not visible:
+            return
+        if self._focus_window_is_ours(now):
+            self._gesture_host_inactive = False
+            return
+        self._release_interaction_for_deactivation()
+
+    def _release_interaction_for_deactivation(self) -> None:
+        """Drop in-flight UltraView input. Idempotent.
+
+        Text commit/cancel and shape, connector, and draw drafts are the
+        work ``_cancel_board_gestures`` already owns. Callers must not copy
+        that block beside this function.
+        """
+        self._gesture_host_inactive = True
+        if self._deactivation_cleanup_depth:
+            return
+        self._deactivation_cleanup_depth += 1
+        try:
+            self._cancel_board_gestures()
+            if self._viewport_ctrl is not None:
+                self._viewport_ctrl.hide()
+            self.note_space(False)
+            self._restore_interaction_cursor()
+        finally:
+            self._deactivation_cleanup_depth -= 1
+
+    def _restore_interaction_cursor(self) -> None:
+        self._unset_board_viewport_cursor()
+        try:
+            self._sync_tool_cursor()
+        except RuntimeError:
+            return
 
     def handle_escape(self) -> bool:
         if self._free_grid.sticky_note_widget().is_editing():
@@ -3041,32 +3130,19 @@ class UltraViewPage(QWidget):
 
     def event(self, event) -> bool:  # noqa: N802
         if event.type() == QEvent.WindowDeactivate:
-            self._pointer_router.commit_or_cancel_text_editor()
-            self._text_geometry_session = None
-            self._shape_geometry_session = None
-            self._connector_geometry_session = None
-            if self._interaction.draft() is not None and self._interaction.draft().tool == TOOL_SHAPES:
-                self._interaction.cancel_draft()
-                self._pointer_router.clear_shape_draft_paint()
-            if self._interaction.draft() is not None and self._interaction.draft().tool == TOOL_CONNECTOR:
-                self._interaction.cancel_draft()
-                self._pointer_router.clear_connector_draft_paint()
-            if self._interaction.draft() is not None and self._interaction.draft().tool == TOOL_DRAW:
-                self._interaction.cancel_draft()
-                self._pointer_router.clear_draw_draft_paint()
+            self._release_interaction_for_deactivation()
+            # setActiveWindow() delivers WindowDeactivate without moving
+            # QGuiApplication.focusWindow(). A parentless leftover can become
+            # activeWindow while this window is still the focus window;
+            # routing stays effective in that offscreen case. A real loss has
+            # already moved focusWindow, or follows as focusWindowChanged.
+            if self._focus_window_is_ours(QGuiApplication.focusWindow()):
+                self._gesture_host_inactive = False
         return super().event(event)
-
-    def changeEvent(self, event) -> None:  # noqa: N802
-        if event.type() == QEvent.WindowDeactivate:
-            self._viewport_router.uninstall()
-            self._viewport_ctrl.hide()
-            self._cancel_board_gestures()
-        elif event.type() == QEvent.WindowActivate:
-            self._viewport_router.install()
-        super().changeEvent(event)
 
     def showEvent(self, event) -> None:  # noqa: N802
         super().showEvent(event)
+        self._gesture_host_inactive = False
         self._viewport_router.install()
 
     def hideEvent(self, event) -> None:  # noqa: N802

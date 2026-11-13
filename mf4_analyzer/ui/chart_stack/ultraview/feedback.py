@@ -27,6 +27,7 @@ DISPLACED_OFFSCREEN = "displaced_offscreen"
 DISPLACE_PREVIEW = "displace_preview"
 REMOVE_ACTION = "remove_action"
 AUTHOR_LOCKED = "author_locked"
+AUTHOR_SNAPPED_ENDPOINT = "author_snapped_endpoint"
 
 COPY: dict[str, str] = {
     CONTINUE_EXPAND: "继续拖动可扩展画布",
@@ -43,6 +44,7 @@ COPY: dict[str, str] = {
     DISPLACE_PREVIEW: "让位 {n} 张",
     REMOVE_ACTION: "从当前 Board 移除（不删除源 View）",
     AUTHOR_LOCKED: "对象已锁定，不能移动、缩放或删除",
+    AUTHOR_SNAPPED_ENDPOINT: "连线端点已吸附，拖动主体不会移动",
 }
 
 # Accessible names match the toast unless a control needs a longer label.
@@ -61,6 +63,7 @@ ACCESSIBLE: dict[str, str] = {
     DISPLACE_PREVIEW: COPY[DISPLACE_PREVIEW],
     REMOVE_ACTION: COPY[REMOVE_ACTION],
     AUTHOR_LOCKED: COPY[AUTHOR_LOCKED],
+    AUTHOR_SNAPPED_ENDPOINT: COPY[AUTHOR_SNAPPED_ENDPOINT],
 }
 
 REASON_TO_KEY: dict[LayoutRejectReason, str] = {

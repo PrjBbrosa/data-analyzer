@@ -554,7 +554,7 @@ _HINTS = (
     ),
     Hint(
         id="markup.capabilities",
-        text="箭头移动标注 · 双击编辑文本 · 单键切换工具",
+        text="按下即画 · 空格平移 · Esc 逐级退出 · Ctrl+Enter 完成复制",
         surface="discovery",
         scope="markup",
         retire_on="markup_open",
@@ -1162,7 +1162,7 @@ _HINTS = (
     ),
     Hint(
         id="ultraview.multiselect",
-        text="多选可对齐分布，Ctrl+D 复制",
+        text="框选含自由对象，拖已选一起移动",
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=81,
@@ -1239,7 +1239,7 @@ _HINTS = (
     ),
     Hint(
         id="ultraview.pan",
-        text="左键框选，右键拖动画布，四向可平移",
+        text="左键框选，右键拖，四向，Shift+滚轮横向",
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=89,

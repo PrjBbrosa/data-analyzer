@@ -13,7 +13,9 @@ import sys
 import tempfile
 from pathlib import Path
 
+from PyQt5 import sip
 from PyQt5.QtCore import QEvent, QObject, QSettings, Qt
+from PyQt5.QtGui import QGuiApplication
 from PyQt5.QtWidgets import (
     QApplication,
     QButtonGroup,
@@ -437,7 +439,9 @@ class MotionDemoWindow(QWidget):
         self.setObjectName("motionDemoWindow")
         self.setWindowTitle(f"{APP_NAME} 原生交互动效样板")
         self._policy = POLICY_OFF
+        self._focus_window_connected = False
         self._build()
+        self._connect_focus_window_deactivate()
 
     def motion_policy(self) -> MotionPolicy:
         return self._policy
@@ -942,20 +946,58 @@ class MotionDemoWindow(QWidget):
         if not target.isChecked():
             target.setChecked(True)
 
-    def changeEvent(self, event) -> None:
+    def event(self, event) -> bool:  # noqa: N802
         if event.type() == QEvent.WindowDeactivate:
-            self._apply_sample_policies(self._policy)
-            if self.sample_s06.isVisible():
-                self.sample_s06.hide()
-            self.sample_s07.snap_to_end()
-        super().changeEvent(event)
+            self._release_samples_for_deactivation()
+        return super().event(event)
 
     def hideEvent(self, event) -> None:
+        self._release_samples_for_deactivation()
+        super().hideEvent(event)
+
+    def _release_samples_for_deactivation(self) -> None:
+        """Stop sample motion when this window is no longer active."""
         self._apply_sample_policies(self._policy)
         if self.sample_s06.isVisible():
             self.sample_s06.hide()
         self.sample_s07.snap_to_end()
-        super().hideEvent(event)
+
+    def _connect_focus_window_deactivate(self) -> None:
+        if self._focus_window_connected:
+            return
+        app = QGuiApplication.instance()
+        if app is None:
+            return
+        app.focusWindowChanged.connect(self._on_focus_window_changed)
+        self._focus_window_connected = True
+
+    def _on_focus_window_changed(self, now) -> None:
+        try:
+            if sip.isdeleted(self):
+                return
+        except (RuntimeError, TypeError):
+            # The app signal can fire while this wrapper is being destroyed.
+            return
+        try:
+            if self.isWindow() or not self.isVisible():
+                return
+        except RuntimeError:
+            return
+        if self._focus_window_is_ours(now):
+            return
+        self._release_samples_for_deactivation()
+
+    def _focus_window_is_ours(self, focus_window) -> bool:
+        try:
+            if sip.isdeleted(self):
+                return False
+            host = self.window()
+            if host is None or sip.isdeleted(host):
+                return False
+            return focus_window is host.windowHandle()
+        except (RuntimeError, TypeError):
+            # sip.isdeleted / window() raise once the wrapper is gone.
+            return False
 
     def closeEvent(self, event) -> None:
         if self.sample_s06.isVisible():

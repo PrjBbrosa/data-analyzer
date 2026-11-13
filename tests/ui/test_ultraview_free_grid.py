@@ -15,7 +15,6 @@ from mf4_analyzer.ui.chart_stack.ultraview.free_grid import (
     GRID_MIN_VISIBLE_ROWS,
     GRID_ROW_HEIGHT,
     GRID_SPARE_ROWS,
-    HANDLE_HIT_PX,
     LAYOUT_MOVE,
     LAYOUT_RESIZE,
     LAYOUT_ARRANGE,
@@ -586,18 +585,69 @@ def test_group_move_out_of_bounds_ghost_stays_a_rigid_translation():
     assert ghosts[0][0] + ghosts[0][2] <= ghosts[1][0]
 
 
-def test_handle_hit_zones_are_at_least_eight_px_and_corners_win():
+def _rect_corners(rect: tuple[int, int, int, int]) -> tuple[tuple[int, int], ...]:
+    x, y, width, height = rect
+    return (
+        (x, y),
+        (x + width - 1, y),
+        (x, y + height - 1),
+        (x + width - 1, y + height - 1),
+    )
+
+
+def test_handle_hit_zones_are_centered_on_the_edge_and_corners_win():
+    from mf4_analyzer.ui.chart_stack.ultraview.free_grid import (
+        HANDLE_CORNER_PX,
+        HANDLE_INNER_PX,
+        HANDLE_OUTER_PX,
+        handle_hit_rects,
+        handle_inner_px,
+        handle_visual_rects,
+    )
+
     card = (0, 0, 120, 80)
-    assert HANDLE_HIT_PX >= 8
+    assert HANDLE_OUTER_PX == 6
+    assert HANDLE_INNER_PX == 6
+    assert HANDLE_CORNER_PX == 14
+    assert handle_inner_px(120) == 6
     assert hit_handle(card, (4, 4)) == "nw"
     assert hit_handle(card, (116, 4)) == "ne"
     assert hit_handle(card, (60, 4)) == "n"
     assert hit_handle(card, (116, 40)) == "e"
     assert hit_handle(card, (4, 40)) == "w"
     assert hit_handle(card, (60, 20)) is None
-    east = hit_handle(card, (120 - HANDLE_HIT_PX, 40))
-    assert east == "e"
-    assert hit_handle(card, (120 - HANDLE_HIT_PX - 1, 40)) is None
+    # 4 px inside the east edge, and the outermost pixel of the 6 px outer band.
+    assert hit_handle(card, (120 - 4, 40)) == "e"
+    assert hit_handle(card, (120 + 5, 40)) == "e"
+    assert hit_handle(card, (120 + 6, 40)) is None
+    assert hit_handle(card, (120 - 7, 40)) is None
+    zones = handle_hit_rects(card)
+    assert zones["nw"] == (-7, -7, 14, 14)
+    assert zones["e"][:2] == (114, 7)
+    assert zones["e"][2] == 12
+    for name, visual in handle_visual_rects(card).items():
+        assert visual[2:] == (6, 6)
+        for point in _rect_corners(visual):
+            assert hit_handle(card, point) == name
+
+
+def test_short_card_inner_band_shrinks_to_one_quarter_and_outer_stays_six():
+    from mf4_analyzer.ui.chart_stack.ultraview.free_grid import handle_inner_px
+
+    # Height 34 < 48 → inward band is 34 // 4 == 8; outward stays 6.
+    assert handle_inner_px(34) == 8
+    assert handle_inner_px(16) == 4
+    assert handle_inner_px(48) == 6
+    short = (0, 0, 80, 34)
+    assert hit_handle(short, (40, 7)) == "n"
+    assert hit_handle(short, (40, 8)) is None
+    assert hit_handle(short, (40, -6)) == "n"
+    assert hit_handle(short, (40, -7)) is None
+    narrow = (0, 0, 16, 80)
+    assert hit_handle(narrow, (12, 40)) == "e"
+    assert hit_handle(narrow, (11, 40)) is None
+    assert hit_handle(narrow, (21, 40)) == "e"
+    assert hit_handle(narrow, (22, 40)) is None
 
 
 def test_resize_handle_snaps_clamps_and_keeps_aspect():
@@ -1225,3 +1275,96 @@ def test_board_fit_does_not_mutate_free_grid_placements():
     assert [(item.ref, item.rect) for item in placements] == before
     assert not hasattr(free_grid, "plan_board_fit")
     assert not hasattr(free_grid, "plan_zoom_fit")
+
+
+# Measured on the pre-D-U4 snap path (grid_metrics 1280×800, 60 px east).
+_FROZEN_60PX_COMMIT = (1, 0, 8, 6)
+
+
+def test_move_ghost_follows_each_pixel_and_commit_stays_snapped():
+    """D-U4: the snapshot follows the pointer; release still uses the snapped cell."""
+    metrics = grid_metrics((1280, 800), [])
+    origin = GridRect(0, 0, 4, 3)
+    placements = [_placement("a", origin)]
+    ref = make_ref("time", "a")
+    gesture = FreeGridGesture()
+    press = (30, 40)
+    threshold = 10
+    gesture.press(ref, origin, press, (20, 18))
+    origin_px = rect_to_pixels(origin, metrics)
+    ghosts = []
+    highlight_changes = []
+    previous_cell = None
+    previous_highlight = None
+    session = None
+    for step in range(61):
+        pos = (press[0] + step, press[1])
+        session = gesture.update(
+            pos, metrics, placements, start_drag_distance=threshold
+        )
+        assert session is not None
+        ghost = session.ghost_pixels(metrics, pos)
+        highlight = session.highlight_pixels(metrics)
+        ghosts.append(ghost)
+        assert (pos[0] - ghost[0], pos[1] - ghost[1]) == (
+            press[0] - origin_px[0],
+            press[1] - origin_px[1],
+        )
+        assert ghost[2:] == origin_px[2:]
+        cell = (
+            session.candidate.column,
+            session.candidate.row,
+            session.candidate.column_span,
+            session.candidate.row_span,
+        )
+        if cell != previous_cell:
+            highlight_changes.append((step, highlight))
+            previous_cell = cell
+        else:
+            assert highlight == previous_highlight
+        previous_highlight = highlight
+    assert session is not None and session.active
+    assert [ghost[0] for ghost in ghosts] == [origin_px[0] + step for step in range(61)]
+    assert [ghost[1] for ghost in ghosts] == [origin_px[1]] * 61
+    first = ghosts[threshold]
+    assert first[:2] == (origin_px[0] + threshold, origin_px[1])
+    assert first[:2] != (press[0] + threshold, press[1])
+    assert len(highlight_changes) < 61
+    assert session.candidate == translated_move_rect(origin, (60, 0), metrics)
+    assert (
+        session.candidate.column,
+        session.candidate.row,
+        session.candidate.column_span,
+        session.candidate.row_span,
+    ) == _FROZEN_60PX_COMMIT
+    assert session.plan is not None and session.plan.accepted
+    assert session.plan.committed_updates() == ((ref, session.candidate),)
+
+
+def test_displaced_card_preview_stays_on_the_snapped_outline():
+    metrics = grid_metrics((1280, 800), [])
+    origin = GridRect(0, 0, 4, 3)
+    other = GridRect(6, 0, 4, 3)
+    placements = [_placement("a", origin), _placement("b", other)]
+    gesture = FreeGridGesture()
+    gesture.press(make_ref("time", "a"), origin, (10, 10), (10, 10))
+    unit = metrics.column_width + metrics.gutter
+    delta = (unit * 6 + 17, 0)
+    pos = (10 + delta[0], 10 + delta[1])
+    session = gesture.update(pos, metrics, placements, start_drag_distance=10)
+    assert session is not None and session.plan is not None and session.plan.accepted
+    assert session.plan.displaced_before_after
+    ghosts = session.group_ghost_pixels(metrics, pos)
+    highlights = session.group_highlight_pixels(metrics)
+    refs = session.preview_refs()
+    assert len(ghosts) == len(highlights) == len(refs) >= 2
+    movers = 0
+    for ref, ghost, highlight in zip(refs, ghosts, highlights):
+        if ref in session.group_origins:
+            movers += 1
+            base = rect_to_pixels(session.group_origins[ref], metrics)
+            assert ghost == (base[0] + delta[0], base[1] + delta[1], base[2], base[3])
+            assert ghost != highlight
+        else:
+            assert ghost == highlight
+    assert movers == 1

@@ -9,12 +9,15 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from PyQt5.QtCore import QEvent, QPoint, QSize, Qt
+from PyQt5.QtCore import QEvent, QObject, QPoint, QSize, Qt
+from PyQt5.QtGui import QMouseEvent
 from PyQt5.QtTest import QTest
-from PyQt5.QtWidgets import QApplication, QMessageBox, QToolButton, QWidget
+from PyQt5.QtWidgets import QApplication, QMessageBox, QStackedWidget, QToolButton, QWidget
 
 import mf4_analyzer.ui.chart_stack.ultraview.widgets as ultraview_widgets
+from mf4_analyzer.ui.chart_stack.ultraview.free_grid import handle_visual_rects
 from mf4_analyzer.ui.chart_stack.ultraview.viewport import LOD_FULL, LOD_TITLE_ONLY
+from mf4_analyzer.ui.chart_stack.ultraview.viewport_router import ViewportGestureRouter
 from mf4_analyzer.ui.chart_stack.ultraview.widgets import (
     CardViewModel,
     FreeGridBoard,
@@ -452,6 +455,222 @@ def test_workspace_gesture_signal_has_a_single_active_lifetime(qtbot, qapp):
     assert seen
     assert seen[0][0] is True
     assert seen[-1] == (False, None)
+
+
+def test_right_press_during_left_gesture_cancels_without_changing_the_model(qtbot):
+    from tests.ui.test_ultraview_gesture_preview import (
+        MOVER_BLUE,
+        _placement_signature,
+        _prepare_colored_board,
+    )
+
+    board = _prepare_colored_board(qtbot, ("right-cancel", MOVER_BLUE))
+    card = board.card_for("time", "right-cancel")
+    before = _placement_signature(board)
+    QTest.mousePress(card, Qt.LeftButton, Qt.NoModifier, QPoint(24, 24))
+    assert board.gesture().is_armed()
+    QTest.mousePress(card, Qt.RightButton, Qt.NoModifier, QPoint(30, 30))
+    assert not board.gesture().is_armed()
+    assert board.gesture().session() is None
+    assert _placement_signature(board) == before
+    QTest.mouseRelease(card, Qt.RightButton, Qt.NoModifier, QPoint(30, 30))
+    assert _placement_signature(board) == before
+
+
+class _IdleViewport:
+    def is_panning(self) -> bool:
+        return False
+
+    def pan_button(self) -> int:
+        return int(Qt.LeftButton)
+
+
+def _refuse_pan(*_args):
+    return False
+
+
+def _ignore_pan(*_args) -> None:
+    return None
+
+
+def _text_field_idle() -> bool:
+    return False
+
+
+class _AcceptButtonlessMove(QObject):
+    """Stop the move before a card child can propagate it to the card frame."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.count = 0
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802
+        if event.type() == QEvent.MouseMove and not event.buttons():
+            self.count += 1
+            event.accept()
+            return True
+        return False
+
+
+def _selected_board(qtbot, qapp):
+    _prepare_app(qapp)
+    board = FreeGridBoard()
+    qtbot.addWidget(board)
+    ref = UltraViewRef("time", "view-1")
+    board.set_free_grid(
+        (FreeGridPlacement(ref, GridRect(0, 0, 4, 3)),),
+        {ref: _model()},
+    )
+    board.show()
+    qtbot.waitExposed(board)
+    qapp.processEvents()
+    board.select_only("time", "view-1")
+    qapp.processEvents()
+    card = board.card_for("time", "view-1")
+    assert card is not None and card.model().selected
+    return board, card, ref
+
+
+def _send_buttonless(widget: QWidget, local: QPoint) -> None:
+    QApplication.sendEvent(
+        widget,
+        QMouseEvent(
+            QEvent.MouseMove,
+            local,
+            widget.mapToGlobal(local),
+            Qt.NoButton,
+            Qt.NoButton,
+            Qt.NoModifier,
+        ),
+    )
+
+
+def test_buttonless_move_over_card_children_sets_resize_cursor_without_the_frame(
+    qtbot, qapp
+):
+    board, card, _ref = _selected_board(qtbot, qapp)
+    image = card.findChild(QWidget, "ultraViewCardImage")
+    header = card.findChild(QWidget, "ultraViewCardHeader")
+    footer = card.findChild(QWidget, "ultraViewCardFooter")
+    assert image is not None and header is not None and footer is not None
+    assert image.hasMouseTracking()
+    assert header.hasMouseTracking()
+    assert footer.hasMouseTracking()
+    swallow = _AcceptButtonlessMove()
+    image.installEventFilter(swallow)
+    header.installEventFilter(swallow)
+    footer.installEventFilter(swallow)
+    router = ViewportGestureRouter(
+        canvas_host=board,
+        viewport=_IdleViewport(),
+        begin_pan=_refuse_pan,
+        update_pan=_ignore_pan,
+        end_pan=_refuse_pan,
+        zoom_wheel=_refuse_pan,
+        pinch=_refuse_pan,
+        note_space=_ignore_pan,
+        text_field_has_focus=_text_field_idle,
+        parent=board,
+    )
+    router.install()
+    try:
+        before = board.cursor().shape()
+        assert before == Qt.ArrowCursor
+        east = QPoint(card.width() - 4, card.height() // 2)
+        assert image.geometry().contains(east)
+        _send_buttonless(image, image.mapFrom(card, east))
+        assert board.cursor().shape() == Qt.SizeHorCursor
+        assert image.cursor().shape() == Qt.SizeHorCursor
+        assert not card.testAttribute(Qt.WA_SetCursor)
+        center = QPoint(card.width() // 2, card.height() // 2)
+        _send_buttonless(image, image.mapFrom(card, center))
+        assert board.cursor().shape() == before
+        assert image.cursor().shape() == before
+        north = QPoint(card.width() // 2, 3)
+        assert header.geometry().contains(north)
+        _send_buttonless(header, header.mapFrom(card, north))
+        assert board.cursor().shape() == Qt.SizeVerCursor
+        assert header.cursor().shape() == Qt.SizeVerCursor
+        _send_buttonless(image, image.mapFrom(card, center))
+        assert board.cursor().shape() == before
+        south = QPoint(card.width() // 2, card.height() - 4)
+        assert footer.geometry().contains(south)
+        _send_buttonless(footer, footer.mapFrom(card, south))
+        assert board.cursor().shape() == Qt.SizeVerCursor
+        assert footer.cursor().shape() == Qt.SizeVerCursor
+        _send_buttonless(image, QPoint(-10000, -10000))
+        assert board.cursor().shape() == before
+        assert swallow.count >= 5
+    finally:
+        router.uninstall()
+
+
+def test_bubbled_move_keeps_the_resize_cursor(qtbot, qapp):
+    """An unaccepted move reaches the canvas stack. That must not drop the cursor."""
+    stack = QStackedWidget()
+    stack.setObjectName("ultraViewBoardCanvasStack")
+    qtbot.addWidget(stack)
+    board, card, _ref = _selected_board(qtbot, qapp)
+    stack.addWidget(board)
+    stack.resize(900, 700)
+    stack.show()
+    qapp.processEvents()
+    router = ViewportGestureRouter(
+        canvas_host=stack,
+        viewport=_IdleViewport(),
+        begin_pan=_refuse_pan,
+        update_pan=_ignore_pan,
+        end_pan=_refuse_pan,
+        zoom_wheel=_refuse_pan,
+        pinch=_refuse_pan,
+        note_space=_ignore_pan,
+        text_field_has_focus=_text_field_idle,
+        parent=stack,
+    )
+    router.install()
+    try:
+        east = QPoint(card.width() - 4, card.height() // 2)
+        _send_buttonless(card, east)
+        qapp.processEvents()
+        assert board.cursor().shape() == Qt.SizeHorCursor
+        assert card.cursor().shape() == Qt.SizeHorCursor
+    finally:
+        router.uninstall()
+
+
+def test_press_six_px_outside_selected_card_starts_resize_not_marquee(qtbot, qapp):
+    board, card, ref = _selected_board(qtbot, qapp)
+    geom = card.geometry()
+    outside = QPoint(geom.right() + 6, geom.center().y())
+    assert not geom.contains(outside)
+    QTest.mousePress(board, Qt.LeftButton, Qt.NoModifier, outside)
+    session = board.gesture().session()
+    assert session is not None and session.handle == "e"
+    assert board.gesture().marquee() is None
+    assert ref in board.gesture().selection()
+    assert board.cursor().shape() == Qt.SizeHorCursor
+    QTest.mouseRelease(board, Qt.LeftButton, Qt.NoModifier, outside)
+    assert ref in board.gesture().selection()
+
+
+def test_quarter_zoom_corner_of_the_visible_handle_still_starts_resize(qtbot, qapp):
+    board, card, ref = _selected_board(qtbot, qapp)
+    board.set_zoom(0.25)
+    qapp.processEvents()
+    card = board.card_for("time", "view-1")
+    assert card is not None
+    geom = card.geometry()
+    assert min(geom.width(), geom.height()) < 48
+    box = (geom.x(), geom.y(), geom.width(), geom.height())
+    hx, hy, width, height = handle_visual_rects(box)["se"]
+    corner = QPoint(hx + width - 1, hy + height - 1)
+    assert not geom.contains(corner)
+    QTest.mousePress(board, Qt.LeftButton, Qt.NoModifier, corner)
+    session = board.gesture().session()
+    assert session is not None and session.handle == "se"
+    assert board.gesture().marquee() is None
+    assert ref in board.gesture().selection()
+    QTest.mouseRelease(board, Qt.LeftButton, Qt.NoModifier, corner)
 
 
 if __name__ == "__main__":

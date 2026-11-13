@@ -29,6 +29,8 @@ from .free_grid import (
 )
 
 Rect = tuple[int, int, int, int]
+# Qt.LeftButton, stored as an int so this module stays free of PyQt.
+_LEFT_BUTTON = 1
 
 
 @dataclass
@@ -47,10 +49,27 @@ class GestureSession:
     plan: LayoutPlan | None = None
     layout_revision: int = 0
     plan_reused: bool = False
+    button: int = _LEFT_BUTTON
 
     def ghost_pixels(self, metrics: GridMetrics, pos: tuple[int, int]) -> Rect:
-        rect = self._preview_rect()
-        return rect_to_pixels(rect, metrics)
+        """Follow layer for a move; resize stays on the snapped preview.
+
+        A move keeps the press point inside the card: the snapshot origin is
+        the press-time card rect plus the whole pointer delta, including the
+        distance already travelled when the drag threshold trips. The drop
+        outline stays on ``highlight_pixels``.
+        """
+        if self.handle is not None:
+            return rect_to_pixels(self._preview_rect(), metrics)
+        return self._follow_pixels(self.origin, metrics, pos)
+
+    def _follow_pixels(
+        self, origin: GridRect, metrics: GridMetrics, pos: tuple[int, int]
+    ) -> Rect:
+        base = rect_to_pixels(origin, metrics)
+        dx = int(pos[0]) - int(self.press[0])
+        dy = int(pos[1]) - int(self.press[1])
+        return (base[0] + dx, base[1] + dy, base[2], base[3])
 
     def _preview_rect(self) -> GridRect:
         if self.plan is not None and self.plan.accepted and self.plan.mover_after is not None:
@@ -65,23 +84,40 @@ class GestureSession:
     def group_ghost_pixels(
         self, metrics: GridMetrics, pos: tuple[int, int]
     ) -> tuple[Rect, ...]:
-        """Ghosts for a group gesture — the preview of what release will commit.
+        """Follow-layer snapshots. Drop outlines stay on ``group_highlight_pixels``.
 
-        An out-of-board group drag commits **nothing** (``update`` sets
-        ``plan=None, legal=False``), so the ghost has to keep showing the rigid
-        translation in its reject state.  Clamping each member individually
-        instead drew a squashed, self-overlapping shape that matched neither the
-        pointer nor the outcome (review 2026-08-15 §4.3).
+        Moving cards keep the press point: each bitmap is that card's press-time
+        pixel rect plus the pointer delta. Displaced neighbours stay on the
+        snapped plan rect. Resize keeps the snapped preview, because the span
+        itself is the grid result.
+
+        An out-of-board group drag commits nothing (``plan=None``), so those
+        snapshots stay a rigid pixel translation. Clamping each member on its
+        own drew a squashed shape that matched neither the pointer nor the
+        outcome (review 2026-08-15 §4.3).
         """
+        if self.handle is not None:
+            if self.plan is not None and self.plan.accepted:
+                return tuple(
+                    rect_to_pixels(rect, metrics)
+                    for _ref, rect in self.plan.preview_rects()
+                )
+            return (rect_to_pixels(self._preview_rect(), metrics),)
         if self.plan is not None and self.plan.accepted:
+            rects: list[Rect] = []
+            for ref, grid_rect in self.plan.preview_rects():
+                origin = self.group_origins.get(ref)
+                if origin is not None:
+                    rects.append(self._follow_pixels(origin, metrics, pos))
+                else:
+                    rects.append(rect_to_pixels(grid_rect, metrics))
+            return tuple(rects)
+        if len(self.group_origins) > 1:
             return tuple(
-                rect_to_pixels(rect, metrics) for _ref, rect in self.plan.preview_rects()
+                self._follow_pixels(origin, metrics, pos)
+                for origin in self.group_origins.values()
             )
-        if self.handle is not None or len(self.group_origins) <= 1:
-            return (self.ghost_pixels(metrics, pos),)
-        return tuple(
-            rect_to_pixels(rect, metrics) for rect in self._rigid_group_rects()
-        )
+        return (self._follow_pixels(self.origin, metrics, pos),)
 
     def group_highlight_pixels(self, metrics: GridMetrics) -> tuple[Rect, ...]:
         if self.plan is not None and self.plan.accepted:
@@ -130,6 +166,7 @@ class MarqueeSession:
     origin: tuple[int, int]
     current: tuple[int, int]
     additive: bool = False
+    button: int = _LEFT_BUTTON
 
     def rect(self) -> Rect:
         x0, y0 = self.origin
@@ -152,12 +189,14 @@ class FreeGridGesture:
     _owned_names: ClassVar[tuple[str, ...]] = (
         "_session",
         "_marquee",
+        "_pending_marquee",
         "_plan_fingerprint",
         "_gesture_id",
     )
     _next_gesture_id: ClassVar[int] = 0
     _session: GestureSession | None = field(default=None, init=False)
     _marquee: MarqueeSession | None = field(default=None, init=False)
+    _pending_marquee: MarqueeSession | None = field(default=None, init=False)
     _plan_fingerprint: tuple | None = field(default=None, init=False)
     _gesture_id: int = field(default=0, init=False)
 
@@ -187,9 +226,29 @@ class FreeGridGesture:
 
     def set_selection(self, refs: Iterable[UltraViewRef]) -> None:
         self.interaction.replace_card_selection(refs)
+        self._merge_pending_author_marquee()
 
     def add_to_selection(self, refs: Iterable[UltraViewRef]) -> None:
         self.interaction.add_cards_to_selection(refs)
+        self._merge_pending_author_marquee()
+
+    def _merge_pending_author_marquee(self) -> None:
+        """Add free objects that intersect the marquee the board just finished.
+
+        Card hits stay on the board (widget geometry). Free objects use the
+        same integer intersection rule, resolved through the one selection
+        owner. Shift and replace both land here after the card keys are set.
+        """
+        session = self._pending_marquee
+        self._pending_marquee = None
+        if session is None:
+            return
+        rect = session.rect()
+        if rect[2] < 4 and rect[3] < 4:
+            return
+        hits = self.interaction.author_marquee_hits(rect)
+        if hits:
+            self.interaction.add_to_selection(hits)
 
     def clear_selection(self) -> None:
         self.interaction.clear_card_keys()
@@ -207,6 +266,7 @@ class FreeGridGesture:
 
     def begin_marquee(self, pos: tuple[int, int], additive: bool) -> None:
         point = (int(pos[0]), int(pos[1]))
+        self._pending_marquee = None
         self._marquee = MarqueeSession(
             origin=point, current=point, additive=bool(additive)
         )
@@ -220,11 +280,14 @@ class FreeGridGesture:
     def take_marquee(self) -> MarqueeSession | None:
         session = self._marquee
         self._marquee = None
+        self._pending_marquee = session
         return session
 
     def cancel_marquee(self) -> bool:
+        pending = self._pending_marquee is not None
+        self._pending_marquee = None
         if self._marquee is None:
-            return False
+            return pending
         self._marquee = None
         return True
 
@@ -238,6 +301,7 @@ class FreeGridGesture:
         group_origins: dict[UltraViewRef, GridRect] | None = None,
         layout_revision: int = 0,
     ) -> None:
+        self._pending_marquee = None
         origins = dict(group_origins) if group_origins else {ref: origin}
         type(self)._next_gesture_id += 1
         self._gesture_id = type(self)._next_gesture_id
@@ -360,6 +424,19 @@ class FreeGridGesture:
             session.candidate = session.plan.mover_after
             session.group_candidates[session.ref] = session.plan.mover_after
         return session
+
+    def cancel_lost_button(self, buttons: int) -> bool:
+        """Drop a move or marquee whose button is no longer down. Does not commit."""
+        cancelled = False
+        session = self._session
+        if session is not None and not (int(buttons) & int(session.button)):
+            self.cancel()
+            cancelled = True
+        marquee = self._marquee
+        if marquee is not None and not (int(buttons) & int(marquee.button)):
+            self.cancel_marquee()
+            cancelled = True
+        return cancelled
 
     def cancel(self) -> GestureSession | None:
         session = self._session

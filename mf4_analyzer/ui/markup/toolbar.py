@@ -11,8 +11,10 @@ appending.
 """
 from __future__ import annotations
 
+from functools import partial
+
 from PyQt5.QtCore import QSize, Qt
-from PyQt5.QtGui import QColor
+from PyQt5.QtGui import QColor, QKeySequence
 from PyQt5.QtWidgets import (
     QButtonGroup,
     QGridLayout,
@@ -27,18 +29,36 @@ from PyQt5.QtWidgets import (
 
 import qtawesome as qta
 
-# Tool button labels, keyed by the tool id. The shortcut hint appended to each
-# tooltip is the tool id's first letter (see _build_toolbar).
-_TOOL_LABELS = {
-    "select": "选择",
-    "crop": "裁剪",
-    "arrow": "箭头",
-    "line": "直线",
-    "rect": "矩形",
-    "pen": "画笔",
-    "text": "文字",
-    "number": "序号",
-}
+# One row per tool: id, the key that selects it, and the tooltip label.
+# Tooltips and MarkupEditor.keyPressEvent both read this table. ``select`` is
+# V (the key that switches to it); the label's first letter is not the key.
+TOOL_SHORTCUTS = (
+    ("select", Qt.Key_V, "选择"),
+    ("crop", Qt.Key_C, "裁剪"),
+    ("arrow", Qt.Key_A, "箭头"),
+    ("line", Qt.Key_L, "直线"),
+    ("rect", Qt.Key_R, "矩形"),
+    ("pen", Qt.Key_P, "画笔"),
+    ("text", Qt.Key_T, "文字"),
+    ("number", Qt.Key_N, "序号"),
+)
+
+
+def tool_for_key(key: int):
+    """Return the tool id ``key`` selects, or None when it is not a tool key."""
+    for tool, shortcut, _label in TOOL_SHORTCUTS:
+        if shortcut == key:
+            return tool
+    return None
+
+
+def tool_tooltip(tool: str) -> str:
+    """Tooltip for ``tool``, including the key from ``TOOL_SHORTCUTS``."""
+    for tool_id, shortcut, label in TOOL_SHORTCUTS:
+        if tool_id == tool:
+            letter = QKeySequence(shortcut).toString(QKeySequence.PortableText)
+            return f"{label} ({letter})"
+    raise KeyError(tool)
 
 _PALETTE = (
     ("红色", "#e53935"),
@@ -146,9 +166,9 @@ def build_toolbar(editor) -> QWidget:
     close_btn.setObjectName("markupCloseButton")
     close_btn.setText("")
     close_btn.setIcon(qta.icon("ph.x", color=_CLOSE_GLYPH))
-    close_btn.setToolTip("关闭 (Esc)")
+    close_btn.setToolTip("关闭（有未完成标注时会确认）")
     _toolbar_chip(close_btn)
-    close_btn.clicked.connect(editor.close)
+    close_btn.clicked.connect(editor.request_close)
     left_layout.addWidget(close_btn)
 
     editor._style_button = QToolButton(center_group)
@@ -192,7 +212,7 @@ def build_toolbar(editor) -> QWidget:
         button = QToolButton(center_group)
         button.setText("")
         button.setIcon(editor._tool_icon(tool, active))
-        button.setToolTip(f"{_TOOL_LABELS[tool]} ({tool[0].upper()})")
+        button.setToolTip(tool_tooltip(tool))
         button.setObjectName(f"markupTool_{tool}")
         button.setCheckable(True)
         _toolbar_chip(button)
@@ -293,6 +313,11 @@ def build_style_panel(editor, menu) -> QWidget:
         )
         color_row.addWidget(button)
         editor._color_buttons[color.lower()] = button
+    more_colors = QPushButton("更多颜色…", panel)
+    more_colors.setObjectName("markupMoreColorsButton")
+    more_colors.setToolTip("更多颜色…")
+    more_colors.clicked.connect(partial(_choose_more_color, editor, menu))
+    color_row.addWidget(more_colors)
     outer.addLayout(color_row)
 
     editor._width_buttons = {}
@@ -319,3 +344,8 @@ def build_style_panel(editor, menu) -> QWidget:
     outer.addLayout(width_row)
     editor._sync_style_panel()
     return panel
+
+
+def _choose_more_color(editor, menu, _checked=False) -> None:
+    menu.hide()
+    editor.choose_custom_color()

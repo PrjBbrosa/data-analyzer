@@ -39,7 +39,7 @@ from .laser_cursor import (
     clear_laser_cursor_cache,
     laser_pointer_cursor,
 )
-from .resize_cursors import HANDLE_CURSORS, cursor_for_handle
+from .resize_cursors import cursor_for_handle
 from .feedback import (
     AUTHOR_LOCKED,
     FEEDBACK_DISPLACED_OFFSCREEN,
@@ -511,9 +511,9 @@ class FreeGridBoard(QWidget):
 
     def apply_safety_cursor(self, safety: bool) -> None:
         if safety:
-            self.setCursor(Qt.ForbiddenCursor)
+            self._set_interaction_cursor(QCursor(Qt.ForbiddenCursor))
         elif self.cursor().shape() == Qt.ForbiddenCursor:
-            self.unsetCursor()
+            self._apply_resolved_cursor(self._hover_pos)
 
     def sync_editor_exclusion(self) -> None:
         self._sync_editor_exclusion()
@@ -725,7 +725,7 @@ class FreeGridBoard(QWidget):
     def clear_workspace_edge_hint(self) -> None:
         self._overlay.set_continue_hint()
         if not self.workspace_safety_blocked() and self.cursor().shape() == Qt.ForbiddenCursor:
-            self.unsetCursor()
+            self._apply_resolved_cursor(self._hover_pos)
 
     def reproject_after_viewport_change(self, global_pos: QPoint | None) -> None:
         """Re-resolve the live candidate after a real scroll/extent/origin change.
@@ -990,6 +990,13 @@ class FreeGridBoard(QWidget):
         card.layout_key_requested.connect(self._on_layout_key)
         card.preset_requested.connect(self.preset_requested)
         card.autofit_requested.connect(self.autofit_requested)
+        self._enable_pointer_tracking(card)
+
+    def _enable_pointer_tracking(self, widget: QWidget) -> None:
+        """Buttonless moves are delivered only to widgets that track the mouse."""
+        widget.setMouseTracking(True)
+        for child in widget.findChildren(QWidget):
+            child.setMouseTracking(True)
 
     def _raise_overlay(self) -> None:
         geom = self.rect()
@@ -1225,40 +1232,7 @@ class FreeGridBoard(QWidget):
         self._apply_selection_flags()
 
     def handle_card_mouse_hover(self, card: FreeGridCard, event: QMouseEvent) -> None:
-        board_pos = card.mapTo(self, event.pos())
-        self._hover_pos = QPoint(board_pos)
-        if self._locked_resize_handle:
-            cursor = cursor_for_handle(self._locked_resize_handle)
-            if cursor is not None:
-                card.setCursor(cursor)
-                self.setCursor(cursor)
-            return
-        author_handle = self._selected_author_handle_at(board_pos)
-        if author_handle is not None:
-            cursor = cursor_for_handle(author_handle[0])
-            if cursor is not None:
-                card.setCursor(cursor)
-                self.setCursor(cursor)
-                return
-        if (
-            not card.model().selected
-            or len(self._gesture.selection()) != 1
-            or self._gesture.is_armed()
-        ):
-            card.unsetCursor()
-            self._apply_resolved_cursor(board_pos)
-            return
-        handle = hit_handle(
-            (0, 0, card.width(), card.height()),
-            (event.pos().x(), event.pos().y()),
-        )
-        cursor = HANDLE_CURSORS.get(handle) if handle is not None else None
-        if cursor is None:
-            card.unsetCursor()
-            self._apply_resolved_cursor(board_pos)
-        else:
-            card.setCursor(cursor)
-            self.setCursor(cursor)
+        self.note_buttonless_hover(card, event)
 
     def handle_card_mouse_move(self, card: FreeGridCard, event: QMouseEvent) -> None:
         if not self._gesture.is_armed():
@@ -1384,7 +1358,7 @@ class FreeGridBoard(QWidget):
         clear_laser_cursor_cache()
         self._locked_resize_handle = None
         self._hover_pos = None
-        self.unsetCursor()
+        self._set_interaction_cursor(None)
         self._unset_page_viewport_cursor()
         super().hideEvent(event)
 
@@ -1437,16 +1411,55 @@ class FreeGridBoard(QWidget):
             return laser_pointer_cursor(dpr=_effective_device_pixel_ratio(self))
         return None
 
+    def note_buttonless_hover(self, watched, event: QMouseEvent) -> None:
+        """Resolve one buttonless move in board coordinates and set the cursor."""
+        if not isinstance(event, QMouseEvent) or event.buttons() != Qt.NoButton:
+            return
+        if sip.isdeleted(self):
+            return
+        pos = self._board_point_from_widget(watched, event)
+        if pos is None or not self.rect().contains(pos):
+            self.clear_buttonless_hover()
+            return
+        self._apply_resolved_cursor(pos)
+
+    def clear_buttonless_hover(self) -> None:
+        if (
+            self._locked_resize_handle
+            or self._gesture.is_armed()
+            or self._author.has_geometry_session()
+        ):
+            return
+        self._hover_pos = None
+        self._apply_resolved_cursor(None)
+
+    def _board_point_from_widget(self, watched, event: QMouseEvent) -> QPoint | None:
+        if not isinstance(watched, QWidget) or sip.isdeleted(watched):
+            return None
+        if watched is self:
+            return QPoint(event.pos())
+        if not self.isAncestorOf(watched):
+            return None
+        return watched.mapTo(self, event.pos())
+
+    def _set_interaction_cursor(self, cursor: QCursor | None) -> None:
+        """The only place the board interaction cursor is applied."""
+        for card in self._widgets.values():
+            if sip.isdeleted(card):
+                continue
+            if card.testAttribute(Qt.WA_SetCursor):
+                card.unsetCursor()
+        if cursor is None:
+            self.unsetCursor()
+        else:
+            self.setCursor(cursor)
+
     def _apply_resolved_cursor(self, pos: QPoint | None) -> None:
         if self._port_flag("is_panning") or self._port_flag("space_down"):
             return
         if pos is not None:
             self._hover_pos = QPoint(pos)
-        cursor = self._resolved_cursor(self._hover_pos)
-        if cursor is None:
-            self.unsetCursor()
-        else:
-            self.setCursor(cursor)
+        self._set_interaction_cursor(self._resolved_cursor(self._hover_pos))
 
     def _sync_tool_cursor(self) -> None:
         if self._port_flag("is_panning") or self._port_flag("space_down"):
@@ -1546,6 +1559,10 @@ class FreeGridBoard(QWidget):
             self._author.begin_selected_author_handle(hit, event, event.pos())
             event.accept()
             return
+        if hit.kind == HIT_RESIZE_HANDLE and isinstance(hit.item, CardKey):
+            self._begin_selected_card_resize(hit, event)
+            event.accept()
+            return
         if hit.kind == HIT_AUTHOR:
             if canvas_click is not None:
                 canvas_click()
@@ -1593,9 +1610,7 @@ class FreeGridBoard(QWidget):
                 handle = session.get("handle")
             if handle:
                 self.lock_resize_cursor(str(handle))
-                cursor = cursor_for_handle(str(handle))
-                if cursor is not None:
-                    self.setCursor(cursor)
+                self._apply_resolved_cursor(event.pos())
             return
         if self._gesture.marquee() is not None and (
             event.buttons() & Qt.LeftButton or grabbed
@@ -1613,9 +1628,7 @@ class FreeGridBoard(QWidget):
                 global_pos=event.globalPos(),
             )
             if self._locked_resize_handle:
-                cursor = cursor_for_handle(self._locked_resize_handle)
-                if cursor is not None:
-                    self.setCursor(cursor)
+                self._apply_resolved_cursor(event.pos())
             return
         self._apply_resolved_cursor(event.pos())
         super().mouseMoveEvent(event)
@@ -1838,7 +1851,7 @@ class FreeGridBoard(QWidget):
                     card.unsetCursor()
             self._feedback.clear_displayed_frame(gesture_id or None)
             if self.cursor().shape() == Qt.ForbiddenCursor:
-                self.unsetCursor()
+                self._set_interaction_cursor(None)
             self._sync_selection_handles()
             self._feedback.reset_pointer_state()
             self._emit_workspace_gesture(False)
@@ -2112,6 +2125,10 @@ class FreeGridBoard(QWidget):
             )
             if ref is not None:
                 card_key = CardKey(ref)
+        if handle is None and target is None and card is None:
+            outside = self._selected_card_handle_at(pos)
+            if outside is not None:
+                handle, card_key = outside
         author_hits = () if handle is not None and handle_item is not None else self._author_keys_at(pos)
         hit = resolve_board_hit(
             editor_active=editor_active,
@@ -2123,6 +2140,47 @@ class FreeGridBoard(QWidget):
         )
         self._interaction.set_hover_target(hit.item)
         return hit
+
+    def _begin_selected_card_resize(self, hit: HitTarget, event: QMouseEvent) -> None:
+        """Start a resize from the board, including the outer hit band."""
+        if not isinstance(hit.item, CardKey) or not hit.handle:
+            return
+        ref = hit.item.ref
+        widget = self._widgets.get(ref)
+        placement = self._placements.get(ref)
+        if widget is None or placement is None:
+            return
+        local = widget.mapFrom(self, event.pos())
+        board_pos = self._logical_board_pos((event.pos().x(), event.pos().y()))
+        self.lock_resize_cursor(str(hit.handle))
+        self._gesture.press_resize(
+            ref,
+            placement.rect,
+            str(hit.handle),
+            board_pos,
+            (local.x(), local.y()),
+            layout_revision=self._layout_revision,
+        )
+        self._apply_selection_flags()
+        self._apply_resolved_cursor(event.pos())
+
+    def _selected_card_handle_at(self, pos: QPoint) -> tuple[str, CardKey] | None:
+        """Resize handle of the single selected card, including the outer band."""
+        selected = self._interaction.card_selection()
+        if len(selected) != 1:
+            return None
+        ref = next(iter(selected))
+        widget = self._widgets.get(ref)
+        if widget is None:
+            return None
+        geom = widget.geometry()
+        handle = hit_handle(
+            (geom.x(), geom.y(), geom.width(), geom.height()),
+            (pos.x(), pos.y()),
+        )
+        if handle is None:
+            return None
+        return str(handle), CardKey(ref)
 
     def _selected_author_handle_at(self, pos: QPoint) -> tuple[str, AuthorKey] | None:
         """I3: selected author handles sit above body hits and cards."""

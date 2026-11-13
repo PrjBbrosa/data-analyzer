@@ -1036,3 +1036,24 @@ def test_motion_light_disable_mid_animation_snaps_and_paints_disabled(
     assert pill.geometry() == second.geometry()
     assert _background_at(choice, second) == _token_name("CONTROL_SURFACE_TOP")
     assert _background_at(choice, first) == _token_name("CONTROL_TRACK")
+
+
+def test_send_event_window_deactivate_snaps_indicator(qtbot, qapp):
+    choice = _show_bound_choice(qtbot, qapp)
+    choice.set_motion_policy(POLICY_LIGHT)
+    choice.buttons()[1].click()
+    assert _driver_is_active(choice)
+    qapp.sendEvent(choice, QEvent(QEvent.WindowDeactivate))
+    assert not _driver_is_active(choice)
+
+
+def test_child_focus_window_change_snaps_indicator(qtbot, qapp):
+    from PyQt5.QtGui import QWindow
+
+    _parent, choice = _show_bound_choice_in_parent(qtbot, qapp)
+    choice.set_motion_policy(POLICY_LIGHT)
+    choice.buttons()[1].click()
+    assert _driver_is_active(choice)
+    assert not choice.isWindow()
+    choice._on_focus_window_changed(QWindow())
+    assert not _driver_is_active(choice)

@@ -1163,11 +1163,94 @@ class MainWindow(
     def _open_markup_editor(self, pix):
         if pix is None or pix.isNull():
             return
+        if not self._close_markup_editor_for_reopen():
+            return
         editor = self._create_markup_editor(pix, self._publish_annotated_pixmap)
         self._markup_editor = editor
-        editor.show()
-        editor.raise_()
-        editor.activateWindow()
+        destroyed = getattr(editor, "destroyed", None)
+        connect = getattr(destroyed, "connect", None)
+        if callable(connect):
+            try:
+                connect(self._on_markup_editor_destroyed)
+            except (TypeError, RuntimeError):
+                pass
+        self._present_markup_editor(editor)
+
+    def _markup_editor_alive(self):
+        """Return the open editor, or None when the handle is stale."""
+        editor = getattr(self, "_markup_editor", None)
+        if editor is None:
+            return None
+        try:
+            from PyQt5 import sip
+            if sip.isdeleted(editor):
+                self._markup_editor = None
+                return None
+        except (RuntimeError, TypeError):
+            pass
+        return editor
+
+    def _close_markup_editor_for_reopen(self) -> bool:
+        """Run the existing close confirm. False means the user cancelled."""
+        editor = self._markup_editor_alive()
+        if editor is None:
+            return True
+        request_close = getattr(editor, "request_close", None)
+        if callable(request_close):
+            try:
+                return bool(request_close())
+            except (RuntimeError, TypeError):
+                self._markup_editor = None
+                return True
+        closer = getattr(editor, "close", None)
+        if callable(closer):
+            try:
+                closer()
+            except (RuntimeError, TypeError):
+                self._markup_editor = None
+                return True
+        still = self._markup_editor_alive()
+        if still is None:
+            return True
+        is_visible = getattr(still, "isVisible", None)
+        if not callable(is_visible):
+            return True
+        try:
+            return not bool(is_visible())
+        except (RuntimeError, TypeError):
+            self._markup_editor = None
+            return True
+
+    def _present_markup_editor(self, editor) -> None:
+        """Show the editor and drop the host transient-for link last."""
+        from ..drawers.batch._geometry import present_independent_tool_window
+
+        if callable(getattr(editor, "windowHandle", None)):
+            present_independent_tool_window(editor)
+            return
+        show = getattr(editor, "show", None)
+        if callable(show):
+            show()
+        raiser = getattr(editor, "raise_", None)
+        if callable(raiser):
+            raiser()
+        activate = getattr(editor, "activateWindow", None)
+        if callable(activate):
+            activate()
+
+    def _on_markup_editor_destroyed(self, *_args) -> None:
+        # PyQt emits destroyed with a fresh QWidget wrapper, so sender() is
+        # not the MarkupEditor instance. A deleted handle is stale; a live
+        # replacement must stay.
+        current = getattr(self, "_markup_editor", None)
+        if current is None:
+            return
+        try:
+            from PyQt5 import sip
+            if sip.isdeleted(current):
+                self._markup_editor = None
+        except (RuntimeError, TypeError):
+            pass
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
@@ -5444,11 +5527,14 @@ class MainWindow(
             except Exception:
                 setattr(self, attr, None)
                 return None
-            # Hidden/closing: drop the handle only. Do not close() again —
-            # a second closeEvent can steal the Board page from a newer
-            # sheet. deleteLater stays so a hidden Batch/UltraView dialog
-            # does not leak; destroyed uses identity so it cannot wipe a
-            # replacement handle.
+            # Hidden/closing: return an adopted Board page first, then drop
+            # the handle. Do not close() again — a second closeEvent can
+            # steal the Board page from a newer sheet. deleteLater stays so
+            # a hidden Batch/UltraView dialog does not leak; destroyed uses
+            # identity so it cannot wipe a replacement handle.
+            release = getattr(dlg, "release_page", None)
+            if callable(release):
+                release()
             deleter = getattr(dlg, "deleteLater", None)
             if callable(deleter):
                 try:

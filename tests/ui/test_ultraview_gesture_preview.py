@@ -547,6 +547,57 @@ def test_drag_does_not_freeze_or_clear_card_pixels(qtbot, monkeypatch):
     _release(card, over)
 
 
+def _placement_signature(board) -> tuple:
+    return tuple(
+        (
+            item.ref.section,
+            item.ref.view_id,
+            item.rect.column,
+            item.rect.row,
+            item.rect.column_span,
+            item.rect.row_span,
+        )
+        for item in board.current_placements()
+    )
+
+
+def test_move_without_buttons_cancels_the_gesture_and_keeps_the_model(qtbot):
+    board = _prepare_colored_board(qtbot, ("lost-release", MOVER_BLUE))
+    card = board.card_for("time", "lost-release")
+    before = _placement_signature(board)
+    start = QPoint(24, 24)
+    _press(card, start)
+    assert board.gesture().is_armed()
+    far = QPoint(start.x() + 90, start.y() + 40)
+    event = QMouseEvent(
+        QEvent.MouseMove,
+        far,
+        card.mapToGlobal(far),
+        Qt.NoButton,
+        Qt.NoButton,
+        Qt.NoModifier,
+    )
+    QApplication.sendEvent(card, event)
+    assert not board.gesture().is_armed()
+    assert board.gesture().session() is None
+    assert _placement_signature(board) == before
+    _release(card, far)
+    assert _placement_signature(board) == before
+
+
+def test_cancel_lost_button_drops_the_session_without_committing(qtbot):
+    board = _prepare_colored_board(qtbot, ("lost-button", MOVER_BLUE))
+    card = board.card_for("time", "lost-button")
+    before = _placement_signature(board)
+    _press(card, QPoint(24, 24))
+    gesture = board.gesture()
+    assert gesture.is_armed()
+    assert gesture.cancel_lost_button(0) is True
+    assert gesture.session() is None
+    assert gesture.take() is None
+    assert _placement_signature(board) == before
+
+
 def test_illegal_overlay_roles_do_not_use_global_legal_for_neighbors(qtbot):
     overlay = GhostOverlay()
     qtbot.addWidget(overlay)
@@ -573,3 +624,109 @@ def test_illegal_overlay_roles_do_not_use_global_legal_for_neighbors(qtbot):
     rendered = _overlay_image(overlay)
     assert _count_matching(rendered, _border_strip(QRect(*neighbor)), _is_illegal_stroke) >= 4
     assert ILLEGAL_PEN.red() > 200
+
+
+def test_drag_ghost_steps_with_the_pointer_while_the_outline_snaps(qtbot):
+    """60 one-pixel steps: the snapshot tracks the pointer; the outline waits for a cell."""
+    board = _prepare_colored_board(qtbot, ("follow-0", MOVER_BLUE))
+    card = board.card_for("time", "follow-0")
+    assert card is not None
+    start = QPoint(40, 36)
+    threshold = QApplication.startDragDistance()
+    _press(card, start)
+    armed = board.gesture().session()
+    assert armed is not None
+    origin_px = board._workspace_pixel_rect(
+        rect_to_pixels(armed.origin, board.metrics())
+    )
+    press_board = card.mapTo(board, start)
+    ghost_xs: list[int] = []
+    highlights: list[tuple[int, int, int, int]] = []
+    cells: list[tuple[int, int, int, int]] = []
+    offsets: list[tuple[int, int]] = []
+    image = None
+    for step in range(1, 61):
+        local = QPoint(start.x() + step, start.y())
+        _send_move(card, local)
+        QApplication.processEvents()
+        overlay = board.ghost_overlay()
+        ghost = overlay._ghost_rect
+        if step < threshold:
+            assert ghost is None
+            continue
+        assert ghost is not None and overlay._highlights
+        assert (ghost.x(), ghost.y(), ghost.width(), ghost.height()) == (
+            origin_px[0] + step,
+            origin_px[1],
+            origin_px[2],
+            origin_px[3],
+        )
+        pointer = card.mapTo(board, local)
+        offsets.append((pointer.x() - ghost.x(), pointer.y() - ghost.y()))
+        ghost_xs.append(ghost.x())
+        highlights.append(
+            (
+                overlay._highlights[0].x(),
+                overlay._highlights[0].y(),
+                overlay._highlights[0].width(),
+                overlay._highlights[0].height(),
+            )
+        )
+        session = board.gesture().session()
+        assert session is not None
+        cells.append(
+            (
+                session.candidate.column,
+                session.candidate.row,
+                session.candidate.column_span,
+                session.candidate.row_span,
+            )
+        )
+        current = overlay.ghost_images()[0]
+        assert current is not None
+        if image is None:
+            image = current
+            assert (ghost.x(), ghost.y()) == (origin_px[0] + step, origin_px[1])
+            assert (ghost.x(), ghost.y()) != (pointer.x(), pointer.y())
+        else:
+            assert current is image
+    assert ghost_xs == [origin_px[0] + step for step in range(threshold, 61)]
+    assert offsets and all(item == offsets[0] for item in offsets)
+    assert offsets[0] == (
+        press_board.x() - origin_px[0],
+        press_board.y() - origin_px[1],
+    )
+    previous = None
+    for cell, highlight in zip(cells, highlights):
+        if previous is not None and cell == previous[0]:
+            assert highlight == previous[1]
+        previous = (cell, highlight)
+    assert len({item for item in highlights}) < len(highlights)
+    _release(card, QPoint(start.x() + 60, start.y()))
+
+
+def test_reposition_cached_ghosts_keeps_the_bitmap_and_the_drop_outline(qtbot):
+    overlay = GhostOverlay()
+    qtbot.addWidget(overlay)
+    overlay.resize(400, 200)
+    overlay.show()
+    image = _solid_image(MOVER_BLUE)
+    ghost = (10, 20, 40, 30)
+    outline = (80, 20, 40, 30)
+    overlay.set_move_previews(
+        ((image, ghost, PREVIEW_MOVER_VALID),),
+        (outline,),
+        legal=True,
+    )
+    assert overlay.reposition_cached_ghosts(((14, 23, 40, 30),)) is True
+    assert overlay.ghost_images()[0] is image
+    moved = overlay._ghost_rect
+    assert moved is not None
+    assert (moved.x(), moved.y(), moved.width(), moved.height()) == (14, 23, 40, 30)
+    assert (
+        overlay._highlights[0].x(),
+        overlay._highlights[0].y(),
+        overlay._highlights[0].width(),
+        overlay._highlights[0].height(),
+    ) == outline
+    assert overlay._handles_rect is None
