@@ -24,6 +24,7 @@ from .ghost_overlay import (
     PREVIEW_DISPLACED_WARNING,
     PREVIEW_MOVER_VALID,
     PREVIEW_SAFETY_WALL,
+    reposition_cached_ghost_items,
 )
 from .viewport_feedback import ViewportFeedbackSurface
 
@@ -320,9 +321,16 @@ class FreeGridFeedbackController:
             and fingerprint == self._last_consumed_candidate_fingerprint
             and self._overlay.is_showing()
         ):
-            if global_pos is not None:
-                self._host.emit_workspace_gesture(True, global_pos)
-            return
+            # Same snapped candidate: leave the planner and the drop outline
+            # alone. A move still slides the cached snapshot; a resize is
+            # already the snapped span.
+            followed = session.handle is not None or self._reposition_follow_ghosts(
+                session, board_pos
+            )
+            if followed:
+                if global_pos is not None:
+                    self._host.emit_workspace_gesture(True, global_pos)
+                return
         self._gesture_presenting = True
         try:
             self._present_live_gesture(session, board_pos, global_pos)
@@ -331,6 +339,29 @@ class FreeGridFeedbackController:
             self._gesture_presenting = False
             if self._latest_pointer_sample is not None:
                 self._schedule_pointer_coalesce()
+
+    def _reposition_follow_ghosts(self, session, board_pos: tuple[int, int]) -> bool:
+        """Slide cached move snapshots. Does not plan, present, or rebuild images."""
+        host = self._host
+        rects = tuple(
+            host.workspace_pixel_rect(rect)
+            for rect in session.group_ghost_pixels(host.metrics(), board_pos)
+        )
+        overlay = self._overlay
+        applied, changed = reposition_cached_ghost_items(overlay, rects)
+        if not applied:
+            return False
+        if not changed:
+            return True
+        snapshot = getattr(overlay, "_snapshot_frame", None)
+        if snapshot is not None and getattr(overlay, "_frame", None) is not None:
+            overlay._frame = snapshot()
+        overlay.update()
+        if session.legal:
+            self._last_legal_ghosts = tuple(
+                (image, QRect(rect), role) for image, rect, role in overlay._ghosts
+            )
+        return True
 
     def _present_live_gesture(
         self,

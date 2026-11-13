@@ -52,8 +52,24 @@ class GestureSession:
     button: int = _LEFT_BUTTON
 
     def ghost_pixels(self, metrics: GridMetrics, pos: tuple[int, int]) -> Rect:
-        rect = self._preview_rect()
-        return rect_to_pixels(rect, metrics)
+        """Follow layer for a move; resize stays on the snapped preview.
+
+        A move keeps the press point inside the card: the snapshot origin is
+        the press-time card rect plus the whole pointer delta, including the
+        distance already travelled when the drag threshold trips. The drop
+        outline stays on ``highlight_pixels``.
+        """
+        if self.handle is not None:
+            return rect_to_pixels(self._preview_rect(), metrics)
+        return self._follow_pixels(self.origin, metrics, pos)
+
+    def _follow_pixels(
+        self, origin: GridRect, metrics: GridMetrics, pos: tuple[int, int]
+    ) -> Rect:
+        base = rect_to_pixels(origin, metrics)
+        dx = int(pos[0]) - int(self.press[0])
+        dy = int(pos[1]) - int(self.press[1])
+        return (base[0] + dx, base[1] + dy, base[2], base[3])
 
     def _preview_rect(self) -> GridRect:
         if self.plan is not None and self.plan.accepted and self.plan.mover_after is not None:
@@ -68,23 +84,40 @@ class GestureSession:
     def group_ghost_pixels(
         self, metrics: GridMetrics, pos: tuple[int, int]
     ) -> tuple[Rect, ...]:
-        """Ghosts for a group gesture — the preview of what release will commit.
+        """Follow-layer snapshots. Drop outlines stay on ``group_highlight_pixels``.
 
-        An out-of-board group drag commits **nothing** (``update`` sets
-        ``plan=None, legal=False``), so the ghost has to keep showing the rigid
-        translation in its reject state.  Clamping each member individually
-        instead drew a squashed, self-overlapping shape that matched neither the
-        pointer nor the outcome (review 2026-08-15 §4.3).
+        Moving cards keep the press point: each bitmap is that card's press-time
+        pixel rect plus the pointer delta. Displaced neighbours stay on the
+        snapped plan rect. Resize keeps the snapped preview, because the span
+        itself is the grid result.
+
+        An out-of-board group drag commits nothing (``plan=None``), so those
+        snapshots stay a rigid pixel translation. Clamping each member on its
+        own drew a squashed shape that matched neither the pointer nor the
+        outcome (review 2026-08-15 §4.3).
         """
+        if self.handle is not None:
+            if self.plan is not None and self.plan.accepted:
+                return tuple(
+                    rect_to_pixels(rect, metrics)
+                    for _ref, rect in self.plan.preview_rects()
+                )
+            return (rect_to_pixels(self._preview_rect(), metrics),)
         if self.plan is not None and self.plan.accepted:
+            rects: list[Rect] = []
+            for ref, grid_rect in self.plan.preview_rects():
+                origin = self.group_origins.get(ref)
+                if origin is not None:
+                    rects.append(self._follow_pixels(origin, metrics, pos))
+                else:
+                    rects.append(rect_to_pixels(grid_rect, metrics))
+            return tuple(rects)
+        if len(self.group_origins) > 1:
             return tuple(
-                rect_to_pixels(rect, metrics) for _ref, rect in self.plan.preview_rects()
+                self._follow_pixels(origin, metrics, pos)
+                for origin in self.group_origins.values()
             )
-        if self.handle is not None or len(self.group_origins) <= 1:
-            return (self.ghost_pixels(metrics, pos),)
-        return tuple(
-            rect_to_pixels(rect, metrics) for rect in self._rigid_group_rects()
-        )
+        return (self._follow_pixels(self.origin, metrics, pos),)
 
     def group_highlight_pixels(self, metrics: GridMetrics) -> tuple[Rect, ...]:
         if self.plan is not None and self.plan.accepted:

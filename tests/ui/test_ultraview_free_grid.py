@@ -1275,3 +1275,96 @@ def test_board_fit_does_not_mutate_free_grid_placements():
     assert [(item.ref, item.rect) for item in placements] == before
     assert not hasattr(free_grid, "plan_board_fit")
     assert not hasattr(free_grid, "plan_zoom_fit")
+
+
+# Measured on the pre-D-U4 snap path (grid_metrics 1280×800, 60 px east).
+_FROZEN_60PX_COMMIT = (1, 0, 8, 6)
+
+
+def test_move_ghost_follows_each_pixel_and_commit_stays_snapped():
+    """D-U4: the snapshot follows the pointer; release still uses the snapped cell."""
+    metrics = grid_metrics((1280, 800), [])
+    origin = GridRect(0, 0, 4, 3)
+    placements = [_placement("a", origin)]
+    ref = make_ref("time", "a")
+    gesture = FreeGridGesture()
+    press = (30, 40)
+    threshold = 10
+    gesture.press(ref, origin, press, (20, 18))
+    origin_px = rect_to_pixels(origin, metrics)
+    ghosts = []
+    highlight_changes = []
+    previous_cell = None
+    previous_highlight = None
+    session = None
+    for step in range(61):
+        pos = (press[0] + step, press[1])
+        session = gesture.update(
+            pos, metrics, placements, start_drag_distance=threshold
+        )
+        assert session is not None
+        ghost = session.ghost_pixels(metrics, pos)
+        highlight = session.highlight_pixels(metrics)
+        ghosts.append(ghost)
+        assert (pos[0] - ghost[0], pos[1] - ghost[1]) == (
+            press[0] - origin_px[0],
+            press[1] - origin_px[1],
+        )
+        assert ghost[2:] == origin_px[2:]
+        cell = (
+            session.candidate.column,
+            session.candidate.row,
+            session.candidate.column_span,
+            session.candidate.row_span,
+        )
+        if cell != previous_cell:
+            highlight_changes.append((step, highlight))
+            previous_cell = cell
+        else:
+            assert highlight == previous_highlight
+        previous_highlight = highlight
+    assert session is not None and session.active
+    assert [ghost[0] for ghost in ghosts] == [origin_px[0] + step for step in range(61)]
+    assert [ghost[1] for ghost in ghosts] == [origin_px[1]] * 61
+    first = ghosts[threshold]
+    assert first[:2] == (origin_px[0] + threshold, origin_px[1])
+    assert first[:2] != (press[0] + threshold, press[1])
+    assert len(highlight_changes) < 61
+    assert session.candidate == translated_move_rect(origin, (60, 0), metrics)
+    assert (
+        session.candidate.column,
+        session.candidate.row,
+        session.candidate.column_span,
+        session.candidate.row_span,
+    ) == _FROZEN_60PX_COMMIT
+    assert session.plan is not None and session.plan.accepted
+    assert session.plan.committed_updates() == ((ref, session.candidate),)
+
+
+def test_displaced_card_preview_stays_on_the_snapped_outline():
+    metrics = grid_metrics((1280, 800), [])
+    origin = GridRect(0, 0, 4, 3)
+    other = GridRect(6, 0, 4, 3)
+    placements = [_placement("a", origin), _placement("b", other)]
+    gesture = FreeGridGesture()
+    gesture.press(make_ref("time", "a"), origin, (10, 10), (10, 10))
+    unit = metrics.column_width + metrics.gutter
+    delta = (unit * 6 + 17, 0)
+    pos = (10 + delta[0], 10 + delta[1])
+    session = gesture.update(pos, metrics, placements, start_drag_distance=10)
+    assert session is not None and session.plan is not None and session.plan.accepted
+    assert session.plan.displaced_before_after
+    ghosts = session.group_ghost_pixels(metrics, pos)
+    highlights = session.group_highlight_pixels(metrics)
+    refs = session.preview_refs()
+    assert len(ghosts) == len(highlights) == len(refs) >= 2
+    movers = 0
+    for ref, ghost, highlight in zip(refs, ghosts, highlights):
+        if ref in session.group_origins:
+            movers += 1
+            base = rect_to_pixels(session.group_origins[ref], metrics)
+            assert ghost == (base[0] + delta[0], base[1] + delta[1], base[2], base[3])
+            assert ghost != highlight
+        else:
+            assert ghost == highlight
+    assert movers == 1

@@ -9,6 +9,10 @@ Transparent background: ``WA_TranslucentBackground`` disables QSS on this
 widget, so ``paintEvent`` always fills (Gotchas). Mouse events pass through.
 Handle hit-testing lives on the board; this overlay only paints the 6×6
 handles centered on the card edge.
+
+Move feedback is two layers. ``_ghosts`` are cached card snapshots and may
+slide with the pointer; ``_highlights`` are the snapped drop outlines. Sliding
+a snapshot reuses the bitmap and does not move the outline.
 """
 from __future__ import annotations
 
@@ -291,6 +295,20 @@ class GhostOverlay(QWidget):
             self.update()
             return
         self._present(self._united_dirty(old_dirty, self._preview_dirty_rect()))
+
+    def reposition_cached_ghosts(self, rects: Sequence) -> bool:
+        """Slide cached snapshots. Images, roles, and drop outlines stay.
+
+        Returns false when the rect count does not match the cached ghosts,
+        so the caller can present a full frame instead of a partial slide.
+        """
+        old_dirty = self._preview_dirty_rect()
+        applied, changed = reposition_cached_ghost_items(self, rects)
+        if not applied:
+            return False
+        if changed:
+            self._present(self._united_dirty(old_dirty, self._preview_dirty_rect()))
+        return True
 
     def clear(self) -> None:
         self._ghosts = ()
@@ -599,6 +617,30 @@ class GhostOverlay(QWidget):
                     painter.drawRect(hx, hy, hw, hh)
         finally:
             painter.end()
+
+
+def reposition_cached_ghost_items(overlay, rects: Sequence) -> tuple[bool, bool]:
+    """Move cached ghost rects without replacing images or roles.
+
+    Returns ``(applied, changed)``. ``applied`` is false when the ghost count
+    does not match, so the caller presents a full frame instead.
+    """
+    current = tuple(overlay._ghosts)
+    if len(rects) != len(current):
+        return False, False
+    moved: list[_GhostItem] = []
+    changed = False
+    for rect, item in zip(rects, current):
+        image, old, role = item
+        new = QRect(rect) if isinstance(rect, QRect) else QRect(
+            int(rect[0]), int(rect[1]), int(rect[2]), int(rect[3])
+        )
+        if new != old:
+            changed = True
+        moved.append((image, new, role))
+    if changed:
+        overlay._ghosts = tuple(moved)
+    return True, changed
 
 
 def _coerce_preview_item(

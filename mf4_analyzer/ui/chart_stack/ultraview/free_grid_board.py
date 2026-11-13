@@ -13,7 +13,7 @@ from dataclasses import dataclass, replace
 from typing import Callable, Mapping, Sequence
 
 from PyQt5 import sip
-from PyQt5.QtCore import QEvent, QMimeData, QPoint, QRect, QSize, Qt, pyqtSignal
+from PyQt5.QtCore import QMimeData, QPoint, QRect, QSize, Qt, pyqtSignal
 from PyQt5.QtGui import QCursor, QImage, QKeyEvent, QMouseEvent, QPixmap
 from PyQt5.QtWidgets import (
     QAbstractScrollArea,
@@ -991,20 +991,12 @@ class FreeGridBoard(QWidget):
         card.preset_requested.connect(self.preset_requested)
         card.autofit_requested.connect(self.autofit_requested)
         self._enable_pointer_tracking(card)
-        card.installEventFilter(self)
 
     def _enable_pointer_tracking(self, widget: QWidget) -> None:
         """Buttonless moves are delivered only to widgets that track the mouse."""
         widget.setMouseTracking(True)
         for child in widget.findChildren(QWidget):
             child.setMouseTracking(True)
-
-    def eventFilter(self, watched, event) -> bool:  # noqa: N802
-        if event.type() == QEvent.ChildAdded:
-            child = event.child()
-            if isinstance(child, QWidget):
-                self._enable_pointer_tracking(child)
-        return False
 
     def _raise_overlay(self) -> None:
         geom = self.rect()

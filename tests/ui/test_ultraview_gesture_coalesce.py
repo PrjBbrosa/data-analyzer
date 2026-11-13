@@ -505,3 +505,50 @@ def test_drag_paint_disables_smooth_pixmap_transform(qtbot, monkeypatch):
     assert hints
     assert all(enabled is False for enabled in hints)
     _release(card, QPoint(start.x() + 20, start.y()))
+
+
+def test_follow_ghost_moves_inside_one_cell_without_replanning(qtbot, monkeypatch):
+    """Same snapped cell: no second plan or present, but the ghost still steps."""
+    board = _prepare_board(qtbot, "follow-cell")
+    card = board.card_for("time", "follow-cell")
+    assert card is not None
+    start = QPoint(16, 16)
+    threshold = QApplication.startDragDistance()
+    _press(card, start)
+    _send_move(card, QPoint(start.x() + threshold, start.y()))
+    QApplication.processEvents()
+    plan_targets = _wrap_plan_layout(monkeypatch)
+    present_calls = _wrap_present(board.ghost_overlay())
+    overlay = board.ghost_overlay()
+    assert overlay._highlights
+    highlight = (
+        overlay._highlights[0].x(),
+        overlay._highlights[0].y(),
+        overlay._highlights[0].width(),
+        overlay._highlights[0].height(),
+    )
+    image = overlay.ghost_images()[0]
+    assert image is not None
+    xs: list[int] = []
+    offsets: list[tuple[int, int]] = []
+    for step in range(12):
+        local = QPoint(start.x() + threshold + step, start.y())
+        _send_move(card, local)
+        QApplication.processEvents()
+        ghost = overlay._ghost_rect
+        assert ghost is not None
+        xs.append(ghost.x())
+        pointer = card.mapTo(board, local)
+        offsets.append((pointer.x() - ghost.x(), pointer.y() - ghost.y()))
+        assert (
+            overlay._highlights[0].x(),
+            overlay._highlights[0].y(),
+            overlay._highlights[0].width(),
+            overlay._highlights[0].height(),
+        ) == highlight
+        assert overlay.ghost_images()[0] is image
+    assert xs == [xs[0] + index for index in range(len(xs))]
+    assert all(item == offsets[0] for item in offsets)
+    assert plan_targets == []
+    assert present_calls == []
+    _release(card, QPoint(start.x() + threshold + 11, start.y()))

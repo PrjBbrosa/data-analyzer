@@ -1057,6 +1057,18 @@ class FreeGridCard(UltraViewCard):
         self.setMouseTracking(True)
         self.setAcceptDrops(False)
 
+    def childEvent(self, event) -> None:  # noqa: N802
+        # Buttonless moves are delivered only to widgets that track the mouse.
+        # The board must not install an event filter for this; the feedback
+        # controller owns that seam.
+        if event.type() == QEvent.ChildAdded:
+            child = event.child()
+            if isinstance(child, QWidget):
+                child.setMouseTracking(True)
+                for grandchild in child.findChildren(QWidget):
+                    grandchild.setMouseTracking(True)
+        super().childEvent(event)
+
     def set_drag_placeholder(self, on: bool) -> None:
         """Hide preview pixels while keeping the card shell during a live drag."""
         wanted = bool(on)
