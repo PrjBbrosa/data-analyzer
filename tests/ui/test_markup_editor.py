@@ -1,5 +1,5 @@
 import pytest
-from PyQt5.QtCore import QEvent, QPoint, QPointF, QRectF, QSettings, Qt, QTimer
+from PyQt5.QtCore import QEvent, QEventLoop, QPoint, QPointF, QRectF, QSettings, Qt, QTimer
 from PyQt5.QtGui import (
     QBrush,
     QColor,
@@ -1273,6 +1273,19 @@ _CLOSE_LABELS = {
 }
 
 
+def _release_tracked_widget(qtbot, widget):
+    """Drop qtbot's close hook once a native close has already destroyed it.
+
+    ``windowHandle().close()`` makes the deferred delete visible to the next
+    ``processEvents`` flush. pytest-qt then calls ``close()`` on the corpse.
+    """
+    node = qtbot._request.node
+    tracked = getattr(node, "qt_widgets", None)
+    if not tracked:
+        return
+    node.qt_widgets = [entry for entry in tracked if entry[0]() is not widget]
+
+
 def _choose_close(editor, button):
     def fire():
         box = QApplication.activeModalWidget()
@@ -1658,19 +1671,25 @@ def test_title_bar_close_confirms_and_cancel_keeps_the_editor(qtbot):
 
 def test_title_bar_finish_copy_calls_on_done_once(qtbot):
     editor, _rect, calls = _dirty_editor(qtbot)
-    _choose_close(editor, QMessageBox.Save)
-    editor.windowHandle().close()
-    assert len(calls) == 1
-    assert not editor.isVisible()
-    assert editor._undo_stack.isClean()
+    try:
+        _choose_close(editor, QMessageBox.Save)
+        editor.windowHandle().close()
+        assert len(calls) == 1
+        assert not editor.isVisible()
+        assert editor._undo_stack.isClean()
+    finally:
+        _release_tracked_widget(qtbot, editor)
 
 
 def test_title_bar_discard_closes_without_on_done(qtbot):
     editor, _rect, calls = _dirty_editor(qtbot)
-    _choose_close(editor, QMessageBox.Discard)
-    editor.windowHandle().close()
-    assert not editor.isVisible()
-    assert calls == []
+    try:
+        _choose_close(editor, QMessageBox.Discard)
+        editor.windowHandle().close()
+        assert not editor.isVisible()
+        assert calls == []
+    finally:
+        _release_tracked_widget(qtbot, editor)
 
 
 def test_programmatic_close_of_dirty_editor_does_not_prompt(qtbot):
@@ -2132,3 +2151,130 @@ def test_ctrl_s_marks_the_stack_clean_only_when_save_succeeds(qtbot, tmp_path, m
     assert dest.is_file()
     assert editor._undo_stack.isClean()
     assert editor.isVisible()
+
+
+def _stub_markup_work_area(monkeypatch, width, height):
+    from mf4_analyzer.ui_kit.dialog_geometry import FrameInsets, IntRect
+
+    monkeypatch.setattr(
+        "mf4_analyzer.ui_kit.dialog_geometry.resolve_available_rect",
+        lambda **_kwargs: IntRect(0, 0, width, height),
+    )
+    monkeypatch.setattr(
+        "mf4_analyzer.ui_kit.dialog_geometry.frame_insets_of",
+        lambda _widget: FrameInsets(),
+    )
+
+
+def _return_to_event_loop():
+    """WA_DeleteOnClose posts a deferred delete the plain processEvents flush skips."""
+    loop = QEventLoop()
+    QTimer.singleShot(0, loop.quit)
+    loop.exec_()
+
+
+def test_small_image_opens_at_zoom_one(qtbot, monkeypatch):
+    _stub_markup_work_area(monkeypatch, 1920, 1080)
+    editor = MarkupEditor(_pixmap(400, 300))
+    qtbot.addWidget(editor)
+    editor.show()
+    QApplication.processEvents()
+
+    assert editor._zoom == pytest.approx(1.0)
+    assert editor._view.transform().m11() == pytest.approx(1.0)
+    assert editor._view.transform().m22() == pytest.approx(1.0)
+
+
+def test_large_image_opens_inside_the_work_area_at_fit_zoom(qtbot, monkeypatch):
+    from mf4_analyzer.ui_kit.dialog_geometry import SCREEN_MARGIN
+
+    _stub_markup_work_area(monkeypatch, 1600, 900)
+    editor = MarkupEditor(_pixmap(3840, 2160))
+    qtbot.addWidget(editor)
+    editor.show()
+    QApplication.processEvents()
+
+    budget_w = 1600 - 2 * SCREEN_MARGIN
+    budget_h = 900 - 2 * SCREEN_MARGIN
+    assert editor.width() <= budget_w
+    assert editor.height() <= budget_h
+    assert editor.width() == budget_w
+    assert editor.height() == budget_h
+    assert editor._zoom < 1.0
+    opened_at = editor._zoom
+    editor._view.fitInView(editor._scene.sceneRect(), Qt.KeepAspectRatio)
+    fitted = editor._view.transform().m11()
+    assert fitted < 1.0
+    assert opened_at == pytest.approx(fitted, rel=1e-6)
+
+
+def test_markup_editor_content_minimum_is_720_by_480(qtbot, monkeypatch):
+    _stub_markup_work_area(monkeypatch, 1920, 1080)
+    editor = MarkupEditor(_pixmap(400, 300))
+    qtbot.addWidget(editor)
+
+    assert editor.minimumWidth() == 720
+    assert editor.minimumHeight() == 480
+    editor.resize(50, 50)
+    assert editor.width() >= 720
+    assert editor.height() >= 480
+
+
+def test_close_destroys_editor_and_clears_the_main_window_handle(qtbot):
+    from PyQt5 import sip
+
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    win._open_markup_editor(_pixmap(80, 60))
+    editor = win._markup_editor
+    assert editor is not None
+    assert editor.testAttribute(Qt.WA_DeleteOnClose)
+    handle = editor.windowHandle()
+    assert handle is not None
+    assert handle.transientParent() is None
+
+    editor.close()
+    assert not editor.isVisible()
+    _return_to_event_loop()
+    assert sip.isdeleted(editor)
+    assert win._markup_editor is None
+
+    win._open_markup_editor(_pixmap(90, 40))
+    replacement = win._markup_editor
+    assert replacement is not None
+    assert not sip.isdeleted(replacement)
+    win._markup_editor = editor
+    win._open_markup_editor(_pixmap(70, 50))
+    assert win._markup_editor is not editor
+    assert not sip.isdeleted(win._markup_editor)
+
+
+def test_second_open_while_dirty_shows_the_existing_confirm(qtbot):
+    from PyQt5 import sip
+
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    win._open_markup_editor(_pixmap(400, 300))
+    editor = win._markup_editor
+    editor.add_rect_item(QRectF(12, 12, 36, 20))
+    assert not editor._undo_stack.isClean()
+
+    _choose_close(editor, QMessageBox.Cancel)
+    win._open_markup_editor(_pixmap(320, 200, color="#abcabc"))
+    assert win._markup_editor is editor
+    assert editor.isVisible()
+    assert QApplication.activeModalWidget() is None
+
+    _choose_close(editor, QMessageBox.Discard)
+    win._open_markup_editor(_pixmap(320, 200, color="#abcabc"))
+    replacement = win._markup_editor
+    assert replacement is not editor
+    assert replacement._background_item.pixmap().size().width() == 320
+    assert replacement._background_item.pixmap().size().height() == 200
+    _return_to_event_loop()
+    assert sip.isdeleted(editor)
+    assert win._markup_editor is replacement

@@ -375,6 +375,34 @@ def test_screen_changed_nudges_once_and_disconnects_on_close(
             assert len(calls) == before
 
 
+def test_markup_editor_refused_plan_keeps_content_minimum(qapp, qtbot, monkeypatch, caplog):
+    """D-M5 uses the shared floor: a degenerate plan is not applied."""
+    from PyQt5.QtGui import QColor, QPixmap
+
+    from mf4_analyzer.ui.markup.editor import MarkupEditor
+
+    monkeypatch.setattr(
+        "mf4_analyzer.ui_kit.dialog_geometry.resolve_available_rect",
+        lambda **_kwargs: IntRect(0, 0, 100, 100),
+    )
+    monkeypatch.setattr(
+        "mf4_analyzer.ui_kit.dialog_geometry.frame_insets_of",
+        lambda _widget: FrameInsets(),
+    )
+    pixmap = QPixmap(400, 300)
+    pixmap.fill(QColor("#f7f7f7"))
+    with caplog.at_level(logging.WARNING, logger="mf4_analyzer.diagnostics"):
+        editor = MarkupEditor(pixmap)
+        qtbot.addWidget(editor)
+    assert editor.width() == 720
+    assert editor.height() == 480
+    assert editor.minimumWidth() == 720
+    assert editor.minimumHeight() == 480
+    assert editor.width() >= MIN_DECORATED_CLIENT
+    assert editor.height() >= MIN_DECORATED_CLIENT
+    assert "degenerate decorated plan refused" in caplog.text
+
+
 def test_present_clears_minimized_and_keeps_maximized(qapp, qtbot):
     from mf4_analyzer.ui.drawers.batch._geometry import (
         present_independent_tool_window,

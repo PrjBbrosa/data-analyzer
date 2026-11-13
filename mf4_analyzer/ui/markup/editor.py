@@ -73,6 +73,17 @@ _HIT_SCREEN_PX = 8.0
 _HANDLE_HIT_SCREEN_PX = 14.0
 _MIN_STROKE_WIDTH = 1
 _MAX_STROKE_WIDTH = 24
+# D-M5 content floor. The shared tool-window planner may still shrink this
+# to the work-area budget; a decorated client cannot fall below D-W1's 200.
+_CONTENT_MIN_W = 720
+_CONTENT_MIN_H = 480
+_TOOL_WINDOW_FLAGS = (
+    Qt.Window
+    | Qt.WindowTitleHint
+    | Qt.WindowSystemMenuHint
+    | Qt.WindowMinMaxButtonsHint
+    | Qt.WindowCloseButtonHint
+)
 # Scene chrome is not an annotation. The view tags previews and the rubber band
 # with the same data role this filter rejects.
 _CHROME_ITEM_DATA = frozenset({
@@ -171,7 +182,9 @@ class MarkupEditor(QWidget):
         on_done: Callable[[QPixmap], None] | None = None,
         parent=None,
     ):
-        super().__init__(parent, Qt.Window)
+        super().__init__(parent, _TOOL_WINDOW_FLAGS)
+        self.setWindowModality(Qt.NonModal)
+        self.setAttribute(Qt.WA_DeleteOnClose, True)
         self.setObjectName("MarkupEditor")
         self.setWindowTitle("图片标注")
 
@@ -218,16 +231,72 @@ class MarkupEditor(QWidget):
         self._toolbar = self._build_toolbar()
         layout.addWidget(self._toolbar)
         layout.addWidget(self._view, 1)
-        self.resize(960, 640)
+        self._fit_to_work_area()
         self.setFocusPolicy(Qt.StrongFocus)
         self._install_history_shortcuts()
 
+    def isModal(self) -> bool:  # noqa: N802 - QDialog seam the shared fitter calls
+        """Independent tool window: do not clamp width to the host."""
+        return False
+
     def showEvent(self, event):
+        from ..drawers.batch._geometry import (
+            arm_post_show_geometry_check,
+            clear_tool_window_transient_parent,
+        )
+
         super().showEvent(event)
+        # raise_/activate can recreate the host transient-for link; clear it
+        # here and again after present_independent_tool_window.
+        clear_tool_window_transient_parent(self)
         if not self._initial_fit_done:
             self._initial_fit_done = True
             QTimer.singleShot(0, self.fit_to_window)
         self._maybe_show_capability_hint()
+        arm_post_show_geometry_check(self)
+
+    def _check_tool_window_geometry(self) -> None:
+        from ..drawers.batch._geometry import finish_post_show_geometry_check
+
+        finish_post_show_geometry_check(self, self._fit_to_work_area)
+
+    def _preferred_client_size(self) -> tuple[int, int]:
+        """Image at 100% plus the toolbar and the view frame."""
+        scene = self._scene.sceneRect()
+        image_w = max(1, int(round(scene.width())))
+        image_h = max(1, int(round(scene.height())))
+        bar_w = 0
+        bar_h = 0
+        bar = self._toolbar
+        if bar is not None:
+            hint = bar.sizeHint()
+            bar_w = max(0, int(hint.width()))
+            bar_h = max(0, int(hint.height()))
+        frame = max(0, int(self._view.frameWidth())) * 2
+        margin_w = 0
+        margin_h = 0
+        layout = self.layout()
+        if layout is not None:
+            margins = layout.contentsMargins()
+            margin_w = int(margins.left()) + int(margins.right())
+            margin_h = int(margins.top()) + int(margins.bottom())
+        return (
+            max(image_w, bar_w) + frame + margin_w,
+            image_h + bar_h + frame + margin_h,
+        )
+
+    def _fit_to_work_area(self) -> None:
+        from ..drawers.batch._geometry import fit_dialog_to_available_screen
+
+        width, height = self._preferred_client_size()
+        fit_dialog_to_available_screen(
+            self,
+            self.parentWidget(),
+            width,
+            height,
+            min_w=_CONTENT_MIN_W,
+            min_h=_CONTENT_MIN_H,
+        )
 
     def set_hint_settings(self, settings):
         """Inject a QSettings store (tests pass a temp INI)."""
@@ -471,16 +540,24 @@ class MarkupEditor(QWidget):
             self._undo_stack.setClean()
         return saved
 
-    def request_close(self) -> None:
+    def request_close(self) -> bool:
         """User close from Esc's last step or the toolbar close button.
 
         A spontaneous title-bar close reaches the same confirm in ``closeEvent``.
+        Returns True when the editor accepted the close.
         """
         self._user_close_request = True
         try:
             self.close()
         finally:
             self._user_close_request = False
+        try:
+            from PyQt5 import sip
+            if sip.isdeleted(self):
+                return True
+        except (RuntimeError, TypeError):
+            return True
+        return not self.isVisible()
 
     def closeEvent(self, event):
         # Programmatic close() (finish path, test teardown) is not spontaneous
@@ -573,8 +650,26 @@ class MarkupEditor(QWidget):
         self.set_zoom(1.0)
 
     def fit_to_window(self) -> None:
-        self._view.fitInView(self._scene.sceneRect(), Qt.KeepAspectRatio)
-        self._zoom = self._view.transform().m11()
+        """Fit the image in the viewport without enlarging past 100%."""
+        scene = self._scene.sceneRect()
+        viewport = self._view.viewport().size()
+        if (
+            scene.width() <= 0
+            or scene.height() <= 0
+            or viewport.width() <= 1
+            or viewport.height() <= 1
+        ):
+            self._view.setTransform(QTransform().scale(1.0, 1.0))
+            self._zoom = 1.0
+            self._auto_fit = True
+            self.refresh_handles()
+            return
+        self._view.fitInView(scene, Qt.KeepAspectRatio)
+        fitted = float(self._view.transform().m11())
+        if not (0.0 < fitted <= 1.0):
+            self._view.setTransform(QTransform().scale(1.0, 1.0))
+            fitted = 1.0
+        self._zoom = fitted
         self._auto_fit = True
         self.refresh_handles()
 
