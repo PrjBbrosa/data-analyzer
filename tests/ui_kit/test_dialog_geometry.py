@@ -1,6 +1,7 @@
 """Injected-rectangle contracts for shared dialog/popover geometry."""
 from __future__ import annotations
 
+import logging
 import os
 
 import pytest
@@ -9,7 +10,11 @@ from PyQt5.QtWidgets import QApplication, QDialog, QFrame, QLabel, QVBoxLayout, 
 
 from mf4_analyzer.ui_kit.dialog_geometry import (
     ANCHOR_GAP,
+    MIN_DECORATED_CLIENT,
+    UNTRUSTED_WORK_HEIGHT,
+    UNTRUSTED_WORK_WIDTH,
     FrameInsets,
+    GeometryPlan,
     IntRect,
     SCREEN_MARGIN,
     Size,
@@ -22,6 +27,7 @@ from mf4_analyzer.ui_kit.dialog_geometry import (
     install_geometry_relayout,
     move_in_screen,
     plan_geometry,
+    resolve_available_rect,
 )
 
 
@@ -480,4 +486,214 @@ def test_hidden_window_uses_estimated_frame_origin(qapp, qtbot, monkeypatch):
     plan = fit_window(dialog, (800, 600), content_minimum=(200, 80))
     assert plan.client.y == plan.frame.y + insets.top
     assert dialog.pos() == QPoint(plan.frame.x, plan.frame.y)
+
+
+def test_untrusted_work_area_thresholds_match_the_spec():
+    assert UNTRUSTED_WORK_WIDTH == 320
+    assert UNTRUSTED_WORK_HEIGHT == 240
+    assert MIN_DECORATED_CLIENT == 200
+
+
+class _FakeScreen:
+    def __init__(self, name, available, geometry, dpr=1.0):
+        self._name = name
+        self._available = QRect(*available)
+        self._geometry = QRect(*geometry)
+        self._dpr = dpr
+
+    def name(self):
+        return self._name
+
+    def availableGeometry(self):
+        return QRect(self._available)
+
+    def geometry(self):
+        return QRect(self._geometry)
+
+    def devicePixelRatio(self):
+        return self._dpr
+
+
+def _install_screens(monkeypatch, chosen, primary=None):
+    monkeypatch.setattr(
+        "mf4_analyzer.ui_kit.dialog_geometry.resolve_target_screen",
+        lambda **_kwargs: chosen,
+    )
+    monkeypatch.setattr(
+        "mf4_analyzer.ui_kit.dialog_geometry._primary_screen",
+        lambda: primary,
+    )
+
+
+@pytest.mark.parametrize(
+    "available",
+    [
+        (0, 0, 0, 0),
+        (0, 0, 10, 10),
+        (0, 0, 319, 239),
+        (0, 0, 320, 239),
+        (0, 0, 319, 240),
+    ],
+)
+def test_untrusted_available_rect_falls_back_to_screen_geometry_and_logs(
+    qapp, monkeypatch, caplog, available,
+):
+    chosen = _FakeScreen("desk-a", available, (20, 30, 1920, 1080), dpr=1.25)
+    primary = _FakeScreen("primary", (7, 8, 1440, 900), (7, 8, 1440, 900), dpr=1.0)
+    _install_screens(monkeypatch, chosen, primary)
+    with caplog.at_level(logging.WARNING, logger="mf4_analyzer.diagnostics"):
+        rect = resolve_available_rect()
+    assert rect == IntRect(20, 30, 1920, 1080)
+    assert "untrusted work area" in caplog.text
+    assert "desk-a" in caplog.text
+    assert "1.25" in caplog.text
+    assert "1920x1080" in caplog.text
+    assert "fallback=screen-geometry" in caplog.text
+    assert "1440x900" not in caplog.text
+
+
+def test_trusted_320x240_work_area_is_used_without_a_warning(qapp, monkeypatch, caplog):
+    chosen = _FakeScreen("desk-b", (4, 5, 320, 240), (0, 0, 1920, 1080), dpr=2.0)
+    _install_screens(monkeypatch, chosen, None)
+    with caplog.at_level(logging.WARNING, logger="mf4_analyzer.diagnostics"):
+        rect = resolve_available_rect()
+    assert rect == IntRect(4, 5, 320, 240)
+    assert "untrusted work area" not in caplog.text
+
+
+def test_untrusted_geometry_falls_back_to_trusted_primary(qapp, monkeypatch, caplog):
+    chosen = _FakeScreen("tiny", (0, 0, 10, 10), (0, 0, 10, 10), dpr=1.5)
+    primary = _FakeScreen("main", (11, 12, 800, 600), (11, 12, 1600, 900), dpr=2.0)
+    _install_screens(monkeypatch, chosen, primary)
+    with caplog.at_level(logging.WARNING, logger="mf4_analyzer.diagnostics"):
+        rect = resolve_available_rect()
+    assert rect == IntRect(11, 12, 800, 600)
+    assert "untrusted work area" in caplog.text
+    assert "tiny" in caplog.text
+    assert "1.5" in caplog.text
+    assert "fallback=primary-available" in caplog.text
+
+
+@pytest.mark.parametrize("primary", [None, "untrusted"])
+def test_untrusted_screens_fall_back_to_the_1080_constant(qapp, monkeypatch, caplog, primary):
+    chosen = _FakeScreen("tiny", (0, 0, 0, 0), (0, 0, 0, 0), dpr=1.0)
+    if primary == "untrusted":
+        primary_screen = _FakeScreen("also-tiny", (0, 0, 10, 10), (0, 0, 10, 10))
+    else:
+        primary_screen = None
+    _install_screens(monkeypatch, chosen, primary_screen)
+    with caplog.at_level(logging.WARNING, logger="mf4_analyzer.diagnostics"):
+        rect = resolve_available_rect()
+    assert rect == IntRect(0, 0, 1920, 1080)
+    assert "untrusted work area" in caplog.text
+    assert "fallback=fallback-constant" in caplog.text
+
+
+def _small_plan(preferred):
+    return plan_geometry(
+        IntRect(0, 0, 1920, 1080),
+        preferred,
+        frame=FrameInsets(),
+        position="center",
+    )
+
+
+@pytest.mark.parametrize("preferred", [(199, 400), (400, 199), (199, 199), (80, 60)])
+def test_apply_plan_refuses_degenerate_decorated_client(qapp, qtbot, caplog, preferred):
+    dialog = QDialog()
+    dialog.setWindowTitle("titled")
+    qtbot.addWidget(dialog)
+    dialog.resize(640, 480)
+    dialog.move(30, 40)
+    before = (dialog.x(), dialog.y(), dialog.width(), dialog.height())
+    plan = _small_plan(preferred)
+    assert plan.client.width < MIN_DECORATED_CLIENT or plan.client.height < MIN_DECORATED_CLIENT
+    with caplog.at_level(logging.WARNING, logger="mf4_analyzer.diagnostics"):
+        assert apply_plan(dialog, plan) is False
+    assert (dialog.x(), dialog.y(), dialog.width(), dialog.height()) == before
+    assert "degenerate decorated plan refused" in caplog.text
+    assert str(plan.client.width) in caplog.text
+    assert str(plan.client.height) in caplog.text
+
+
+@pytest.mark.parametrize("preferred", [(200, 200), (200, 480), (480, 200)])
+def test_apply_plan_accepts_decorated_client_at_the_floor(qapp, qtbot, caplog, preferred):
+    dialog = QDialog()
+    dialog.setWindowTitle("titled")
+    qtbot.addWidget(dialog)
+    dialog.resize(640, 480)
+    plan = _small_plan(preferred)
+    assert plan.client.width >= MIN_DECORATED_CLIENT
+    assert plan.client.height >= MIN_DECORATED_CLIENT
+    with caplog.at_level(logging.WARNING, logger="mf4_analyzer.diagnostics"):
+        assert apply_plan(dialog, plan) is True
+    assert dialog.width() == plan.client.width
+    assert dialog.height() == plan.client.height
+    assert "degenerate decorated plan refused" not in caplog.text
+
+
+def test_apply_plan_frameless_and_child_accept_a_small_plan(qapp, qtbot, caplog):
+    plan = _small_plan((80, 60))
+    assert plan.client.width < MIN_DECORATED_CLIENT
+    assert plan.client.height < MIN_DECORATED_CLIENT
+
+    frameless = QDialog()
+    qtbot.addWidget(frameless)
+    frameless.setWindowFlags(Qt.Dialog | Qt.FramelessWindowHint)
+    frameless.resize(400, 300)
+    host = QWidget()
+    qtbot.addWidget(host)
+    child = QWidget(host)
+    qtbot.addWidget(child)
+    child.resize(400, 300)
+    assert child.isWindow() is False
+    popup = QFrame(host, Qt.Popup)
+    qtbot.addWidget(popup)
+    popup.resize(400, 300)
+
+    with caplog.at_level(logging.WARNING, logger="mf4_analyzer.diagnostics"):
+        assert apply_plan(frameless, plan) is True
+        assert apply_plan(child, plan) is True
+        assert apply_plan(popup, plan) is True
+    assert frameless.width() == plan.client.width
+    assert frameless.height() == plan.client.height
+    assert child.width() == plan.client.width
+    assert child.height() == plan.client.height
+    assert popup.width() == plan.client.width
+    assert popup.height() == plan.client.height
+    assert "degenerate decorated plan refused" not in caplog.text
+
+
+def test_shrink_keeps_a_decorated_window_at_the_floor_and_lets_frameless_shrink(
+    qapp, qtbot,
+):
+    """A planned frame smaller than the live frame must not pull a titled window under 200."""
+    tight = GeometryPlan(
+        client=IntRect(0, 0, 220, 220),
+        frame=IntRect(0, 0, 40, 40),
+        compact=False,
+        needs_scroll=False,
+        margin_used=8,
+    )
+    titled = QDialog()
+    titled.setWindowTitle("titled")
+    qtbot.addWidget(titled)
+    titled.resize(400, 400)
+    titled.show()
+    qtbot.waitExposed(titled)
+    apply_plan(titled, tight)
+    assert titled.width() >= MIN_DECORATED_CLIENT
+    assert titled.height() >= MIN_DECORATED_CLIENT
+    assert titled.width() < 220
+    assert titled.height() < 220
+
+    frameless = QDialog()
+    qtbot.addWidget(frameless)
+    frameless.setWindowFlags(Qt.Dialog | Qt.FramelessWindowHint)
+    frameless.resize(400, 400)
+    frameless.show()
+    qtbot.waitExposed(frameless)
+    apply_plan(frameless, tight)
+    assert frameless.width() < MIN_DECORATED_CLIENT
+    assert frameless.height() < MIN_DECORATED_CLIENT
 

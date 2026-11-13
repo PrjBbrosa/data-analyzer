@@ -27,6 +27,12 @@ SCREEN_MARGIN = 8
 COMPACT_WORK_WIDTH = 640
 COMPACT_WORK_HEIGHT = 360
 ANCHOR_GAP = 8
+# D-W1 floors. These are calibrated cutoffs, not preferences: a work area
+# below 320×240 is untrusted, and a decorated top-level client below 200
+# is not applied.
+UNTRUSTED_WORK_WIDTH = 320
+UNTRUSTED_WORK_HEIGHT = 240
+MIN_DECORATED_CLIENT = 200
 # Unshown decorated windows have no native frame yet. This is an estimate
 # used only before Show; after Show the real frameGeometry is measured.
 _ESTIMATED_TITLE_INSETS = (1, 28, 1, 1)
@@ -425,6 +431,133 @@ def resolve_target_screen(
     return app.primaryScreen()
 
 
+_LAST_WORK_AREA: dict | None = None
+_POPOVER_WINDOW_TYPES = None
+
+
+def _fallback_work_rect() -> IntRect:
+    return IntRect(0, 0, 1920, 1080)
+
+
+def _work_rect_is_trusted(rect: IntRect) -> bool:
+    return (
+        rect.width >= UNTRUSTED_WORK_WIDTH
+        and rect.height >= UNTRUSTED_WORK_HEIGHT
+    )
+
+
+def _read_screen_rect(screen, method_name: str) -> IntRect | None:
+    method = getattr(screen, method_name, None)
+    if not callable(method):
+        return None
+    try:
+        return as_rect(method())
+    except (RuntimeError, TypeError, ValueError):
+        return None
+
+
+def _screen_label(screen) -> str:
+    method = getattr(screen, "name", None)
+    if not callable(method):
+        return ""
+    try:
+        return str(method() or "")
+    except (RuntimeError, TypeError, ValueError):
+        return ""
+
+
+def _screen_dpr(screen) -> float:
+    method = getattr(screen, "devicePixelRatio", None)
+    if not callable(method):
+        return 0.0
+    try:
+        return float(method())
+    except (RuntimeError, TypeError, ValueError):
+        return 0.0
+
+
+def _primary_screen():
+    app = QApplication.instance()
+    if app is None:
+        return None
+    try:
+        return app.primaryScreen()
+    except RuntimeError:
+        return None
+
+
+def _remember_work_area(
+    *,
+    rect: IntRect,
+    reason: str,
+    untrusted: bool,
+    screen_name: str,
+    dpr: float,
+    available: IntRect | None,
+    geometry: IntRect | None,
+    chosen_screen_name: str,
+) -> None:
+    global _LAST_WORK_AREA
+    _LAST_WORK_AREA = {
+        "rect": rect,
+        "reason": reason,
+        "untrusted": untrusted,
+        "screen_name": screen_name,
+        "dpr": dpr,
+        "available": available,
+        "geometry": geometry,
+        "chosen_screen_name": chosen_screen_name,
+    }
+
+
+def _rect_text(rect: IntRect | None) -> str:
+    if rect is None:
+        return "unavailable"
+    return f"{rect.x},{rect.y} {rect.width}x{rect.height}"
+
+
+def _rect_payload(rect: IntRect | None) -> dict | None:
+    if rect is None:
+        return None
+    return {
+        "x": int(rect.x),
+        "y": int(rect.y),
+        "width": int(rect.width),
+        "height": int(rect.height),
+    }
+
+
+def _warn_untrusted_work_area(
+    *,
+    screen_name: str,
+    dpr: float,
+    available: IntRect,
+    geometry: IntRect | None,
+    fallback: str,
+) -> None:
+    from mf4_analyzer.ui_kit.layout_diagnostics import warn_untrusted_work_area
+
+    warn_untrusted_work_area(
+        screen_name=screen_name,
+        dpr=dpr,
+        available=_rect_text(available),
+        geometry=_rect_text(geometry),
+        fallback=fallback,
+    )
+
+
+def _fallback_untrusted_work_area(geometry, screen_name):
+    """Trusted geometry, then a trusted primary work area, then 1920×1080."""
+    if geometry is not None and _work_rect_is_trusted(geometry):
+        return geometry, "screen-geometry", screen_name
+    primary = _primary_screen()
+    if primary is not None:
+        primary_available = _read_screen_rect(primary, "availableGeometry")
+        if primary_available is not None and _work_rect_is_trusted(primary_available):
+            return primary_available, "primary-available", _screen_label(primary)
+    return _fallback_work_rect(), "fallback-constant", ""
+
+
 def resolve_available_rect(
     *,
     anchor_global=None,
@@ -435,17 +568,77 @@ def resolve_available_rect(
         anchor_global=anchor_global, widget=widget, parent=parent,
     )
     if screen is None:
-        return IntRect(0, 0, 1920, 1080)
+        fallback = _fallback_work_rect()
+        _remember_work_area(
+            rect=fallback,
+            reason="no-screen",
+            untrusted=False,
+            screen_name="",
+            dpr=0.0,
+            available=None,
+            geometry=None,
+            chosen_screen_name="",
+        )
+        return fallback
     try:
-        return as_rect(screen.availableGeometry())
+        available = as_rect(screen.availableGeometry())
     except RuntimeError:
-        return IntRect(0, 0, 1920, 1080)
+        fallback = _fallback_work_rect()
+        _remember_work_area(
+            rect=fallback,
+            reason="unavailable",
+            untrusted=False,
+            screen_name=_screen_label(screen),
+            dpr=_screen_dpr(screen),
+            available=None,
+            geometry=None,
+            chosen_screen_name="",
+        )
+        return fallback
+    geometry = _read_screen_rect(screen, "geometry")
+    name = _screen_label(screen)
+    dpr = _screen_dpr(screen)
+    if _work_rect_is_trusted(available):
+        _remember_work_area(
+            rect=available,
+            reason="available",
+            untrusted=False,
+            screen_name=name,
+            dpr=dpr,
+            available=available,
+            geometry=geometry,
+            chosen_screen_name=name,
+        )
+        return available
+    chosen, reason, chosen_name = _fallback_untrusted_work_area(geometry, name)
+    _remember_work_area(
+        rect=chosen,
+        reason=reason,
+        untrusted=True,
+        screen_name=name,
+        dpr=dpr,
+        available=available,
+        geometry=geometry,
+        chosen_screen_name=chosen_name,
+    )
+    _warn_untrusted_work_area(
+        screen_name=name,
+        dpr=dpr,
+        available=available,
+        geometry=geometry,
+        fallback=reason,
+    )
+    return chosen
 
 
-def frame_insets_of(widget: QWidget | None) -> FrameInsets:
-    """Measure native frame insets; estimate only when the window is hidden."""
+def _read_frame_insets(widget: QWidget | None) -> tuple[FrameInsets, str]:
+    """Return insets and ``measured`` / ``estimated`` / ``none``.
+
+    The inset numbers match ``frame_insets_of``; the source word is only
+    for the geometry diagnostic record.
+    """
     if widget is None or not _alive(widget):
-        return FrameInsets()
+        return FrameInsets(), "none"
     try:
         if widget.isWindow() and widget.isVisible():
             frame = widget.frameGeometry()
@@ -455,7 +648,7 @@ def frame_insets_of(widget: QWidget | None) -> FrameInsets:
             right = frame.right() - geo.right()
             bottom = frame.bottom() - geo.bottom()
             if left >= 0 and top >= 0 and right >= 0 and bottom >= 0:
-                return FrameInsets(left, top, right, bottom)
+                return FrameInsets(left, top, right, bottom), "measured"
         handle = widget.windowHandle()
         if handle is not None:
             margins = handle.frameMargins()
@@ -464,15 +657,20 @@ def frame_insets_of(widget: QWidget | None) -> FrameInsets:
                 max(0, margins.top()),
                 max(0, margins.right()),
                 max(0, margins.bottom()),
-            )
+            ), "measured"
     except RuntimeError:
-        return FrameInsets()
+        return FrameInsets(), "none"
     flags = widget.windowFlags()
     frameless = bool(flags & Qt.FramelessWindowHint)
     if widget.isWindow() and not frameless:
         left, top, right, bottom = _ESTIMATED_TITLE_INSETS
-        return FrameInsets(left, top, right, bottom)
-    return FrameInsets()
+        return FrameInsets(left, top, right, bottom), "estimated"
+    return FrameInsets(), "none"
+
+
+def frame_insets_of(widget: QWidget | None) -> FrameInsets:
+    """Measure native frame insets; estimate only when the window is hidden."""
+    return _read_frame_insets(widget)[0]
 
 
 def _release_size_conflicts(widget: QWidget, client: Size) -> None:
@@ -510,8 +708,18 @@ def _shrink_unaccounted_frame(widget: QWidget, planned_frame: IntRect) -> None:
     extra_h = actual.height - planned_frame.height
     if extra_w <= 0 and extra_h <= 0:
         return
-    target_w = max(0, widget.width() - extra_w)
-    target_h = max(0, widget.height() - extra_h)
+    target_w = widget.width() - extra_w
+    target_h = widget.height() - extra_h
+    # A decorated top-level may lose unaccounted chrome, but not so much
+    # that the client falls under the D-W1 floor. Popovers and frameless
+    # windows keep the old shrink-to-fit behavior.
+    if _is_decorated_toplevel(widget):
+        if extra_w > 0:
+            target_w = max(MIN_DECORATED_CLIENT, target_w)
+        if extra_h > 0:
+            target_h = max(MIN_DECORATED_CLIENT, target_h)
+    target_w = max(0, target_w)
+    target_h = max(0, target_h)
     previous_max = widget.maximumSize()
     widget.setMaximumSize(target_w, target_h)
     widget.resize(target_w, target_h)
@@ -546,6 +754,104 @@ def _plan_move_origin(widget: QWidget, plan: GeometryPlan) -> QPoint:
     return QPoint(plan.client.x, plan.client.y)
 
 
+def _popover_window_types() -> frozenset[int]:
+    global _POPOVER_WINDOW_TYPES
+    if _POPOVER_WINDOW_TYPES is None:
+        mask = int(Qt.WindowType_Mask)
+        _POPOVER_WINDOW_TYPES = frozenset({
+            int(Qt.Popup) & mask,
+            int(Qt.ToolTip) & mask,
+        })
+    return _POPOVER_WINDOW_TYPES
+
+
+def _is_decorated_toplevel(widget: QWidget) -> bool:
+    """Title-bar top-level windows. Popovers, flyouts, and frameless are exempt."""
+    try:
+        if not widget.isWindow():
+            return False
+        flags = int(widget.windowFlags())
+    except RuntimeError:
+        return False
+    if flags & int(Qt.FramelessWindowHint):
+        return False
+    kind = flags & int(Qt.WindowType_Mask)
+    if kind in _popover_window_types():
+        return False
+    return True
+
+
+def decorated_plan_is_degenerate(widget: QWidget, plan: GeometryPlan) -> bool:
+    """True when applying ``plan`` would make a titled top-level unusably small."""
+    if not _alive(widget) or not _is_decorated_toplevel(widget):
+        return False
+    return (
+        int(plan.client.width) < MIN_DECORATED_CLIENT
+        or int(plan.client.height) < MIN_DECORATED_CLIENT
+    )
+
+
+def _degenerate_plan_details(widget: QWidget, plan: GeometryPlan) -> dict:
+    insets, source = _read_frame_insets(widget)
+    return {
+        "widget_class": type(widget).__name__,
+        "object_name": widget.objectName(),
+        "current": {
+            "x": int(widget.x()),
+            "y": int(widget.y()),
+            "width": int(widget.width()),
+            "height": int(widget.height()),
+        },
+        "plan": {
+            "client": _rect_payload(plan.client),
+            "frame": _rect_payload(plan.frame),
+            "compact": bool(plan.compact),
+            "needs_scroll": bool(plan.needs_scroll),
+            "margin_used": int(plan.margin_used),
+            "action_vertical": bool(plan.action_vertical),
+        },
+        "frame_insets": {
+            "left": int(insets.left),
+            "top": int(insets.top),
+            "right": int(insets.right),
+            "bottom": int(insets.bottom),
+            "source": source,
+        },
+    }
+
+
+def tool_window_plan_facts(widget: QWidget, plan: GeometryPlan) -> dict:
+    """Screen, frame, budget, and planned rectangles for one tool-window fit."""
+    decision = _LAST_WORK_AREA or {}
+    insets, source = _read_frame_insets(widget)
+    chosen = decision.get("rect")
+    budget = None
+    if isinstance(chosen, IntRect):
+        size = client_budget(chosen, insets, plan.margin_used)
+        budget = {"width": int(size.width), "height": int(size.height)}
+    return {
+        "chosen_screen": {
+            "name": decision.get("chosen_screen_name", ""),
+            "reason": decision.get("reason", ""),
+            "dpr": decision.get("dpr", 0.0),
+            "rejected_name": decision.get("screen_name", ""),
+            "available": _rect_payload(decision.get("available")),
+            "geometry": _rect_payload(decision.get("geometry")),
+            "chosen": _rect_payload(chosen if isinstance(chosen, IntRect) else None),
+        },
+        "frame_insets": {
+            "left": int(insets.left),
+            "top": int(insets.top),
+            "right": int(insets.right),
+            "bottom": int(insets.bottom),
+            "source": source,
+        },
+        "budget": budget,
+        "planned_client": _rect_payload(plan.client),
+        "planned_frame": _rect_payload(plan.frame),
+    }
+
+
 def apply_plan(
     widget: QWidget,
     plan: GeometryPlan,
@@ -557,8 +863,15 @@ def apply_plan(
     Returns True when geometry actually changed. Hidden windows and the
     post-show correction share this convention: estimate insets before the
     native frame exists, then re-apply with measured ``frameGeometry()``.
+    A decorated top-level whose planned client is under
+    ``MIN_DECORATED_CLIENT`` in either dimension is left untouched.
     """
     if not _alive(widget):
+        return False
+    if decorated_plan_is_degenerate(widget, plan):
+        from mf4_analyzer.ui_kit.layout_diagnostics import warn_degenerate_decorated_plan
+
+        warn_degenerate_decorated_plan(_degenerate_plan_details(widget, plan))
         return False
     client = plan.client
     if release_conflicts:

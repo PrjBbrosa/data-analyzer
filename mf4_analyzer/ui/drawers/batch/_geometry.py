@@ -14,7 +14,7 @@ implementation instead of drifting apart.
 """
 from __future__ import annotations
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import QTimer, Qt
 
 
 def configure_independent_tool_window(widget) -> None:
@@ -72,6 +72,16 @@ def present_independent_tool_window(widget) -> None:
     clear_tool_window_transient_parent(widget)
 
 
+def _widget_alive(widget) -> bool:
+    if widget is None:
+        return False
+    try:
+        from PyQt5 import sip
+        return not sip.isdeleted(widget)
+    except (RuntimeError, TypeError):
+        return True
+
+
 def fit_dialog_to_available_screen(
     dialog, parent, target_w: int, target_h: int, *, min_w: int, min_h: int,
 ) -> None:
@@ -80,8 +90,20 @@ def fit_dialog_to_available_screen(
     Forwards to ``ui_kit.dialog_geometry.fit_window``. Content minimums
     cannot break the available-geometry budget. Does not call
     ``setMaximumSize``, so later test/user resizes still work.
+
+    After a fit that was applied, the minimum is the lesser of the content
+    floor and the client that was actually applied. A degenerate decorated
+    plan is not applied; the dialog is then resized to the content floor
+    and that same minimum is set, still never above the applied client.
     """
-    from mf4_analyzer.ui_kit.dialog_geometry import fit_window
+    from mf4_analyzer.ui_kit.dialog_geometry import (
+        decorated_plan_is_degenerate,
+        fit_window,
+    )
+    from mf4_analyzer.ui_kit.layout_diagnostics import (
+        detailed_layout_enabled,
+        note_tool_window_geometry,
+    )
 
     modal = True
     is_modal = getattr(dialog, "isModal", None)
@@ -90,10 +112,89 @@ def fit_dialog_to_available_screen(
             modal = bool(is_modal())
         except RuntimeError:
             modal = True
-    fit_window(
+    plan = fit_window(
         dialog,
         (int(target_w), int(target_h)),
         parent=parent,
         content_minimum=(int(min_w), int(min_h)),
         clamp_width_to_parent=bool(modal and parent is not None),
     )
+    if decorated_plan_is_degenerate(dialog, plan):
+        dialog.resize(int(min_w), int(min_h))
+    applied_w = int(dialog.width())
+    applied_h = int(dialog.height())
+    dialog.setMinimumSize(
+        min(int(min_w), max(0, applied_w)),
+        min(int(min_h), max(0, applied_h)),
+    )
+    if detailed_layout_enabled() and _widget_alive(dialog):
+        from mf4_analyzer.ui_kit.dialog_geometry import tool_window_plan_facts
+
+        note_tool_window_geometry(
+            dialog, "plan", plan=tool_window_plan_facts(dialog, plan),
+        )
+
+
+def note_tool_window_phase(widget, phase: str) -> None:
+    """Lifecycle size checkpoint. Silent unless the layout switch is on."""
+    from mf4_analyzer.ui_kit.layout_diagnostics import note_tool_window_geometry
+
+    note_tool_window_geometry(widget, phase)
+
+
+def arm_post_show_geometry_check(widget) -> None:
+    """Schedule one post-show size check. The slot is a bound method."""
+    if not _widget_alive(widget):
+        return
+    if getattr(widget, "_geometry_check_running", False):
+        return
+    widget._geometry_retry_used = False
+    if getattr(widget, "_geometry_check_pending", False):
+        return
+    checker = getattr(widget, "_check_tool_window_geometry", None)
+    if not callable(checker):
+        return
+    widget._geometry_check_pending = True
+    QTimer.singleShot(0, checker)
+
+
+def _client_needs_geometry_recovery(widget) -> bool:
+    from mf4_analyzer.ui_kit.dialog_geometry import MIN_DECORATED_CLIENT
+
+    width = int(widget.width())
+    height = int(widget.height())
+    if width < int(widget.minimumWidth()) or height < int(widget.minimumHeight()):
+        return True
+    return width < MIN_DECORATED_CLIENT or height < MIN_DECORATED_CLIENT
+
+
+def finish_post_show_geometry_check(widget, refit) -> None:
+    """Compare the client with its minimum once. Refit at most once per show."""
+    if not _widget_alive(widget):
+        return
+    if getattr(widget, "_geometry_check_running", False):
+        return
+    widget._geometry_check_running = True
+    try:
+        widget._geometry_check_pending = False
+        if (
+            not getattr(widget, "_geometry_retry_used", False)
+            and _client_needs_geometry_recovery(widget)
+        ):
+            widget._geometry_retry_used = True
+            before_w = int(widget.width())
+            before_h = int(widget.height())
+            refit()
+            if _widget_alive(widget):
+                from mf4_analyzer.ui_kit.layout_diagnostics import (
+                    warn_tool_window_geometry_recovered,
+                )
+
+                warn_tool_window_geometry_recovered(
+                    widget, before_width=before_w, before_height=before_h,
+                )
+        if _widget_alive(widget):
+            note_tool_window_phase(widget, "after-show-tick")
+    finally:
+        if _widget_alive(widget):
+            widget._geometry_check_running = False

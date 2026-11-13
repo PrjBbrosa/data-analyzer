@@ -50,9 +50,12 @@ from ...drop_paths import (
 )
 from ...widgets.toast import Toast
 from ._geometry import (
+    arm_post_show_geometry_check,
     clear_tool_window_transient_parent,
     configure_independent_tool_window,
+    finish_post_show_geometry_check,
     fit_dialog_to_available_screen,
+    note_tool_window_phase,
     present_independent_tool_window,
 )
 from .analysis_panel import AnalysisPanel
@@ -664,6 +667,7 @@ class BatchSheet(QDialog):
             self._on_user_configuration
         )
         self._analysis_panel.paramsChanged.connect(self._on_user_configuration)
+        note_tool_window_phase(self, "construct-end")
 
     def _fit_to_available_screen(self, parent, target_w: int, target_h: int) -> None:
         """Thin forwarder to the shared clamp so ``BatchSheet`` and
@@ -678,6 +682,7 @@ class BatchSheet(QDialog):
         present_independent_tool_window(self)
 
     def showEvent(self, event) -> None:  # noqa: N802 - Qt override
+        note_tool_window_phase(self, "show-enter")
         super().showEvent(event)
         clear_tool_window_transient_parent(self)
         from mf4_analyzer.ui_kit.dialog_geometry import nudge_into_work_area
@@ -685,6 +690,14 @@ class BatchSheet(QDialog):
         nudge_into_work_area(self, parent=self.parentWidget())
         self._sync_method_caption_width()
         self._settle_initial_content_layout()
+        arm_post_show_geometry_check(self)
+        note_tool_window_phase(self, "show-return")
+
+    def _check_tool_window_geometry(self) -> None:
+        finish_post_show_geometry_check(self, self._refit_for_geometry_recovery)
+
+    def _refit_for_geometry_recovery(self) -> None:
+        self._fit_to_available_screen(self.parentWidget(), 1080, 760)
 
     def _settle_initial_content_layout(self) -> None:
         """Resolve nested size hints without dispatching input or timers.

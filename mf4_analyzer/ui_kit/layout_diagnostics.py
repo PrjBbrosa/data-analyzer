@@ -109,7 +109,7 @@ def collect_environment_facts(widget: QWidget | None = None) -> dict:
         screens = []
         for screen in app.screens():
             available = screen.availableGeometry()
-            screens.append({
+            screen_facts = {
                 "name": screen.name(),
                 "dpr": float(screen.devicePixelRatio()),
                 "logical_dpi": (float(screen.logicalDotsPerInchX()), float(screen.logicalDotsPerInchY())),
@@ -119,7 +119,18 @@ def collect_environment_facts(widget: QWidget | None = None) -> dict:
                     "width": available.width(),
                     "height": available.height(),
                 },
-            })
+            }
+            try:
+                geometry = screen.geometry()
+                screen_facts["geometry"] = {
+                    "x": geometry.x(),
+                    "y": geometry.y(),
+                    "width": geometry.width(),
+                    "height": geometry.height(),
+                }
+            except RuntimeError:
+                screen_facts["geometry"] = None
+            screens.append(screen_facts)
         facts["screens"] = screens
     except RuntimeError:
         pass
@@ -183,8 +194,12 @@ def collect_widget_layout_facts(
     return facts
 
 
-def emit_layout_facts(facts: dict, *, detailed: bool = False) -> None:
-    """Log facts. Serialization failure is reported and does not abort."""
+def emit_layout_facts(facts: dict, *, detailed: bool = False, bounded: bool = True) -> None:
+    """Log facts. Serialization failure is reported and does not abort.
+
+    ``bounded`` keeps the shared diagnostics throttle. An explicit tool-window
+    geometry trace passes ``bounded=False`` so each lifecycle phase is kept.
+    """
     if not facts:
         raise TypeError("facts is required")
     if not detailed and not detailed_layout_enabled():
@@ -205,7 +220,121 @@ def emit_layout_facts(facts: dict, *, detailed: bool = False) -> None:
     except (TypeError, ValueError) as exc:
         _LOGGER.warning("layout diagnostics serialization failed: %s", exc)
         return
-    throttled(_LOGGER, "layout_diagnostics", logging.INFO, "layout_diagnostics %s", text)
+    if bounded:
+        throttled(_LOGGER, "layout_diagnostics", logging.INFO, "layout_diagnostics %s", text)
+        return
+    _LOGGER.info("layout_diagnostics %s", text)
+
+
+def warn_untrusted_work_area(
+    *,
+    screen_name: str,
+    dpr: float,
+    available: str,
+    geometry: str,
+    fallback: str,
+) -> None:
+    """D-W1 warning. Emitted even when the layout-diagnostics switch is off."""
+    _LOGGER.warning(
+        "untrusted work area screen=%s dpr=%s available=%s geometry=%s fallback=%s",
+        screen_name,
+        dpr,
+        available,
+        geometry,
+        fallback,
+    )
+
+
+def warn_degenerate_decorated_plan(details: dict) -> None:
+    """D-W1 warning. ``details`` is the plan that was refused, not document text."""
+    try:
+        text = json.dumps(details, ensure_ascii=False, sort_keys=True)
+    except (TypeError, ValueError) as exc:
+        _LOGGER.warning(
+            "degenerate decorated plan refused serialization failed: %s", exc,
+        )
+        return
+    _LOGGER.warning("degenerate decorated plan refused %s", text)
+
+
+def warn_tool_window_geometry_recovered(
+    widget: QWidget,
+    *,
+    before_width: int,
+    before_height: int,
+) -> None:
+    """D-W1 post-show recovery. The token is literal; facts are environmental."""
+    facts: dict = {"event": "tool-window-geometry-recovered"}
+    try:
+        facts.update(collect_environment_facts(widget))
+        facts["before_client"] = {
+            "width": int(before_width),
+            "height": int(before_height),
+        }
+        facts["after_client"] = {
+            "width": int(widget.width()),
+            "height": int(widget.height()),
+        }
+        facts["minimum"] = {
+            "width": int(widget.minimumWidth()),
+            "height": int(widget.minimumHeight()),
+        }
+    except RuntimeError as exc:
+        facts["error"] = type(exc).__name__
+    try:
+        text = json.dumps(facts, ensure_ascii=False, sort_keys=True)
+    except (TypeError, ValueError) as exc:
+        _LOGGER.warning("tool-window-geometry-recovered serialization failed: %s", exc)
+        return
+    _LOGGER.warning("tool-window-geometry-recovered %s", text)
+
+
+def _client_size_facts(widget: QWidget) -> dict:
+    facts = {
+        "client": {"width": int(widget.width()), "height": int(widget.height())},
+        "minimum": {
+            "width": int(widget.minimumWidth()),
+            "height": int(widget.minimumHeight()),
+        },
+    }
+    try:
+        frame = widget.frameGeometry()
+        facts["frame"] = {"width": int(frame.width()), "height": int(frame.height())}
+    except RuntimeError:
+        facts["frame"] = None
+    return facts
+
+
+def note_tool_window_geometry(widget: QWidget, phase: str, *, plan: dict | None = None) -> None:
+    """Record one tool-window geometry phase when the layout switch is on.
+
+    The switch is ``TRACELAB_LAYOUT_DIAGNOSTICS=1`` or ``TRACELAB_LAYOUT_PROBE=1``.
+    Off means this function does nothing; D-W1 warnings are logged separately.
+    """
+    if not detailed_layout_enabled():
+        return
+    if widget is None or not _alive(widget):
+        return
+    trace = getattr(widget, "_tracelab_tool_geometry_trace", None)
+    if not isinstance(trace, dict):
+        trace = {"kind": "tool-window-geometry", "sizes": {}}
+        widget._tracelab_tool_geometry_trace = trace
+    if plan:
+        for key, value in plan.items():
+            if key == "sizes":
+                continue
+            trace[key] = value
+    trace["phase"] = str(phase)
+    sizes = trace.get("sizes")
+    if not isinstance(sizes, dict):
+        sizes = {}
+        trace["sizes"] = sizes
+    try:
+        sizes[str(phase)] = _client_size_facts(widget)
+        trace["environment"] = collect_environment_facts(widget)
+    except RuntimeError:
+        return
+    emit_layout_facts(trace, detailed=True, bounded=False)
 
 
 def emit_environment_once(widget: QWidget | None = None) -> None:

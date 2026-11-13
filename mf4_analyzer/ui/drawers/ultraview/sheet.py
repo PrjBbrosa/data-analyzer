@@ -11,9 +11,12 @@ from PyQt5.QtWidgets import QDialog, QPushButton, QVBoxLayout, QWidget
 
 from ...widgets.toast import Toast
 from ..batch._geometry import (
+    arm_post_show_geometry_check,
     clear_tool_window_transient_parent,
     configure_independent_tool_window,
+    finish_post_show_geometry_check,
     fit_dialog_to_available_screen,
+    note_tool_window_phase,
     present_independent_tool_window,
 )
 
@@ -54,6 +57,7 @@ class UltraViewSheet(QDialog):
         fit_dialog_to_available_screen(
             self, parent, 1280, 800, min_w=800, min_h=560,
         )
+        note_tool_window_phase(self, "construct-end")
 
     def present(self) -> None:
         """Adopt the Board page and show this window beside the Analyzer."""
@@ -79,12 +83,23 @@ class UltraViewSheet(QDialog):
             parent_toast(text, kind)
 
     def showEvent(self, event):  # noqa: N802 (Qt API)
+        note_tool_window_phase(self, "show-enter")
         super().showEvent(event)
         clear_tool_window_transient_parent(self)
         self._silence_dialog_buttons()
         from mf4_analyzer.ui_kit.dialog_geometry import nudge_into_work_area
 
         nudge_into_work_area(self, parent=self.parentWidget())
+        arm_post_show_geometry_check(self)
+        note_tool_window_phase(self, "show-return")
+
+    def _check_tool_window_geometry(self) -> None:
+        finish_post_show_geometry_check(self, self._refit_for_geometry_recovery)
+
+    def _refit_for_geometry_recovery(self) -> None:
+        fit_dialog_to_available_screen(
+            self, self.parentWidget(), 1280, 800, min_w=800, min_h=560,
+        )
 
     def _fit_page_on_open(self) -> None:
         if not _alive(self):
