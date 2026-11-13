@@ -2729,3 +2729,33 @@ def test_motion_instance_keeps_manager_caps_and_action_buttons(qtbot):
     assert len(analysis_manager.views) == MAX_VIEWS
     assert not analysis_bar._plus.isEnabled()
     assert analysis_bar._plus.size() == QSize(28, 28)
+
+
+def test_send_event_window_deactivate_clears_tab_hover(qtbot):
+    _manager, bar = _shown_bar(qtbot, count=3, active=1)
+    tabs = bar.tabBar()
+    _hover_icon_slot(tabs, 1)
+    assert tabs.hover_index() == 1
+    QApplication.sendEvent(bar, QEvent(QEvent.WindowDeactivate))
+    assert tabs.hover_index() == -1
+
+
+def test_child_focus_window_change_clears_tab_hover(qtbot):
+    from PyQt5.QtGui import QWindow
+    from PyQt5.QtWidgets import QVBoxLayout
+
+    host = QWidget()
+    qtbot.addWidget(host)
+    manager = _manager_with_views(count=3, active=1)
+    layout = QVBoxLayout(host)
+    bar = ViewTabBar(manager, host)
+    layout.addWidget(bar)
+    host.resize(900, 80)
+    host.show()
+    QApplication.processEvents()
+    assert not bar.isWindow()
+    tabs = bar.tabBar()
+    _hover_icon_slot(tabs, 1)
+    assert tabs.hover_index() == 1
+    bar._on_focus_window_changed(QWindow())
+    assert tabs.hover_index() == -1

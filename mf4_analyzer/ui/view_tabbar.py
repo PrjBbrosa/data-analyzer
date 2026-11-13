@@ -6,6 +6,7 @@ the integration layer.
 """
 from __future__ import annotations
 
+from PyQt5 import sip
 from PyQt5.QtCore import (
     QDateTime,
     QEvent,
@@ -18,7 +19,15 @@ from PyQt5.QtCore import (
     QTimer,
     pyqtSignal,
 )
-from PyQt5.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
+from PyQt5.QtGui import (
+    QColor,
+    QGuiApplication,
+    QIcon,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPixmap,
+)
 from PyQt5.QtWidgets import (
     QApplication,
     QFrame,
@@ -546,6 +555,7 @@ class ViewTabBar(QWidget):
         self._overflow_popup_closed_msecs = 0
         self._tab_spacer_icon = _tab_spacer_icon()
         self._motion_policy = POLICY_OFF
+        self._focus_window_connected = False
         self._user_marker_view_id = None
         self._marker_rect = QRectF()
         self._marker_view_id = ""
@@ -639,6 +649,7 @@ class ViewTabBar(QWidget):
         manager.active_changed.connect(self._sync_active)
         manager.split_changed.connect(self._on_manager_split_changed)
         self.refresh()
+        self._connect_focus_window_deactivate()
 
     def _make_section_anchor(self, section: str) -> QWidget:
         key = str(section)
@@ -1273,6 +1284,7 @@ class ViewTabBar(QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
+        self._connect_focus_window_deactivate()
         # Re-measure once shown/polished so the initial pre-style width (taken
         # during __init__'s refresh, where the row has no geometry yet) is
         # corrected against the real styled widths.
@@ -1281,20 +1293,65 @@ class ViewTabBar(QWidget):
 
     def hideEvent(self, event):
         self._close_overflow_popup()
-        self._tabs.clear_interaction_state()
-        self._relocate_marker(interpolate=False)
+        self._clear_chrome_for_deactivation()
         super().hideEvent(event)
+
+    def event(self, event):  # noqa: N802
+        if event.type() == QEvent.WindowDeactivate:
+            self._clear_chrome_for_deactivation()
+        return super().event(event)
 
     def changeEvent(self, event):
         super().changeEvent(event)
         etype = event.type()
-        if etype in (QEvent.WindowDeactivate, QEvent.ActivationChange):
-            window = self.window()
-            if window is not None and not window.isActiveWindow():
-                self._tabs.clear_interaction_state()
-                self._relocate_marker(interpolate=False)
-        elif etype in (QEvent.FontChange, QEvent.ApplicationFontChange):
+        if etype in (QEvent.FontChange, QEvent.ApplicationFontChange):
             self._relocate_marker(interpolate=False)
+
+    def _clear_chrome_for_deactivation(self) -> None:
+        """Drop hover chrome and snap the active-tab marker.
+
+        ``ActivationChange`` reaches the top-level window only, and
+        ``WindowDeactivate`` does not arrive through ``changeEvent``.
+        """
+        self._tabs.clear_interaction_state()
+        self._relocate_marker(interpolate=False)
+
+    def _connect_focus_window_deactivate(self) -> None:
+        if self._focus_window_connected:
+            return
+        app = QGuiApplication.instance()
+        if app is None:
+            return
+        app.focusWindowChanged.connect(self._on_focus_window_changed)
+        self._focus_window_connected = True
+
+    def _on_focus_window_changed(self, now) -> None:
+        try:
+            if sip.isdeleted(self):
+                return
+        except (RuntimeError, TypeError):
+            # The app signal can fire while this wrapper is being destroyed.
+            return
+        try:
+            if self.isWindow() or not self.isVisible():
+                return
+        except RuntimeError:
+            return
+        if self._focus_window_is_ours(now):
+            return
+        self._clear_chrome_for_deactivation()
+
+    def _focus_window_is_ours(self, focus_window) -> bool:
+        try:
+            if sip.isdeleted(self):
+                return False
+            host = self.window()
+            if host is None or sip.isdeleted(host):
+                return False
+            return focus_window is host.windowHandle()
+        except (RuntimeError, TypeError):
+            # sip.isdeleted / window() raise once the wrapper is gone.
+            return False
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

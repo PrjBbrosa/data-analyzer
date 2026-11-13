@@ -5,6 +5,7 @@ from collections.abc import Sequence
 
 from PyQt5 import sip
 from PyQt5.QtCore import QEvent, Qt, pyqtSignal
+from PyQt5.QtGui import QGuiApplication
 from PyQt5.QtWidgets import (
     QButtonGroup,
     QComboBox,
@@ -71,6 +72,8 @@ class SegmentedChoice(QFrame):
         self._motion_policy = resolve_policy(None)
         self._indicator: SelectionIndicator | None = None
         self._direct_activation_index: int | None = None
+        self._focus_window_connected = False
+        self._connect_focus_window_deactivate()
 
     @property
     def _motion_driver(self):
@@ -187,23 +190,67 @@ class SegmentedChoice(QFrame):
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
+        self._connect_focus_window_deactivate()
         self._snap_indicator()
 
     def hideEvent(self, event) -> None:
         self._snap_indicator()
         super().hideEvent(event)
 
+    def event(self, event) -> bool:  # noqa: N802
+        if event.type() == QEvent.WindowDeactivate:
+            self._snap_indicator()
+        return super().event(event)
+
     def changeEvent(self, event) -> None:
         super().changeEvent(event)
         kind = event.type()
-        if kind in (
-            QEvent.FontChange,
-            QEvent.EnabledChange,
-            QEvent.WindowDeactivate,
-        ):
+        if kind in (QEvent.FontChange, QEvent.EnabledChange):
             self._snap_indicator()
         if kind == QEvent.EnabledChange:
             self._refresh_enabled_chrome()
+
+    def _connect_focus_window_deactivate(self) -> None:
+        if self._focus_window_connected:
+            return
+        app = QGuiApplication.instance()
+        if app is None:
+            return
+        app.focusWindowChanged.connect(self._on_focus_window_changed)
+        self._focus_window_connected = True
+
+    def _on_focus_window_changed(self, now) -> None:
+        """Snap when a child control's top-level window loses the focus window.
+
+        A window receives ``WindowDeactivate`` in ``event()``. A child does
+        not see that event through ``changeEvent``.
+        """
+        try:
+            if sip.isdeleted(self):
+                return
+        except (RuntimeError, TypeError):
+            # The app signal can fire while this wrapper is being destroyed.
+            return
+        try:
+            if self.isWindow() or not self.isVisible():
+                return
+        except RuntimeError:
+            return
+        if self._focus_window_is_ours(now):
+            return
+        self._snap_indicator()
+
+    def _focus_window_is_ours(self, focus_window) -> bool:
+        try:
+            if sip.isdeleted(self):
+                return False
+            host = self.window()
+            if host is None or sip.isdeleted(host):
+                return False
+            return focus_window is host.windowHandle()
+        except (RuntimeError, TypeError):
+            # sip.isdeleted / window() raise once the wrapper is gone.
+            return False
 
     def wheelEvent(self, event) -> None:
         if not self.isEnabled():

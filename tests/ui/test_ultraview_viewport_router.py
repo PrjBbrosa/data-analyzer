@@ -89,8 +89,9 @@ def test_middle_pan_continues_across_canvas_children(qtbot, kind):
 def test_middle_pan_survives_stale_foreign_active_window(qtbot, qapp):
     """Capture tests leave parentless shown widgets as activeWindow.
 
-    The router must still begin a pan on the UltraView card; WindowDeactivate
-    already uninstalls when a real foreign window takes the session.
+    setActiveWindow() can deliver WindowDeactivate without moving
+    QGuiApplication.focusWindow(). Routing stays installed and effective
+    for that leftover. A real focus-window change is what suspends it.
     """
     leftover = QWidget()
     leftover.resize(64, 48)

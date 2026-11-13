@@ -3483,9 +3483,8 @@ def test_library_drop_over_board_starts_edge_timer(qtbot):
     assert not page._edge_pan_timer.isActive()
 
 
-def test_free_grid_focus_loss_cancels_active_move_without_commit(qtbot):
-    harness = _Harness(qtbot)
-    free, (card,) = _prepare_free_grid(harness, qtbot, "blur-0")
+def _arm_free_grid_move(harness, qtbot, name):
+    free, (card,) = _prepare_free_grid(harness, qtbot, name)
     requested = []
     group = []
     harness.page.free_grid_geometry_requested.connect(lambda *args: requested.append(args))
@@ -3496,23 +3495,119 @@ def test_free_grid_focus_loss_cancels_active_move_without_commit(qtbot):
     mid = QPoint(start.x() + unit * 6, start.y())
     _drag_card(card, start, mid, release=False)
     assert free.gesture().is_active()
-    harness.page.changeEvent(QEvent(QEvent.WindowDeactivate))
+    return free, requested, group
+
+
+def _assert_move_cancelled(free, requested, group) -> None:
     assert requested == []
     assert group == []
     assert not free.gesture().is_armed()
     assert free.ghost_overlay()._ghost_rect is None
 
 
-def test_app_focus_changed_to_none_no_longer_cancels_active_move(qtbot):
-    """§4.3: focusChanged(now=None) is a fragile cancel trigger.
+def test_free_grid_focus_loss_cancels_active_move_without_commit(qtbot):
+    """Both real delivery paths cancel a drag and do not commit it.
 
-    It also fires for transient reasons unrelated to real window
-    deactivation (e.g. a popup hiding/destroying mid-interaction), so using
-    it to cancel gestures risked killing an in-progress drag out from under
-    the user.  Real window deactivation is already covered by
-    changeEvent(WindowDeactivate) and hideEvent (both call
-    _cancel_board_gestures() themselves — see
-    test_free_grid_focus_loss_cancels_active_move_without_commit).
+    ``changeEvent(WindowDeactivate)`` never runs for a window-system
+    deactivation. ``sendEvent`` hits ``event()``. A foreign
+    ``focusWindowChanged`` is what Alt-Tab delivers to a child page.
+    """
+    from PyQt5.QtGui import QWindow
+
+    harness = _Harness(qtbot)
+    free, requested, group = _arm_free_grid_move(harness, qtbot, "blur-0")
+    QApplication.sendEvent(harness.page, QEvent(QEvent.WindowDeactivate))
+    _assert_move_cancelled(free, requested, group)
+
+    free, requested, group = _arm_free_grid_move(harness, qtbot, "blur-0b")
+    foreign = QWindow()
+    foreign.setObjectName("foreign-focus")
+    harness.page._on_focus_window_changed(foreign)
+    _assert_move_cancelled(free, requested, group)
+    assert harness.page._viewport_router._installed
+    assert not harness.page._viewport_router_is_active()
+
+
+def test_deactivation_clears_space_pan_and_suspends_new_gestures(qtbot):
+    from PyQt5.QtGui import QWindow
+
+    harness = _Harness(qtbot)
+    page = harness.page
+    viewport = page.board_scroll_area().viewport()
+    page.note_space(True)
+    assert page.board_viewport().space_down()
+    assert viewport.cursor().shape() == Qt.OpenHandCursor
+    QApplication.sendEvent(page, QEvent(QEvent.WindowDeactivate))
+    assert not page.board_viewport().space_down()
+    assert viewport.cursor().shape() not in (Qt.OpenHandCursor, Qt.ClosedHandCursor)
+    # Offscreen often leaves focusWindow at None. Re-showing is the
+    # supported way back to an effective router.
+    page.show()
+    qtbot.wait(10)
+    assert page._viewport_router._installed
+    assert page._viewport_router_is_active()
+
+    page.note_space(True)
+    foreign = QWindow()
+    page._on_focus_window_changed(foreign)
+    assert not page.board_viewport().space_down()
+    assert viewport.cursor().shape() not in (Qt.OpenHandCursor, Qt.ClosedHandCursor)
+    assert page._viewport_router._installed
+    assert not page._viewport_router_is_active()
+    page._on_focus_window_changed(foreign)
+    assert not page.board_viewport().space_down()
+
+    viewport.setFocus(Qt.OtherFocusReason)
+    QTest.keyPress(viewport, Qt.Key_Space)
+    assert not page.board_viewport().space_down()
+
+    page._on_focus_window_changed(page.window().windowHandle())
+    assert page._viewport_router_is_active()
+    QTest.keyPress(viewport, Qt.Key_Space)
+    assert page.board_viewport().space_down()
+    QTest.keyRelease(viewport, Qt.Key_Space)
+
+    page._on_focus_window_changed(foreign)
+    assert not page._viewport_router_is_active()
+    page.hide()
+    page.show()
+    qtbot.wait(10)
+    assert page._viewport_router._installed
+    assert page._viewport_router_is_active()
+
+
+def test_top_level_deactivate_clears_space_on_child_page(qtbot):
+    """WindowDeactivate is delivered to the top-level window, then forwarded."""
+    from PyQt5.QtWidgets import QVBoxLayout
+
+    from mf4_analyzer.ui.chart_stack.ultraview.page import UltraViewPage
+
+    host = QWidget()
+    qtbot.addWidget(host)
+    page = UltraViewPage(host)
+    layout = QVBoxLayout(host)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.addWidget(page)
+    host.resize(1200, 800)
+    host.show()
+    qtbot.wait(10)
+    assert not page.isWindow()
+    page.note_space(True)
+    assert page.board_viewport().space_down()
+    QApplication.sendEvent(host, QEvent(QEvent.WindowDeactivate))
+    assert not page.board_viewport().space_down()
+    assert page.board_scroll_area().viewport().cursor().shape() not in (
+        Qt.OpenHandCursor,
+        Qt.ClosedHandCursor,
+    )
+
+
+def test_app_focus_changed_to_none_no_longer_cancels_active_move(qtbot):
+    """focusChanged(now=None) is not window deactivation.
+
+    It also fires when a popup hides mid-drag. Real deactivation is
+    event(WindowDeactivate) and QGuiApplication.focusWindowChanged
+    (see test_free_grid_focus_loss_cancels_active_move_without_commit).
     """
     harness = _Harness(qtbot)
     free, (card,) = _prepare_free_grid(harness, qtbot, "blur-none-0")
