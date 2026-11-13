@@ -875,7 +875,42 @@ class UltraViewCard(QFrame):
         menu = self.make_context_menu()
         menu.popup(self.mapToGlobal(pos))
 
+    def _parent_left_gesture_active(self) -> bool:
+        parent = self.parentWidget()
+        if parent is None:
+            return False
+        gesture = getattr(parent, "gesture", None)
+        if callable(gesture):
+            state = gesture()
+            if state.is_armed() or state.marquee() is not None:
+                return True
+        slot = getattr(parent, "is_slot_drag_armed", None)
+        return bool(callable(slot) and slot())
+
+    def _cancel_parent_left_gesture(self) -> bool:
+        """Cancel an in-flight left gesture without committing it."""
+        if not self._parent_left_gesture_active():
+            return False
+        parent = self.parentWidget()
+        cancel = getattr(parent, "cancel_gesture", None)
+        if callable(cancel):
+            cancel()
+        else:
+            gesture = getattr(parent, "gesture", None)
+            if callable(gesture):
+                gesture().cancel_lost_button(0)
+        self._press_pos = None
+        return True
+
+    def _abandon_left_gesture_if_button_up(self, event: QMouseEvent) -> bool:
+        if event.buttons() & Qt.LeftButton:
+            return False
+        return self._cancel_parent_left_gesture()
+
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if event.button() == Qt.RightButton and self._cancel_parent_left_gesture():
+            event.accept()
+            return
         if event.button() == Qt.LeftButton:
             router = getattr(self.parentWidget(), "route_card_press", None)
             if callable(router) and router(self, event):
@@ -901,6 +936,8 @@ class UltraViewCard(QFrame):
         event.accept()
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if self._abandon_left_gesture_if_button_up(event):
+            return
         parent = self.parentWidget()
         handler = getattr(parent, "handle_card_mouse_move", None)
         armed = getattr(parent, "is_slot_drag_armed", None)
@@ -1064,6 +1101,9 @@ class FreeGridCard(UltraViewCard):
         self.autofit_requested.emit(self._model.section, self._model.view_id)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if event.button() == Qt.RightButton and self._cancel_parent_left_gesture():
+            event.accept()
+            return
         if event.button() == Qt.LeftButton:
             parent = self.parentWidget()
             already_selected = bool(self._model.selected)
@@ -1078,6 +1118,8 @@ class FreeGridCard(UltraViewCard):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if self._abandon_left_gesture_if_button_up(event):
+            return
         parent = self.parentWidget()
         handler = getattr(parent, "handle_card_mouse_move", None)
         gesture = getattr(parent, "gesture", None)

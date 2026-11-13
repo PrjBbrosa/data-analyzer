@@ -1239,7 +1239,7 @@ _HINTS = (
     ),
     Hint(
         id="ultraview.pan",
-        text="左键框选，右键拖动画布，四向可平移",
+        text="左键框选，右键拖，四向，Shift+滚轮横向",
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=89,

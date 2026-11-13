@@ -454,6 +454,26 @@ def test_workspace_gesture_signal_has_a_single_active_lifetime(qtbot, qapp):
     assert seen[-1] == (False, None)
 
 
+def test_right_press_during_left_gesture_cancels_without_changing_the_model(qtbot):
+    from tests.ui.test_ultraview_gesture_preview import (
+        MOVER_BLUE,
+        _placement_signature,
+        _prepare_colored_board,
+    )
+
+    board = _prepare_colored_board(qtbot, ("right-cancel", MOVER_BLUE))
+    card = board.card_for("time", "right-cancel")
+    before = _placement_signature(board)
+    QTest.mousePress(card, Qt.LeftButton, Qt.NoModifier, QPoint(24, 24))
+    assert board.gesture().is_armed()
+    QTest.mousePress(card, Qt.RightButton, Qt.NoModifier, QPoint(30, 30))
+    assert not board.gesture().is_armed()
+    assert board.gesture().session() is None
+    assert _placement_signature(board) == before
+    QTest.mouseRelease(card, Qt.RightButton, Qt.NoModifier, QPoint(30, 30))
+    assert _placement_signature(board) == before
+
+
 if __name__ == "__main__":
     if len(sys.argv) >= 3 and sys.argv[1] == "--dpr-child":
         _probe_card_dpr(float(sys.argv[2]))

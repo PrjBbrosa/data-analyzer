@@ -20,6 +20,7 @@ from .elastic_workspace import edge_pan_velocity
 from .free_grid import screen_grid_metrics
 from .free_grid_board import FreeGridBoard
 from .template_board import BoardGrid
+from .pointer_router import pointer_button_is_down
 from .viewport import (
     QUALITY_FAST,
     QUALITY_SMOOTH,
@@ -177,6 +178,7 @@ class ViewportController(QObject):
         self._filled_card: tuple[str, str] | None = None
         self._ignore_next_context_menu = False
         self._right_gesture_widget: QWidget | None = None
+        self._wheel_line_remainder = 0.0
 
         self._edge_pan_timer = QTimer(self)
         self._edge_pan_timer.setObjectName("ultraViewWorkspaceEdgePanTimer")
@@ -418,12 +420,88 @@ class ViewportController(QObject):
         self._apply_zoom_and_center(zoom, center)
 
     def handle_zoom_wheel(self, event: QWheelEvent, widget) -> bool:
-        factor = wheel_zoom_factor(event.angleDelta().y(), event.pixelDelta().y())
-        if factor == 1.0:
+        modifiers = int(event.modifiers())
+        if modifiers & int(Qt.ControlModifier | Qt.MetaModifier):
+            factor = wheel_zoom_factor(event.angleDelta().y(), event.pixelDelta().y())
+            if factor == 1.0:
+                return False
+            cursor = self._cursor_in_scroll_viewport(event, widget)
+            self._zoom_at(self._viewport.zoom() * factor, cursor)
+            return True
+        return self.handle_scroll_wheel(event)
+
+    def handle_scroll_wheel(self, event: QWheelEvent) -> bool:
+        """Scroll from a non-zoom wheel. Plain angle wheels stay with Qt.
+
+        Shift uses the same line step as a vertical notch, on the horizontal
+        bar. A pixel-only trackpad event scrolls both axes by that pixel delta.
+        """
+        pixel = event.pixelDelta()
+        angle = event.angleDelta()
+        if pixel.x() == 0 and pixel.y() == 0 and angle.x() == 0 and angle.y() == 0:
             return False
-        cursor = self._cursor_in_scroll_viewport(event, widget)
-        self._zoom_at(self._viewport.zoom() * factor, cursor)
-        return True
+        if angle.x() == 0 and angle.y() == 0:
+            sign = self._wheel_pixel_sign()
+            self._nudge_scrollbar(self._board_scroll.horizontalScrollBar(), sign * int(pixel.x()))
+            self._nudge_scrollbar(self._board_scroll.verticalScrollBar(), sign * int(pixel.y()))
+            return True
+        if int(event.modifiers()) & int(Qt.ShiftModifier):
+            delta = self._line_scroll_delta(self._dominant_wheel_angle(angle))
+            self._nudge_scrollbar(self._board_scroll.horizontalScrollBar(), delta)
+            return True
+        return False
+
+    def _dominant_wheel_angle(self, angle) -> int:
+        if int(angle.y()) != 0:
+            return int(angle.y())
+        return int(angle.x())
+
+    def _wheel_pixel_sign(self) -> int:
+        """Match a positive angle notch, which follows invertedControls."""
+        if self._board_scroll.verticalScrollBar().invertedControls():
+            return -1
+        return 1
+
+    def _line_scroll_delta(self, angle: int) -> int:
+        """Qt's plain-wheel line step, including its fractional accumulator.
+
+        ``QAbstractSlider`` scrolls ``wheelScrollLines * singleStep`` per
+        120-unit notch and caps one event at ``pageStep``. Shift must use
+        that line step, not the page step the slider applies for Shift.
+        """
+        bar = self._board_scroll.verticalScrollBar()
+        lines = int(QApplication.wheelScrollLines())
+        if lines < 1:
+            lines = 1
+        single = int(bar.singleStep())
+        if single < 1:
+            single = 1
+        pending = float(lines) * (float(angle) / 120.0) * float(single)
+        if (
+            self._wheel_line_remainder != 0.0
+            and pending != 0.0
+            and (pending / self._wheel_line_remainder) < 0.0
+        ):
+            self._wheel_line_remainder = 0.0
+        self._wheel_line_remainder += pending
+        whole = int(self._wheel_line_remainder)
+        page = int(bar.pageStep())
+        if page < 1:
+            page = 1
+        applied = whole
+        if applied > page:
+            applied = page
+        elif applied < -page:
+            applied = -page
+        self._wheel_line_remainder -= float(whole)
+        if bar.invertedControls():
+            applied = -applied
+        return applied
+
+    def _nudge_scrollbar(self, bar, delta: int) -> None:
+        if int(delta) == 0:
+            return
+        bar.setValue(int(bar.value()) + int(delta))
 
     def handle_pinch(self, event: QNativeGestureEvent, widget) -> bool:
         if event.gestureType() != Qt.ZoomNativeGesture:
@@ -454,6 +532,13 @@ class ViewportController(QObject):
             widget = QApplication.widgetAt(event.globalPos())
         if is_right and not self._is_board_canvas_widget(widget):
             return False
+        if (
+            is_right
+            and self._viewport.is_panning()
+            and self._viewport.pan_button() == int(Qt.LeftButton)
+        ):
+            self.abandon_board_pan()
+            return False
         if not is_right:
             self._cancel_board_gestures()
             self._pause_draw()
@@ -466,8 +551,18 @@ class ViewportController(QObject):
             self._restart_smooth_timer()
         return True
 
+    def abandon_board_pan(self) -> None:
+        """End a pan whose button or grab disappeared without a new delta."""
+        if not self._viewport.is_panning():
+            return
+        self.end_board_pan()
+
     def update_board_pan(self, event) -> None:
         if not self._viewport.is_panning():
+            return
+        buttons = int(event.buttons()) if hasattr(event, "buttons") else 0
+        if not pointer_button_is_down(buttons, self._viewport.pan_button()):
+            self.abandon_board_pan()
             return
         threshold = 0.0
         if self._viewport.pan_button() == int(Qt.RightButton):

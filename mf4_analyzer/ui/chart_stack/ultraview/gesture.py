@@ -29,6 +29,8 @@ from .free_grid import (
 )
 
 Rect = tuple[int, int, int, int]
+# Qt.LeftButton, stored as an int so this module stays free of PyQt.
+_LEFT_BUTTON = 1
 
 
 @dataclass
@@ -47,6 +49,7 @@ class GestureSession:
     plan: LayoutPlan | None = None
     layout_revision: int = 0
     plan_reused: bool = False
+    button: int = _LEFT_BUTTON
 
     def ghost_pixels(self, metrics: GridMetrics, pos: tuple[int, int]) -> Rect:
         rect = self._preview_rect()
@@ -130,6 +133,7 @@ class MarqueeSession:
     origin: tuple[int, int]
     current: tuple[int, int]
     additive: bool = False
+    button: int = _LEFT_BUTTON
 
     def rect(self) -> Rect:
         x0, y0 = self.origin
@@ -360,6 +364,19 @@ class FreeGridGesture:
             session.candidate = session.plan.mover_after
             session.group_candidates[session.ref] = session.plan.mover_after
         return session
+
+    def cancel_lost_button(self, buttons: int) -> bool:
+        """Drop a move or marquee whose button is no longer down. Does not commit."""
+        cancelled = False
+        session = self._session
+        if session is not None and not (int(buttons) & int(session.button)):
+            self.cancel()
+            cancelled = True
+        marquee = self._marquee
+        if marquee is not None and not (int(buttons) & int(marquee.button)):
+            self.cancel_marquee()
+            cancelled = True
+        return cancelled
 
     def cancel(self) -> GestureSession | None:
         session = self._session

@@ -547,6 +547,57 @@ def test_drag_does_not_freeze_or_clear_card_pixels(qtbot, monkeypatch):
     _release(card, over)
 
 
+def _placement_signature(board) -> tuple:
+    return tuple(
+        (
+            item.ref.section,
+            item.ref.view_id,
+            item.rect.column,
+            item.rect.row,
+            item.rect.column_span,
+            item.rect.row_span,
+        )
+        for item in board.current_placements()
+    )
+
+
+def test_move_without_buttons_cancels_the_gesture_and_keeps_the_model(qtbot):
+    board = _prepare_colored_board(qtbot, ("lost-release", MOVER_BLUE))
+    card = board.card_for("time", "lost-release")
+    before = _placement_signature(board)
+    start = QPoint(24, 24)
+    _press(card, start)
+    assert board.gesture().is_armed()
+    far = QPoint(start.x() + 90, start.y() + 40)
+    event = QMouseEvent(
+        QEvent.MouseMove,
+        far,
+        card.mapToGlobal(far),
+        Qt.NoButton,
+        Qt.NoButton,
+        Qt.NoModifier,
+    )
+    QApplication.sendEvent(card, event)
+    assert not board.gesture().is_armed()
+    assert board.gesture().session() is None
+    assert _placement_signature(board) == before
+    _release(card, far)
+    assert _placement_signature(board) == before
+
+
+def test_cancel_lost_button_drops_the_session_without_committing(qtbot):
+    board = _prepare_colored_board(qtbot, ("lost-button", MOVER_BLUE))
+    card = board.card_for("time", "lost-button")
+    before = _placement_signature(board)
+    _press(card, QPoint(24, 24))
+    gesture = board.gesture()
+    assert gesture.is_armed()
+    assert gesture.cancel_lost_button(0) is True
+    assert gesture.session() is None
+    assert gesture.take() is None
+    assert _placement_signature(board) == before
+
+
 def test_illegal_overlay_roles_do_not_use_global_legal_for_neighbors(qtbot):
     overlay = GhostOverlay()
     qtbot.addWidget(overlay)
