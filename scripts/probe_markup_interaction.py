@@ -16,7 +16,9 @@ Under offscreen, or with no ``DISPLAY``, ``--self-check`` prints
 call that an X11 result. Offscreen numbers are not Windows evidence.
 
 This script is not product code. It does not write into ``docs/`` or the
-git tree. Hint ``QSettings`` go to a temporary INI under ``TMPDIR``.
+git tree. Hint ``QSettings`` go to a temporary INI under ``TMPDIR`` when
+that variable is set, otherwise the platform temp directory
+(``TEMP`` / ``TMP`` on Windows).
 
     .venv/bin/python scripts/probe_markup_interaction.py --help
     TMPDIR=/tmp QT_QPA_PLATFORM=offscreen PYTHONPATH=. \\
@@ -401,9 +403,12 @@ def _run(names: list[str]) -> int:
     app.setOrganizationName("TraceLabProbe")
     app.setApplicationName("MarkupInteractionProbe")
     results = []
-    tmp_root = os.environ.get("TMPDIR") or "/tmp"
+    tmp_root = os.environ.get("TMPDIR")
+    temp_kwargs = {"prefix": "tracelab-markup-input-"}
+    if tmp_root:
+        temp_kwargs["dir"] = tmp_root
     try:
-        with tempfile.TemporaryDirectory(prefix="tracelab-markup-input-", dir=tmp_root) as tmp:
+        with tempfile.TemporaryDirectory(**temp_kwargs) as tmp:
             directory = Path(tmp)
             _redirect_qsettings(directory)
             for name in names:

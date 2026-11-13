@@ -17,7 +17,10 @@ Offscreen numbers are not Windows evidence and are not X11 evidence.
 
 This script is not product code. It does not write into ``docs/`` or the
 git tree. ``MainWindow`` preferences are redirected to a temporary INI
-under ``TMPDIR``.
+under ``TMPDIR`` when that variable is set, otherwise the platform temp
+directory (``TEMP`` / ``TMP`` on Windows). The deactivation scenario may
+leave Space held in the app; that observation is recorded, then Space and
+any pan are cleared before the next scenario.
 
     .venv/bin/python scripts/probe_ultraview_interaction.py --help
     TMPDIR=/tmp QT_QPA_PLATFORM=offscreen PYTHONPATH=. \\
@@ -108,6 +111,40 @@ def _xdo(*args: str) -> dict:
         "stdout": (completed.stdout or "")[-400:],
         "stderr": (completed.stderr or "")[-400:],
     }
+
+
+def _temp_directory(prefix: str):
+    """Honor ``TMPDIR`` when set; otherwise use the platform temp dir.
+
+    A hardcoded ``/tmp`` fallback raises ``FileNotFoundError`` on Windows
+    when ``TMPDIR`` is unset and the drive has no ``\\tmp``.
+    """
+    root = os.environ.get("TMPDIR")
+    if root:
+        return tempfile.TemporaryDirectory(prefix=prefix, dir=root)
+    return tempfile.TemporaryDirectory(prefix=prefix)
+
+
+def _release_gesture_state(session: _Session) -> None:
+    """Clear Space-pan left behind by the deactivation scenario.
+
+    The U-1 reading is already in that scenario's result. Later scenarios
+    share this session; a stuck ``space_down`` makes left-drag a board pan,
+    so card-drag and author-select would measure the wrong gesture.
+    """
+    _xdo("keyup", "space")
+    page = session.page
+    note = getattr(page, "note_space", None)
+    if callable(note):
+        note(False)
+    cancel = getattr(page, "_cancel_board_gestures", None)
+    if callable(cancel):
+        cancel()
+    controller = getattr(page, "_viewport_ctrl", None)
+    end_pan = getattr(controller, "end_board_pan", None) if controller is not None else None
+    if callable(end_pan):
+        end_pan()
+    _pump(session.app, 0.05)
 
 
 def _release_inputs() -> None:
@@ -632,9 +669,8 @@ def _run(names: list[str]) -> int:
     app.setApplicationName("UltraViewInteractionProbe")
     session = None
     results = []
-    tmp_root = os.environ.get("TMPDIR") or "/tmp"
     try:
-        with tempfile.TemporaryDirectory(prefix="tracelab-ultraview-input-", dir=tmp_root) as tmp:
+        with _temp_directory("tracelab-ultraview-input-") as tmp:
             try:
                 session = _open_session(app, Path(tmp))
             except Exception as exc:  # noqa: BLE001
@@ -659,6 +695,8 @@ def _run(names: list[str]) -> int:
                                 "traceback": traceback.format_exc(),
                             }
                         )
+                    if name == "deactivation":
+                        _release_gesture_state(session)
     finally:
         _release_inputs()
         if session is not None:

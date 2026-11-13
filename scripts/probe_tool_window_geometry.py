@@ -15,7 +15,8 @@ a substitute for a real Windows display (CLAUDE.md Gotchas). A native Linux
 or Wine reading is not a Windows frame-inset measurement either. This
 script is not product code. It does not write into ``docs/`` or the git
 tree. Batch preferences and the markup hint store go to a temporary INI
-under ``TMPDIR`` (default ``/tmp``).
+under ``TMPDIR`` when that variable is set, otherwise the platform temp
+directory (``TEMP`` / ``TMP`` on Windows).
 
 Run from a source checkout, including a Windows source tree beside a
 frozen build. The script imports ``mf4_analyzer``; it is not packed inside
@@ -339,8 +340,11 @@ def _run(self_check: bool) -> int:
     app.setApplicationName("ToolWindowGeometry")
     records: list[dict] = []
     ultraview_ok = False
-    tmp_root = os.environ.get("TMPDIR") or "/tmp"
-    with tempfile.TemporaryDirectory(prefix="tracelab-tool-geometry-", dir=tmp_root) as tmp:
+    tmp_root = os.environ.get("TMPDIR")
+    temp_kwargs = {"prefix": "tracelab-tool-geometry-"}
+    if tmp_root:
+        temp_kwargs["dir"] = tmp_root
+    with tempfile.TemporaryDirectory(**temp_kwargs) as tmp:
         directory = Path(tmp)
         _redirect_qsettings(directory)
         ultraview_ok = _open_ultraview(records)
