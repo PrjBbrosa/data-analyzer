@@ -2997,8 +2997,9 @@ QWidget#chartToolbar QToolButton:disabled {
     background-color: #f8fafc;
 }
 
-/* Markup editor toolbar: standard 36px rectangles, Precision Light wash
- * on hover/checked. Width/colour chips live in the style popup, not here. */
+/* Markup editor toolbar: standard 36px rectangles. Hover is a light fill;
+ * the selected tool is a solid accent fill. Width/colour chips live in the
+ * style popup, not here. */
 QWidget#markupEditorToolbar {
     background-color: #ffffff;
 }
@@ -3031,9 +3032,12 @@ QWidget#markupEditorToolbar QToolButton:pressed {
     background-color: {{SURFACE_ACCENT_PALE_BG}};
     border-color: {{CONTROL_ACCENT}};
 }
-QWidget#markupEditorToolbar QToolButton:checked {
-    background-color: {{SURFACE_ACCENT_PALE_BG}};
+QWidget#markupEditorToolbar QToolButton:checked,
+QWidget#markupEditorToolbar QToolButton:checked:hover,
+QWidget#markupEditorToolbar QToolButton:checked:pressed {
+    background-color: {{CONTROL_ACCENT}};
     border-color: {{CONTROL_ACCENT}};
+    color: #ffffff;
 }
 QWidget#markupEditorToolbar QToolButton#markupCloseButton:hover,
 QWidget#markupEditorToolbar QToolButton#markupCloseButton:pressed {

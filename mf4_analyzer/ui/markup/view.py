@@ -13,6 +13,7 @@ from PyQt5.QtWidgets import (
 )
 
 from .commands import _GeometryCommand, _MoveCommand
+from .items import _ArrowAnnotationItem
 
 
 class _MarkupGraphicsView(QGraphicsView):
@@ -398,20 +399,34 @@ class _MarkupGraphicsView(QGraphicsView):
         super().wheelEvent(event)
 
     def _create_preview(self, tool: str, point: QPointF):
-        pen = self._editor._pen()
-        pen.setStyle(Qt.DashLine)
-        if tool in {"rect", "crop"}:
+        # Finished marks and their previews share a type and a solid pen.
+        # Dash stays on the crop box and the rubber band only.
+        if tool == "crop":
             item = QGraphicsRectItem(QRectF(point, point))
-            brush = QBrush(QColor(20, 96, 255, 34)) if tool == "crop" else QBrush(Qt.NoBrush)
-            item.setBrush(brush)
-        elif tool in {"line", "arrow"}:
+            item.setPen(QPen(QColor("#1769e0"), 1, Qt.DashLine))
+            item.setBrush(QBrush(QColor(23, 105, 224, 38)))
+        elif tool == "rect":
+            item = QGraphicsRectItem(QRectF(point, point))
+            item.setPen(self._editor._pen())
+            item.setBrush(QBrush(Qt.NoBrush))
+        elif tool == "line":
             item = QGraphicsLineItem(QLineF(point, point))
+            item.setPen(self._editor._pen())
+        elif tool == "arrow":
+            item = _ArrowAnnotationItem(
+                QPointF(point),
+                QPointF(point),
+                self._editor._pen(),
+                QColor(self._editor._color),
+            )
+            item.setFlag(QGraphicsItem.ItemIsSelectable, False)
+            item.setFlag(QGraphicsItem.ItemIsMovable, False)
         elif tool == "pen":
             self._path = QPainterPath(point)
             item = QGraphicsPathItem(self._path)
+            item.setPen(self._editor._pen())
         else:
             return None
-        item.setPen(pen)
         item.setZValue(10)
         item.setData(0, "markup_preview")
         item.setAcceptedMouseButtons(Qt.NoButton)
@@ -422,11 +437,16 @@ class _MarkupGraphicsView(QGraphicsView):
     def _update_preview(self, point: QPointF):
         if self._preview is None:
             return
+        if isinstance(self._preview, _ArrowAnnotationItem):
+            self._preview.set_endpoint("p2", point)
+            return
         if isinstance(self._preview, QGraphicsRectItem):
             self._preview.setRect(QRectF(self._start, point).normalized())
-        elif isinstance(self._preview, QGraphicsLineItem):
+            return
+        if isinstance(self._preview, QGraphicsLineItem):
             self._preview.setLine(QLineF(self._start, point))
-        elif isinstance(self._preview, QGraphicsPathItem):
+            return
+        if isinstance(self._preview, QGraphicsPathItem):
             self._path.lineTo(point)
             self._preview.setPath(self._path)
 

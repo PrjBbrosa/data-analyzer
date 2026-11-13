@@ -1925,6 +1925,197 @@ def test_wheel_zoom_keeps_the_scene_point_under_the_pointer(qtbot):
             assert editor._stroke_width == stroke
 
 
+def _press_and_move(editor, start, points):
+    editor.show()
+    viewport = editor._view.viewport()
+
+    def _send(kind, scene_point, button, buttons):
+        pos = editor._view.mapFromScene(QPointF(scene_point[0], scene_point[1]))
+        QApplication.sendEvent(
+            viewport,
+            QMouseEvent(kind, QPointF(pos), button, buttons, Qt.NoModifier),
+        )
+
+    _send(QEvent.MouseButtonPress, start, Qt.LeftButton, Qt.LeftButton)
+    for point in points:
+        _send(QEvent.MouseMove, point, Qt.NoButton, Qt.LeftButton)
+
+
+def _screen_square(editor, handle):
+    rect = editor._view.transform().mapRect(handle.mapRectToScene(handle.rect()))
+    return rect.width(), rect.height()
+
+
+@pytest.mark.parametrize("zoom", [0.25, 1.0, 4.0])
+def test_handles_are_nine_screen_pixels_at_every_zoom(qtbot, zoom):
+    editor = MarkupEditor(_pixmap(400, 300))
+    qtbot.addWidget(editor)
+    rect = editor.add_rect_item(QRectF(80, 60, 90, 70))
+    rect.setSelected(True)
+    editor.set_zoom(zoom)
+    editor.refresh_handles()
+    assert editor._handles
+    widths = set()
+    heights = set()
+    for handle in editor._handles:
+        width, height = _screen_square(editor, handle)
+        assert width == pytest.approx(9.0, abs=0.01)
+        assert height == pytest.approx(9.0, abs=0.01)
+        widths.add(round(width, 4))
+        heights.add(round(height, 4))
+    assert len(widths) == 1
+    assert len(heights) == 1
+
+
+def test_handle_hit_pad_stays_14_screen_pixels_across_zoom(qtbot):
+    from mf4_analyzer.ui.markup.editor import _HANDLE_HIT_SCREEN_PX
+
+    assert _HANDLE_HIT_SCREEN_PX == 14.0
+    editor = MarkupEditor(_pixmap(400, 300))
+    qtbot.addWidget(editor)
+    rect = editor.add_rect_item(QRectF(80, 60, 90, 70))
+    rect.setSelected(True)
+    for zoom in (0.25, 1.0, 4.0):
+        editor.set_zoom(zoom)
+        editor.refresh_handles()
+        corner = next(handle for handle in editor._handles if handle._role == "br")
+        center = corner.sceneBoundingRect().center()
+        tolerance = 14.0 / zoom
+        assert editor.handle_at(center + QPointF(tolerance * 0.5, 0)) is not None
+        assert editor.handle_at(center + QPointF(tolerance + 1.0, 0)) is None
+
+
+@pytest.mark.parametrize(
+    "tool,item_type",
+    [
+        ("arrow", _ArrowAnnotationItem),
+        ("line", QGraphicsLineItem),
+        ("rect", QGraphicsRectItem),
+        ("pen", QGraphicsPathItem),
+    ],
+)
+def test_draw_preview_matches_the_finished_mark(qtbot, tool, item_type):
+    editor = MarkupEditor(_pixmap())
+    qtbot.addWidget(editor)
+    editor.set_color(QColor("#059669"))
+    editor.set_stroke_width(6)
+    editor.set_tool(tool)
+    _press_and_move(editor, (12, 14), [(70, 48)])
+    preview = editor._view._preview
+    assert type(preview) is item_type
+    pen = preview.pen()
+    finished = editor._pen()
+    assert pen.style() == Qt.SolidLine
+    assert pen.widthF() == pytest.approx(finished.widthF())
+    assert pen.color().rgba() == finished.color().rgba()
+    if tool == "arrow":
+        head = preview._arrow_head()
+        assert head.count() == 3
+        assert head.at(0) != head.at(1)
+    if tool == "rect":
+        assert preview.brush().style() == Qt.NoBrush
+
+
+def test_pen_preview_appends_each_new_segment(qtbot):
+    editor = MarkupEditor(_pixmap())
+    qtbot.addWidget(editor)
+    editor.set_tool("pen")
+    _press_and_move(editor, (10, 10), [(20, 12), (28, 30), (40, 36)])
+    path = editor._view._path
+    assert path.elementCount() == 4
+    assert path.elementAt(0).x == pytest.approx(10)
+    assert path.elementAt(0).y == pytest.approx(10)
+    assert path.elementAt(1).x == pytest.approx(20)
+    assert path.elementAt(3).x == pytest.approx(40)
+    assert path.elementAt(3).y == pytest.approx(36)
+
+
+def test_crop_preview_and_rubber_band_stay_dashed(qtbot):
+    editor = MarkupEditor(_pixmap())
+    qtbot.addWidget(editor)
+    editor.set_tool("crop")
+    _press_and_move(editor, (8, 8), [(40, 30)])
+    assert editor._view._preview.pen().style() == Qt.DashLine
+    editor._view.cancel_in_progress_draft()
+
+    editor.set_tool("select")
+    _press_and_move(editor, (8, 8), [(50, 36)])
+    band = editor._view._rubber_band
+    assert band is not None
+    assert band.pen().style() == Qt.DashLine
+
+
+def test_stroke_width_is_clamped_to_1_through_24(qtbot):
+    editor = MarkupEditor(_pixmap())
+    qtbot.addWidget(editor)
+    for raw, expected in ((0, 1), (-3, 1), (1, 1), (24, 24), (25, 24), (100, 24)):
+        editor.set_stroke_width(raw)
+        assert editor._stroke_width == expected
+    rect = editor.add_rect_item(QRectF(4, 4, 20, 12))
+    rect.setSelected(True)
+    editor.set_stroke_width(40)
+    assert editor._stroke_width == 24
+    assert rect.pen().widthF() == pytest.approx(24)
+
+
+def test_bracket_keys_stay_inside_the_stroke_range(qtbot):
+    editor = MarkupEditor(_pixmap())
+    qtbot.addWidget(editor)
+    editor.show()
+    editor.set_stroke_width(1)
+    qtbot.keyClick(editor._view, Qt.Key_BracketLeft)
+    assert editor._stroke_width == 1
+    editor.set_stroke_width(24)
+    qtbot.keyClick(editor._view, Qt.Key_BracketRight)
+    assert editor._stroke_width == 24
+    qtbot.keyClick(editor._view, Qt.Key_BracketLeft)
+    assert editor._stroke_width == 23
+
+
+def test_more_colors_applies_an_alpha_color_for_this_editor_session(qtbot, monkeypatch):
+    from PyQt5.QtWidgets import QColorDialog
+
+    editor = MarkupEditor(_pixmap())
+    qtbot.addWidget(editor)
+    chosen = QColor(12, 34, 56, 128)
+    seen = {}
+
+    def _fake_get_color(*args, **kwargs):
+        seen["args"] = args
+        seen["kwargs"] = kwargs
+        return QColor(chosen)
+
+    monkeypatch.setattr(QColorDialog, "getColor", _fake_get_color)
+    button = editor.findChild(QAbstractButton, "markupMoreColorsButton")
+    assert button is not None and button.text() == "更多颜色…"
+    button.click()
+
+    options = seen["args"][3] if len(seen["args"]) > 3 else seen["kwargs"].get("options")
+    assert int(options) & int(QColorDialog.ShowAlphaChannel)
+    assert editor._color.rgba() == chosen.rgba()
+    first = editor.add_rect_item(QRectF(2, 2, 10, 8))
+    second = editor.add_rect_item(QRectF(20, 2, 10, 8))
+    assert first.pen().color().rgba() == chosen.rgba()
+    assert second.pen().color().rgba() == chosen.rgba()
+
+    other = MarkupEditor(_pixmap())
+    qtbot.addWidget(other)
+    assert other._color.name().lower() == "#e53935"
+    assert other._color.alpha() == 255
+
+
+def test_more_colors_cancel_keeps_the_current_color(qtbot, monkeypatch):
+    from PyQt5.QtWidgets import QColorDialog
+
+    editor = MarkupEditor(_pixmap())
+    qtbot.addWidget(editor)
+    before = QColor(editor._color)
+
+    monkeypatch.setattr(QColorDialog, "getColor", lambda *_args, **_kwargs: QColor())
+    editor.findChild(QAbstractButton, "markupMoreColorsButton").click()
+    assert editor._color.rgba() == before.rgba()
+
+
 def test_ctrl_s_marks_the_stack_clean_only_when_save_succeeds(qtbot, tmp_path, monkeypatch):
     editor = MarkupEditor(_pixmap())
     qtbot.addWidget(editor)

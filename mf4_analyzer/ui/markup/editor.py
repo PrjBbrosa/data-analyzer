@@ -15,6 +15,7 @@ from PyQt5.QtGui import (
     QTransform,
 )
 from PyQt5.QtWidgets import (
+    QColorDialog,
     QFileDialog,
     QGraphicsEllipseItem,
     QGraphicsItem,
@@ -52,6 +53,7 @@ from .handles import (
     corner_scale_factor,
     handle_hit_tolerance,
     handle_points,
+    handle_scene_extent,
     nearest_within_tolerance,
     resize_rect,
 )
@@ -62,12 +64,15 @@ from .toolbar import (
     build_toolbar,
     color_button_qss,
     compact_tool_button_qss,
+    tool_for_key,
 )
 from .view import _MarkupGraphicsView
 
 _HIT_TOLERANCE = 12.0
 _HIT_SCREEN_PX = 8.0
 _HANDLE_HIT_SCREEN_PX = 14.0
+_MIN_STROKE_WIDTH = 1
+_MAX_STROKE_WIDTH = 24
 # Scene chrome is not an annotation. The view tags previews and the rubber band
 # with the same data role this filter rejects.
 _CHROME_ITEM_DATA = frozenset({
@@ -148,7 +153,7 @@ class MarkupEditor(QWidget):
         "number": "ph.number-square-one",
     }
     _TOOL_ICON_COLOR = "#334155"          # idle glyph on the white chip
-    _TOOL_ICON_COLOR_ACTIVE = "#1769e0"   # selected glyph on the wash chip
+    _TOOL_ICON_COLOR_ACTIVE = "#ffffff"   # selected glyph on the solid accent chip
     _HANDLE_CURSORS = {
         "tl": Qt.SizeFDiagCursor,
         "br": Qt.SizeFDiagCursor,
@@ -562,6 +567,7 @@ class MarkupEditor(QWidget):
         self._auto_fit = False
         self._zoom = min(8.0, max(0.1, float(zoom)))
         self._view.setTransform(QTransform().scale(self._zoom, self._zoom))
+        self.refresh_handles()
 
     def actual_size(self) -> None:
         self.set_zoom(1.0)
@@ -570,6 +576,7 @@ class MarkupEditor(QWidget):
         self._view.fitInView(self._scene.sceneRect(), Qt.KeepAspectRatio)
         self._zoom = self._view.transform().m11()
         self._auto_fit = True
+        self.refresh_handles()
 
     def set_color(self, color: QColor) -> None:
         entries = []
@@ -584,6 +591,11 @@ class MarkupEditor(QWidget):
         self.refresh_handles()
 
     def set_stroke_width(self, width: int) -> None:
+        width = int(width)
+        if width < _MIN_STROKE_WIDTH:
+            width = _MIN_STROKE_WIDTH
+        elif width > _MAX_STROKE_WIDTH:
+            width = _MAX_STROKE_WIDTH
         entries = []
         for item in self.selected_markup_items():
             if isinstance(item, QGraphicsTextItem):
@@ -591,13 +603,25 @@ class MarkupEditor(QWidget):
                 # change here would just litter the undo stack with no-ops.
                 continue
             before = self._item_style(item)
-            entries.append((item, before, (before[0], int(width))))
-        self._stroke_width = int(width)
+            entries.append((item, before, (before[0], width)))
+        self._stroke_width = width
         if entries:
             self._undo_stack.push(_StyleCommand(self, entries))
         self._refresh_style_button_icon()
         self._sync_style_panel()
         self.refresh_handles()
+
+    def choose_custom_color(self) -> None:
+        """Pick a session color, including alpha, from the palette's last entry."""
+        color = QColorDialog.getColor(
+            QColor(self._color),
+            self,
+            "更多颜色",
+            QColorDialog.ShowAlphaChannel,
+        )
+        if not color.isValid():
+            return
+        self.set_color(QColor(color))
 
     def set_tool(self, tool: str) -> None:
         if tool not in self.TOOLS:
@@ -972,13 +996,17 @@ class MarkupEditor(QWidget):
         self._handles = []
 
     def _make_handle(self, point: QPointF, role: str, target=None):
-        handle = QGraphicsRectItem(-4, -4, 8, 8)
+        side = handle_scene_extent(self._zoom)
+        handle = QGraphicsRectItem(-side / 2.0, -side / 2.0, side, side)
         handle.setData(0, "editor_handle")
         handle._role = role
         handle._target = target
         handle.setZValue(80)
         handle.setPos(point)
-        handle.setPen(QPen(QColor("#1769e0"), 1))
+        pen = QPen(QColor("#1769e0"))
+        pen.setCosmetic(True)
+        pen.setWidthF(1.0)
+        handle.setPen(pen)
         handle.setBrush(QBrush(QColor("#ffffff")))
         self._scene.addItem(handle)
         self._handles.append(handle)
@@ -1289,7 +1317,7 @@ class MarkupEditor(QWidget):
             event.accept()
             return
         if key == Qt.Key_BracketLeft:
-            self.set_stroke_width(max(1, self._stroke_width - 1))
+            self.set_stroke_width(self._stroke_width - 1)
             event.accept()
             return
         if key == Qt.Key_BracketRight:
@@ -1297,18 +1325,10 @@ class MarkupEditor(QWidget):
             event.accept()
             return
 
-        shortcuts = {
-            Qt.Key_V: "select",
-            Qt.Key_A: "arrow",
-            Qt.Key_L: "line",
-            Qt.Key_R: "rect",
-            Qt.Key_P: "pen",
-            Qt.Key_T: "text",
-            Qt.Key_N: "number",
-            Qt.Key_C: "crop",
-        }
-        if key in shortcuts and not command:
-            self.set_tool(shortcuts[key])
-            event.accept()
-            return
+        if not command:
+            tool = tool_for_key(key)
+            if tool is not None:
+                self.set_tool(tool)
+                event.accept()
+                return
         super().keyPressEvent(event)

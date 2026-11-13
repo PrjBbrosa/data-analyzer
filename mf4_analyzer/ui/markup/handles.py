@@ -27,6 +27,10 @@ CROP_ROLE_PREFIX = "crop_"
 # become unclickable.
 MIN_DRAG_SCALE = 0.25
 
+# Handle squares stay this many screen pixels on a side at every zoom. The hit
+# pad is a separate radius (handle_hit_tolerance) and does not follow this size.
+HANDLE_SCREEN_PX = 9.0
+
 
 def bare_role(role: str) -> str:
     """Strip the crop prefix so crop and item handles share one role table."""
@@ -105,6 +109,15 @@ def corner_scale_factor(top_left, point, width: float, height: float):
     if not candidates:
         return None
     return max(max(candidates), MIN_DRAG_SCALE)
+
+
+def handle_scene_extent(zoom: float) -> float:
+    """Scene-unit side length of a handle that measures ``HANDLE_SCREEN_PX``.
+
+    The 0.1 floor matches ``handle_hit_tolerance`` so a zero zoom stays finite.
+    It does not change the 9px result at the zooms the editor actually uses.
+    """
+    return HANDLE_SCREEN_PX / max(float(zoom), 0.1)
 
 
 def handle_hit_tolerance(screen_px: float, zoom: float) -> float:

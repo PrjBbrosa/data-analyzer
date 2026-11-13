@@ -205,3 +205,27 @@ def test_hit_zone_is_square_not_circular():
     centers = [QPointF(0, 0)]
     assert handles.nearest_within_tolerance(centers, QPointF(4.9, 4.9), 5) == 0
     assert handles.nearest_within_tolerance(centers, QPointF(5.1, 0), 5) is None
+
+
+# ---------------------------------------------------------------------------
+# D-M4: constant screen size, unchanged hit pad
+# ---------------------------------------------------------------------------
+
+def test_handle_screen_size_is_nine_pixels():
+    assert handles.HANDLE_SCREEN_PX == 9
+
+
+@pytest.mark.parametrize("zoom", [0.25, 1.0, 4.0])
+def test_handle_scene_extent_is_nine_screen_pixels_at_every_zoom(zoom):
+    extent = handles.handle_scene_extent(zoom)
+    assert extent * zoom == pytest.approx(9.0)
+    assert extent == pytest.approx(9.0 / zoom)
+
+
+@pytest.mark.parametrize("zoom", [0.25, 1.0, 4.0])
+def test_hit_pad_stays_a_fixed_screen_radius_when_handles_are_nine_pixels(zoom):
+    """The grab radius stays 14 screen pixels. It does not track the 9px square."""
+    assert handles.handle_hit_tolerance(14, zoom) == pytest.approx(14.0 / zoom)
+    assert handles.handle_hit_tolerance(14, zoom) != pytest.approx(
+        handles.handle_scene_extent(zoom)
+    )
