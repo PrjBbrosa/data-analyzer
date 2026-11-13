@@ -162,6 +162,27 @@ def screen_px_tolerance_to_board(
     return (amount / pitch_x, amount / pitch_y)
 
 
+def pixel_rects_intersect(
+    left: tuple[int, int, int, int],
+    right: tuple[int, int, int, int],
+) -> bool:
+    """Qt ``QRect.intersects`` for integer ``(x, y, width, height)`` rects.
+
+    Empty spans do not intersect. Rects that only share an edge do not either:
+    Qt's right and bottom edges are the inclusive ``origin + span - 1``.
+    """
+    try:
+        ax, ay, aw, ah = (int(left[0]), int(left[1]), int(left[2]), int(left[3]))
+        bx, by, bw, bh = (int(right[0]), int(right[1]), int(right[2]), int(right[3]))
+    except (TypeError, ValueError):
+        return False
+    if aw <= 0 or ah <= 0 or bw <= 0 or bh <= 0:
+        return False
+    return max(ax, bx) <= min(ax + aw - 1, bx + bw - 1) and max(ay, by) <= min(
+        ay + ah - 1, by + bh - 1
+    )
+
+
 def geometry_grid_bounds(
     *,
     points: Iterable[BoardPoint] = (),
@@ -500,6 +521,42 @@ def handle_hit_rects(
         "sw": (x, y + height - zone, zone, zone),
         "s": (x + zone, y + height - zone, inner_w, zone),
         "se": (x + width - zone, y + height - zone, zone, zone),
+    }
+
+
+def text_corner_handle_rects(
+    box_px: tuple[int, int, int, int],
+    *,
+    hit: int = HANDLE_HIT_PX,
+    size: int = HANDLE_VISUAL_PX,
+) -> dict[str, tuple[int, int, int, int]]:
+    """Corner-handle squares for a text box, in pixel coordinates.
+
+    A box smaller than twice the handle hit band on either side draws every
+    corner handle fully outside the box. Larger boxes keep the handle centered
+    on the corner.
+    """
+    x, y, width, height = (
+        int(box_px[0]),
+        int(box_px[1]),
+        int(box_px[2]),
+        int(box_px[3]),
+    )
+    band = max(1, int(hit))
+    box = max(2, int(size))
+    if width < 2 * band or height < 2 * band:
+        return {
+            "nw": (x - box, y - box, box, box),
+            "ne": (x + width, y - box, box, box),
+            "sw": (x - box, y + height, box, box),
+            "se": (x + width, y + height, box, box),
+        }
+    half = box // 2
+    return {
+        "nw": (x - half, y - half, box, box),
+        "ne": (x + width - half, y - half, box, box),
+        "sw": (x - half, y + height - half, box, box),
+        "se": (x + width - half, y + height - half, box, box),
     }
 
 
@@ -917,6 +974,56 @@ def stroke_hit_record(
     )
 
 
+STROKE_PICK_MIN_PX = 6.0
+STROKE_PICK_PAD_PX = 4.0
+CONNECTOR_PICK_PX = 8.0
+
+
+def stroke_pick_tolerance_px(width_px_100: object) -> float:
+    """Screen-pixel stroke pick radius. It does not change with zoom.
+
+    The live pen width is ``width_px_100`` screen pixels: camera zoom scales
+    the path, not the pen. The radius is ``max(6, screen width / 2 + 4)``.
+    """
+    width = _finite_nonnegative(width_px_100)
+    if width is None:
+        width = 0.0
+    return max(STROKE_PICK_MIN_PX, width / 2.0 + STROKE_PICK_PAD_PX)
+
+
+def connector_pick_tolerance_px() -> float:
+    """Screen-pixel connector body pick radius. It does not change with zoom."""
+    return CONNECTOR_PICK_PX
+
+
+def hit_polyline_px(
+    points: Iterable[BoardPoint],
+    probe: BoardPoint,
+    tolerance_px: float,
+) -> bool:
+    """True when ``probe`` is within ``tolerance_px`` of a polyline.
+
+    Coordinates are whatever space the caller already mapped (screen pixels
+    for pick tests). The tolerance is not scaled again here.
+    """
+    parsed_probe = _finite_point(probe)
+    amount = _finite_nonnegative(tolerance_px)
+    if parsed_probe is None or amount is None:
+        return False
+    parsed = [item for item in (_finite_point(point) for point in points) if item is not None]
+    if not parsed:
+        return False
+    limit = amount * amount
+    if len(parsed) == 1:
+        dx = parsed[0][0] - parsed_probe[0]
+        dy = parsed[0][1] - parsed_probe[1]
+        return dx * dx + dy * dy <= limit
+    for index in range(len(parsed) - 1):
+        if _segment_distance_sq(parsed_probe, parsed[index], parsed[index + 1]) <= limit:
+            return True
+    return False
+
+
 def hit_stroke(record: StrokeHitRecord, probe: BoardPoint) -> bool:
     """True when ``probe`` sits in the stroke corridor."""
     point = _finite_point(probe)
@@ -1093,7 +1200,11 @@ __all__ = [
     "box_side_points",
     "connection_anchor_hit_rects",
     "connector_handle_points",
+    "CONNECTOR_PICK_PX",
+    "STROKE_PICK_MIN_PX",
+    "STROKE_PICK_PAD_PX",
     "connector_hit_bounds",
+    "connector_pick_tolerance_px",
     "connector_route_points",
     "constrain_shift_point",
     "elbow_path",
@@ -1104,8 +1215,10 @@ __all__ = [
     "hit_connection_anchor",
     "hit_connector",
     "hit_connector_handle",
+    "hit_polyline_px",
     "hit_stroke",
     "lasso_is_usable",
+    "pixel_rects_intersect",
     "pixels_to_board_box",
     "pixels_to_board_point",
     "point_in_lasso",
@@ -1120,6 +1233,8 @@ __all__ = [
     "filter_stroke_samples",
     "persist_stroke_points",
     "stroke_hit_record",
+    "stroke_pick_tolerance_px",
+    "text_corner_handle_rects",
     "stroke_ink_bounds",
     "strokes_hit_by_segment",
     "StrokeHitRecord",

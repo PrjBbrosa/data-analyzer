@@ -1162,7 +1162,7 @@ _HINTS = (
     ),
     Hint(
         id="ultraview.multiselect",
-        text="多选可对齐分布，Ctrl+D 复制",
+        text="框选含自由对象，拖已选一起移动",
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=81,

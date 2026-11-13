@@ -8,6 +8,7 @@ defaults, and ``editor_active`` stay on the Board-owned session.
 """
 from __future__ import annotations
 
+import math
 from typing import Protocol, Sequence
 
 from PyQt5.QtCore import QPoint, QRect, Qt
@@ -27,15 +28,19 @@ from .author_geometry import (
     board_box_to_pixels,
     board_point_to_pixels,
     connector_handle_points,
+    connector_pick_tolerance_px,
+    connector_route_points,
     hit_box_handle,
-    hit_connector,
     hit_connector_handle,
-    hit_stroke,
+    hit_polyline_px,
+    pixel_rects_intersect,
     pixels_to_board_point,
     resize_box_candidate,
-    stroke_hit_record,
+    snap_board_point,
+    stroke_pick_tolerance_px,
 )
 from .author_layer import AuthorLayerModel, AuthorPaintLayer
+from .author_selection import translate_object
 from .author_style import DEFAULT_STICKY_PALETTE, DEFAULT_THEME
 from .author_tools import (
     HIT_AUTHOR,
@@ -49,6 +54,7 @@ from .author_tools import (
     TOOL_STICKY,
     AuthorCreateIntent,
     AuthorKey,
+    AuthorNudgeIntent,
     AuthorUpdateIntent,
     BoardInteractionController,
     HitTarget,
@@ -61,7 +67,7 @@ from .author_tools import (
 from .author_widgets import BoardTextEditor, StickyNoteWidget
 from .card_widgets import FreeGridCard
 from .elastic_workspace import author_content_bounds
-from .feedback import AUTHOR_LOCKED, text_for_key
+from .feedback import AUTHOR_LOCKED, AUTHOR_SNAPPED_ENDPOINT, text_for_key
 from .free_grid import GridMetrics
 from .viewport_feedback import ViewportFeedbackSurface
 
@@ -159,6 +165,7 @@ class FreeGridAuthorController:
         self._geometry_session: dict[str, object] | None = None
         self._sticky_note.text_committed.connect(self._on_sticky_text_committed)
         self._sticky_note.edit_cancelled.connect(self._on_sticky_edit_cancelled)
+        self._host.interaction().set_author_marquee_resolver(self.author_keys_intersecting)
 
     def projected_objects(self) -> tuple[object, ...]:
         return self._author_objects
@@ -234,6 +241,7 @@ class FreeGridAuthorController:
         if self._geometry_session is None:
             return False
         self._geometry_session = None
+        self._paint_layer.set_geometry_overrides(())
         unlock = getattr(self._host, "unlock_resize_cursor", None)
         if callable(unlock):
             unlock()
@@ -251,6 +259,7 @@ class FreeGridAuthorController:
         """Board switch/clear: hide editors and drop the geometry session."""
         self.hide_author_editor()
         self._geometry_session = None
+        self._paint_layer.set_geometry_overrides(())
 
     def projected_selection_rects(self) -> list[tuple[int, int, int, int]]:
         """Pixel rects of selected author boxes. Overlay present stays on Board."""
@@ -295,12 +304,21 @@ class FreeGridAuthorController:
     def sync_projection(self) -> None:
         boxes = []
         selected = self._host.interaction().author_selection_ids()
+        overrides = {
+            str(object_id): geometry
+            for object_id, geometry in self._live_geometry_overrides()
+        }
         if selected:
             for item in self._author_objects:
-                if str(getattr(item, "object_id", "")) not in selected:
+                object_id = str(getattr(item, "object_id", ""))
+                if object_id not in selected:
+                    continue
+                geometry = overrides.get(object_id)
+                if geometry is not None and geometry[0] == "box":
+                    boxes.append(geometry[1])
                     continue
                 box = getattr(item, "box", None)
-                if box is not None:
+                if box is not None and geometry is None:
                     boxes.append((box.x, box.y, box.width, box.height))
         origin = self._host.workspace_origin_offset()
         metrics = self._host.metrics()
@@ -317,6 +335,8 @@ class FreeGridAuthorController:
                     (editor_object_id,) if editor_object_id else ()
                 ),
                 selection_boxes=tuple(boxes),
+                geometry_overrides=tuple(overrides.items()),
+                text_handle_boxes=self._text_handle_boxes(overrides),
             )
         )
         self._paint_layer.set_view_geometry(
@@ -404,19 +424,34 @@ class FreeGridAuthorController:
         if not isinstance(hit.item, AuthorKey):
             return
         item = self.author_item(hit.item.object_id)
+        interaction = self._host.interaction()
         additive = bool(event.modifiers() & Qt.ShiftModifier)
         if additive:
-            self._host.interaction().toggle(hit.item)
+            interaction.toggle(hit.item)
             self._host.apply_selection_flags()
             return
-        self._host.interaction().select_only(hit.item)
-        self._host.apply_selection_flags()
         if item is not None and bool(getattr(item, "locked", False)):
+            interaction.select_only(hit.item)
+            self._host.apply_selection_flags()
             self._host.emit_author_feedback(text_for_key(AUTHOR_LOCKED))
             return
-        if item is None or not isinstance(item, (StickyObject, TextObject, ShapeObject)):
+        if _connector_has_snapped_end(item):
+            if hit.item not in interaction.selection():
+                interaction.select_only(hit.item)
+            self._host.apply_selection_flags()
+            self._host.emit_author_feedback(text_for_key(AUTHOR_SNAPPED_ENDPOINT))
             return
-        self.begin_box_geometry(item, pos, handle=None)
+        if item is None:
+            interaction.select_only(hit.item)
+            self._host.apply_selection_flags()
+            return
+        if hit.item in interaction.selection():
+            members = self._movable_selected_objects()
+        else:
+            interaction.select_only(hit.item)
+            members = (item,)
+        self._host.apply_selection_flags()
+        self._begin_group_move(members, pos)
 
     def begin_selected_author_handle(
         self, hit: HitTarget, event: QMouseEvent, pos: QPoint
@@ -561,6 +596,9 @@ class FreeGridAuthorController:
         session = self._geometry_session
         if not session or session.get("origin") is None:
             return
+        if session.get("kind") == "group-move":
+            self._update_group_move(session, pos)
+            return
         box = self._candidate_from_session(session, pos, modifiers=modifiers)
         if box is None:
             return
@@ -669,11 +707,15 @@ class FreeGridAuthorController:
         session = self._geometry_session
         if not session or session.get("origin") is None:
             self._geometry_session = None
+            self._paint_layer.set_geometry_overrides(())
             self._host.release_mouse_if_grabbed()
             unlock = getattr(self._host, "unlock_resize_cursor", None)
             if callable(unlock):
                 unlock()
             self._host.sync_selection_handles()
+            return
+        if session.get("kind") == "group-move":
+            self._finish_group_move(session)
             return
         next_box = self._candidate_from_session(session, pos, modifiers=modifiers)
         preview = session.get("preview_box")
@@ -750,16 +792,30 @@ class FreeGridAuthorController:
                 return (handle, AuthorKey(object_id))
         return None
 
+    def author_keys_intersecting(
+        self, rect: tuple[int, int, int, int]
+    ) -> tuple[AuthorKey, ...]:
+        """Free objects whose pixel bounds intersect ``rect``.
+
+        The rule matches card marquee: ``QRect.intersects``, not containment.
+        Selection itself is written by the gesture that owns ``_selection``.
+        """
+        hits: list[AuthorKey] = []
+        for item in self._author_objects:
+            object_id = str(getattr(item, "object_id", "") or "")
+            bounds = self._item_pixel_rect(item)
+            if not object_id or bounds is None:
+                continue
+            if pixel_rects_intersect(bounds, rect):
+                hits.append(AuthorKey(object_id))
+        return tuple(hits)
+
     def keys_at(self, pos: QPoint) -> tuple[AuthorKey, ...]:
         """Reverse-z hit list. The paint layer itself remains mouse-transparent."""
         hits: list[AuthorKey] = []
         origin = self._host.workspace_origin_offset()
         metrics = self._host.metrics()
-        probe = pixels_to_board_point(
-            (float(pos.x()), float(pos.y())),
-            metrics,
-            origin_offset=origin,
-        )
+        probe_px = (float(pos.x()), float(pos.y()))
         for item in reversed(self._author_objects):
             object_id = str(getattr(item, "object_id", "") or "")
             if not object_id:
@@ -783,30 +839,192 @@ class FreeGridAuthorController:
                 if rect.contains(pos):
                     hits.append(AuthorKey(object_id))
                 continue
-            if probe is None:
-                continue
             if isinstance(item, ConnectorObject):
-                if hit_connector(
-                    (item.start.point.x, item.start.point.y),
-                    (item.end.point.x, item.end.point.y),
-                    probe,
-                    route=item.route,
-                    stroke_width=item.stroke_width,
-                    start_head=item.start_head,
-                    end_head=item.end_head,
-                    elbow_bias=item.elbow_bias,
-                ):
+                pixels = _route_pixels(item, metrics, origin)
+                if hit_polyline_px(pixels, probe_px, connector_pick_tolerance_px()):
                     hits.append(AuthorKey(object_id))
                 continue
             if isinstance(item, StrokeObject):
-                record = stroke_hit_record(
-                    object_id,
-                    ((point.x, point.y) for point in item.points),
-                    item.width_px_100,
-                )
-                if record is not None and hit_stroke(record, probe):
+                pixels = _point_pixels(item.points, metrics, origin)
+                if hit_polyline_px(
+                    pixels, probe_px, stroke_pick_tolerance_px(item.width_px_100)
+                ):
                     hits.append(AuthorKey(object_id))
         return tuple(hits)
+
+    def _movable_selected_objects(self) -> tuple[object, ...]:
+        selected = self._host.interaction().author_selection_ids()
+        members = []
+        for item in self._author_objects:
+            object_id = str(getattr(item, "object_id", "") or "")
+            if object_id not in selected:
+                continue
+            if bool(getattr(item, "locked", False)):
+                continue
+            if _connector_has_snapped_end(item):
+                continue
+            members.append(item)
+        return tuple(members)
+
+    def _begin_group_move(self, members: tuple[object, ...], pos: QPoint) -> None:
+        if not members:
+            return
+        self._geometry_session = {
+            "kind": "group-move",
+            "origin": self.pixel_to_board_point(pos),
+            "members": members,
+            "overrides": (),
+            "snapped_delta": (0.0, 0.0),
+        }
+        self._host.grab_mouse_for_feedback()
+        self._update_group_move(self._geometry_session, pos)
+
+    def _update_group_move(self, session: dict[str, object], pos: QPoint) -> None:
+        current = self.pixel_to_board_point(pos)
+        origin = session.get("origin")
+        members = session.get("members")
+        if current is None or not isinstance(origin, tuple) or not isinstance(members, tuple):
+            return
+        dx = float(current[0]) - float(origin[0])
+        dy = float(current[1]) - float(origin[1])
+        snapped = snap_board_point((dx, dy)) or (0.0, 0.0)
+        session["snapped_delta"] = snapped
+        overrides = []
+        drop_rects = []
+        for item in members:
+            object_id = str(getattr(item, "object_id", "") or "")
+            if not object_id:
+                continue
+            overrides.append((object_id, _geometry_tuple(translate_object(item, dx, dy))))
+            drop = self._item_pixel_rect(translate_object(item, snapped[0], snapped[1]))
+            if drop is not None:
+                drop_rects.append(drop)
+        session["overrides"] = tuple(overrides)
+        self.sync_projection()
+        self._host.ghost_overlay().set_selection_rects(tuple(drop_rects), handles=False)
+
+    def _finish_group_move(self, session: dict[str, object]) -> None:
+        snapped = session.get("snapped_delta") or (0.0, 0.0)
+        members = session.get("members") or ()
+        ids = tuple(
+            str(getattr(item, "object_id", "") or "")
+            for item in members
+            if str(getattr(item, "object_id", "") or "")
+        )
+        sx, sy = float(snapped[0]), float(snapped[1])
+        self._geometry_session = None
+        self._paint_layer.set_geometry_overrides(())
+        self._host.release_mouse_if_grabbed()
+        unlock = getattr(self._host, "unlock_resize_cursor", None)
+        if callable(unlock):
+            unlock()
+        if ids and (sx != 0.0 or sy != 0.0):
+            self._host.emit_author_update(AuthorNudgeIntent(ids, sx, sy))
+        self.sync_projection()
+        self._host.sync_selection_handles()
+
+    def _live_geometry_overrides(self) -> tuple[tuple[str, tuple], ...]:
+        session = self._geometry_session
+        if not session or session.get("kind") != "group-move":
+            return ()
+        overrides = session.get("overrides") or ()
+        return tuple(overrides)
+
+    def _text_handle_boxes(self, overrides: dict[str, tuple]) -> tuple[tuple, ...]:
+        selected = self._host.interaction().author_selection_ids()
+        boxes = []
+        for item in self._author_objects:
+            if not isinstance(item, TextObject):
+                continue
+            object_id = str(getattr(item, "object_id", "") or "")
+            if object_id not in selected:
+                continue
+            geometry = overrides.get(object_id)
+            if geometry is not None and geometry[0] == "box":
+                boxes.append(geometry[1])
+                continue
+            box = getattr(item, "box", None)
+            if box is not None:
+                boxes.append((box.x, box.y, box.width, box.height))
+        return tuple(boxes)
+
+    def _item_pixel_rect(self, item) -> tuple[int, int, int, int] | None:
+        origin = self._host.workspace_origin_offset()
+        metrics = self._host.metrics()
+        box = getattr(item, "box", None)
+        if box is not None:
+            mapped = board_box_to_pixels(
+                (box.x, box.y, box.width, box.height),
+                metrics,
+                origin_offset=origin,
+            )
+            return None if mapped is None else pixel_box(mapped)
+        if isinstance(item, ConnectorObject):
+            return _pixel_bounds(_route_pixels(item, metrics, origin))
+        if isinstance(item, StrokeObject):
+            return _pixel_bounds(_point_pixels(item.points, metrics, origin))
+        return None
+
+
+def _connector_has_snapped_end(item) -> bool:
+    """A connector end is snapped when it carries an anchor target."""
+    if not isinstance(item, ConnectorObject):
+        return False
+    return item.start.target is not None or item.end.target is not None
+
+
+def _geometry_tuple(item) -> tuple:
+    """Preview geometry tag for one translated object."""
+    box = getattr(item, "box", None)
+    if box is not None:
+        return ("box", (box.x, box.y, box.width, box.height))
+    if isinstance(item, StrokeObject):
+        return ("points", tuple((point.x, point.y) for point in item.points))
+    if isinstance(item, ConnectorObject):
+        return (
+            "connector",
+            (item.start.point.x, item.start.point.y),
+            (item.end.point.x, item.end.point.y),
+        )
+    return ()
+
+
+def _point_pixels(points, metrics, origin) -> tuple[tuple[float, float], ...]:
+    pixels = []
+    for point in points:
+        pixel = board_point_to_pixels(
+            (float(point.x), float(point.y)), metrics, origin_offset=origin
+        )
+        if pixel is not None:
+            pixels.append(pixel)
+    return tuple(pixels)
+
+
+def _route_pixels(item: ConnectorObject, metrics, origin) -> tuple[tuple[float, float], ...]:
+    route = connector_route_points(
+        (item.start.point.x, item.start.point.y),
+        (item.end.point.x, item.end.point.y),
+        route=item.route,
+        elbow_bias=item.elbow_bias,
+    )
+    pixels = []
+    for point in route:
+        pixel = board_point_to_pixels(point, metrics, origin_offset=origin)
+        if pixel is not None:
+            pixels.append(pixel)
+    return tuple(pixels)
+
+
+def _pixel_bounds(pixels: tuple[tuple[float, float], ...]) -> tuple[int, int, int, int] | None:
+    if not pixels:
+        return None
+    xs = [point[0] for point in pixels]
+    ys = [point[1] for point in pixels]
+    left = int(math.floor(min(xs)))
+    top = int(math.floor(min(ys)))
+    right = int(math.ceil(max(xs)))
+    bottom = int(math.ceil(max(ys)))
+    return (left, top, max(1, right - left), max(1, bottom - top))
 
 
 __all__ = ["FreeGridAuthorController", "FreeGridAuthorHost", "pixel_box"]

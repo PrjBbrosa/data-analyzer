@@ -872,6 +872,9 @@ class BoardInteractionController:
         self._draw_preset_index = 0
         self._draw_style = StrokeCreateIntent(object_id="format", points=())
         self._clipboard: AuthorClipboardPayload | None = None
+        # Hit helper for marquee. Not a selection store: results are written
+        # into ``_selection`` by the gesture that finishes the marquee.
+        self._author_marquee_resolver = None
         self._geometry_sessions: dict[str, dict[str, object] | None] = {
             TOOL_TEXT: None,
             TOOL_SHAPES: None,
@@ -1252,6 +1255,17 @@ class BoardInteractionController:
         """Replace card keys and drop author keys (non-additive marquee)."""
         self._selection = frozenset(CardKey(ref) for ref in refs)
         self._refresh_primary_card()
+
+    def set_author_marquee_resolver(self, resolver) -> None:
+        """Register the free-object hit helper. Selection itself stays here."""
+        self._author_marquee_resolver = resolver
+
+    def author_marquee_hits(self, rect: tuple[int, int, int, int]) -> tuple[AuthorKey, ...]:
+        """Author keys whose pixel bounds intersect ``rect``. Empty if unset."""
+        resolver = self._author_marquee_resolver
+        if resolver is None:
+            return ()
+        return tuple(_checked_key(item) for item in resolver(rect) if isinstance(item, AuthorKey))
 
     def clear_selection(self) -> bool:
         if not self._selection and self._primary_card is None:

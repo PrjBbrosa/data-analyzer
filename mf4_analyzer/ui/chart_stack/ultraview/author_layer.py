@@ -19,7 +19,13 @@ from PyQt5.QtCore import QPointF, QRect, QRectF, Qt
 from PyQt5.QtGui import QColor, QPainter, QPainterPath, QPen
 from PyQt5.QtWidgets import QWidget
 
-from .author_geometry import board_box_to_pixels, board_point_to_pixels
+from .author_geometry import (
+    HANDLE_HIT_PX,
+    HANDLE_VISUAL_PX,
+    board_box_to_pixels,
+    board_point_to_pixels,
+    text_corner_handle_rects,
+)
 from .author_render import draw_author_objects, shape_path
 from .author_style import DEFAULT_THEME, pen_color
 from .free_grid import GridMetrics
@@ -54,6 +60,12 @@ class AuthorLayerModel:
     # counterpart out of this transparent paint layer until editing ends.
     hidden_text_object_ids: frozenset[str] = frozenset()
     selection_boxes: tuple[BoardBox, ...] = ()
+    # Live drag only. ``(object id, geometry)`` where geometry is
+    # ``("box", (x, y, w, h))``, ``("points", ((x, y), ...))``, or
+    # ``("connector", (sx, sy), (ex, ey))``. The persisted objects stay put.
+    geometry_overrides: tuple[tuple[str, tuple], ...] = ()
+    # Selected text boxes, in Board units. Corner handles are drawn from these.
+    text_handle_boxes: tuple[BoardBox, ...] = ()
     guide_lines: tuple[GuideLine, ...] = ()
     draft_points: tuple[BoardPoint, ...] = ()
     draft_shape: str = ""
@@ -107,6 +119,8 @@ class AuthorPaintLayer(QWidget):
                 if str(object_id)
             ),
             selection_boxes=tuple(model.selection_boxes),
+            geometry_overrides=tuple(model.geometry_overrides),
+            text_handle_boxes=tuple(model.text_handle_boxes),
             guide_lines=tuple(model.guide_lines),
             draft_points=tuple(model.draft_points),
             draft_shape=str(model.draft_shape or ""),
@@ -133,6 +147,8 @@ class AuthorPaintLayer(QWidget):
             theme=model.theme,
             hidden_text_object_ids=model.hidden_text_object_ids,
             selection_boxes=model.selection_boxes,
+            geometry_overrides=model.geometry_overrides,
+            text_handle_boxes=model.text_handle_boxes,
             guide_lines=model.guide_lines,
             draft_points=model.draft_points,
             draft_shape=model.draft_shape,
@@ -152,6 +168,8 @@ class AuthorPaintLayer(QWidget):
             theme=model.theme,
             hidden_text_object_ids=model.hidden_text_object_ids,
             selection_boxes=model.selection_boxes,
+            geometry_overrides=model.geometry_overrides,
+            text_handle_boxes=model.text_handle_boxes,
             guide_lines=model.guide_lines,
             draft_points=model.draft_points,
             draft_shape=model.draft_shape,
@@ -163,6 +181,19 @@ class AuthorPaintLayer(QWidget):
     def set_selection_boxes(self, boxes: Iterable[BoardBox]) -> None:
         model = self._model
         self._model = _replace_model(model, selection_boxes=tuple(boxes))
+        self.update()
+
+    def set_geometry_overrides(
+        self, overrides: Iterable[tuple[str, tuple]]
+    ) -> None:
+        """Install the live id → preview geometry map. Empty clears it."""
+        model = self._model
+        cleaned = tuple(
+            (str(object_id), geometry)
+            for object_id, geometry in overrides
+            if str(object_id) and isinstance(geometry, tuple)
+        )
+        self._model = _replace_model(model, geometry_overrides=cleaned)
         self.update()
 
     def set_guides(
@@ -258,7 +289,7 @@ class AuthorPaintLayer(QWidget):
             painter.setRenderHint(QPainter.Antialiasing, True)
             draw_author_objects(
                 painter,
-                model.objects,
+                _objects_with_overrides(model.objects, model.geometry_overrides),
                 metrics,
                 origin_offset=model.origin_offset,
                 theme=model.theme,
@@ -419,6 +450,89 @@ class AuthorPaintLayer(QWidget):
             rect = QRectF(*pixel)
             if rect.width() > 0.0 and rect.height() > 0.0:
                 painter.drawRect(rect)
+        if model.text_handle_boxes:
+            painter.setBrush(_SELECTION_COLOR)
+            for box in model.text_handle_boxes:
+                pixel = board_box_to_pixels(box, metrics, origin_offset=model.origin_offset)
+                if pixel is None:
+                    continue
+                rects = text_corner_handle_rects(
+                    (
+                        int(round(pixel[0])),
+                        int(round(pixel[1])),
+                        max(1, int(round(pixel[2]))),
+                        max(1, int(round(pixel[3]))),
+                    ),
+                    hit=HANDLE_HIT_PX,
+                    size=HANDLE_VISUAL_PX,
+                )
+                for name in ("nw", "ne", "sw", "se"):
+                    painter.drawRect(QRectF(*rects[name]))
+
+
+def _objects_with_overrides(objects, overrides) -> tuple[object, ...]:
+    """Return paint copies whose geometry follows the live drag preview."""
+    if not overrides:
+        return tuple(objects)
+    by_id = {str(object_id): geometry for object_id, geometry in overrides}
+    painted = []
+    for item in objects:
+        object_id = str(getattr(item, "object_id", "") or "")
+        geometry = by_id.get(object_id)
+        painted.append(item if geometry is None else _apply_geometry_override(item, geometry))
+    return tuple(painted)
+
+
+def _apply_geometry_override(item, geometry):
+    """Copy ``item`` with one preview geometry. Malformed input keeps ``item``."""
+    from dataclasses import replace
+
+    from mf4_analyzer.ui.ultraview_state import BoardBox, BoardPoint
+
+    if not isinstance(geometry, tuple) or not geometry:
+        return item
+    kind = geometry[0]
+    if kind == "box" and getattr(item, "box", None) is not None:
+        raw = _finite_tuple(geometry[1] if len(geometry) > 1 else (), 4)
+        if raw is None:
+            return item
+        return replace(item, box=BoardBox(*raw))
+    if kind == "points" and hasattr(item, "points"):
+        raw_points = geometry[1] if len(geometry) > 1 else ()
+        points = []
+        for point in raw_points:
+            parsed = _finite_tuple(point, 2)
+            if parsed is not None:
+                points.append(BoardPoint(*parsed))
+        if len(points) < 2:
+            return item
+        return replace(item, points=tuple(points))
+    if kind == "connector" and hasattr(item, "start") and hasattr(item, "end"):
+        start = _finite_tuple(geometry[1] if len(geometry) > 1 else (), 2)
+        end = _finite_tuple(geometry[2] if len(geometry) > 2 else (), 2)
+        if start is None or end is None:
+            return item
+        return replace(
+            item,
+            start=type(item.start)(BoardPoint(*start), item.start.target),
+            end=type(item.end)(BoardPoint(*end), item.end.target),
+        )
+    return item
+
+
+def _finite_tuple(value, count: int) -> tuple[float, ...] | None:
+    if not isinstance(value, tuple) or len(value) != count:
+        return None
+    numbers = []
+    for item in value:
+        try:
+            number = float(item)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(number):
+            return None
+        numbers.append(number)
+    return tuple(numbers)
 
 
 def _replace_model(model: AuthorLayerModel, **changes) -> AuthorLayerModel:
@@ -429,6 +543,8 @@ def _replace_model(model: AuthorLayerModel, **changes) -> AuthorLayerModel:
         "theme": model.theme,
         "hidden_text_object_ids": model.hidden_text_object_ids,
         "selection_boxes": model.selection_boxes,
+        "geometry_overrides": model.geometry_overrides,
+        "text_handle_boxes": model.text_handle_boxes,
         "guide_lines": model.guide_lines,
         "draft_points": model.draft_points,
         "draft_shape": model.draft_shape,

@@ -189,12 +189,14 @@ class FreeGridGesture:
     _owned_names: ClassVar[tuple[str, ...]] = (
         "_session",
         "_marquee",
+        "_pending_marquee",
         "_plan_fingerprint",
         "_gesture_id",
     )
     _next_gesture_id: ClassVar[int] = 0
     _session: GestureSession | None = field(default=None, init=False)
     _marquee: MarqueeSession | None = field(default=None, init=False)
+    _pending_marquee: MarqueeSession | None = field(default=None, init=False)
     _plan_fingerprint: tuple | None = field(default=None, init=False)
     _gesture_id: int = field(default=0, init=False)
 
@@ -224,9 +226,29 @@ class FreeGridGesture:
 
     def set_selection(self, refs: Iterable[UltraViewRef]) -> None:
         self.interaction.replace_card_selection(refs)
+        self._merge_pending_author_marquee()
 
     def add_to_selection(self, refs: Iterable[UltraViewRef]) -> None:
         self.interaction.add_cards_to_selection(refs)
+        self._merge_pending_author_marquee()
+
+    def _merge_pending_author_marquee(self) -> None:
+        """Add free objects that intersect the marquee the board just finished.
+
+        Card hits stay on the board (widget geometry). Free objects use the
+        same integer intersection rule, resolved through the one selection
+        owner. Shift and replace both land here after the card keys are set.
+        """
+        session = self._pending_marquee
+        self._pending_marquee = None
+        if session is None:
+            return
+        rect = session.rect()
+        if rect[2] < 4 and rect[3] < 4:
+            return
+        hits = self.interaction.author_marquee_hits(rect)
+        if hits:
+            self.interaction.add_to_selection(hits)
 
     def clear_selection(self) -> None:
         self.interaction.clear_card_keys()
@@ -244,6 +266,7 @@ class FreeGridGesture:
 
     def begin_marquee(self, pos: tuple[int, int], additive: bool) -> None:
         point = (int(pos[0]), int(pos[1]))
+        self._pending_marquee = None
         self._marquee = MarqueeSession(
             origin=point, current=point, additive=bool(additive)
         )
@@ -257,11 +280,14 @@ class FreeGridGesture:
     def take_marquee(self) -> MarqueeSession | None:
         session = self._marquee
         self._marquee = None
+        self._pending_marquee = session
         return session
 
     def cancel_marquee(self) -> bool:
+        pending = self._pending_marquee is not None
+        self._pending_marquee = None
         if self._marquee is None:
-            return False
+            return pending
         self._marquee = None
         return True
 
@@ -275,6 +301,7 @@ class FreeGridGesture:
         group_origins: dict[UltraViewRef, GridRect] | None = None,
         layout_revision: int = 0,
     ) -> None:
+        self._pending_marquee = None
         origins = dict(group_origins) if group_origins else {ref: origin}
         type(self)._next_gesture_id += 1
         self._gesture_id = type(self)._next_gesture_id
