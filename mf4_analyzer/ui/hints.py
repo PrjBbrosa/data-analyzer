@@ -554,7 +554,7 @@ _HINTS = (
     ),
     Hint(
         id="markup.capabilities",
-        text="按下即画 · Esc 逐级退出 · Ctrl+Enter 完成复制",
+        text="按下即画 · 空格平移 · Esc 逐级退出 · Ctrl+Enter 完成复制",
         surface="discovery",
         scope="markup",
         retire_on="markup_open",

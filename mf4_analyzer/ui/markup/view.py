@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from PyQt5.QtCore import QLineF, QPointF, QRectF, Qt
+from PyQt5.QtCore import QEvent, QLineF, QPoint, QPointF, QRectF, Qt
 from PyQt5.QtGui import QBrush, QColor, QPainterPath, QPen
 from PyQt5.QtWidgets import (
+    QApplication,
     QGraphicsItem,
     QGraphicsLineItem,
     QGraphicsPathItem,
@@ -34,6 +35,9 @@ class _MarkupGraphicsView(QGraphicsView):
         self._rubber_origin = None
         self._rubber_band = None
         self._text_edit_press = False
+        self._space_down = False
+        self._pan_button = None
+        self._pan_pos = None
         self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.AnchorUnderMouse)
         self.setMouseTracking(True)
@@ -45,6 +49,10 @@ class _MarkupGraphicsView(QGraphicsView):
             self.cancel_in_progress_draft()
             self._editor.clear_selection()
             event.accept()
+            return
+        # Middle-drag and Space+left-drag pan. They must win before a draw
+        # tool or a hit-test can start an annotation.
+        if self._start_pan(event):
             return
         if event.button() != Qt.LeftButton:
             super().mousePressEvent(event)
@@ -168,6 +176,16 @@ class _MarkupGraphicsView(QGraphicsView):
         self._editor.refresh_handles()
 
     def mouseMoveEvent(self, event):
+        if self._pan_button is not None:
+            if not (event.buttons() & self._pan_button):
+                self._finish_pan()
+            else:
+                pos = QPointF(event.pos())
+                delta = pos - self._pan_pos
+                self._pan_pos = pos
+                self._scroll_by(-delta.x(), -delta.y())
+                event.accept()
+                return
         point = self._clamp(self.mapToScene(event.pos()))
         if self._resize_handle is not None:
             self._editor.drag_handle(self._resize_handle, point)
@@ -196,6 +214,10 @@ class _MarkupGraphicsView(QGraphicsView):
         event.accept()
 
     def mouseReleaseEvent(self, event):
+        if self._pan_button is not None and event.button() == self._pan_button:
+            self._finish_pan()
+            event.accept()
+            return
         if event.button() != Qt.LeftButton:
             super().mouseReleaseEvent(event)
             return
@@ -302,6 +324,11 @@ class _MarkupGraphicsView(QGraphicsView):
 
     def keyPressEvent(self, event):
         key = event.key()
+        if key == Qt.Key_Space and not self._editor._text_item_is_editing():
+            if not event.isAutoRepeat():
+                self._space_down = True
+            event.accept()
+            return
         modifiers = event.modifiers()
         command = bool(modifiers & (Qt.ControlModifier | Qt.MetaModifier))
         # Esc / Ctrl+Enter / Ctrl+S belong to the editor even while text is editing.
@@ -317,13 +344,58 @@ class _MarkupGraphicsView(QGraphicsView):
         if not event.isAccepted():
             self._editor.keyPressEvent(event)
 
-    def wheelEvent(self, event):
-        degrees = event.angleDelta().y()
-        if degrees == 0:
-            super().wheelEvent(event)
+    def keyReleaseEvent(self, event):
+        if event.key() == Qt.Key_Space and not self._editor._text_item_is_editing():
+            if not event.isAutoRepeat():
+                self._space_down = False
+                if self._pan_button == Qt.LeftButton:
+                    self._finish_pan()
+            event.accept()
             return
-        self._editor.zoom_by(1.15 if degrees > 0 else 1 / 1.15)
-        event.accept()
+        super().keyReleaseEvent(event)
+
+    def viewportEvent(self, event):
+        # Key events sent at the viewport (the same target as mouse and wheel)
+        # do not reach QGraphicsView.keyPressEvent on their own.
+        if event.type() == QEvent.KeyPress:
+            self.keyPressEvent(event)
+            return True
+        if event.type() == QEvent.KeyRelease:
+            self.keyReleaseEvent(event)
+            return True
+        return super().viewportEvent(event)
+
+    def wheelEvent(self, event):
+        # Q-1: the wheel keeps zooming. Stroke width stays on [ and ].
+        # A trackpad pixel delta without Ctrl pans; Shift pans horizontally.
+        modifiers = int(event.modifiers())
+        ctrl = bool(modifiers & int(Qt.ControlModifier | Qt.MetaModifier))
+        pixel = event.pixelDelta()
+        angle = event.angleDelta()
+        if ctrl:
+            delta = angle.y() or pixel.y() or angle.x() or pixel.x()
+            if delta == 0:
+                super().wheelEvent(event)
+                return
+            self._zoom_at_pointer(1.15 if delta > 0 else 1 / 1.15, self._pointer_pos(event))
+            event.accept()
+            return
+        if modifiers & int(Qt.ShiftModifier):
+            self._pan_horizontal_wheel(pixel, angle)
+            event.accept()
+            return
+        if pixel.x() != 0 or pixel.y() != 0:
+            self._scroll_by(-float(pixel.x()), -float(pixel.y()))
+            event.accept()
+            return
+        if angle.y() != 0:
+            self._zoom_at_pointer(
+                1.15 if angle.y() > 0 else 1 / 1.15,
+                self._pointer_pos(event),
+            )
+            event.accept()
+            return
+        super().wheelEvent(event)
 
     def _create_preview(self, tool: str, point: QPointF):
         pen = self._editor._pen()
@@ -362,6 +434,136 @@ class _MarkupGraphicsView(QGraphicsView):
         if self._preview is not None and self._preview.scene() is self._editor._scene:
             self._editor._scene.removeItem(self._preview)
         self._preview = None
+
+    def _start_pan(self, event) -> bool:
+        button = event.button()
+        if button != Qt.MiddleButton and not (
+            button == Qt.LeftButton and self._space_down
+        ):
+            return False
+        self._pan_button = button
+        self._pan_pos = QPointF(event.pos())
+        self.viewport().setCursor(Qt.ClosedHandCursor)
+        event.accept()
+        return True
+
+    def _finish_pan(self) -> None:
+        if self._pan_button is None:
+            return
+        self._pan_button = None
+        self._pan_pos = None
+        self.viewport().unsetCursor()
+
+    def _pointer_pos(self, event) -> QPointF:
+        position = getattr(event, "position", None)
+        if callable(position):
+            return QPointF(position())
+        return QPointF(event.pos())
+
+    def _scroll_by(self, dx: float, dy: float) -> None:
+        """Move the scrollbars by viewport pixels.
+
+        Positive ``dx`` / ``dy`` reveal scene content toward the bottom-right.
+        A pan that follows the pointer passes the negated pointer delta.
+        """
+        if dx:
+            bar = self.horizontalScrollBar()
+            bar.setValue(int(round(bar.value() + dx)))
+        if dy:
+            bar = self.verticalScrollBar()
+            bar.setValue(int(round(bar.value() + dy)))
+
+    def _pan_horizontal_wheel(self, pixel, angle) -> None:
+        if pixel.x() != 0 or pixel.y() != 0:
+            delta = pixel.x() if pixel.x() != 0 else pixel.y()
+            self._scroll_by(-float(delta), 0.0)
+            return
+        ticks = angle.y() if angle.y() != 0 else angle.x()
+        if ticks == 0:
+            return
+        bar = self.horizontalScrollBar()
+        lines = int(QApplication.wheelScrollLines())
+        if lines < 1:
+            lines = 1
+        step = int(bar.singleStep())
+        if step < 1:
+            step = 1
+        page = int(bar.pageStep())
+        if page < 1:
+            page = 1
+        delta = int(ticks) * lines * step // 120
+        if delta > page:
+            delta = page
+        elif delta < -page:
+            delta = -page
+        self._scroll_by(-float(delta), 0.0)
+
+    def _zoom_at_pointer(self, factor: float, view_pos: QPointF) -> None:
+        """Scale around the wheel position, then keep that scene point put.
+
+        ``setTransform`` with ``AnchorUnderMouse`` follows ``QCursor`` and
+        misses by about two pixels per notch even when the scroll range can
+        hold the point. A fitted view also hides its scrollbars; the first
+        zoom that needs them shrinks the viewport on the next layout. Show
+        those bars before scaling so the correction runs on the final
+        viewport. A scroll value the range cannot represent stays clamped.
+        """
+        anchor_px = QPoint(int(round(view_pos.x())), int(round(view_pos.y())))
+        scene_point = self.mapToScene(anchor_px)
+        # Same clamp as MarkupEditor.set_zoom. Predicting the unclamped factor
+        # would reserve scrollbars a zoom that cannot happen will not need.
+        target = min(8.0, max(0.1, float(self._editor._zoom) * float(factor)))
+        saved_policy = (
+            self.horizontalScrollBarPolicy(),
+            self.verticalScrollBarPolicy(),
+        )
+        self._show_scrollbars_before_zoom(target)
+        anchor = self.transformationAnchor()
+        self.setTransformationAnchor(QGraphicsView.NoAnchor)
+        try:
+            self._editor.zoom_by(factor)
+        finally:
+            self.setTransformationAnchor(anchor)
+            self.setHorizontalScrollBarPolicy(saved_policy[0])
+            self.setVerticalScrollBarPolicy(saved_policy[1])
+        self._hold_scene_point(scene_point, QPointF(anchor_px))
+
+    def _show_scrollbars_before_zoom(self, zoom: float) -> None:
+        rect = self._editor._scene.sceneRect()
+        # A second pass catches the bar that appears only because the first
+        # bar made the other viewport edge smaller.
+        for _ in range(2):
+            viewport = self.viewport()
+            horizontal = self.horizontalScrollBar()
+            vertical = self.verticalScrollBar()
+            if (
+                horizontal.maximum() == horizontal.minimum()
+                and rect.width() * zoom > viewport.width() + 0.5
+            ):
+                self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
+            if (
+                vertical.maximum() == vertical.minimum()
+                and rect.height() * zoom > viewport.height() + 0.5
+            ):
+                self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
+
+    def _hold_scene_point(self, scene_point: QPointF, view_pos: QPointF) -> None:
+        horizontal = self.horizontalScrollBar()
+        vertical = self.verticalScrollBar()
+        for _ in range(2):
+            mapped = self.mapFromScene(scene_point)
+            dx = int(round(mapped.x() - view_pos.x()))
+            dy = int(round(mapped.y() - view_pos.y()))
+            if dx == 0 and dy == 0:
+                return
+            before_x = horizontal.value()
+            before_y = vertical.value()
+            if dx:
+                horizontal.setValue(before_x + dx)
+            if dy:
+                vertical.setValue(before_y + dy)
+            if horizontal.value() == before_x and vertical.value() == before_y:
+                return
 
     def _clamp(self, point: QPointF) -> QPointF:
         rect = self._editor._scene.sceneRect()

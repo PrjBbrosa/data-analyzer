@@ -1,13 +1,15 @@
 import pytest
-from PyQt5.QtCore import QEvent, QPointF, QRectF, QSettings, Qt, QTimer
+from PyQt5.QtCore import QEvent, QPoint, QPointF, QRectF, QSettings, Qt, QTimer
 from PyQt5.QtGui import (
     QBrush,
     QColor,
+    QKeyEvent,
     QKeySequence,
     QMouseEvent,
     QPainterPath,
     QPen,
     QPixmap,
+    QWheelEvent,
 )
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtWidgets import (
@@ -1706,6 +1708,221 @@ def test_plain_enter_confirms_only_a_crop_and_ctrl_enter_finishes(qtbot):
     assert len(calls) == 1
     assert not editor.isVisible()
     assert editor._undo_stack.isClean()
+
+
+def _show_zoomed(qtbot, width=1600, height=1200, zoom=2.0):
+    """A view with scroll range on both axes, parked away from either limit."""
+    editor = MarkupEditor(_pixmap(width, height))
+    qtbot.addWidget(editor)
+    editor.show()
+    QApplication.processEvents()
+    editor.set_zoom(zoom)
+    QApplication.processEvents()
+    view = editor._view
+    horizontal = view.horizontalScrollBar()
+    vertical = view.verticalScrollBar()
+    horizontal.setValue((horizontal.minimum() + horizontal.maximum()) // 2)
+    vertical.setValue((vertical.minimum() + vertical.maximum()) // 2)
+    QApplication.processEvents()
+    return editor
+
+
+def _send_viewport_mouse(viewport, kind, pos, button, buttons, modifiers=Qt.NoModifier):
+    QApplication.sendEvent(
+        viewport,
+        QMouseEvent(kind, QPointF(pos), button, buttons, modifiers),
+    )
+
+
+def _send_viewport_wheel(
+    viewport,
+    pos,
+    *,
+    angle_y=120,
+    pixel=QPoint(0, 0),
+    modifiers=Qt.NoModifier,
+):
+    local = QPoint(int(pos.x()), int(pos.y()))
+    QApplication.sendEvent(
+        viewport,
+        QWheelEvent(
+            QPointF(local),
+            QPointF(viewport.mapToGlobal(local)),
+            pixel,
+            QPoint(0, angle_y),
+            Qt.NoButton,
+            modifiers,
+            Qt.NoScrollPhase,
+            False,
+        ),
+    )
+
+
+def _scroll_room(view, margin=40):
+    horizontal = view.horizontalScrollBar()
+    vertical = view.verticalScrollBar()
+    return (
+        horizontal.maximum() - horizontal.minimum() > margin
+        and vertical.maximum() - vertical.minimum() > margin
+        and horizontal.minimum() + margin < horizontal.value() < horizontal.maximum() - margin
+        and vertical.minimum() + margin < vertical.value() < vertical.maximum() - margin
+    )
+
+
+def test_middle_drag_and_space_left_drag_scroll_with_the_pointer(qtbot):
+    editor = _show_zoomed(qtbot)
+    editor.set_tool("rect")
+    view = editor._view
+    viewport = view.viewport()
+    before_items = len(_markup_items(editor))
+    horizontal = view.horizontalScrollBar()
+    vertical = view.verticalScrollBar()
+    start = QPoint(220, 180)
+    end = QPoint(256, 158)
+    dx = end.x() - start.x()
+    dy = end.y() - start.y()
+
+    h0 = horizontal.value()
+    v0 = vertical.value()
+    scene_at_press = view.mapToScene(start)
+    _send_viewport_mouse(
+        viewport, QEvent.MouseButtonPress, start, Qt.MiddleButton, Qt.MiddleButton
+    )
+    _send_viewport_mouse(
+        viewport, QEvent.MouseMove, end, Qt.NoButton, Qt.MiddleButton
+    )
+    _send_viewport_mouse(
+        viewport, QEvent.MouseButtonRelease, end, Qt.MiddleButton, Qt.NoButton
+    )
+
+    assert horizontal.value() - h0 == -dx
+    assert vertical.value() - v0 == -dy
+    landed = view.mapFromScene(scene_at_press)
+    assert abs(landed.x() - end.x()) <= 1
+    assert abs(landed.y() - end.y()) <= 1
+    assert len(_markup_items(editor)) == before_items
+
+    h0 = horizontal.value()
+    v0 = vertical.value()
+    scene_at_press = view.mapToScene(start)
+    QApplication.sendEvent(
+        viewport, QKeyEvent(QEvent.KeyPress, Qt.Key_Space, Qt.NoModifier)
+    )
+    _send_viewport_mouse(
+        viewport, QEvent.MouseButtonPress, start, Qt.LeftButton, Qt.LeftButton
+    )
+    _send_viewport_mouse(
+        viewport, QEvent.MouseMove, end, Qt.NoButton, Qt.LeftButton
+    )
+    _send_viewport_mouse(
+        viewport, QEvent.MouseButtonRelease, end, Qt.LeftButton, Qt.NoButton
+    )
+    QApplication.sendEvent(
+        viewport, QKeyEvent(QEvent.KeyRelease, Qt.Key_Space, Qt.NoModifier)
+    )
+
+    assert horizontal.value() - h0 == -dx
+    assert vertical.value() - v0 == -dy
+    landed = view.mapFromScene(scene_at_press)
+    assert abs(landed.x() - end.x()) <= 1
+    assert abs(landed.y() - end.y()) <= 1
+    assert len(_markup_items(editor)) == before_items
+    assert editor._tool == "rect"
+
+
+def test_space_left_press_does_not_create_an_annotation(qtbot):
+    editor = _show_zoomed(qtbot)
+    editor.set_tool("rect")
+    view = editor._view
+    viewport = view.viewport()
+    existing = editor.add_rect_item(QRectF(40, 40, 80, 50))
+    origin = QPointF(existing.pos())
+    before = len(_markup_items(editor))
+    QApplication.sendEvent(
+        viewport, QKeyEvent(QEvent.KeyPress, Qt.Key_Space, Qt.NoModifier)
+    )
+    _drag_scene(qtbot, editor, (30, 30), (90, 80))
+    assert len(_markup_items(editor)) == before
+    assert existing.pos() == origin
+    assert editor._view._dragging_tool is None
+    QApplication.sendEvent(
+        viewport, QKeyEvent(QEvent.KeyRelease, Qt.Key_Space, Qt.NoModifier)
+    )
+
+    _drag_scene(qtbot, editor, (30, 30), (90, 80))
+    assert len(_markup_items(editor)) == before + 1
+
+
+def test_shift_wheel_pans_horizontally(qtbot):
+    editor = _show_zoomed(qtbot)
+    view = editor._view
+    viewport = view.viewport()
+    horizontal = view.horizontalScrollBar()
+    vertical = view.verticalScrollBar()
+    zoom = editor._zoom
+    width = editor._stroke_width
+    lines = QApplication.wheelScrollLines()
+    step = horizontal.singleStep()
+    assert lines >= 1 and step >= 1
+    notch = 120 * lines * step // 120
+    pos = QPoint(viewport.width() // 3, viewport.height() // 3)
+
+    h0 = horizontal.value()
+    v0 = vertical.value()
+    _send_viewport_wheel(viewport, pos, angle_y=120, modifiers=Qt.ShiftModifier)
+    assert horizontal.value() - h0 == -notch
+    assert vertical.value() == v0
+    assert editor._zoom == zoom
+    assert editor._stroke_width == width
+
+    h1 = horizontal.value()
+    _send_viewport_wheel(viewport, pos, angle_y=-120, modifiers=Qt.ShiftModifier)
+    assert horizontal.value() - h1 == notch
+    assert vertical.value() == v0
+    assert editor._zoom == zoom
+
+
+def test_trackpad_pixel_delta_without_ctrl_pans(qtbot):
+    editor = _show_zoomed(qtbot)
+    view = editor._view
+    viewport = view.viewport()
+    horizontal = view.horizontalScrollBar()
+    vertical = view.verticalScrollBar()
+    zoom = editor._zoom
+    pos = QPoint(viewport.width() // 2, viewport.height() // 2)
+    h0 = horizontal.value()
+    v0 = vertical.value()
+    _send_viewport_wheel(
+        viewport,
+        pos,
+        angle_y=120,
+        pixel=QPoint(24, -15),
+        modifiers=Qt.NoModifier,
+    )
+    assert horizontal.value() - h0 == -24
+    assert vertical.value() - v0 == 15
+    assert editor._zoom == zoom
+    assert editor._stroke_width == 4
+
+
+def test_wheel_zoom_keeps_the_scene_point_under_the_pointer(qtbot):
+    editor = _show_zoomed(qtbot, width=2400, height=1600, zoom=1.5)
+    view = editor._view
+    viewport = view.viewport()
+    pos = QPoint(int(viewport.width() * 0.37), int(viewport.height() * 0.42))
+    scene_point = view.mapToScene(pos)
+    stroke = editor._stroke_width
+
+    for modifiers in (Qt.NoModifier, Qt.ControlModifier):
+        for _ in range(3):
+            assert _scroll_room(view)
+            before = editor._zoom
+            _send_viewport_wheel(viewport, pos, angle_y=120, modifiers=modifiers)
+            assert editor._zoom == pytest.approx(before * 1.15, rel=1e-9)
+            landed = view.mapFromScene(scene_point)
+            assert abs(landed.x() - pos.x()) <= 1
+            assert abs(landed.y() - pos.y()) <= 1
+            assert editor._stroke_width == stroke
 
 
 def test_ctrl_s_marks_the_stack_clean_only_when_save_succeeds(qtbot, tmp_path, monkeypatch):
