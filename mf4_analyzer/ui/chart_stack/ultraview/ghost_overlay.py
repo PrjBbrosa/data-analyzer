@@ -6,8 +6,9 @@ Cocoa cannot stably clip-update a translucent sibling as large as the elastic
 workspace. This overlay stays limited to the template grid widget.
 
 Transparent background: ``WA_TranslucentBackground`` disables QSS on this
-widget, so ``paintEvent`` always fills (Gotchas). Mouse events pass through;
-handle hit-testing lives on the card so the overlay never steals presses.
+widget, so ``paintEvent`` always fills (Gotchas). Mouse events pass through.
+Handle hit-testing lives on the board; this overlay only paints the 6×6
+handles centered on the card edge.
 """
 from __future__ import annotations
 
@@ -593,6 +594,7 @@ class GhostOverlay(QWidget):
                     self._handles_rect.height(),
                 )
                 for name in HANDLE_NAMES:
+                    # Centered on the edge so the whole 6×6 sits in the hit band.
                     hx, hy, hw, hh = handle_visual_rects(box)[name]
                     painter.drawRect(hx, hy, hw, hh)
         finally:

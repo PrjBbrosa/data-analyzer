@@ -56,6 +56,7 @@ class ViewportGestureRouter(QObject):
         self._suppress_context_menu = suppress_context_menu
         self._is_active = is_active
         self._installed = False
+        self._hover_board = None
 
     def install(self) -> None:
         if self._installed:
@@ -101,6 +102,7 @@ class ViewportGestureRouter(QObject):
                 self._update_pan(event)
                 event.accept()
                 return True
+            self._forward_buttonless_hover(watched, event)
             return False
         if event_type == QEvent.UngrabMouse:
             self._cancel_lost_grab(watched)
@@ -211,6 +213,64 @@ class ViewportGestureRouter(QObject):
         self._note_space(pressed)
         event.accept()
         return True
+
+    def _forward_buttonless_hover(self, watched, event) -> None:
+        """Resolve one buttonless move on the board. Do not consume it."""
+        if not isinstance(event, QMouseEvent) or event.buttons() != Qt.NoButton:
+            return
+        board = self._board_for_hover(watched)
+        if board is None:
+            # An unaccepted move bubbles to the canvas stack. That receiver is
+            # not inside the board, but the pointer has not left it.
+            if self._event_still_over_tracked_board(event):
+                return
+            self._clear_tracked_hover()
+            return
+        self._hover_board = board
+        try:
+            board.note_buttonless_hover(watched, event)
+        except RuntimeError:
+            self._hover_board = None
+
+    def _board_for_hover(self, watched):
+        if not isinstance(watched, QWidget):
+            return None
+        current: QWidget | None = watched
+        while current is not None:
+            note = getattr(current, "note_buttonless_hover", None)
+            if callable(note):
+                return current
+            if current is self._canvas_host:
+                return None
+            current = current.parentWidget()
+        return None
+
+    def _event_still_over_tracked_board(self, event) -> bool:
+        board = self._hover_board
+        if board is None or not isinstance(board, QWidget):
+            return False
+        if not isinstance(event, QMouseEvent):
+            return False
+        try:
+            if not board.isVisible():
+                return False
+            local = board.mapFromGlobal(event.globalPos())
+        except RuntimeError:
+            return False
+        return board.rect().contains(local)
+
+    def _clear_tracked_hover(self) -> None:
+        board = self._hover_board
+        self._hover_board = None
+        if board is None:
+            return
+        clear = getattr(board, "clear_buttonless_hover", None)
+        if not callable(clear):
+            return
+        try:
+            clear()
+        except RuntimeError:
+            return
 
     def _is_canvas_descendant(self, watched) -> bool:
         if not self._canvas_host.isVisible():

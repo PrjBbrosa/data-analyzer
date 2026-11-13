@@ -137,6 +137,34 @@ def test_hard_reject_same_key_suppressed_within_one_second():
     assert gate.allow_hard_reject(SAFETY_BOUNDS, 11.0) is True
 
 
+def test_painted_handles_stay_inside_the_edge_centered_hit_band():
+    """Ghost and viewport overlays both paint ``handle_visual_rects``."""
+    from mf4_analyzer.ui.chart_stack.ultraview.free_grid import (
+        HANDLE_VISUAL_PX,
+        handle_visual_rects,
+        hit_handle,
+    )
+
+    card = (16, 24, 250, 138)
+    assert HANDLE_VISUAL_PX == 6
+    for name, (hx, hy, width, height) in handle_visual_rects(card).items():
+        assert (width, height) == (6, 6)
+        edge_x = card[0] + card[2]
+        edge_y = card[1] + card[3]
+        if name == "e":
+            assert hx + width / 2 == edge_x
+        if name == "se":
+            assert hx + width / 2 == edge_x
+            assert hy + height / 2 == edge_y
+        for point in (
+            (hx, hy),
+            (hx + width - 1, hy),
+            (hx, hy + height - 1),
+            (hx + width - 1, hy + height - 1),
+        ):
+            assert hit_handle(card, point) == name
+
+
 def test_successful_commit_always_allowed_immediately():
     gate = FeedbackThrottle()
     assert gate.allow_hard_reject(NO_LEGAL_LAYOUT, 1.0) is True

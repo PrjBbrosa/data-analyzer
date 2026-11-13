@@ -15,7 +15,6 @@ from mf4_analyzer.ui.chart_stack.ultraview.free_grid import (
     GRID_MIN_VISIBLE_ROWS,
     GRID_ROW_HEIGHT,
     GRID_SPARE_ROWS,
-    HANDLE_HIT_PX,
     LAYOUT_MOVE,
     LAYOUT_RESIZE,
     LAYOUT_ARRANGE,
@@ -586,18 +585,69 @@ def test_group_move_out_of_bounds_ghost_stays_a_rigid_translation():
     assert ghosts[0][0] + ghosts[0][2] <= ghosts[1][0]
 
 
-def test_handle_hit_zones_are_at_least_eight_px_and_corners_win():
+def _rect_corners(rect: tuple[int, int, int, int]) -> tuple[tuple[int, int], ...]:
+    x, y, width, height = rect
+    return (
+        (x, y),
+        (x + width - 1, y),
+        (x, y + height - 1),
+        (x + width - 1, y + height - 1),
+    )
+
+
+def test_handle_hit_zones_are_centered_on_the_edge_and_corners_win():
+    from mf4_analyzer.ui.chart_stack.ultraview.free_grid import (
+        HANDLE_CORNER_PX,
+        HANDLE_INNER_PX,
+        HANDLE_OUTER_PX,
+        handle_hit_rects,
+        handle_inner_px,
+        handle_visual_rects,
+    )
+
     card = (0, 0, 120, 80)
-    assert HANDLE_HIT_PX >= 8
+    assert HANDLE_OUTER_PX == 6
+    assert HANDLE_INNER_PX == 6
+    assert HANDLE_CORNER_PX == 14
+    assert handle_inner_px(120) == 6
     assert hit_handle(card, (4, 4)) == "nw"
     assert hit_handle(card, (116, 4)) == "ne"
     assert hit_handle(card, (60, 4)) == "n"
     assert hit_handle(card, (116, 40)) == "e"
     assert hit_handle(card, (4, 40)) == "w"
     assert hit_handle(card, (60, 20)) is None
-    east = hit_handle(card, (120 - HANDLE_HIT_PX, 40))
-    assert east == "e"
-    assert hit_handle(card, (120 - HANDLE_HIT_PX - 1, 40)) is None
+    # 4 px inside the east edge, and the outermost pixel of the 6 px outer band.
+    assert hit_handle(card, (120 - 4, 40)) == "e"
+    assert hit_handle(card, (120 + 5, 40)) == "e"
+    assert hit_handle(card, (120 + 6, 40)) is None
+    assert hit_handle(card, (120 - 7, 40)) is None
+    zones = handle_hit_rects(card)
+    assert zones["nw"] == (-7, -7, 14, 14)
+    assert zones["e"][:2] == (114, 7)
+    assert zones["e"][2] == 12
+    for name, visual in handle_visual_rects(card).items():
+        assert visual[2:] == (6, 6)
+        for point in _rect_corners(visual):
+            assert hit_handle(card, point) == name
+
+
+def test_short_card_inner_band_shrinks_to_one_quarter_and_outer_stays_six():
+    from mf4_analyzer.ui.chart_stack.ultraview.free_grid import handle_inner_px
+
+    # Height 34 < 48 → inward band is 34 // 4 == 8; outward stays 6.
+    assert handle_inner_px(34) == 8
+    assert handle_inner_px(16) == 4
+    assert handle_inner_px(48) == 6
+    short = (0, 0, 80, 34)
+    assert hit_handle(short, (40, 7)) == "n"
+    assert hit_handle(short, (40, 8)) is None
+    assert hit_handle(short, (40, -6)) == "n"
+    assert hit_handle(short, (40, -7)) is None
+    narrow = (0, 0, 16, 80)
+    assert hit_handle(narrow, (12, 40)) == "e"
+    assert hit_handle(narrow, (11, 40)) is None
+    assert hit_handle(narrow, (21, 40)) == "e"
+    assert hit_handle(narrow, (22, 40)) is None
 
 
 def test_resize_handle_snaps_clamps_and_keeps_aspect():
