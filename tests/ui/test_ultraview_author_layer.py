@@ -279,3 +279,71 @@ def test_board_text_editor_bold_large_size_keeps_positive_glyph_advance(qapp):
     cursor = editor.textCursor()
     cursor.select(cursor.Document)
     assert cursor.charFormat().property(QTextFormat.FontPixelSize) == 32
+
+
+def test_live_override_follows_the_pointer_and_small_text_handles_sit_outside(qapp):
+    from mf4_analyzer.ui.chart_stack.ultraview.author_geometry import (
+        board_box_to_pixels,
+        board_point_to_pixels,
+        pixel_rects_intersect,
+        text_corner_handle_rects,
+    )
+    from mf4_analyzer.ui.ultraview_state import BoardPoint, StrokeObject
+
+    host = QWidget()
+    host.resize(700, 500)
+    layer = AuthorPaintLayer(host)
+    layer.setGeometry(host.rect())
+    metrics = _metrics()
+    stroke = StrokeObject(
+        "ink",
+        "stroke",
+        points=(BoardPoint(1.0, 1.0), BoardPoint(4.0, 1.0)),
+        tool="pen",
+        palette="ink",
+        width_px_100=4,
+    )
+    moved = (("points", ((1.0, 3.0), (4.0, 3.0))),)
+    layer.set_model(
+        AuthorLayerModel(
+            objects=(stroke,),
+            metrics=metrics,
+            geometry_overrides=(("ink", moved[0]),),
+        )
+    )
+    image = QImage(700, 500, QImage.Format_ARGB32)
+    image.fill(Qt.transparent)
+    painter = QPainter(image)
+    layer.render(painter)
+    painter.end()
+    old = board_point_to_pixels((2.5, 1.0), metrics)
+    new = board_point_to_pixels((2.5, 3.0), metrics)
+    assert image.pixelColor(int(round(old[0])), int(round(old[1]))).alpha() == 0
+    assert image.pixelColor(int(round(new[0])), int(round(new[1]))).alpha() > 0
+    assert layer.model().objects[0].points[0].y == 1.0
+
+    text = TextObject("tiny", "text", box=BoardBox(2.0, 2.0, 0.2, 0.2), text="")
+    pixel = board_box_to_pixels((2.0, 2.0, 0.2, 0.2), metrics)
+    box_px = (
+        int(round(pixel[0])),
+        int(round(pixel[1])),
+        max(1, int(round(pixel[2]))),
+        max(1, int(round(pixel[3]))),
+    )
+    handles = text_corner_handle_rects(box_px)
+    assert all(pixel_rects_intersect(rect, box_px) is False for rect in handles.values())
+    layer.set_model(
+        AuthorLayerModel(
+            objects=(text,),
+            metrics=metrics,
+            text_handle_boxes=((2.0, 2.0, 0.2, 0.2),),
+        )
+    )
+    painted = QImage(700, 500, QImage.Format_ARGB32)
+    painted.fill(Qt.transparent)
+    painter = QPainter(painted)
+    layer.render(painter)
+    painter.end()
+    handle = handles["nw"]
+    sample = painted.pixelColor(handle[0] + handle[2] // 2, handle[1] + handle[3] // 2)
+    assert sample.blue() > sample.red()

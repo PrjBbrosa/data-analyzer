@@ -1119,3 +1119,79 @@ def test_draw_presets_are_circular_chips_not_line_pills(qtbot):
     assert QColor(ring).blue() >= 180 or QColor(center).alpha() > 40
     assert not _mid_band_is_line_pill(selected_image)
     assert not flyout.preset_editor_visible()
+
+
+def test_stroke_body_drag_translates_every_point_and_pick_is_zoom_stable(qtbot):
+    from mf4_analyzer.ui.chart_stack.ultraview.author_geometry import (
+        snap_board_point,
+        stroke_pick_tolerance_px,
+    )
+    from mf4_analyzer.ui.chart_stack.ultraview.author_tools import AuthorKey, AuthorNudgeIntent
+
+    harness = _DrawHarness(qtbot)
+    harness.page.set_board(harness.board)
+    ink = StrokeObject(
+        "ink",
+        "stroke",
+        points=(BoardPoint(4.0, 6.0), BoardPoint(8.0, 6.0), BoardPoint(8.0, 9.0)),
+        tool="pen",
+        palette="ink",
+        width_px_100=2,
+    )
+    fat = StrokeObject(
+        "fat",
+        "stroke",
+        points=(BoardPoint(12.0, 6.0), BoardPoint(16.0, 6.0)),
+        tool="pen",
+        palette="ink",
+        width_px_100=20,
+    )
+    harness.board.author_objects = [ink, fat]
+    harness.page.set_board(harness.board)
+    QApplication.processEvents()
+    free = harness.page._free_grid
+    free.interaction().set_selection((AuthorKey("ink"),))
+    controller = free.author_controller()
+    start = _widget_point(free, (6.0, 6.0))
+    QTest.mousePress(free, Qt.LeftButton, Qt.NoModifier, start)
+    pitch_x = free.metrics().exact_pitch()[0]
+    drag = max(3, int(round(0.20 * pitch_x)))
+    moved = QPoint(start.x() + drag, start.y())
+    controller.update_author_geometry(moved)
+    overrides = dict(free.author_paint_layer().model().geometry_overrides)
+    points = overrides["ink"][1]
+    origin = [(point.x, point.y) for point in ink.points]
+    deltas = [(point[0] - origin[index][0], point[1] - origin[index][1]) for index, point in enumerate(points)]
+    assert deltas[0] == deltas[1] == deltas[2]
+    snapped = snap_board_point(deltas[0])
+    assert snapped == controller.geometry_session["snapped_delta"]
+    assert abs(deltas[0][0] - snapped[0]) > 0.02
+    intents = []
+    free.author_update_requested.connect(intents.append)
+    controller.finish_author_geometry(moved)
+    assert len(intents) == 1
+    assert isinstance(intents[0], AuthorNudgeIntent)
+    assert intents[0].object_ids == ("ink",)
+    assert (intents[0].dx, intents[0].dy) == snapped
+    assert [(point.x, point.y) for point in ink.points] == origin
+
+    for zoom in (0.5, 1.0, 2.0, 3.0):
+        free.set_zoom(zoom)
+        for item, tolerance in (
+            (ink, stroke_pick_tolerance_px(ink.width_px_100)),
+            (fat, stroke_pick_tolerance_px(fat.width_px_100)),
+        ):
+            first = _widget_point(free, (item.points[0].x, item.points[0].y))
+            second = _widget_point(free, (item.points[1].x, item.points[1].y))
+            mid_x = (first.x() + second.x()) / 2.0
+            line_y = (first.y() + second.y()) / 2.0
+            last = None
+            for distance in range(0, 40):
+                probe = QPoint(int(round(mid_x)), int(round(line_y + distance)))
+                hit = any(key.object_id == item.object_id for key in controller.keys_at(probe))
+                if hit:
+                    last = abs(probe.y() - line_y)
+            assert last is not None
+            assert abs(last - tolerance) <= 1.0
+            miss = QPoint(int(round(mid_x)), int(round(line_y + tolerance + 3.0)))
+            assert all(key.object_id != item.object_id for key in controller.keys_at(miss))
