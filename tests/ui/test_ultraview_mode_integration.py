@@ -1,10 +1,12 @@
 """UltraView independent panel: ChartStack host, Toolbar, Inspector, MainWindow routing."""
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import pytest
 
+from PyQt5 import sip
 from PyQt5.QtGui import QColor, QImage
 from PyQt5.QtCore import QCoreApplication, Qt
 from PyQt5.QtTest import QTest
@@ -1171,3 +1173,145 @@ def test_closing_wwt_source_invalidates_ultraview_preview_keeps_view_id(
     if page is not None:
         status = page._status_for(ref)
         assert status in {STATUS_STALE, STATUS_MISSING, None} or status != STATUS_FRESH
+
+
+def test_reopening_minimized_ultraview_restores_the_same_window(qapp, qtbot):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    win.resize(1200, 800)
+    win.show()
+    win.open_ultraview()
+    qapp.processEvents()
+    sheet = win._ultraview_sheet
+    assert sheet is not None
+    sheet.showMinimized()
+    qapp.processEvents()
+    assert sheet.isMinimized()
+    assert sheet.isVisible()
+    win.open_ultraview()
+    qapp.processEvents()
+    assert win._ultraview_sheet is sheet
+    assert not sheet.isMinimized()
+    assert sheet.isVisible()
+
+
+def test_delete_later_without_close_returns_page_to_stack(qapp, qtbot):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    page = win.chart_stack.page_ultraview
+    stack = win.chart_stack.stack
+    index = stack.indexOf(page)
+    win.open_ultraview()
+    qapp.processEvents()
+    sheet = win._ultraview_sheet
+    assert page.parentWidget() is sheet
+    sheet.deleteLater()
+    qtbot.waitUntil(lambda: sip.isdeleted(sheet), timeout=1000)
+    assert not sip.isdeleted(page)
+    assert page.parentWidget() is stack
+    assert stack.indexOf(page) == index
+
+
+def test_hidden_sheet_releases_page_before_delete_later(qapp, qtbot):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    page = win.chart_stack.page_ultraview
+    stack = win.chart_stack.stack
+    index = stack.indexOf(page)
+    win.open_ultraview()
+    qapp.processEvents()
+    sheet = win._ultraview_sheet
+    sheet.hide()
+    assert page.parentWidget() is sheet
+    assert win._alive_tool_dialog("_ultraview_sheet") is None
+    assert not sip.isdeleted(page)
+    assert page.parentWidget() is stack
+    assert stack.indexOf(page) == index
+    assert win._ultraview_sheet is None
+    assert not sip.isdeleted(sheet)
+
+
+def test_release_page_is_idempotent(qapp, qtbot):
+    host = QWidget()
+    qtbot.addWidget(host)
+    stack = QStackedWidget(host)
+    stack.addWidget(QLabel("time"))
+    page = QLabel("board")
+    stack.addWidget(page)
+    index = stack.indexOf(page)
+    sheet = UltraViewSheet(host, page, stack)
+    qtbot.addWidget(sheet)
+    sheet.present()
+    qapp.processEvents()
+    assert page.parentWidget() is sheet
+    inserts = []
+    original = stack.insertWidget
+
+    def _insert(idx, widget):
+        inserts.append((idx, widget))
+        return original(idx, widget)
+
+    stack.insertWidget = _insert
+    sheet.release_page()
+    sheet.release_page()
+    assert inserts == [(index, page)]
+    assert page.parentWidget() is stack
+    assert stack.indexOf(page) == index
+    assert not sip.isdeleted(page)
+
+
+def test_release_page_does_not_steal_a_page_owned_by_a_newer_sheet(qapp, qtbot):
+    host = QWidget()
+    qtbot.addWidget(host)
+    stack = QStackedWidget(host)
+    page = QLabel("board")
+    stack.addWidget(page)
+    first = UltraViewSheet(host, page, stack)
+    qtbot.addWidget(first)
+    first.present()
+    qapp.processEvents()
+    second = UltraViewSheet(host, page, stack)
+    qtbot.addWidget(second)
+    second.present()
+    qapp.processEvents()
+    assert page.parentWidget() is second
+    first.release_page()
+    assert page.parentWidget() is second
+    assert not sip.isdeleted(page)
+
+
+def test_restore_page_logs_when_page_or_stack_is_already_dead(qapp, qtbot, caplog):
+    logger = "mf4_analyzer.ui.drawers.ultraview.sheet"
+    host = QWidget()
+    qtbot.addWidget(host)
+    stack = QStackedWidget(host)
+    page = QLabel("board")
+    stack.addWidget(page)
+    sheet = UltraViewSheet(host, page, stack)
+    qtbot.addWidget(sheet)
+    sheet.present()
+    qapp.processEvents()
+    assert page.parentWidget() is sheet
+    stack.deleteLater()
+    qtbot.waitUntil(lambda: sip.isdeleted(stack), timeout=1000)
+    with caplog.at_level(logging.WARNING, logger=logger):
+        sheet._restore_page()
+    assert "could not restore" in caplog.text
+    assert "stack_dead=True" in caplog.text
+    assert not sip.isdeleted(page)
+
+    caplog.clear()
+    stack2 = QStackedWidget()
+    qtbot.addWidget(stack2)
+    page2 = QLabel("board")
+    stack2.addWidget(page2)
+    sheet2 = UltraViewSheet(None, page2, stack2)
+    qtbot.addWidget(sheet2)
+    sheet2.present()
+    qapp.processEvents()
+    page2.deleteLater()
+    qtbot.waitUntil(lambda: sip.isdeleted(page2), timeout=1000)
+    with caplog.at_level(logging.WARNING, logger=logger):
+        sheet2._restore_page()
+    assert "could not restore" in caplog.text
+    assert "page_dead=True" in caplog.text

@@ -14,7 +14,9 @@ implementation instead of drifting apart.
 """
 from __future__ import annotations
 
-from PyQt5.QtCore import QTimer, Qt
+import weakref
+
+from PyQt5.QtCore import QObject, QTimer, Qt
 
 
 def configure_independent_tool_window(widget) -> None:
@@ -57,9 +59,11 @@ def clear_tool_window_transient_parent(widget) -> None:
 def present_independent_tool_window(widget) -> None:
     """Show, raise, then detach from the host window's z-order.
 
-    ``raise_`` / ``activateWindow`` can re-create the native transient-for
-    link, so the detach must run last.
+    A minimized tool window is restored first. Maximized and fullscreen bits
+    stay set. ``raise_`` / ``activateWindow`` can re-create the native
+    transient-for link, so the detach must run last.
     """
+    _clear_window_minimized(widget)
     show = getattr(widget, "show", None)
     if callable(show):
         show()
@@ -70,6 +74,152 @@ def present_independent_tool_window(widget) -> None:
     if callable(activate):
         activate()
     clear_tool_window_transient_parent(widget)
+
+
+def _clear_window_minimized(widget) -> None:
+    """Drop ``Qt.WindowMinimized`` and leave maximized / fullscreen alone."""
+    if not _widget_alive(widget):
+        return
+    state_of = getattr(widget, "windowState", None)
+    set_state = getattr(widget, "setWindowState", None)
+    if not callable(state_of) or not callable(set_state):
+        return
+    try:
+        state = state_of()
+    except (RuntimeError, TypeError):
+        return
+    if not bool(state & Qt.WindowMinimized):
+        return
+    try:
+        set_state(state & ~Qt.WindowMinimized)
+    except (RuntimeError, TypeError):
+        return
+
+
+_NUDGE_BLOCKED_STATES = (
+    Qt.WindowMinimized | Qt.WindowMaximized | Qt.WindowFullScreen
+)
+
+
+def show_event_should_nudge(widget, event) -> bool:
+    """Nudge only a deliberate show of a normal window.
+
+    Spontaneous shows (window-manager maps) and minimized, maximized, or
+    fullscreen windows are left to the platform. Screen changes use
+    ``bind_screen_overflow_nudge`` instead of this gate.
+    """
+    if not _widget_alive(widget) or event is None:
+        return False
+    spontaneous = getattr(event, "spontaneous", None)
+    if callable(spontaneous):
+        try:
+            if spontaneous():
+                return False
+        except (RuntimeError, TypeError):
+            return False
+    state_of = getattr(widget, "windowState", None)
+    if not callable(state_of):
+        return False
+    try:
+        state = state_of()
+    except (RuntimeError, TypeError):
+        return False
+    return not bool(state & _NUDGE_BLOCKED_STATES)
+
+
+class _ScreenOverflowNudge(QObject):
+    """One overflow nudge when the tool window's screen changes.
+
+    The ``screenChanged`` slot is this object's bound method. The connection
+    is removed on close and again when the host is destroyed.
+    """
+
+    def __init__(self, host):
+        super().__init__(host)
+        # Weak: a strong host pointer here cycles through this child and keeps
+        # the tool window's Python wrapper alive after Qt has deleted it.
+        self._host_ref = weakref.ref(host)
+        self._handle = None
+        destroyed = getattr(host, "destroyed", None)
+        if destroyed is not None:
+            try:
+                destroyed.connect(self.unbind)
+            except (RuntimeError, TypeError):
+                pass
+
+    def _host_widget(self):
+        host = self._host_ref()
+        if not _widget_alive(host):
+            return None
+        return host
+
+    def bind(self) -> None:
+        host = self._host_widget()
+        if host is None:
+            return
+        handle = host.windowHandle()
+        if handle is None:
+            try:
+                host.winId()
+            except (RuntimeError, TypeError, AttributeError):
+                return
+            host = self._host_widget()
+            if host is None:
+                return
+            handle = host.windowHandle()
+        if handle is None:
+            return
+        if self._handle is handle and _widget_alive(handle):
+            return
+        self.unbind()
+        try:
+            handle.screenChanged.connect(self._on_screen_changed)
+        except (RuntimeError, TypeError):
+            return
+        self._handle = handle
+
+    def unbind(self, *_args) -> None:
+        handle = self._handle
+        self._handle = None
+        if handle is None or not _widget_alive(handle):
+            return
+        try:
+            handle.screenChanged.disconnect(self._on_screen_changed)
+        except (RuntimeError, TypeError):
+            return
+
+    def _on_screen_changed(self, _screen=None) -> None:
+        host = self._host_widget()
+        if host is None:
+            return
+        from mf4_analyzer.ui_kit.dialog_geometry import nudge_into_work_area
+
+        parent = None
+        try:
+            parent = host.parentWidget()
+        except (RuntimeError, TypeError):
+            parent = None
+        nudge_into_work_area(host, parent=parent)
+
+
+def bind_screen_overflow_nudge(widget) -> None:
+    """Connect ``windowHandle().screenChanged`` to one overflow-only nudge."""
+    if not _widget_alive(widget):
+        return
+    watcher = getattr(widget, "_screen_overflow_nudge", None)
+    if not isinstance(watcher, _ScreenOverflowNudge) or not _widget_alive(watcher):
+        watcher = _ScreenOverflowNudge(widget)
+        widget._screen_overflow_nudge = watcher
+    watcher.bind()
+
+
+def unbind_screen_overflow_nudge(widget) -> None:
+    """Drop the screen-change nudge, if this window still has one."""
+    if not _widget_alive(widget):
+        return
+    watcher = getattr(widget, "_screen_overflow_nudge", None)
+    if isinstance(watcher, _ScreenOverflowNudge) and _widget_alive(watcher):
+        watcher.unbind()
 
 
 def _widget_alive(widget) -> bool:

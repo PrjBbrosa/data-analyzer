@@ -5444,11 +5444,14 @@ class MainWindow(
             except Exception:
                 setattr(self, attr, None)
                 return None
-            # Hidden/closing: drop the handle only. Do not close() again —
-            # a second closeEvent can steal the Board page from a newer
-            # sheet. deleteLater stays so a hidden Batch/UltraView dialog
-            # does not leak; destroyed uses identity so it cannot wipe a
-            # replacement handle.
+            # Hidden/closing: return an adopted Board page first, then drop
+            # the handle. Do not close() again — a second closeEvent can
+            # steal the Board page from a newer sheet. deleteLater stays so
+            # a hidden Batch/UltraView dialog does not leak; destroyed uses
+            # identity so it cannot wipe a replacement handle.
+            release = getattr(dlg, "release_page", None)
+            if callable(release):
+                release()
             deleter = getattr(dlg, "deleteLater", None)
             if callable(deleter):
                 try:

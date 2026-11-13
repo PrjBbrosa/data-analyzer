@@ -6,19 +6,26 @@ the user keep working a single-file View while the Board stays visible.
 """
 from __future__ import annotations
 
-from PyQt5.QtCore import Qt
+import logging
+
+from PyQt5.QtCore import QEvent, Qt
 from PyQt5.QtWidgets import QDialog, QPushButton, QVBoxLayout, QWidget
 
 from ...widgets.toast import Toast
 from ..batch._geometry import (
     arm_post_show_geometry_check,
+    bind_screen_overflow_nudge,
     clear_tool_window_transient_parent,
     configure_independent_tool_window,
     finish_post_show_geometry_check,
     fit_dialog_to_available_screen,
     note_tool_window_phase,
     present_independent_tool_window,
+    show_event_should_nudge,
+    unbind_screen_overflow_nudge,
 )
+
+_LOG = logging.getLogger(__name__)
 
 
 def _alive(obj) -> bool:
@@ -87,9 +94,11 @@ class UltraViewSheet(QDialog):
         super().showEvent(event)
         clear_tool_window_transient_parent(self)
         self._silence_dialog_buttons()
-        from mf4_analyzer.ui_kit.dialog_geometry import nudge_into_work_area
+        if show_event_should_nudge(self, event):
+            from mf4_analyzer.ui_kit.dialog_geometry import nudge_into_work_area
 
-        nudge_into_work_area(self, parent=self.parentWidget())
+            nudge_into_work_area(self, parent=self.parentWidget())
+        bind_screen_overflow_nudge(self)
         arm_post_show_geometry_check(self)
         note_tool_window_phase(self, "show-return")
 
@@ -139,21 +148,48 @@ class UltraViewSheet(QDialog):
         # ChartStack.take_hint_bar: after changing parent, show the widget.
         page.setVisible(True)
 
+    def release_page(self) -> None:
+        """Return the Board page to its stack. Safe to call more than once."""
+        self._restore_page()
+
+    def _warn_restore_failed(self, *, page_dead: bool, stack_dead: bool) -> None:
+        _LOG.warning(
+            "UltraViewSheet could not restore the Board page "
+            "(page_dead=%s, stack_dead=%s)",
+            page_dead,
+            stack_dead,
+        )
+
     def _restore_page(self) -> None:
         page = self._page
         stack = self._stack
-        if not _alive(page) or not _alive(stack):
+        page_dead = page is not None and not _alive(page)
+        stack_dead = stack is not None and not _alive(stack)
+        if page_dead or stack_dead:
+            self._warn_restore_failed(page_dead=page_dead, stack_dead=stack_dead)
             return
-        if page.parentWidget() is stack:
+        if page is None or stack is None:
+            return
+        try:
+            parent = page.parentWidget()
+        except RuntimeError:
+            self._warn_restore_failed(page_dead=True, stack_dead=stack_dead)
+            return
+        # Already home, or a newer sheet adopted the page. A second release
+        # must not pull the page back off that sheet.
+        if parent is stack or (parent is not None and parent is not self):
             return
         insert = getattr(stack, "insertWidget", None)
         add = getattr(stack, "addWidget", None)
         idx = self._stack_index
-        if callable(insert) and idx >= 0:
-            insert(idx, page)
-            return
-        if callable(add):
-            add(page)
+        try:
+            if callable(insert) and idx >= 0:
+                insert(idx, page)
+                return
+            if callable(add):
+                add(page)
+        except RuntimeError:
+            self._warn_restore_failed(page_dead=False, stack_dead=True)
 
     def _reset_session(self) -> None:
         page = self._page
@@ -165,10 +201,20 @@ class UltraViewSheet(QDialog):
 
     def closeEvent(self, event):  # noqa: N802 (Qt API)
         self._reset_session()
-        self._restore_page()
+        self.release_page()
+        unbind_screen_overflow_nudge(self)
         super().closeEvent(event)
 
     def done(self, result):  # noqa: N802 (Qt API)
         self._reset_session()
-        self._restore_page()
+        self.release_page()
+        unbind_screen_overflow_nudge(self)
         super().done(result)
+
+    def event(self, event):  # noqa: N802 (Qt API)
+        # deleteLater skips closeEvent. Return the page before Qt deletes
+        # this sheet and every child that is still parented here.
+        if event.type() == QEvent.DeferredDelete:
+            unbind_screen_overflow_nudge(self)
+            self.release_page()
+        return super().event(event)

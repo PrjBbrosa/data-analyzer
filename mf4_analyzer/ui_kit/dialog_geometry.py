@@ -35,6 +35,7 @@ UNTRUSTED_WORK_HEIGHT = 240
 MIN_DECORATED_CLIENT = 200
 # Unshown decorated windows have no native frame yet. This is an estimate
 # used only before Show; after Show the real frameGeometry is measured.
+# A measured Windows value is still pending.
 _ESTIMATED_TITLE_INSETS = (1, 28, 1, 1)
 
 POSITION_CENTER = "center"

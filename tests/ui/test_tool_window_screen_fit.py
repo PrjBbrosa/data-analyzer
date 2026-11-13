@@ -4,6 +4,9 @@ from __future__ import annotations
 import logging
 
 import pytest
+from PyQt5 import sip
+from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QShowEvent
 from PyQt5.QtWidgets import QDialog, QWidget
 
 from mf4_analyzer.ui.drawers.batch._geometry import fit_dialog_to_available_screen
@@ -264,3 +267,129 @@ def test_geometry_trace_stays_quiet_when_the_switch_is_off(qapp, qtbot, monkeypa
         _pump(qapp)
     assert "tool-window-geometry" not in caplog.text
     assert "construct-end" not in caplog.text
+
+
+class _SpontaneousShow(QShowEvent):
+    def spontaneous(self):  # noqa: D102
+        return True
+
+
+def _new_tool_sheet(qtbot, kind):
+    if kind == "ultraview":
+        page = QWidget()
+        qtbot.addWidget(page)
+        sheet = UltraViewSheet(None, page)
+    else:
+        from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+        sheet = BatchSheet(None, files={})
+    qtbot.addWidget(sheet)
+    return sheet
+
+
+def _patch_nudge(monkeypatch, calls, *, resize=None):
+    def nudge(widget, **_kwargs):
+        calls.append(widget)
+        if resize is not None:
+            widget.resize(*resize)
+
+    monkeypatch.setattr(
+        "mf4_analyzer.ui_kit.dialog_geometry.nudge_into_work_area",
+        nudge,
+    )
+
+
+@pytest.mark.parametrize("kind", ["ultraview", "batch"])
+def test_spontaneous_show_does_not_nudge(qapp, qtbot, monkeypatch, kind):
+    calls = []
+    _patch_nudge(monkeypatch, calls)
+    sheet = _new_tool_sheet(qtbot, kind)
+    sheet.showEvent(_SpontaneousShow())
+    assert calls == []
+
+
+@pytest.mark.parametrize("kind", ["ultraview", "batch"])
+def test_normal_show_still_nudges_once(qapp, qtbot, monkeypatch, kind):
+    calls = []
+    _patch_nudge(monkeypatch, calls)
+    sheet = _new_tool_sheet(qtbot, kind)
+    sheet.show()
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("kind", ["ultraview", "batch"])
+@pytest.mark.parametrize("how", ["maximized", "fullscreen", "minimized"])
+def test_special_window_state_show_does_not_nudge(
+    qapp, qtbot, monkeypatch, kind, how,
+):
+    calls = []
+    _patch_nudge(monkeypatch, calls, resize=(211, 211))
+    sheet = _new_tool_sheet(qtbot, kind)
+    if how == "minimized":
+        sheet.showMinimized()
+        assert sheet.isMinimized()
+    elif how == "fullscreen":
+        sheet.setWindowState(Qt.WindowFullScreen)
+        sheet.show()
+        assert sheet.isFullScreen()
+    else:
+        sheet.setWindowState(Qt.WindowMaximized)
+        sheet.show()
+        assert sheet.isMaximized()
+    assert calls == []
+    assert (sheet.width(), sheet.height()) != (211, 211)
+
+
+@pytest.mark.parametrize("kind", ["ultraview", "batch"])
+def test_screen_changed_nudges_once_and_disconnects_on_close(
+    qapp, qtbot, monkeypatch, kind,
+):
+    calls = []
+    _patch_nudge(monkeypatch, calls)
+    sheet = _new_tool_sheet(qtbot, kind)
+    sheet.show()
+    handle = sheet.windowHandle()
+    assert handle is not None
+    calls.clear()
+    handle.screenChanged.emit(handle.screen())
+    assert len(calls) == 1
+
+    sheet.setWindowState(Qt.WindowMaximized)
+    calls.clear()
+    handle.screenChanged.emit(handle.screen())
+    assert len(calls) == 1
+
+    sheet.hide()
+    sheet.show()
+    calls.clear()
+    handle = sheet.windowHandle()
+    handle.screenChanged.emit(handle.screen())
+    assert len(calls) == 1
+
+    sheet.close()
+    if not sip.isdeleted(sheet):
+        handle = sheet.windowHandle()
+        if handle is not None and not sip.isdeleted(handle):
+            before = len(calls)
+            handle.screenChanged.emit(handle.screen())
+            assert len(calls) == before
+
+
+def test_present_clears_minimized_and_keeps_maximized(qapp, qtbot):
+    from mf4_analyzer.ui.drawers.batch._geometry import (
+        present_independent_tool_window,
+    )
+
+    dialog = QDialog()
+    dialog.setWindowTitle("tool")
+    qtbot.addWidget(dialog)
+    dialog.resize(420, 300)
+    dialog.show()
+    dialog.setWindowState(Qt.WindowMaximized | Qt.WindowMinimized)
+    qapp.processEvents()
+    assert dialog.isMinimized()
+    assert dialog.isMaximized()
+    present_independent_tool_window(dialog)
+    qapp.processEvents()
+    assert not dialog.isMinimized()
+    assert dialog.isMaximized()

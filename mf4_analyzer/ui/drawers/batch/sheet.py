@@ -51,12 +51,15 @@ from ...drop_paths import (
 from ...widgets.toast import Toast
 from ._geometry import (
     arm_post_show_geometry_check,
+    bind_screen_overflow_nudge,
     clear_tool_window_transient_parent,
     configure_independent_tool_window,
     finish_post_show_geometry_check,
     fit_dialog_to_available_screen,
     note_tool_window_phase,
     present_independent_tool_window,
+    show_event_should_nudge,
+    unbind_screen_overflow_nudge,
 )
 from .analysis_panel import AnalysisPanel
 from .input_panel import InputPanel, STATE_PATH_PENDING, STATE_PROBING
@@ -685,9 +688,11 @@ class BatchSheet(QDialog):
         note_tool_window_phase(self, "show-enter")
         super().showEvent(event)
         clear_tool_window_transient_parent(self)
-        from mf4_analyzer.ui_kit.dialog_geometry import nudge_into_work_area
+        if show_event_should_nudge(self, event):
+            from mf4_analyzer.ui_kit.dialog_geometry import nudge_into_work_area
 
-        nudge_into_work_area(self, parent=self.parentWidget())
+            nudge_into_work_area(self, parent=self.parentWidget())
+        bind_screen_overflow_nudge(self)
         self._sync_method_caption_width()
         self._settle_initial_content_layout()
         arm_post_show_geometry_check(self)
@@ -3144,6 +3149,7 @@ class BatchSheet(QDialog):
         # the event and comes back through here once the runner has stopped.
         self._teardown_result_details()
         self._persist_panel_prefs()
+        unbind_screen_overflow_nudge(self)
         super().closeEvent(event)
 
     def done(self, result):  # noqa: N802 (Qt API)
@@ -3162,6 +3168,7 @@ class BatchSheet(QDialog):
         """
         self._teardown_result_details()
         self._persist_panel_prefs()
+        unbind_screen_overflow_nudge(self)
         super().done(result)
 
     def get_preset(self) -> AnalysisPreset:
