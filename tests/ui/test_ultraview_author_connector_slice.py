@@ -808,3 +808,114 @@ def test_mixed_mutation_is_atomic_on_target_move():
     assert (note.box.x, note.box.y) == (5.0, 6.0)
     assert link.start.target.object_id == "note"
     assert point_on_box_outline((5.0, 6.0, 3.0, 2.0), (link.start.point.x, link.start.point.y))
+
+
+def test_connector_body_moves_only_when_neither_end_is_snapped(qtbot):
+    from mf4_analyzer.ui.chart_stack.ultraview.author_geometry import (
+        board_point_to_pixels,
+        connector_pick_tolerance_px,
+        snap_board_point,
+    )
+    from mf4_analyzer.ui.chart_stack.ultraview.author_tools import AuthorKey, AuthorNudgeIntent
+    from mf4_analyzer.ui.chart_stack.ultraview.feedback import AUTHOR_SNAPPED_ENDPOINT, text_for_key
+
+    harness = _ConnectorHarness(qtbot)
+    free_line = ConnectorObject(
+        "free-line",
+        "connector",
+        start=ConnectorEndpoint(BoardPoint(4.0, 8.0)),
+        end=ConnectorEndpoint(BoardPoint(9.0, 8.0)),
+        route="straight",
+    )
+    anchored = ConnectorObject(
+        "anchored",
+        "connector",
+        start=ConnectorEndpoint(
+            BoardPoint(4.0, 12.0),
+            AnchorTarget("author", object_id="free-line", anchor="e"),
+        ),
+        end=ConnectorEndpoint(BoardPoint(9.0, 12.0)),
+        route="straight",
+    )
+    harness.board.author_objects = [free_line, anchored]
+    harness.page.set_board(harness.board)
+    QApplication.processEvents()
+    free = harness.page._free_grid
+    toasts = []
+    intents = []
+    free.feedback_requested.connect(toasts.append)
+    free.author_update_requested.connect(intents.append)
+    free.interaction().set_selection((AuthorKey("free-line"), AuthorKey("anchored")))
+    controller = free.author_controller()
+    start = QPoint(*_midpoint(free, free_line))
+    QTest.mousePress(free, Qt.LeftButton, Qt.NoModifier, start)
+    pitch_x = free.metrics().exact_pitch()[0]
+    moved = QPoint(start.x() + max(3, int(round(0.20 * pitch_x))), start.y())
+    controller.update_author_geometry(moved)
+    overrides = dict(free.author_paint_layer().model().geometry_overrides)
+    assert "anchored" not in overrides
+    start_dx = overrides["free-line"][1][0] - free_line.start.point.x
+    end_dx = overrides["free-line"][2][0] - free_line.end.point.x
+    assert abs(start_dx - end_dx) < 1e-9
+    snapped = snap_board_point((start_dx, overrides["free-line"][1][1] - free_line.start.point.y))
+    assert abs(start_dx - snapped[0]) > 0.02
+    assert toasts == []
+    controller.finish_author_geometry(moved)
+    assert len(intents) == 1
+    assert isinstance(intents[0], AuthorNudgeIntent)
+    assert intents[0].object_ids == ("free-line",)
+    assert (free_line.start.point.x, free_line.end.point.x) == (4.0, 9.0)
+
+    before = (anchored.start.point.x, anchored.end.point.x)
+    anchor_pos = QPoint(*_midpoint(free, anchored))
+    QTest.mousePress(free, Qt.LeftButton, Qt.NoModifier, anchor_pos)
+    controller.update_author_geometry(QPoint(anchor_pos.x() + 12, anchor_pos.y()))
+    assert controller.geometry_session is None
+    assert toasts == [text_for_key(AUTHOR_SNAPPED_ENDPOINT)]
+    assert (anchored.start.point.x, anchored.end.point.x) == before
+    assert free.interaction().author_selection_ids() == {"free-line", "anchored"}
+    QTest.mouseRelease(free, Qt.LeftButton, Qt.NoModifier, anchor_pos)
+    assert len(intents) == 1
+
+    for zoom in (0.5, 1.0, 2.0, 3.0):
+        free.set_zoom(zoom)
+        first = board_point_to_pixels(
+            (free_line.start.point.x, free_line.start.point.y),
+            free.metrics(),
+            origin_offset=free.workspace_origin_offset(),
+        )
+        second = board_point_to_pixels(
+            (free_line.end.point.x, free_line.end.point.y),
+            free.metrics(),
+            origin_offset=free.workspace_origin_offset(),
+        )
+        mid_x = (first[0] + second[0]) / 2.0
+        line_y = (first[1] + second[1]) / 2.0
+        tolerance = connector_pick_tolerance_px()
+        last = None
+        for distance in range(0, 24):
+            probe = QPoint(int(round(mid_x)), int(round(line_y + distance)))
+            hit = any(key.object_id == "free-line" for key in controller.keys_at(probe))
+            if hit:
+                last = abs(probe.y() - line_y)
+        assert last is not None
+        assert abs(last - tolerance) <= 1.0
+
+
+def _midpoint(board, item) -> tuple[int, int]:
+    from mf4_analyzer.ui.chart_stack.ultraview.author_geometry import board_point_to_pixels
+
+    first = board_point_to_pixels(
+        (item.start.point.x, item.start.point.y),
+        board.metrics(),
+        origin_offset=board.workspace_origin_offset(),
+    )
+    second = board_point_to_pixels(
+        (item.end.point.x, item.end.point.y),
+        board.metrics(),
+        origin_offset=board.workspace_origin_offset(),
+    )
+    return (
+        int(round((first[0] + second[0]) / 2.0)),
+        int(round((first[1] + second[1]) / 2.0)),
+    )
