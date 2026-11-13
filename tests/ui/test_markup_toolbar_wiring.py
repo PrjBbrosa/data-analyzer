@@ -92,7 +92,7 @@ EXPECTED_BUTTONS = [
 ]
 
 EXPECTED_TOOLTIPS = {
-    "markupCloseButton": "关闭 (Esc)",
+    "markupCloseButton": "关闭（有未完成标注时会确认）",
     "markupStyleButton": "样式（颜色 / 线宽） · [ ] 调线宽",
     "markupUndoButton": "撤销 (Ctrl+Z)",
     "markupRedoButton": "重做 (Ctrl+Y)",

@@ -27,6 +27,7 @@ from PyQt5.QtWidgets import (
     QGraphicsSimpleTextItem,
     QGraphicsTextItem,
     QGraphicsView,
+    QMessageBox,
     QShortcut,
     QUndoStack,
     QVBoxLayout,
@@ -67,6 +68,62 @@ from .view import _MarkupGraphicsView
 _HIT_TOLERANCE = 12.0
 _HIT_SCREEN_PX = 8.0
 _HANDLE_HIT_SCREEN_PX = 14.0
+# Scene chrome is not an annotation. The view tags previews and the rubber band
+# with the same data role this filter rejects.
+_CHROME_ITEM_DATA = frozenset({
+    "editor_handle",
+    "crop_overlay",
+    "rubber_band",
+    "markup_preview",
+})
+
+
+def _pen_pad(pen: QPen, tolerance: float) -> float:
+    width = pen.widthF()
+    if width <= 0:
+        width = 1.0
+    return width / 2.0 + tolerance
+
+
+def _point_in_ellipse(rect: QRectF, point: QPointF) -> bool:
+    if rect.width() <= 0 or rect.height() <= 0:
+        return False
+    rx = rect.width() / 2.0
+    ry = rect.height() / 2.0
+    dx = (point.x() - rect.center().x()) / rx
+    dy = (point.y() - rect.center().y()) / ry
+    return dx * dx + dy * dy <= 1.0
+
+
+def _rect_ring_contains(rect: QRectF, point: QPointF, pad: float) -> bool:
+    pad = max(0.0, pad)
+    outer = rect.adjusted(-pad, -pad, pad, pad)
+    if not outer.contains(point):
+        return False
+    inner = rect.adjusted(pad, pad, -pad, -pad)
+    if inner.width() <= 0 or inner.height() <= 0:
+        return True
+    return not inner.contains(point)
+
+
+def _ellipse_ring_contains(rect: QRectF, point: QPointF, pad: float) -> bool:
+    pad = max(0.0, pad)
+    if not _point_in_ellipse(rect.adjusted(-pad, -pad, pad, pad), point):
+        return False
+    inner = rect.adjusted(pad, pad, -pad, -pad)
+    if inner.width() <= 0 or inner.height() <= 0:
+        return True
+    return not _point_in_ellipse(inner, point)
+
+
+def _is_hollow_shape(item) -> bool:
+    """Rects and ellipses with no fill are stroke-only. Filled badges are not."""
+    if not isinstance(item, (QGraphicsRectItem, QGraphicsEllipseItem)):
+        return False
+    brush = item.brush()
+    if brush.style() == Qt.NoBrush:
+        return True
+    return brush.color().alpha() == 0
 
 
 def _pixmap_as_device_pixels(pixmap: QPixmap) -> QPixmap:
@@ -132,6 +189,8 @@ class MarkupEditor(QWidget):
         self._hint_toast = None
         self._toolbar = None
         self._capability_hint_shown = False
+        self._user_close_request = False
+        self._asking_close = False
 
         self._scene = QGraphicsScene(self)
         self._background_item = QGraphicsPixmapItem(self._current_pixmap)
@@ -393,6 +452,8 @@ class MarkupEditor(QWidget):
         result = self.render_result()
         if self._on_done is not None:
             self._on_done(result)
+        # Success is the new clean state, so a following close does not ask again.
+        self._undo_stack.setClean()
         self.close()
         return result
 
@@ -400,7 +461,70 @@ class MarkupEditor(QWidget):
         path = self._get_save_path()
         if not path:
             return False
-        return self.render_result().save(path)
+        saved = bool(self.render_result().save(path))
+        if saved:
+            self._undo_stack.setClean()
+        return saved
+
+    def request_close(self) -> None:
+        """User close from Esc's last step or the toolbar close button.
+
+        A spontaneous title-bar close reaches the same confirm in ``closeEvent``.
+        """
+        self._user_close_request = True
+        try:
+            self.close()
+        finally:
+            self._user_close_request = False
+
+    def closeEvent(self, event):
+        # Programmatic close() (finish path, test teardown) is not spontaneous
+        # and does not prompt. The title bar closes the QWindow, which delivers
+        # a spontaneous close event and must ask when the stack is dirty.
+        if self._asking_close:
+            event.ignore()
+            return
+        user_close = self._user_close_request or bool(event.spontaneous())
+        if user_close and not self._undo_stack.isClean():
+            decision = self._ask_close_decision()
+            if decision == "cancel":
+                event.ignore()
+                return
+            if decision == "copy":
+                self.finish_and_copy()
+                event.accept()
+                super().closeEvent(event)
+                return
+        super().closeEvent(event)
+
+    def _ask_close_decision(self) -> str:
+        """Return ``copy``, ``discard``, or ``cancel``.
+
+        Standard buttons so tests can click ``QMessageBox.Save`` /
+        ``Discard`` / ``Cancel`` on ``QApplication.activeModalWidget()``.
+        """
+        self._asking_close = True
+        try:
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Question)
+            box.setWindowTitle("关闭标注")
+            box.setText("标注尚未完成复制。")
+            box.setStandardButtons(
+                QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel
+            )
+            box.button(QMessageBox.Save).setText("完成复制")
+            box.button(QMessageBox.Discard).setText("放弃")
+            box.button(QMessageBox.Cancel).setText("取消")
+            box.setDefaultButton(QMessageBox.Cancel)
+            box.setEscapeButton(QMessageBox.Cancel)
+            choice = box.exec_()
+        finally:
+            self._asking_close = False
+        if choice == QMessageBox.Save:
+            return "copy"
+        if choice == QMessageBox.Discard:
+            return "discard"
+        return "cancel"
 
     def _get_save_path(self) -> str:
         path, _ = QFileDialog.getSaveFileName(
@@ -625,32 +749,137 @@ class MarkupEditor(QWidget):
         self.refresh_handles()
         return pasted
 
-    def markup_item_at(self, point: QPointF):
-        exact = self._first_markup(self._scene.items(point))
-        if exact is not None:
-            return exact
-        tol = _HIT_SCREEN_PX / max(self._zoom, 0.1)
-        region = QRectF(point.x() - tol, point.y() - tol, tol * 2, tol * 2)
-        return self._first_markup(
-            self._scene.items(region, Qt.IntersectsItemShape, Qt.DescendingOrder)
-        )
+    def activate_markup_item(self, item) -> None:
+        """Select the item just drawn and show its handles. The tool stays."""
+        self.clear_selection()
+        if item is None or item.scene() is not self._scene:
+            return
+        item.setSelected(True)
+        self.refresh_handles()
 
-    def _first_markup(self, items):
+    def select_markup_in_rect(self, rect: QRectF, *, additive: bool) -> None:
+        """Rubber-band result. ``additive`` (Shift) keeps the previous selection."""
+        found = []
+        seen = set()
+        for item in self._scene.items(
+            rect, Qt.IntersectsItemShape, Qt.DescendingOrder
+        ):
+            markup = self._as_markup_item(item)
+            if markup is None or id(markup) in seen:
+                continue
+            seen.add(id(markup))
+            found.append(markup)
+        if not additive:
+            self.clear_selection()
+        for markup in found:
+            markup.setSelected(True)
+        self.refresh_handles()
+
+    def markup_item_at(self, point: QPointF):
+        """Top-level markup whose visible stroke or filled body contains ``point``.
+
+        Hollow rects and ellipses match the stroke plus tolerance, not the
+        interior. Children of a ``QGraphicsItemGroup`` normalize to the group.
+        """
+        tol = self._screen_hit_tolerance()
+        region = QRectF(point.x() - tol, point.y() - tol, tol * 2, tol * 2)
+        candidates = self._ordered_markup(
+            list(self._scene.items(point))
+            + list(
+                self._scene.items(
+                    region, Qt.IntersectsItemShape, Qt.DescendingOrder
+                )
+            )
+        )
+        for markup in candidates:
+            if self._counts_as_visible_hit(markup, point, tol):
+                return markup
+        return None
+
+    def hollow_markup_containing(self, point: QPointF):
+        """Selected-move target: interior of a hollow rect or ellipse.
+
+        The hit is the top-level markup item, never a group child. Stroke hits
+        are left to ``markup_item_at``.
+        """
+        seen = set()
+        for item in self._scene.items(point):
+            markup = self._as_markup_item(item)
+            if markup is None or id(markup) in seen:
+                continue
+            seen.add(id(markup))
+            if self._hollow_interior_contains(markup, point):
+                return markup
+        return None
+
+    def _screen_hit_tolerance(self) -> float:
+        return _HIT_SCREEN_PX / max(self._zoom, 0.1)
+
+    def _ordered_markup(self, items):
+        ordered = []
         seen = set()
         for item in items:
             markup = self._as_markup_item(item)
             if markup is None or id(markup) in seen:
                 continue
             seen.add(id(markup))
-            return markup
-        return None
+            ordered.append(markup)
+        return ordered
+
+    def _counts_as_visible_hit(self, markup, point: QPointF, tol: float) -> bool:
+        if isinstance(markup, QGraphicsItemGroup):
+            return any(
+                self._child_visible_hit(child, point, tol)
+                for child in markup.childItems()
+            )
+        if _is_hollow_shape(markup):
+            return self._near_hollow_stroke(markup, markup.mapFromScene(point), tol)
+        # Non-hollow items are already limited to the point or its tolerance box.
+        return True
+
+    def _child_visible_hit(self, child, point: QPointF, tol: float) -> bool:
+        local = child.mapFromScene(point)
+        if _is_hollow_shape(child):
+            return self._near_hollow_stroke(child, local, tol)
+        if child.shape().contains(local):
+            return True
+        probe = QRectF(local.x() - tol, local.y() - tol, tol * 2, tol * 2)
+        return child.shape().intersects(probe)
+
+    def _near_hollow_stroke(self, item, local: QPointF, tol: float) -> bool:
+        pad = _pen_pad(item.pen(), tol)
+        rect = item.rect()
+        if isinstance(item, QGraphicsEllipseItem):
+            return _ellipse_ring_contains(rect, local, pad)
+        return _rect_ring_contains(rect, local, pad)
+
+    def _hollow_interior_contains(self, markup, point: QPointF) -> bool:
+        shapes = (
+            list(markup.childItems())
+            if isinstance(markup, QGraphicsItemGroup)
+            else [markup]
+        )
+        tol = self._screen_hit_tolerance()
+        for shape in shapes:
+            if not _is_hollow_shape(shape):
+                continue
+            local = shape.mapFromScene(point)
+            rect = shape.rect()
+            inside = (
+                _point_in_ellipse(rect, local)
+                if isinstance(shape, QGraphicsEllipseItem)
+                else rect.contains(local)
+            )
+            if inside and not self._near_hollow_stroke(shape, local, tol):
+                return True
+        return False
 
     def _as_markup_item(self, item):
         while item is not None and item.parentItem() is not None:
             item = item.parentItem()
         if item is None or item is self._background_item:
             return None
-        if item.data(0) in {"editor_handle", "crop_overlay"}:
+        if item.data(0) in _CHROME_ITEM_DATA:
             return None
         return item
 
@@ -698,9 +927,14 @@ class MarkupEditor(QWidget):
         if handle is not None:
             role = bare_role(getattr(handle, "_role", ""))
             return self._HANDLE_CURSORS.get(role, Qt.SizeAllCursor)
-        if self.markup_item_at(point) is not None:
-            return Qt.SizeAllCursor
-        return Qt.ArrowCursor if self._tool == "select" else Qt.CrossCursor
+        if self._tool == "select":
+            if self.markup_item_at(point) is not None:
+                return Qt.SizeAllCursor
+            hollow = self.hollow_markup_containing(point)
+            if hollow is not None and hollow.isSelected():
+                return Qt.SizeAllCursor
+            return Qt.ArrowCursor
+        return Qt.CrossCursor
 
     def drag_handle(self, handle, point: QPointF):
         role = getattr(handle, "_role", "")
@@ -979,24 +1213,36 @@ class MarkupEditor(QWidget):
         self._undo_stack.redo()
 
     def keyPressEvent(self, event):
+        # Q-2: Ctrl+Enter finishes and copies; plain Enter only confirms a crop.
+        # Esc: draft → text edit → crop → selection → close. Dirty close asks 完成复制 / 放弃 / 取消.
         key = event.key()
         modifiers = event.modifiers()
         command = bool(modifiers & (Qt.ControlModifier | Qt.MetaModifier))
 
         if key == Qt.Key_Escape:
-            focused = self._scene.focusItem()
-            if isinstance(focused, QGraphicsTextItem):
-                focused.clearFocus()
-            elif self.active_crop_rect().isValid():
-                self.cancel_active_crop()
-            else:
-                self.close()
             event.accept()
+            if self._view.cancel_in_progress_draft():
+                return
+            if self._text_item_is_editing():
+                focused = self._scene.focusItem()
+                if focused is not None:
+                    focused.clearFocus()
+                return
+            if self.active_crop_rect().isValid():
+                self.cancel_active_crop()
+                return
+            if self.selected_markup_items():
+                self.clear_selection()
+                return
+            self.request_close()
             return
         if key in (Qt.Key_Return, Qt.Key_Enter):
-            # Enter never finishes the copy (too easy to fire by accident); it
-            # only confirms an in-progress crop. While editing text the text
-            # item consumes Enter as a newline before we ever reach here.
+            # Plain Enter only confirms an in-progress crop. While editing text
+            # the text item consumes Enter as a newline before we reach here.
+            if command:
+                self.finish_and_copy()
+                event.accept()
+                return
             if self.active_crop_rect().isValid():
                 self.apply_active_crop()
                 event.accept()
@@ -1009,6 +1255,10 @@ class MarkupEditor(QWidget):
             return
         if command and key == Qt.Key_C:
             self.copy_selected_annotations()
+            event.accept()
+            return
+        if command and key == Qt.Key_S:
+            self.save_result()
             event.accept()
             return
         if command and key == Qt.Key_V:

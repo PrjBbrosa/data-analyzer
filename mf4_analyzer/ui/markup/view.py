@@ -3,6 +3,7 @@ from __future__ import annotations
 from PyQt5.QtCore import QLineF, QPointF, QRectF, Qt
 from PyQt5.QtGui import QBrush, QColor, QPainterPath, QPen
 from PyQt5.QtWidgets import (
+    QGraphicsItem,
     QGraphicsLineItem,
     QGraphicsPathItem,
     QGraphicsRectItem,
@@ -30,18 +31,31 @@ class _MarkupGraphicsView(QGraphicsView):
         self._resize_handle = None
         self._resize_before = None
         self._pending_text_focus_item = None
+        self._rubber_origin = None
+        self._rubber_band = None
+        self._text_edit_press = False
         self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.AnchorUnderMouse)
         self.setMouseTracking(True)
         self.viewport().setMouseTracking(True)
 
     def mousePressEvent(self, event):
-        tool = self._editor._tool
+        # Right-click ends the active item only. Esc continues the ladder.
+        if event.button() == Qt.RightButton:
+            self.cancel_in_progress_draft()
+            self._editor.clear_selection()
+            event.accept()
+            return
         if event.button() != Qt.LeftButton:
             super().mousePressEvent(event)
             return
 
+        tool = self._editor._tool
         point = self._clamp(self.mapToScene(event.pos()))
+        # Any tool: the active item's handle resizes that item. Built-in
+        # RubberBandDrag never starts because this method used to return
+        # before super(), and a hollow rect's shape includes its interior,
+        # so super() would select it. Empty presses rubber-band here; Shift adds.
         handle = self._editor.handle_at(point)
         if handle is not None:
             self._resize_handle = handle
@@ -52,39 +66,91 @@ class _MarkupGraphicsView(QGraphicsView):
             event.accept()
             return
 
-        existing = self._editor.markup_item_at(point)
-        if isinstance(existing, QGraphicsTextItem) and tool == "text":
-            self._begin_move(existing, point, event.modifiers())
-            self._pending_text_focus_item = existing
+        if tool == "select":
+            self._press_select(point, event)
+            return
+        if tool == "text":
+            self._press_text(point)
             event.accept()
             return
-        if existing is not None:
-            self._begin_move(existing, point, event.modifiers())
+        if tool == "number":
+            self._editor.clear_selection()
+            item = self._editor.add_number_item(QRectF(point, point))
+            self._editor.activate_markup_item(item)
+            event.accept()
+            return
+
+        # arrow / line / rect / pen / crop: a press that is not a handle
+        # always starts a new annotation or crop, even on an existing stroke.
+        self._begin_draw(tool, point)
+        event.accept()
+
+    def _press_select(self, point, event):
+        hit = self._editor.markup_item_at(point)
+        if hit is None:
+            hollow = self._editor.hollow_markup_containing(point)
+            if hollow is not None and hollow.isSelected():
+                hit = hollow
+        if hit is not None:
+            self._begin_move(hit, point, event.modifiers())
             self._pending_text_focus_item = None
             event.accept()
             return
+        self._begin_rubber_band(point)
+        event.accept()
 
-        if tool == "select":
-            self._editor.clear_selection()
-            event.accept()
+    def _press_text(self, point):
+        existing = self._editor.markup_item_at(point)
+        if isinstance(existing, QGraphicsTextItem):
+            self._editor.focus_text_item(existing)
+            # Keep the following move/release from reaching the view, which
+            # would drop edit focus or drag the label.
+            self._text_edit_press = True
             return
-
-        if tool == "number":
-            self._editor.clear_selection()
-            self._editor.add_number_item(QRectF(point, point))
-            event.accept()
-            return
-        if tool == "text":
-            self._editor.clear_selection()
-            self._editor.add_text_item(point, "")
-            event.accept()
-            return
-
         self._editor.clear_selection()
-        self._start = point
+        item = self._editor.add_text_item(point, "")
+        item.setSelected(True)
+        self._editor.refresh_handles()
+
+    def _begin_draw(self, tool: str, point):
+        self._editor.clear_selection()
+        self._start = QPointF(point)
         self._dragging_tool = tool
         self._preview = self._create_preview(tool, point)
-        event.accept()
+
+    def _begin_rubber_band(self, point):
+        self._rubber_origin = QPointF(point)
+        band = QGraphicsRectItem()
+        band.setData(0, "rubber_band")
+        pen = QPen(QColor("#1769e0"), 1, Qt.DashLine)
+        pen.setCosmetic(True)
+        band.setPen(pen)
+        band.setBrush(QBrush(QColor(23, 105, 224, 28)))
+        band.setZValue(70)
+        band.setAcceptedMouseButtons(Qt.NoButton)
+        band.setFlag(QGraphicsItem.ItemIsSelectable, False)
+        band.setRect(QRectF(point, point))
+        self._editor._scene.addItem(band)
+        self._rubber_band = band
+
+    def cancel_in_progress_draft(self) -> bool:
+        """Drop an in-progress draw or rubber band. Selection is left alone."""
+        drawing = self._dragging_tool is not None
+        banding = self._rubber_origin is not None
+        if not drawing and not banding:
+            return False
+        self._remove_preview()
+        self._dragging_tool = None
+        self._path = None
+        self._remove_rubber_band()
+        return True
+
+    def _remove_rubber_band(self):
+        band = self._rubber_band
+        if band is not None and band.scene() is self._editor._scene:
+            self._editor._scene.removeItem(band)
+        self._rubber_band = None
+        self._rubber_origin = None
 
     def _begin_move(self, item, point: QPointF, modifiers):
         if not (modifiers & (Qt.ControlModifier | Qt.MetaModifier)):
@@ -114,6 +180,13 @@ class _MarkupGraphicsView(QGraphicsView):
             self._editor.refresh_handles()
             event.accept()
             return
+        if self._text_edit_press:
+            event.accept()
+            return
+        if self._rubber_origin is not None and self._rubber_band is not None:
+            self._rubber_band.setRect(QRectF(self._rubber_origin, point).normalized())
+            event.accept()
+            return
         if self._dragging_tool is None:
             self.viewport().setCursor(self._editor._cursor_for(point))
             super().mouseMoveEvent(event)
@@ -127,6 +200,7 @@ class _MarkupGraphicsView(QGraphicsView):
             super().mouseReleaseEvent(event)
             return
 
+        point = self._clamp(self.mapToScene(event.pos()))
         if self._resize_handle is not None:
             self._commit_resize()
             event.accept()
@@ -148,11 +222,28 @@ class _MarkupGraphicsView(QGraphicsView):
                 self._editor.focus_text_item(pending_text_focus)
             event.accept()
             return
+        if self._text_edit_press:
+            self._text_edit_press = False
+            event.accept()
+            return
+        if self._rubber_origin is not None:
+            origin = self._rubber_origin
+            self._remove_rubber_band()
+            rect = QRectF(origin, point).normalized()
+            if rect.width() < self._MIN_DRAG and rect.height() < self._MIN_DRAG:
+                if not (event.modifiers() & Qt.ShiftModifier):
+                    self._editor.clear_selection()
+            else:
+                self._editor.select_markup_in_rect(
+                    rect,
+                    additive=bool(event.modifiers() & Qt.ShiftModifier),
+                )
+            event.accept()
+            return
         if self._dragging_tool is None:
             super().mouseReleaseEvent(event)
             return
 
-        point = self._clamp(self.mapToScene(event.pos()))
         point = self._constrained_point(point, event.modifiers())
         tool = self._dragging_tool
         self._remove_preview()
@@ -160,21 +251,24 @@ class _MarkupGraphicsView(QGraphicsView):
 
         rect = QRectF(self._start, point).normalized()
         line = QLineF(self._start, point)
+        created = None
         if tool == "crop":
             if rect.width() >= self._MIN_DRAG and rect.height() >= self._MIN_DRAG:
                 self._editor.set_active_crop_rect(rect)
         elif tool == "rect":
             if rect.width() >= self._MIN_DRAG and rect.height() >= self._MIN_DRAG:
-                self._editor.add_rect_item(rect)
+                created = self._editor.add_rect_item(rect)
         elif tool == "line":
             if line.length() >= self._MIN_DRAG:
-                self._editor.add_line_item(QRectF(self._start, point))
+                created = self._editor.add_line_item(QRectF(self._start, point))
         elif tool == "arrow":
             if line.length() >= self._MIN_DRAG:
-                self._editor.add_arrow_item(QRectF(self._start, point))
+                created = self._editor.add_arrow_item(QRectF(self._start, point))
         elif tool == "pen" and self._path is not None and self._path.elementCount() > 1:
-            self._editor.add_path_item(QPainterPath(self._path))
+            created = self._editor.add_path_item(QPainterPath(self._path))
         self._path = None
+        if created is not None:
+            self._editor.activate_markup_item(created)
         event.accept()
 
     def _commit_resize(self):
@@ -206,6 +300,23 @@ class _MarkupGraphicsView(QGraphicsView):
             return
         super().mouseDoubleClickEvent(event)
 
+    def keyPressEvent(self, event):
+        key = event.key()
+        modifiers = event.modifiers()
+        command = bool(modifiers & (Qt.ControlModifier | Qt.MetaModifier))
+        # Esc / Ctrl+Enter / Ctrl+S belong to the editor even while text is editing.
+        if key == Qt.Key_Escape:
+            self._text_edit_press = False
+        if key == Qt.Key_Escape or (
+            command and key in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_S)
+        ):
+            self._editor.keyPressEvent(event)
+            if event.isAccepted():
+                return
+        super().keyPressEvent(event)
+        if not event.isAccepted():
+            self._editor.keyPressEvent(event)
+
     def wheelEvent(self, event):
         degrees = event.angleDelta().y()
         if degrees == 0:
@@ -230,7 +341,9 @@ class _MarkupGraphicsView(QGraphicsView):
             return None
         item.setPen(pen)
         item.setZValue(10)
+        item.setData(0, "markup_preview")
         item.setAcceptedMouseButtons(Qt.NoButton)
+        item.setFlag(QGraphicsItem.ItemIsSelectable, False)
         self._editor._scene.addItem(item)
         return item
 

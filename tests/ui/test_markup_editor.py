@@ -1,13 +1,25 @@
-from PyQt5.QtCore import QEvent, QPointF, QRectF, QSettings, Qt
-from PyQt5.QtGui import QColor, QKeySequence, QMouseEvent, QPainterPath, QPixmap
+import pytest
+from PyQt5.QtCore import QEvent, QPointF, QRectF, QSettings, Qt, QTimer
+from PyQt5.QtGui import (
+    QBrush,
+    QColor,
+    QKeySequence,
+    QMouseEvent,
+    QPainterPath,
+    QPen,
+    QPixmap,
+)
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtWidgets import (
     QAbstractButton,
-    QPushButton,
+    QGraphicsEllipseItem,
     QGraphicsLineItem,
+    QGraphicsPathItem,
     QGraphicsRectItem,
     QGraphicsSimpleTextItem,
     QGraphicsTextItem,
+    QMessageBox,
+    QPushButton,
     QShortcut,
     QToolButton,
     QWidget,
@@ -15,6 +27,7 @@ from PyQt5.QtWidgets import (
 
 from mf4_analyzer.ui import hints
 from mf4_analyzer.ui.markup.editor import MarkupEditor
+from mf4_analyzer.ui.markup.items import _ArrowAnnotationItem
 
 
 def _pixmap(width=120, height=80, color="#f7f7f7"):
@@ -340,17 +353,21 @@ def test_select_tool_drags_existing_item(qtbot):
     assert rect_item.pos().y() >= 20
 
 
-def test_existing_item_can_be_dragged_even_when_draw_tool_is_active(qtbot):
+def test_draw_tool_press_on_existing_item_draws_instead_of_moving(qtbot):
     editor = MarkupEditor(_pixmap())
     qtbot.addWidget(editor)
     rect_item = editor.add_rect_item(QRectF(10, 10, 30, 20))
     editor.set_tool("arrow")
+    before_pos = QPointF(rect_item.pos())
+    before_rect = QRectF(rect_item.rect())
 
     _drag_scene(qtbot, editor, (20, 20), (55, 45))
 
-    assert rect_item.isSelected()
-    assert rect_item.pos().x() >= 30
-    assert rect_item.pos().y() >= 20
+    assert rect_item.pos() == before_pos
+    assert rect_item.rect() == before_rect
+    assert not rect_item.isSelected()
+    assert editor._tool == "arrow"
+    assert any(isinstance(item, _ArrowAnnotationItem) for item in _markup_items(editor))
 
 
 def test_arrow_shape_has_clickable_width(qtbot):
@@ -368,18 +385,23 @@ def test_markup_item_at_uses_fuzzy_tolerance_for_thin_line(qtbot):
     assert editor.markup_item_at(QPointF(40, 24)) is line
 
 
-def test_near_click_selects_line_under_draw_tool_without_drawing(qtbot):
+def test_draw_tool_click_on_stroke_does_not_select_or_move_the_line(qtbot):
     editor = MarkupEditor(_pixmap())
     qtbot.addWidget(editor)
     line = editor.add_line_item(QRectF(20, 20, 60, 0))
     editor.set_zoom(1.0)
     editor.set_tool("arrow")
     before = len(_markup_items(editor))
+    before_pos = QPointF(line.pos())
     editor.show()
     pos = editor._view.mapFromScene(QPointF(40, 23))
-    qtbot.mouseClick(editor._view.viewport(), Qt.LeftButton, pos=pos)
+    qtbot.mousePress(editor._view.viewport(), Qt.LeftButton, pos=pos)
+    assert editor._view._dragging_tool == "arrow"
+    qtbot.mouseRelease(editor._view.viewport(), Qt.LeftButton, pos=pos)
     QApplication.processEvents()
-    assert line.isSelected()
+    assert not line.isSelected()
+    assert line.pos() == before_pos
+    # A stationary click starts the draw but does not commit a zero-length arrow.
     assert len(_markup_items(editor)) == before
 
 
@@ -844,19 +866,28 @@ def test_text_tool_click_existing_text_reopens_it_without_adding_new_item(qtbot)
     assert text_item.hasFocus()
 
 
-def test_text_tool_drag_existing_text_moves_instead_of_editing(qtbot):
+def test_text_tool_press_on_existing_text_edits_instead_of_moving(qtbot):
     editor = MarkupEditor(_pixmap())
     qtbot.addWidget(editor)
     text_item = editor.add_text_item(QPointF(20, 20), "peak")
-    text_item.clearFocus()
     editor.set_tool("text")
+    editor.show()
+    editor.activateWindow()
+    editor._view.setFocus()
+    QApplication.processEvents()
+    text_item.clearFocus()
+    QApplication.processEvents()
+    assert not text_item.hasFocus()
     before = QPointF(text_item.pos())
 
     _drag_scene(qtbot, editor, (24, 24), (58, 44))
 
-    assert text_item.pos().x() > before.x() + 25
-    assert text_item.pos().y() > before.y() + 15
-    assert not text_item.hasFocus()
+    assert text_item.pos() == before
+    assert text_item.hasFocus()
+    assert text_item.textInteractionFlags() & Qt.TextEditorInteraction
+    assert [
+        item for item in _markup_items(editor) if isinstance(item, QGraphicsTextItem)
+    ] == [text_item]
 
 
 def test_selected_text_has_resize_handle_that_scales_text(qtbot):
@@ -1143,7 +1174,7 @@ def test_toolbar_buttons_expose_their_shortcuts(qtbot):
             "markupStyleButton",
         )
     }
-    assert tips["markupCloseButton"] == "关闭 (Esc)"
+    assert tips["markupCloseButton"] == "关闭（有未完成标注时会确认）"
     assert tips["markupUndoButton"] == "撤销 (Ctrl+Z)"
     assert tips["markupRedoButton"] == "重做 (Ctrl+Y)"
     assert tips["markupStyleButton"] == "样式（颜色 / 线宽） · [ ] 调线宽"
@@ -1224,3 +1255,472 @@ def test_capability_toast_not_shown_when_already_discovered(qtbot, tmp_path):
     QApplication.processEvents()
 
     assert editor._hint_toast is None
+
+
+def _ready(editor):
+    editor.show()
+    QApplication.processEvents()
+    editor.set_zoom(1.0)
+    return editor
+
+
+_CLOSE_LABELS = {
+    QMessageBox.Save: "完成复制",
+    QMessageBox.Discard: "放弃",
+    QMessageBox.Cancel: "取消",
+}
+
+
+def _choose_close(editor, button):
+    def fire():
+        box = QApplication.activeModalWidget()
+        assert isinstance(box, QMessageBox)
+        assert box.parent() is editor
+        for standard, text in _CLOSE_LABELS.items():
+            assert text in box.button(standard).text()
+        box.button(button).click()
+
+    QTimer.singleShot(0, fire)
+
+
+def _dirty_editor(qtbot):
+    calls = []
+    editor = MarkupEditor(_pixmap(), on_done=calls.append)
+    qtbot.addWidget(editor)
+    rect = editor.add_rect_item(QRectF(12, 12, 36, 20))
+    _ready(editor)
+    assert not editor._undo_stack.isClean()
+    return editor, rect, calls
+
+
+def test_hollow_rect_interior_is_not_a_stroke_hit(qtbot):
+    editor = MarkupEditor(_pixmap(200, 140))
+    qtbot.addWidget(editor)
+    rect = editor.add_rect_item(QRectF(10, 10, 160, 100))
+    editor.set_zoom(1.0)
+
+    assert editor.markup_item_at(QPointF(90, 60)) is None
+    assert editor.hollow_markup_containing(QPointF(90, 60)) is rect
+    assert editor.markup_item_at(QPointF(90, 10)) is rect
+
+
+@pytest.mark.parametrize("tool", ["arrow", "line", "rect", "pen", "number", "text"])
+def test_draw_tool_inside_hollow_rect_creates_a_new_item(qtbot, tool):
+    editor = MarkupEditor(_pixmap(200, 140))
+    qtbot.addWidget(editor)
+    rect = editor.add_rect_item(QRectF(10, 10, 160, 100))
+    editor.set_tool(tool)
+    _ready(editor)
+    before_pos = QPointF(rect.pos())
+    before_rect = QRectF(rect.rect())
+
+    if tool in {"number", "text"}:
+        _click_scene(qtbot, editor, (90, 60))
+    else:
+        _drag_scene(qtbot, editor, (70, 45), (120, 80))
+
+    others = [item for item in _markup_items(editor) if item is not rect]
+    assert len(others) == 1
+    assert rect.pos() == before_pos
+    assert rect.rect() == before_rect
+    assert not rect.isSelected()
+    assert others[0].isSelected()
+    assert editor._handles
+    assert any(getattr(handle, "_target", None) is others[0] for handle in editor._handles)
+    assert editor._tool == tool
+
+
+def test_text_tool_on_a_line_creates_text_and_leaves_the_line(qtbot):
+    editor = MarkupEditor(_pixmap())
+    qtbot.addWidget(editor)
+    line = editor.add_line_item(QRectF(20, 40, 70, 0))
+    editor.set_tool("text")
+    _ready(editor)
+    before = QPointF(line.pos())
+
+    _click_scene(qtbot, editor, (40, 40))
+
+    assert line.pos() == before
+    assert not line.isSelected()
+    assert any(isinstance(item, QGraphicsTextItem) for item in _markup_items(editor))
+
+
+@pytest.mark.parametrize(
+    "tool", ["select", "arrow", "line", "rect", "pen", "text", "number"]
+)
+def test_press_on_active_handle_resizes_instead_of_using_the_tool(qtbot, tool):
+    editor = MarkupEditor(_pixmap())
+    qtbot.addWidget(editor)
+    rect = editor.add_rect_item(QRectF(20, 20, 40, 30))
+    rect.setSelected(True)
+    editor.set_tool(tool)
+    editor.refresh_handles()
+    _ready(editor)
+    handle = next(h for h in editor._handles if str(getattr(h, "_role", "")).endswith("br"))
+    before = QRectF(rect.rect())
+    before_count = len(_markup_items(editor))
+
+    _drag_scene_points(qtbot, editor, handle.pos(), handle.pos() + QPointF(16, 12))
+
+    assert len(_markup_items(editor)) == before_count
+    assert rect.rect().right() > before.right()
+    assert rect.rect().bottom() > before.bottom()
+    assert editor._tool == tool
+
+
+def test_crop_press_inside_hollow_rect_starts_a_crop_and_handle_resizes_it(qtbot):
+    editor = MarkupEditor(_pixmap(200, 140))
+    qtbot.addWidget(editor)
+    rect = editor.add_rect_item(QRectF(10, 10, 160, 100))
+    editor.set_tool("crop")
+    _ready(editor)
+    before_pos = QPointF(rect.pos())
+    before_rect = QRectF(rect.rect())
+
+    _drag_scene(qtbot, editor, (40, 40), (100, 80))
+
+    assert rect.pos() == before_pos
+    assert rect.rect() == before_rect
+    assert editor.active_crop_rect().isValid()
+    assert len(_markup_items(editor)) == 1
+    handle = next(
+        h for h in editor._handles if str(getattr(h, "_role", "")).endswith("br")
+    )
+    before_crop = editor.active_crop_rect()
+    _drag_scene_points(qtbot, editor, handle.pos(), handle.pos() + QPointF(18, 14))
+    grown = editor.active_crop_rect()
+    assert grown.left() == pytest.approx(before_crop.left())
+    assert grown.top() == pytest.approx(before_crop.top())
+    assert grown.right() > before_crop.right()
+    assert grown.bottom() > before_crop.bottom()
+    assert len(_markup_items(editor)) == 1
+    assert rect.pos() == before_pos
+
+
+def test_select_tool_moves_stroke_and_selected_interior_but_not_unselected_interior(qtbot):
+    editor = MarkupEditor(_pixmap(200, 140))
+    qtbot.addWidget(editor)
+    rect = editor.add_rect_item(QRectF(10, 10, 160, 100))
+    editor.set_tool("select")
+    _ready(editor)
+
+    _drag_scene(qtbot, editor, (90, 60), (120, 80))
+
+    assert rect.pos() == QPointF(0, 0)
+    rect.setSelected(False)
+    editor.refresh_handles()
+    # (40, 10) is on the top stroke and away from the edge-midpoint handle.
+    _drag_scene(qtbot, editor, (40, 10), (70, 30))
+    assert rect.isSelected()
+    assert rect.pos().x() >= 20
+    assert rect.pos().y() >= 12
+
+    rect.setPos(0, 0)
+    rect.setSelected(True)
+    editor.refresh_handles()
+    _drag_scene(qtbot, editor, (90, 60), (112, 78))
+    assert rect.pos().x() >= 15
+    assert rect.pos().y() >= 12
+
+
+def test_select_tool_rubber_band_selects_intersections_and_shift_adds(qtbot):
+    editor = MarkupEditor(_pixmap(160, 100))
+    qtbot.addWidget(editor)
+    line_a = editor.add_line_item(QRectF(10, 15, 40, 0))
+    line_b = editor.add_line_item(QRectF(10, 70, 40, 0))
+    editor.set_tool("select")
+    _ready(editor)
+    line_a.setSelected(True)
+
+    _drag_scene(qtbot, editor, (5, 60), (80, 88))
+
+    assert line_b.isSelected()
+    assert not line_a.isSelected()
+    assert line_a.pos() == QPointF(0, 0)
+    assert line_b.pos() == QPointF(0, 0)
+
+    line_a.setSelected(True)
+    line_b.setSelected(False)
+    _drag_scene(qtbot, editor, (5, 60), (80, 88), modifiers=Qt.ShiftModifier)
+
+    assert line_a.isSelected()
+    assert line_b.isSelected()
+
+
+def test_just_drawn_item_stays_active_until_the_next_press_or_right_click(qtbot):
+    editor = MarkupEditor(_pixmap(160, 100))
+    qtbot.addWidget(editor)
+    editor.set_tool("rect")
+    _ready(editor)
+
+    _drag_scene(qtbot, editor, (15, 15), (55, 40))
+    first = _first_item(editor, QGraphicsRectItem)
+    assert first.isSelected()
+    assert editor._handles
+    assert editor._tool == "rect"
+    handle = next(h for h in editor._handles if getattr(h, "_role", "") == "br")
+    before = QRectF(first.rect())
+    _drag_scene_points(qtbot, editor, handle.pos(), handle.pos() + QPointF(18, 12))
+    assert len(_markup_items(editor)) == 1
+    assert first.rect().right() > before.right()
+
+    _drag_scene(qtbot, editor, (20, 75), (70, 92))
+    rects = [item for item in _markup_items(editor) if isinstance(item, QGraphicsRectItem)]
+    assert len(rects) == 2
+    second = next(item for item in rects if item is not first)
+    assert not first.isSelected()
+    assert second.isSelected()
+    assert any(getattr(h, "_target", None) is second for h in editor._handles)
+
+    pos = editor._view.mapFromScene(QPointF(2, 2))
+    qtbot.mouseClick(editor._view.viewport(), Qt.RightButton, pos=pos)
+    assert not second.isSelected()
+    assert editor._handles == []
+    assert editor.isVisible()
+    assert editor._tool == "rect"
+
+
+def test_hollow_ellipse_interior_does_not_move_and_filled_ellipse_does_hit(qtbot):
+    editor = MarkupEditor(_pixmap(180, 120))
+    qtbot.addWidget(editor)
+    ellipse = QGraphicsEllipseItem(QRectF(20, 20, 100, 60))
+    ellipse.setPen(QPen(QColor("#e53935"), 4))
+    ellipse.setBrush(QBrush(Qt.NoBrush))
+    ellipse.setFlag(ellipse.ItemIsSelectable, True)
+    editor._scene.addItem(ellipse)
+    editor.set_zoom(1.0)
+
+    assert editor.markup_item_at(QPointF(70, 50)) is None
+    assert editor.hollow_markup_containing(QPointF(70, 50)) is ellipse
+    assert editor.markup_item_at(QPointF(70, 20)) is ellipse
+
+    editor.set_tool("select")
+    _ready(editor)
+    _drag_scene(qtbot, editor, (70, 50), (95, 70))
+    assert ellipse.pos() == QPointF(0, 0)
+
+    ellipse.setBrush(QBrush(QColor("#e53935")))
+    assert editor.markup_item_at(QPointF(70, 50)) is ellipse
+
+
+def test_number_hit_normalizes_to_the_group_and_draw_tools_do_not_move_it(qtbot):
+    editor = MarkupEditor(_pixmap())
+    qtbot.addWidget(editor)
+    number = editor.add_number_item(QRectF(40, 30, 0, 0))
+    center = number.sceneBoundingRect().center()
+    assert editor.markup_item_at(center) is number
+    assert number.childItems()
+    assert all(editor._as_markup_item(child) is number for child in number.childItems())
+    editor.set_tool("select")
+    _ready(editor)
+    origin = QPointF(number.pos())
+
+    _drag_scene(
+        qtbot,
+        editor,
+        (center.x(), center.y()),
+        (center.x() + 16, center.y() + 10),
+    )
+
+    assert number.pos() != origin
+    assert editor._markup_items() == [number]
+    editor._undo_stack.undo()
+    assert number.pos() == origin
+    editor.set_tool("arrow")
+    _drag_scene(
+        qtbot,
+        editor,
+        (center.x(), center.y()),
+        (center.x() + 24, center.y() + 16),
+    )
+    assert number.pos() == origin
+    assert any(isinstance(item, _ArrowAnnotationItem) for item in _markup_items(editor))
+    assert editor._markup_items().count(number) == 1
+
+
+def test_escape_cancels_a_crop_draft_before_the_crop_itself(qtbot):
+    editor = MarkupEditor(_pixmap())
+    qtbot.addWidget(editor)
+    editor.set_tool("crop")
+    _ready(editor)
+    _drag_scene(qtbot, editor, (10, 10), (50, 40))
+    assert editor.active_crop_rect().isValid()
+    viewport = editor._view.viewport()
+    pos = editor._view.mapFromScene(QPointF(70, 60))
+    qtbot.mousePress(viewport, Qt.LeftButton, pos=pos)
+    assert editor._view._dragging_tool == "crop"
+    qtbot.keyClick(editor._view, Qt.Key_Escape)
+    qtbot.mouseRelease(viewport, Qt.LeftButton, pos=pos)
+    assert editor._view._dragging_tool is None
+    assert editor.active_crop_rect().isValid()
+    assert editor.isVisible()
+    qtbot.keyClick(editor._view, Qt.Key_Escape)
+    assert not editor.active_crop_rect().isValid()
+    assert editor.isVisible()
+
+
+def test_escape_ladder_leaves_text_then_crop_then_selection(qtbot):
+    calls = []
+    editor = MarkupEditor(_pixmap(160, 100), on_done=calls.append)
+    qtbot.addWidget(editor)
+    _ready(editor)
+    editor.set_active_crop_rect(QRectF(70, 12, 40, 24))
+    text = editor.add_text_item(QPointF(16, 16), "peak")
+    text.setSelected(True)
+    assert editor._text_item_is_editing()
+
+    qtbot.keyClick(editor._view, Qt.Key_Escape)
+    assert not editor._text_item_is_editing()
+    assert editor.active_crop_rect().isValid()
+    assert text.isSelected()
+    assert editor.isVisible()
+
+    qtbot.keyClick(editor._view, Qt.Key_Escape)
+    assert not editor.active_crop_rect().isValid()
+    assert text.isSelected()
+
+    qtbot.keyClick(editor._view, Qt.Key_Escape)
+    assert not text.isSelected()
+    assert text.scene() is editor._scene
+    assert editor.isVisible()
+    assert QApplication.activeModalWidget() is None
+    QApplication.processEvents()
+    assert not editor._undo_stack.isClean()
+
+    _choose_close(editor, QMessageBox.Cancel)
+    qtbot.keyClick(editor._view, Qt.Key_Escape)
+    assert editor.isVisible()
+    assert text.toPlainText() == "peak"
+    assert calls == []
+
+
+def test_dirty_escape_cancel_keeps_annotations(qtbot):
+    editor, rect, calls = _dirty_editor(qtbot)
+    _choose_close(editor, QMessageBox.Cancel)
+    qtbot.keyClick(editor._view, Qt.Key_Escape)
+    assert editor.isVisible()
+    assert rect.scene() is editor._scene
+    assert calls == []
+    assert QApplication.activeModalWidget() is None
+
+
+def test_dirty_escape_discard_closes_without_on_done(qtbot):
+    editor, _rect, calls = _dirty_editor(qtbot)
+    _choose_close(editor, QMessageBox.Discard)
+    qtbot.keyClick(editor._view, Qt.Key_Escape)
+    assert not editor.isVisible()
+    assert calls == []
+
+
+def test_dirty_escape_finish_copy_calls_on_done_once(qtbot):
+    editor, _rect, calls = _dirty_editor(qtbot)
+    _choose_close(editor, QMessageBox.Save)
+    qtbot.keyClick(editor._view, Qt.Key_Escape)
+    assert len(calls) == 1
+    assert not calls[0].isNull()
+    assert not editor.isVisible()
+    assert editor._undo_stack.isClean()
+
+
+def test_clean_escape_closes_without_a_dialog(qtbot):
+    calls = []
+    editor = MarkupEditor(_pixmap(), on_done=calls.append)
+    qtbot.addWidget(editor)
+    _ready(editor)
+    assert editor._undo_stack.isClean()
+    qtbot.keyClick(editor._view, Qt.Key_Escape)
+    assert not editor.isVisible()
+    assert calls == []
+    assert QApplication.activeModalWidget() is None
+
+
+def test_toolbar_close_on_dirty_editor_cancel_keeps_work(qtbot):
+    editor, rect, calls = _dirty_editor(qtbot)
+    _choose_close(editor, QMessageBox.Cancel)
+    editor.findChild(QToolButton, "markupCloseButton").click()
+    assert editor.isVisible()
+    assert rect.scene() is editor._scene
+    assert calls == []
+
+
+def test_title_bar_close_confirms_and_cancel_keeps_the_editor(qtbot):
+    editor, rect, calls = _dirty_editor(qtbot)
+    handle = editor.windowHandle()
+    assert handle is not None
+    _choose_close(editor, QMessageBox.Cancel)
+    handle.close()
+    assert editor.isVisible()
+    assert rect.scene() is editor._scene
+    assert calls == []
+
+
+def test_title_bar_finish_copy_calls_on_done_once(qtbot):
+    editor, _rect, calls = _dirty_editor(qtbot)
+    _choose_close(editor, QMessageBox.Save)
+    editor.windowHandle().close()
+    assert len(calls) == 1
+    assert not editor.isVisible()
+    assert editor._undo_stack.isClean()
+
+
+def test_title_bar_discard_closes_without_on_done(qtbot):
+    editor, _rect, calls = _dirty_editor(qtbot)
+    _choose_close(editor, QMessageBox.Discard)
+    editor.windowHandle().close()
+    assert not editor.isVisible()
+    assert calls == []
+
+
+def test_programmatic_close_of_dirty_editor_does_not_prompt(qtbot):
+    editor, _rect, calls = _dirty_editor(qtbot)
+    editor.close()
+    assert not editor.isVisible()
+    assert calls == []
+    assert QApplication.activeModalWidget() is None
+
+
+def test_plain_enter_confirms_only_a_crop_and_ctrl_enter_finishes(qtbot):
+    calls = []
+    editor = MarkupEditor(_pixmap(120, 80), on_done=calls.append)
+    qtbot.addWidget(editor)
+    editor.add_rect_item(QRectF(8, 8, 20, 12))
+    editor.set_tool("crop")
+    _ready(editor)
+
+    qtbot.keyClick(editor._view, Qt.Key_Return)
+    qtbot.keyClick(editor._view, Qt.Key_Enter)
+    assert calls == []
+    assert editor.isVisible()
+    assert not editor._undo_stack.isClean()
+
+    _drag_scene(qtbot, editor, (10, 12), (70, 52))
+    assert editor.active_crop_rect().isValid()
+    qtbot.keyClick(editor._view, Qt.Key_Return)
+    assert calls == []
+    assert editor.isVisible()
+    assert not editor.active_crop_rect().isValid()
+    assert editor._background_item.pixmap().size().width() == 60
+    assert editor._background_item.pixmap().size().height() == 40
+
+    qtbot.keyClick(editor._view, Qt.Key_Return, modifier=Qt.ControlModifier)
+    assert len(calls) == 1
+    assert not editor.isVisible()
+    assert editor._undo_stack.isClean()
+
+
+def test_ctrl_s_marks_the_stack_clean_only_when_save_succeeds(qtbot, tmp_path, monkeypatch):
+    editor = MarkupEditor(_pixmap())
+    qtbot.addWidget(editor)
+    editor.add_rect_item(QRectF(8, 8, 24, 16))
+    _ready(editor)
+    monkeypatch.setattr(MarkupEditor, "_get_save_path", lambda self: "")
+    qtbot.keyClick(editor._view, Qt.Key_S, modifier=Qt.ControlModifier)
+    assert not editor._undo_stack.isClean()
+    assert editor.isVisible()
+
+    dest = tmp_path / "marked.png"
+    monkeypatch.setattr(MarkupEditor, "_get_save_path", lambda self, path=str(dest): path)
+    qtbot.keyClick(editor._view, Qt.Key_S, modifier=Qt.ControlModifier)
+    assert dest.is_file()
+    assert editor._undo_stack.isClean()
+    assert editor.isVisible()

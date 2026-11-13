@@ -146,9 +146,9 @@ def build_toolbar(editor) -> QWidget:
     close_btn.setObjectName("markupCloseButton")
     close_btn.setText("")
     close_btn.setIcon(qta.icon("ph.x", color=_CLOSE_GLYPH))
-    close_btn.setToolTip("关闭 (Esc)")
+    close_btn.setToolTip("关闭（有未完成标注时会确认）")
     _toolbar_chip(close_btn)
-    close_btn.clicked.connect(editor.close)
+    close_btn.clicked.connect(editor.request_close)
     left_layout.addWidget(close_btn)
 
     editor._style_button = QToolButton(center_group)
