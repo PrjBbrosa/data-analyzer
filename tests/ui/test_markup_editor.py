@@ -2278,3 +2278,25 @@ def test_second_open_while_dirty_shows_the_existing_confirm(qtbot):
     _return_to_event_loop()
     assert sip.isdeleted(editor)
     assert win._markup_editor is replacement
+
+
+@pytest.mark.parametrize('event_type', [QEvent.FocusOut, QEvent.WindowDeactivate, QEvent.Hide])
+@pytest.mark.parametrize('target', ['view', 'editor'])
+def test_space_pan_clears_when_view_loses_focus_or_visibility(qtbot, event_type, target):
+    editor = MarkupEditor(_pixmap(600, 400))
+    qtbot.addWidget(editor)
+    editor.show()
+    QApplication.processEvents()
+    editor.set_tool('rect')
+    view = editor._view
+    viewport = view.viewport()
+    QApplication.sendEvent(viewport, QKeyEvent(QEvent.KeyPress, Qt.Key_Space, Qt.NoModifier))
+    _send_viewport_mouse(viewport, QEvent.MouseButtonPress, QPoint(100, 100), Qt.LeftButton, Qt.LeftButton)
+    QApplication.sendEvent(view if target == "view" else editor, QEvent(event_type))
+    assert not view._space_down
+    assert view._pan_button is None
+    assert view._pan_pos is None
+    _send_viewport_mouse(viewport, QEvent.MouseButtonPress, QPoint(100, 100), Qt.LeftButton, Qt.LeftButton)
+    assert view._pan_button is None
+    assert view._dragging_tool == 'rect'
+    view.cancel_in_progress_draft()

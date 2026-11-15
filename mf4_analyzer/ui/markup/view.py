@@ -43,6 +43,25 @@ class _MarkupGraphicsView(QGraphicsView):
         self.setResizeAnchor(QGraphicsView.AnchorUnderMouse)
         self.setMouseTracking(True)
         self.viewport().setMouseTracking(True)
+        self._editor.installEventFilter(self)
+
+    def eventFilter(self, watched, event):
+        if watched is self._editor and event.type() in (
+            QEvent.FocusOut, QEvent.WindowDeactivate, QEvent.Hide,
+        ):
+            self._clear_pan_state()
+        return super().eventFilter(watched, event)
+
+    def _clear_pan_state(self):
+        # Key release may go to another widget/window. Never carry a held
+        # Space key or a pan gesture into the next activation.
+        self._space_down = False
+        self._finish_pan()
+
+    def event(self, event):
+        if event.type() in (QEvent.FocusOut, QEvent.WindowDeactivate, QEvent.Hide):
+            self._clear_pan_state()
+        return super().event(event)
 
     def mousePressEvent(self, event):
         # Right-click ends the active item only. Esc continues the ladder.

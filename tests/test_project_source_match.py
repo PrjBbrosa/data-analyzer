@@ -200,3 +200,45 @@ def test_ambiguous_count_mismatch_does_not_invent_a_second_load():
         "a": ("only", LEVEL_UNVERIFIED),
         "b": (None, LEVEL_MISSING),
     }
+
+
+def test_deficient_overlapping_evidence_finishes_within_budget():
+    # Even equal total counts can have a Hall-deficient subset. Enumeration
+    # explores 12! assignments here before discovering that no cover exists.
+    import subprocess
+    import sys
+    code = """
+from mf4_analyzer.ui.project_source_match import *
+refs = [SourceRefFact(str(i), '', frozenset({'x'}), None, 'manual') for i in range(13)]
+candidates = [SourceCandidateFact(str(i), '', frozenset({'x'}), None) for i in range(12)]
+candidates.append(SourceCandidateFact('extra', '', frozenset({'other'}), None))
+assert all(a.level == LEVEL_UNVERIFIED for a in match_project_sources(refs, candidates))
+"""
+    subprocess.run([sys.executable, '-c', code], check=True, timeout=5)
+
+
+def test_remove_evidence_rejects_malformed_names():
+    for names in (123, 'speed', {'speed': 1}, [None], ['speed', 'speed']):
+        assert loader_channel_names(['torque'], [{'op': 'remove', 'names': names}]) == frozenset({'torque'})
+
+
+def test_matching_agrees_with_exhaustive_small_graph_oracle():
+    from itertools import permutations
+    from mf4_analyzer.ui.project_source_match import _unique_evidence
+    # Cover missing edges, alternating paths, cycles and unused candidates.
+    for row_count, column_count in ((2, 3), (3, 3)):
+        refs = [_ref(str(i), channels={str(i)}) for i in range(row_count)]
+        for mask in range(1 << (row_count * column_count)):
+            candidates = [
+                _cand(str(j), channels={str(i) for i in range(row_count)
+                      if mask & (1 << (i * column_count + j))})
+                for j in range(column_count)
+            ]
+            edged = [r for r in refs if any(r.loader_channels <= c.channels for c in candidates)]
+            covers = [
+                dict(zip((r.key for r in edged), (c.key for c in choices)))
+                for choices in permutations(candidates, len(edged))
+                if all(r.loader_channels <= c.channels for r, c in zip(edged, choices))
+            ]
+            expected = covers[0] if len(covers) == 1 else None
+            assert _unique_evidence(refs, candidates) == expected

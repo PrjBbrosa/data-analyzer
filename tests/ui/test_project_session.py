@@ -3023,12 +3023,20 @@ def test_skipped_recipe_is_visible_and_drops_view_refs(
     assert "已移除" in warnings[0][2]
 
     captured = {}
+    original_set_title = QMessageBox.setWindowTitle
+
+    def _set_title(box, title):
+        # macOS QMessageBox may ignore native window titles. Assert the app's
+        # request while still exercising the real widget and cancel default.
+        captured["title"] = title
+        original_set_title(box, title)
 
     def _exec(box):
-        captured["title"] = box.windowTitle()
         captured["info"] = box.informativeText()
+        assert box.defaultButton().text() == "取消"
         box.done(0)
 
+    monkeypatch.setattr(QMessageBox, "setWindowTitle", _set_title)
     monkeypatch.setattr(QMessageBox, "exec_", _exec)
     assert mw2.save_project(tmp_path / "again.tlproj") is False
     assert captured["title"] == "项目恢复不完整"
@@ -3514,3 +3522,64 @@ def test_legacy_same_name_groups_do_not_replay_onto_a_guess(
     assert "来源对应关系无法确认" in warnings[0][2]
     assert "未回放派生通道" in warnings[0][2]
     assert "未套用采样率设置" in warnings[0][2]
+
+
+def test_recreated_channel_keeps_views_after_old_generation_fails(qapp, qtbot, tmp_path, monkeypatch):
+    from mf4_analyzer.ui.main_window import MainWindow
+    from mf4_analyzer.signal.channel_recipe import make_single, RemoveEntry
+    _silence_editor(monkeypatch)
+    csv = tmp_path / 'generations.csv'
+    project = tmp_path / 'generations.tlproj'
+    _write_eps_csv(csv)
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window._load_one(str(csv))
+    fid = next(iter(window.files))
+    window._apply_channel_edits(fid, {}, [], edits=[
+        make_single('X', '', 'abs', 'torque', None),
+        make_single('old_child', '', 'abs', 'X', None),
+        RemoveEntry(('X',)),
+        make_single('X', '', 'abs', 'rpm', None),
+        make_single('Y', '', 'abs', 'X', None),
+    ])
+    window.navigator.set_checked_channels([(fid, 'X'), (fid, 'Y')])
+    window.analysis_managers['fft'].get(0).panes[0].sources = [(fid, 'X'), (fid, 'Y')]
+    assert window.save_project(project)
+    _write_eps_csv(csv, torque=False)
+    restored = MainWindow()
+    qtbot.addWidget(restored)
+    restored.open_project(project)
+    fid2 = next(iter(restored.files))
+    fd = restored.files[fid2]
+    assert {'X', 'Y'} <= set(fd.channels)
+    assert 'old_child' not in fd.channels
+    assert {(fid2, 'X'), (fid2, 'Y')} <= set(restored.view_manager.get(0).checked)
+    assert restored.analysis_managers['fft'].get(0).panes[0].sources == [(fid2, 'X'), (fid2, 'Y')]
+    assert [r[1] for r in restored._project_restore_health.skipped_channel_edits] == ['old_child']
+
+
+def test_malformed_remove_is_reported_without_aborting_project_restore(qapp, qtbot, tmp_path, monkeypatch):
+    from mf4_analyzer.ui.main_window import MainWindow
+    _silence_editor(monkeypatch)
+    csv = tmp_path / 'invalid.csv'
+    project = tmp_path / 'invalid.tlproj'
+    _write_eps_csv(csv)
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window._load_one(str(csv))
+    assert window.save_project(project)
+    raw = json.loads(project.read_text())
+    raw['files'][0]['channel_edits'] = [{'op': 'remove', 'names': 123}]
+    project.write_text(json.dumps(raw))
+    window.open_project(project)
+    assert len(window.files) == 1
+    assert 'torque' in next(iter(window.files.values())).channels
+    assert window._project_restore_health.degraded
+    assert window._project_restore_health.skipped_channel_edits[0][2] == '条目无法识别'
+
+
+def test_unverified_source_reports_malformed_remove():
+    from types import SimpleNamespace
+    from mf4_analyzer.ui.main_window._project_io_mixin import _unverified_channel_edit_skips
+    ref = SimpleNamespace(channel_edits=[{'op': 'remove', 'names': 123}])
+    assert _unverified_channel_edit_skips(ref, 'f') == [('f', '', '条目无法识别')]

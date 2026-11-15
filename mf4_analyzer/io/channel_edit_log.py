@@ -297,6 +297,9 @@ def replay(fd, entries) -> list:
         _assign(fd, name, values, entry.unit)
         _ephemeral(fd).discard(name)
         created.add(name)
+        # A later generation of this name can recover independently of the
+        # failed generation. Only subsequent consumers see the recovery.
+        skipped_outputs.discard(name)
         results.append(ReplayResult("applied", None, name, entry))
     return results
 

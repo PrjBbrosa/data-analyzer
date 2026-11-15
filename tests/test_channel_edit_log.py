@@ -185,3 +185,18 @@ print(json.dumps(blocked))
     )
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == []
+
+
+def test_recreated_output_recovers_after_an_earlier_generation_failed():
+    from mf4_analyzer.signal.channel_recipe import RemoveEntry
+    fd = _fd()
+    results = replay(fd, [
+        make_single('X', '', 'abs', 'missing', None),
+        make_single('old_child', '', 'abs', 'X', None),
+        RemoveEntry(('X',)),
+        make_single('X', '', 'abs', 'speed', None),
+        make_single('Y', '', 'abs', 'X', None),
+    ])
+    assert [r.applied for r in results] == [False, False, True, True, True]
+    np.testing.assert_array_equal(fd.data['Y'], fd.data['speed'])
+    assert 'old_child' not in fd.channels

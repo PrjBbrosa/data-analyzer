@@ -29,6 +29,8 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+from ..signal.channel_recipe import RecipeError, remove_from_dict
+
 LEVEL_IDENTITY = "identity"
 LEVEL_EVIDENCE = "evidence"
 LEVEL_SOLE = "sole"
@@ -88,10 +90,11 @@ def loader_channel_names(channel_order, channel_edits) -> frozenset[str]:
             if isinstance(name, str) and name.strip():
                 derived.add(name.strip())
         elif op == "remove":
-            for name in item.get("names") or ():
-                text = str(name).strip()
-                if text:
-                    removed.add(text)
+            try:
+                removed.update(remove_from_dict(item).names)
+            except RecipeError:
+                # Replay owns the warning; invalid entries cannot be evidence.
+                continue
     names: set[str] = set()
     for name in channel_order or ():
         text = str(name).strip()
@@ -203,25 +206,52 @@ def _unique_evidence(refs, candidates) -> dict[str, str] | None:
     edged = [(ref, options) for ref, options in edged if options]
     if not edged:
         return {}
-    found: list[dict[str, str]] = []
+    options = {
+        ref.key: tuple(candidate.key for candidate in choices)
+        for ref, choices in edged
+    }
 
-    def walk(index: int, used: set[str], chosen: dict[str, str]) -> None:
-        if len(found) > 1:
-            return
-        if index == len(edged):
-            found.append(dict(chosen))
-            return
-        ref, options = edged[index]
-        for candidate in options:
-            if candidate.key in used:
-                continue
-            used.add(candidate.key)
-            chosen[ref.key] = candidate.key
-            walk(index + 1, used, chosen)
-            del chosen[ref.key]
-            used.remove(candidate.key)
+    def cover(forbidden=None):
+        # Augmenting paths find a covering bipartite matching in polynomial
+        # time, including Hall-deficient subsets with equal total counts.
+        # Iterative traversal also avoids a recursion limit for many groups.
+        matched = {}
+        owners = {}
+        for root in options:
+            queue = [root]
+            visited = {root}
+            previous = {}
+            free = None
+            for ref_key in queue:
+                for candidate_key in options[ref_key]:
+                    if (ref_key, candidate_key) == forbidden or candidate_key in previous:
+                        continue
+                    previous[candidate_key] = ref_key
+                    owner = owners.get(candidate_key)
+                    if owner is None:
+                        free = candidate_key
+                        break
+                    if owner not in visited:
+                        visited.add(owner)
+                        queue.append(owner)
+                if free is not None:
+                    break
+            if free is None:
+                return None
+            while free is not None:
+                ref_key = previous[free]
+                old = matched.get(ref_key)
+                matched[ref_key] = free
+                owners[free] = ref_key
+                free = old
+        return matched
 
-    walk(0, set(), {})
-    if len(found) != 1:
+    matched = cover()
+    if matched is None:
         return None
-    return found[0]
+    # Any different covering assignment omits at least one matched edge.
+    # Forbidding each edge detects ambiguity without enumerating assignments.
+    for edge in matched.items():
+        if cover(forbidden=edge) is not None:
+            return None
+    return matched

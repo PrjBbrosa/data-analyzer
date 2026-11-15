@@ -148,20 +148,16 @@ def _unverified_channel_edit_skips(ref, new_fid):
     """Report every recipe that was not replayed because the pairing is unconfirmed."""
     from ..project_source_match import UNVERIFIED_SOURCE_REASON
 
+    from ...signal.channel_recipe import DeriveEntry, RecipeError, entry_from_dict
+
     skipped = []
     for item in getattr(ref, "channel_edits", None) or []:
-        if not isinstance(item, dict):
+        try:
+            entry = entry_from_dict(item)
+        except RecipeError:
+            skipped.append((new_fid, "", "条目无法识别"))
             continue
-        names = []
-        if item.get("op") == "derive":
-            name = item.get("name")
-            if isinstance(name, str) and name.strip():
-                names.append(name.strip())
-        elif item.get("op") == "remove":
-            for name in item.get("names") or ():
-                text = str(name).strip()
-                if text:
-                    names.append(text)
+        names = (entry.name,) if isinstance(entry, DeriveEntry) else entry.names
         for name in names:
             skipped.append((new_fid, name, UNVERIFIED_SOURCE_REASON))
     return skipped
@@ -3031,12 +3027,17 @@ class ProjectIOMixin:
         if not raw:
             return []
         from ...io.channel_edit_log import ChannelEditLog, replay
+        from ...signal.channel_recipe import DeriveEntry
 
         skipped = []
         kept = []
         for result in replay(fd, raw):
             if result.applied and result.entry is not None:
                 kept.append(result.entry)
+                if isinstance(result.entry, DeriveEntry):
+                    # A successfully recreated name must keep its saved View
+                    # references; historical failures of that name are obsolete.
+                    skipped = [item for item in skipped if item[1] != result.channel]
             else:
                 skipped.append((
                     new_fid,
