@@ -9,19 +9,26 @@ import pytest
 
 from mf4_analyzer.ui.chart_stack.ultraview.author_geometry import (
     CORNER_HANDLES,
+    HANDLE_HIT_PX,
+    HANDLE_VISUAL_PX,
     LATTICE_STEP,
     SQUARE_SNAP_ENTER_PX,
     SQUARE_SNAP_EXIT_PX,
     apply_square_snap,
     board_box_to_pixels,
     board_point_to_pixels,
+    connector_pick_tolerance_px,
     geometry_grid_bounds,
+    hit_polyline_px,
+    pixel_rects_intersect,
     pixels_to_board_box,
     pixels_to_board_point,
     resize_box_candidate,
     screen_px_tolerance_to_board,
     simplify_stroke,
     snap_board_point,
+    stroke_pick_tolerance_px,
+    text_corner_handle_rects,
 )
 from mf4_analyzer.ui.chart_stack.ultraview.free_grid import GridMetrics
 from mf4_analyzer.ui.ultraview_state import GridBounds
@@ -220,6 +227,44 @@ def test_square_snap_keeps_fixed_opposite_corner():
     assert nw[0] + nw[2] == pytest.approx(13.0)
     assert nw[1] + nw[3] == pytest.approx(8.0)
     assert simplify_stroke([(2.0, 3.0), (2.0, 3.0)], tolerance=1.0) == ((2.0, 3.0),)
+
+
+def test_pixel_rects_use_qrect_edge_intersection():
+    """A shared edge is not an intersection. A null rect is not either."""
+    assert pixel_rects_intersect((0, 0, 10, 10), (9, 9, 4, 4)) is True
+    assert pixel_rects_intersect((0, 0, 10, 10), (10, 0, 4, 4)) is False
+    assert pixel_rects_intersect((0, 0, 10, 10), (0, 10, 4, 4)) is False
+    assert pixel_rects_intersect((0, 0, 0, 0), (0, 0, 4, 4)) is False
+    assert pixel_rects_intersect((2, 3, 0, 8), (0, 0, 6, 6)) is True
+    assert pixel_rects_intersect((0, 0, 10, 0), (0, 0, 6, 6)) is False
+
+
+def test_pick_tolerance_stays_in_screen_pixels_at_every_zoom():
+    assert stroke_pick_tolerance_px(2) == 6.0
+    assert stroke_pick_tolerance_px(20) == 14.0
+    assert connector_pick_tolerance_px() == 8.0
+    for scale in (0.5, 1.0, 2.0, 3.0):
+        metrics = _metrics(scale=scale)
+        start = board_point_to_pixels((4.0, 4.0), metrics)
+        end = board_point_to_pixels((8.0, 4.0), metrics)
+        assert start is not None and end is not None
+        mid = ((start[0] + end[0]) / 2.0, (start[1] + end[1]) / 2.0)
+        for tolerance in (6.0, 8.0, 14.0):
+            on_edge = (mid[0], mid[1] + tolerance)
+            beyond = (mid[0], mid[1] + tolerance + 0.01)
+            assert hit_polyline_px((start, end), on_edge, tolerance) is True
+            assert hit_polyline_px((start, end), beyond, tolerance) is False
+
+
+def test_small_text_corner_handles_are_drawn_outside_the_box():
+    small = (10, 20, 20, 30)
+    assert small[2] < 2 * HANDLE_HIT_PX
+    outside = text_corner_handle_rects(small, hit=HANDLE_HIT_PX, size=HANDLE_VISUAL_PX)
+    assert set(outside) == {"nw", "ne", "sw", "se"}
+    for rect in outside.values():
+        assert pixel_rects_intersect(rect, small) is False
+    large = text_corner_handle_rects((0, 0, 80, 80))
+    assert pixel_rects_intersect(large["nw"], (0, 0, 80, 80)) is True
 
 
 def test_rdp_cap_is_stable_and_keeps_first_last_point():
