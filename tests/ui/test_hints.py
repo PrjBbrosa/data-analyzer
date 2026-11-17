@@ -197,6 +197,7 @@ def test_frf_hints_cover_cursor_display_and_time_domain_limits():
         "frf.custom_x_limit",
         "frf.view_in_time_domain",
         "frf.retry_compute",
+        "frf.align_then_compute",
     }
     joined = " ".join(frf_hints.values())
     for phrase in (

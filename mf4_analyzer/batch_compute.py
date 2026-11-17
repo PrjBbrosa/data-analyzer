@@ -18,6 +18,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any, Mapping, Sequence
 import logging
+import math
 
 import numpy as np
 import pandas as pd
@@ -344,7 +345,7 @@ def prepare_frf_task(fd, input_channel: str, output_channel: str, params) -> Pre
 
 
 def _prepare_native_frf_task(fd, input_channel, output_channel, params) -> PreparedBatchFrf:
-    """Native FRF inputs stay on their own clocks. Cross-rate stays unsupported."""
+    """Native FRF uses each prepared target rate. Alignment runs only when requested."""
     from .analysis_signal_prepare import load_native_channel, prepare_pair
     from .batch_frf import alignment_fact
 
@@ -372,8 +373,15 @@ def _prepare_native_frf_task(fd, input_channel, output_channel, params) -> Prepa
         right_identity=output_channel,
         source_revision=left.source_revision,
     )
-    if pair.status != "ready":
+    if pair.status != "ready" or pair.left is None or pair.right is None:
         raise BatchFrfDataError(pair.reason)
+    target_fs = pair.left.target_fs
+    if (
+        target_fs is None
+        or pair.right.target_fs is None
+        or not math.isclose(float(target_fs), float(pair.right.target_fs), rel_tol=1e-9, abs_tol=0.0)
+    ):
+        raise BatchFrfDataError("两端 prepared 采样率不一致，不能计算频响")
     try:
         frf_params = FrfParams(
             estimator=str(params.get("estimator", "h1") or "").strip().lower(),
@@ -390,7 +398,7 @@ def _prepare_native_frf_task(fd, input_channel, output_channel, params) -> Prepa
     try:
         plan_frf_request(
             n_samples=int(pair.left.values.size),
-            fs=pair.left.source_fs,
+            fs=float(target_fs),
             params=frf_params,
         )
     except FrfRequestValidationError as exc:
@@ -410,7 +418,7 @@ def _prepare_native_frf_task(fd, input_channel, output_channel, params) -> Prepa
         output_values=output_values,
         input_time=input_time,
         output_time=output_time,
-        fs=float(pair.left.source_fs),
+        fs=float(target_fs),
         params=frf_params,
         input_unit=_frf_channel_unit(fd, input_channel),
         output_unit=_frf_channel_unit(fd, output_channel),

@@ -99,35 +99,6 @@ def _native_export_has_invalid(loaded) -> bool:
     return False
 
 
-def _native_excel_frame(loaded, include_time):
-    """Wide table for one shared valid clock; otherwise one row per sample."""
-    import pandas as pd
-
-    if _native_channels_share_clock(loaded) and not _native_export_has_invalid(loaded):
-        frame = pd.DataFrame()
-        if include_time:
-            frame["Time"] = np.asarray(loaded[0][1].time)
-        for name, series in loaded:
-            frame[name] = np.asarray(series.values)
-        return frame
-    rows = []
-    for name, series in loaded:
-        validity = getattr(series, "validity", None)
-        invalid = (
-            np.zeros(len(series.time), dtype=bool)
-            if validity is None
-            else np.asarray(validity, dtype=bool)
-        )
-        for stamp, value, bad in zip(series.time, series.values, invalid):
-            rows.append({
-                "Channel": name,
-                "Time": stamp,
-                "Value": value,
-                "Invalid": bool(bad),
-            })
-    return pd.DataFrame(rows, columns=["Channel", "Time", "Value", "Invalid"])
-
-
 @dataclass
 class TimePlotSlot:
     """One attempted ``(fid, channel)`` in workspace order.
@@ -5450,8 +5421,8 @@ class MainWindow(
                 series = read_signal(
                     fd, channel, span=span, representation="physical",
                 )
-            except (SignalAccessError, SourceClosedError, TypeError, ValueError):
-                continue
+            except (SignalAccessError, SourceClosedError, TypeError, ValueError) as exc:
+                raise ValueError(f"通道 {channel} 读取失败，未导出：{exc}") from exc
             loaded.append((channel, series))
         return loaded
 
@@ -5460,21 +5431,16 @@ class MainWindow(
         by the channel-editor's 导出 section (export_requested). Time column and
         time-range filter mirror the former toolbar-export behavior.
 
-        A native source keeps each channel clock. Channels that share one time
-        vector and have no invalid samples stay a wide table. Anything else is
-        a long table of channel, time, value and invalid flag.
+        A native source uses the shared sample writer: one long table with the
+        original record, segment, time, value and validity. A channel that
+        cannot be read fails the export instead of being skipped.
         """
         from pathlib import Path
         from PyQt5.QtWidgets import QFileDialog, QMessageBox
         import pandas as pd
         fd = self.files.get(fid)
         valid_channels = self._exportable_channels(fd, channels)
-        native_loaded = None
-        if fd is not None and getattr(fd, "is_native", False):
-            native_loaded = self._load_native_export_series(
-                fd, valid_channels, use_range,
-            )
-            valid_channels = [channel for channel, _series in native_loaded]
+        native = fd is not None and getattr(fd, "is_native", False)
         if fd is None or not valid_channels:
             self.toast("没有可导出的数据或未勾选通道", "warning")
             return
@@ -5482,8 +5448,19 @@ class MainWindow(
         if not fp:
             return
         try:
-            if native_loaded is not None:
-                df = _native_excel_frame(native_loaded, include_time)
+            if native:
+                from ...batch_output import export_native_samples
+                from ...io.signal_access import TimeSpan
+                span = None
+                if use_range:
+                    lo, hi = self.inspector.top.range_values()
+                    span = TimeSpan(float(lo), float(hi))
+                result = export_native_samples(
+                    fd, fp, layout="long", channels=valid_channels, span=span,
+                )
+                written = result.paths[0]
+                self._status_message(f"导出完成: {written.name}")
+                self.toast(f"已导出 {written.name}", "success")
             else:
                 df = pd.DataFrame()
                 if include_time and fd.time_array is not None:
@@ -5494,14 +5471,14 @@ class MainWindow(
                     lo, hi = self.inspector.top.range_values()
                     m = (fd.time_array >= lo) & (fd.time_array <= hi)
                     df = df.loc[m].reset_index(drop=True)
-            df.to_excel(fp, index=False, engine='openpyxl')
-            self._status_message(
-                f"导出完成: {Path(fp).name} ({len(df)} 行 × {len(df.columns)} 列)"
-            )
-            self.toast(
-                f"已导出 {Path(fp).name} · {len(df)} 行 × {len(df.columns)} 列",
-                "success",
-            )
+                df.to_excel(fp, index=False, engine='openpyxl')
+                self._status_message(
+                    f"导出完成: {Path(fp).name} ({len(df)} 行 × {len(df.columns)} 列)"
+                )
+                self.toast(
+                    f"已导出 {Path(fp).name} · {len(df)} 行 × {len(df.columns)} 列",
+                    "success",
+                )
         except Exception as e:
             QMessageBox.critical(self, "错误", str(e))
 
@@ -5523,7 +5500,11 @@ class MainWindow(
             self.toast("没有可导出的数据或未勾选通道", "warning")
             return
         if getattr(fd, "is_native", False):
-            loaded = self._load_native_export_series(fd, valid_channels, use_range)
+            try:
+                loaded = self._load_native_export_series(fd, valid_channels, use_range)
+            except ValueError as exc:
+                self.toast(str(exc), "warning")
+                return
             if not loaded:
                 self.toast("没有可导出的数据或未勾选通道", "warning")
                 return

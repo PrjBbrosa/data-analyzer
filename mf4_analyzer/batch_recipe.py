@@ -114,6 +114,7 @@ METHOD_PARAM_FIELDS = {
         "phase_mode",
         "coherence_threshold",
         "fade_low_coherence",
+        "align_then_compute",
         "render_group_by",
     }),
     "order_time": frozenset({
@@ -216,6 +217,7 @@ _BOOL_PARAM_FIELDS = frozenset({
     "remove_mean",
     "periodic_window",
     "fade_low_coherence",
+    "align_then_compute",
 })
 _NORMALIZED_ENUM_PARAM_FIELDS = frozenset({
     "render_group_by",
@@ -232,6 +234,7 @@ _NORMALIZED_ENUM_PARAM_FIELDS = frozenset({
 FRF_COMPUTE_PARAM_FIELDS = frozenset({
     "time_range", "fs", "estimator", "window", "periodic_window",
     "t_win_s", "overlap", "nfft_mode", "nfft", "detrend",
+    "align_then_compute",
 })
 FRF_RENDER_PARAM_FIELDS = frozenset({
     "magnitude_scale", "frequency_scale", "phase_mode",

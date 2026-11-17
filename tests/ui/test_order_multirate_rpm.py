@@ -223,6 +223,33 @@ def test_order_rpm_keeps_neighbors_and_rejects_real_overrun(multirate_win):
     np.testing.assert_allclose(native, [120.0, 200.0, 280.0])
 
 
+def test_order_rpm_for_rejects_invalid_native_speed(qapp, qtbot):
+    from mf4_analyzer.io.native_signal_store import AxisSpec, ChannelSpec, NativeSignalStore
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    time = np.array([0.0, 1.0, 2.0])
+    store = NativeSignalStore.build(
+        "native-bad",
+        (AxisSpec("t", "clk", "time", "s", time),),
+        (
+            ChannelSpec(
+                0, 1, "n_motor", "t", np.array([100.0, 999.0, 300.0]),
+                unit="rpm", validity=np.array([False, True, False]),
+            ),
+        ),
+    )
+    win.files["native"] = FileData.from_native_store("bad.mf4", store)
+    rejected = []
+    rpm = win._order_rpm_for(
+        ("native", "n_motor"), 3, t_sig=time,
+        params={"rpm_mode": "channel", "rpm_factor": 1.0},
+        rejections=rejected,
+    )
+    assert rpm is None
+    assert rejected
+
+
 def test_order_rpm_for_nonmonotonic_motor_axis_skips(multirate_win):
     """Boundary: if the motor-speed channel's own time axis is degenerate
     (non strictly increasing), alignment is unsafe — keep the existing

@@ -714,7 +714,7 @@ def test_batch_frf_param_form_uses_canonical_compute_and_display_fields(qtbot):
     form.set_method("frf")
     assert {
         "estimator", "window", "t_win_s", "overlap", "nfft_mode", "nfft",
-        "magnitude_scale",
+        "align_then_compute", "magnitude_scale",
         "frequency_scale", "phase_mode", "coherence_threshold",
         "fade_low_coherence",
     } == form.visible_field_names()
@@ -747,6 +747,7 @@ def test_batch_frf_keeps_estimation_and_display_in_stable_columns(qtbot):
 
     estimation = (
         "estimator", "window", "t_win_s", "overlap", "nfft_mode", "nfft",
+        "align_then_compute",
     )
     display = (
         "magnitude_scale", "frequency_scale", "phase_mode",

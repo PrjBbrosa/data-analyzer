@@ -5187,9 +5187,10 @@ class BatchRunner:
                 x_column = self._bound_signal_name(None, x_channel, fd=fd)
                 if not x_column or not self._source_has_channel(fd, x_column):
                     raise ValueError(f'missing X channel: {x_channel}')
-                x_values, _x_time, _x_fs = self._task_channel_arrays(
+                x_values, x_time, _x_fs = self._task_channel_arrays(
                     fd, x_column, None, require_fs=False, time_range=params.get("time_range"),
                 )
+                x_values = self._align_custom_x(time, x_values, x_time)
             preprocessed = preprocess_batch_signal(
                 signal, time, fs, params, x_values=x_values,
                 nonfinite_policy="preserve",
@@ -5731,9 +5732,10 @@ class BatchRunner:
                 x_column = self._bound_signal_name(None, x_channel, fd=fd)
                 if not x_column or not self._source_has_channel(fd, x_column):
                     raise ValueError(f"missing X channel: {x_channel}")
-                x_values, _x_time, _x_fs = self._task_channel_arrays(
+                x_values, x_time, _x_fs = self._task_channel_arrays(
                     fd, x_column, None, require_fs=False, time_range=requested_params.get("time_range"),
                 )
+                x_values = self._align_custom_x(time, x_values, x_time)
 
             preprocessed = preprocess_batch_signal(
                 sig,
@@ -6666,33 +6668,19 @@ class BatchRunner:
                 return rpm * factor
 
             if target_channel:
-                target_time, _target_values, _target_fs = self._task_channel_arrays(
+                _target_values, target_time, _target_fs = self._task_channel_arrays(
                     fd, target_channel, None, require_fs=False, time_range=time_range,
                 )
             else:
                 target_time = fd.time_array
-            valid_target = self._strict_finite_time_axis(
-                target_time, len(np.asarray(target_time)),
+            unit = str((getattr(rpm_fd, "channel_units", None) or {}).get(rpm_ch, "") or "")
+            return self._aligned_rpm(
+                target_time, rpm, rpm_time, factor,
+                unit=unit,
+                channel=rpm_ch,
+                target_source_id=target_source_id,
+                rpm_source_id=rpm_source_id,
             )
-            valid_rpm = self._strict_finite_time_axis(
-                rpm_time, len(rpm),
-            )
-            if not (valid_target and valid_rpm):
-                raise ValueError(
-                    "cross-source RPM timebase incompatible "
-                    f"(target source {target_source_id!r}, "
-                    f"rpm source {rpm_source_id!r}): time axes must be "
-                    "finite and strictly increasing"
-                )
-            target_time = np.asarray(target_time, dtype=float)
-            rpm_time = np.asarray(rpm_time, dtype=float)
-            if target_time[-1] < rpm_time[0] or target_time[0] > rpm_time[-1]:
-                raise ValueError(
-                    "cross-source RPM timebase incompatible "
-                    f"(target source {target_source_id!r}, "
-                    f"rpm source {rpm_source_id!r}): time ranges do not overlap"
-                )
-            return np.interp(target_time, rpm_time, rpm) * factor
         rpm_channel = preset.rpm_channel
         if not rpm_channel:
             rpm_channel = _guess_rpm_channel(fd)
@@ -6705,10 +6693,49 @@ class BatchRunner:
         if not rpm_channel or not self._source_has_channel(fd, rpm_channel):
             raise ValueError("rpm channel is required for order batch analysis")
         factor = float(preset.params.get('rpm_factor', 1.0))
-        rpm, _rpm_time, _rpm_fs = self._task_channel_arrays(
+        rpm, rpm_time, _rpm_fs = self._task_channel_arrays(
             fd, rpm_channel, None, require_fs=False, time_range=time_range,
         )
+        if target_channel and rpm_time is not None:
+            _target_values, target_time, _target_fs = self._task_channel_arrays(
+                fd, target_channel, None, require_fs=False, time_range=time_range,
+            )
+            unit = str((getattr(fd, "channel_units", None) or {}).get(rpm_channel, "") or "")
+            source_id = target_source_id or getattr(fd, "source_id", None) or ""
+            return self._aligned_rpm(
+                target_time, rpm, rpm_time, factor,
+                unit=unit,
+                channel=rpm_channel,
+                target_source_id=source_id,
+                rpm_source_id=source_id,
+            )
         return np.asarray(rpm, dtype=float) * factor
+
+    def _align_custom_x(self, signal_time, x_values, x_time):
+        if x_time is None:
+            return x_values
+        from .analysis_signal_prepare import align_companion_clock
+        return align_companion_clock(signal_time, x_values, x_time)
+
+    def _aligned_rpm(
+        self, target_time, rpm, rpm_time, factor, *,
+        unit, channel, target_source_id, rpm_source_id,
+    ):
+        from .analysis_signal_prepare import prepare_order_speed
+        prepared = prepare_order_speed(
+            target_time, rpm, rpm_time,
+            rpm_factor=factor,
+            rpm_unit=unit,
+            rpm_source=(rpm_source_id, channel),
+            require_full_coverage=True,
+        )
+        if prepared.status != "ready" or prepared.values is None:
+            raise ValueError(
+                "RPM timebase incompatible "
+                f"(target source {target_source_id!r}, "
+                f"rpm source {rpm_source_id!r}): {prepared.reason}"
+            )
+        return np.asarray(prepared.values, dtype=float)
 
     # ---- batch_output compatibility aliases -------------------------------
     # These three byte-output writers moved to batch_output.py as

@@ -2,7 +2,7 @@
 
 Same-axis data passes through as a local float copy. Native callers do not
 rebuild time by sample index. Explicit uniformization computes new values and
-new times. Downsampling uses the frozen zero-phase Butterworth design.
+new times. Downsampling uses the frozen zero-phase Chebyshev II design.
 Cross-rate FRF alignment is enabled only for a shared origin and an integer
 ratio onto the lower rate. Other ratios and fractional delays stay unsupported.
 """
@@ -16,15 +16,24 @@ import math
 import numpy as np
 
 from .signal.numeric_precision import integers_exact_in_float64
-from .signal.filters import FilterSpec, apply as apply_filter, nyquist_guard
 from .signal.spectrogram import DEFAULT_TIME_JITTER_TOLERANCE
 
-_ANTIALIAS_ORDER = 8
-_ANTIALIAS_CUTOFF_RATIO = 0.9
+# Zero-phase Chebyshev type II. sosfiltfilt applies the design twice, so each
+# pass is specified at half the product ripple and stopband. The product
+# contract stays passband [0, 0.30 Ft] within 0.1 dB and stopband
+# [0.50 Ft, source Nyquist) at least 60 dB down. Each pass uses 0.049 dB
+# rather than a literal half of 0.1: the equiripple endpoint plus float64
+# lands a few ULPs over 0.1 when the single pass is exactly 0.05.
+_ANTIALIAS_PASSBAND_RATIO = 0.30
+_ANTIALIAS_STOPBAND_RATIO = 0.50
+_ANTIALIAS_PASSBAND_DB = 0.1
 _ANTIALIAS_STOPBAND_DB = 60.0
+_ANTIALIAS_GPASS_DB = 0.049
+_ANTIALIAS_GSTOP_DB = 30.0
+_PRECISION_POLICY = "m4-same-axis-2"
 
 
-POLICY_VERSION = "m4-same-axis-2"
+POLICY_VERSION = "m4-antialias-3"
 DEFAULT_PREPARE_BYTE_LIMIT = 512 * 1024 * 1024
 _RPM_UNITS = frozenset({"", "rpm", "r/min", "1/min", "min^-1", "rev/min"})
 
@@ -269,6 +278,7 @@ def prepare_pair(
     right_identity="",
     source_revision="",
     byte_limit=None,
+    materialize=True,
 ) -> PreparedPair:
     """Pair two original axes. Equal length is not evidence that they match."""
     left_values_arr = np.asarray(left_values)
@@ -300,7 +310,7 @@ def prepare_pair(
             return _align_uniform_pair(
                 left_values_arr, left_time_arr, right_values_arr, right_time_arr,
                 left_rate, right_rate, facts, source_revision, byte_limit,
-                left_identity, right_identity,
+                left_identity, right_identity, materialize=materialize,
             )
         if rates_differ:
             return _pair(
@@ -361,6 +371,7 @@ def prepare_order_speed(
     manual_rpm=None,
     require_full_coverage=True,
     policy="native",
+    invalid=None,
 ) -> PreparedSignal:
     """Align motor speed onto the signal clock without extending past coverage."""
     signal = np.asarray(signal_time, dtype=float).reshape(-1)
@@ -419,14 +430,45 @@ def prepare_order_speed(
     common["original_values_hash"] = array_content_hash(rpm)
     if rpm.shape[0] != rpm_axis.shape[0] or rpm.size < 2:
         return _reject("转速和时间长度不一致", quality="shape", input_count=int(signal.size), provenance=provenance, **common)
-    if not np.all(np.isfinite(rpm)) or not np.all(np.isfinite(rpm_axis)):
+    invalid_mask = None
+    if invalid is not None:
+        invalid_mask = np.asarray(invalid, dtype=bool).reshape(-1)
+        if invalid_mask.shape[0] != rpm.shape[0]:
+            return _reject(
+                "转速失效掩码长度必须与样本一致",
+                quality="invalid", input_count=int(signal.size), provenance=provenance, **common,
+            )
+    if not np.all(np.isfinite(rpm_axis)):
         return _reject("转速或时间含非有限值", quality="nonfinite", input_count=int(signal.size), provenance=provenance, **common)
     if np.any(np.diff(rpm_axis) <= 0) or np.any(np.diff(signal) <= 0):
         return _reject("转速对齐要求两端时间严格递增", quality="time", input_count=int(signal.size), provenance=provenance, **common)
     factor = float(rpm_factor)
     scaled = rpm * factor
+
+    def _speed_support_is_bad(query_axis):
+        lo = float(np.asarray(query_axis, dtype=float)[0])
+        hi = float(np.asarray(query_axis, dtype=float)[-1])
+        covered = np.flatnonzero((rpm_axis >= lo) & (rpm_axis <= hi))
+        if covered.size:
+            left = max(0, int(covered[0]) - 1)
+            right = min(int(rpm.size), int(covered[-1]) + 2)
+        else:
+            left, right = 0, int(rpm.size)
+        flagged = invalid_mask is not None and bool(np.any(invalid_mask[left:right]))
+        nonfinite = not bool(np.all(np.isfinite(rpm[left:right])))
+        return flagged, nonfinite
+
     same_clock = rpm.size == signal.size and np.allclose(rpm_axis, signal, rtol=0.0, atol=1e-9)
     if same_clock:
+        flagged, nonfinite = _speed_support_is_bad(signal)
+        if flagged or nonfinite:
+            return _reject(
+                "转速样本含失效或非有限值，不能计算",
+                quality="invalid" if flagged else "nonfinite",
+                input_count=int(signal.size),
+                provenance=provenance,
+                **common,
+            )
         values = np.array(scaled, dtype=np.float64, copy=True)
         return _ready(
             values, np.array(signal, dtype=np.float64, copy=True),
@@ -453,6 +495,15 @@ def prepare_order_speed(
     query = signal if require_full_coverage else signal[inside]
     if query.size < 2:
         return _reject("有效覆盖内不足 2 点", quality="coverage", input_count=int(signal.size), provenance=provenance, **common)
+    flagged, nonfinite = _speed_support_is_bad(query)
+    if flagged or nonfinite:
+        return _reject(
+            "转速样本含失效或非有限值，不能计算",
+            quality="invalid" if flagged else "nonfinite",
+            input_count=int(signal.size),
+            provenance=provenance,
+            **common,
+        )
     aligned = np.interp(query, rpm_axis, scaled).astype(np.float64, copy=False)
     return _ready(
         aligned, np.array(query, dtype=np.float64, copy=True),
@@ -678,15 +729,101 @@ def _reinterpret(values, time, source_fs, policy, input_count, requested, common
 
 
 def frozen_antialias_design() -> dict:
-    """Zero-phase FFT Butterworth used before a uniform downsample."""
+    """Zero-phase Chebyshev II used before a uniform downsample.
+
+    The mask is not the user-filter Butterworth. ``sosfiltfilt`` applies the
+    section twice. Each pass uses half the stopband and a passband ripple
+    just inside half of 0.1 dB, so the product stays inside the contract.
+    """
     return {
-        "order": _ANTIALIAS_ORDER,
-        "cutoff_ratio": _ANTIALIAS_CUTOFF_RATIO,
-        "padding": "odd_reflect",
-        "delay_compensation": 0,
-        "edge_samples": "min(n-1, max(16, n//10))",
+        "kind": "cheby2_zero_phase",
+        "ftype": "cheby2",
+        "passband_end_ratio": _ANTIALIAS_PASSBAND_RATIO,
+        "stopband_start_ratio": _ANTIALIAS_STOPBAND_RATIO,
+        "passband_db": _ANTIALIAS_PASSBAND_DB,
         "stopband_db": _ANTIALIAS_STOPBAND_DB,
+        "gpass_per_pass_db": _ANTIALIAS_GPASS_DB,
+        "gstop_per_pass_db": _ANTIALIAS_GSTOP_DB,
+        "padding": "odd",
+        "delay_compensation": 0,
+        "edge_samples": "filtfilt_pad",
+        "application": "sosfiltfilt",
+        "precision_policy": _PRECISION_POLICY,
     }
+
+
+def _antialias_sos(source_fs, target_fs):
+    """Design the single-pass SOS. Does not allocate signal workspace."""
+    from scipy.signal import iirdesign
+
+    source = float(source_fs)
+    target = float(target_fs)
+    nyquist = 0.5 * source
+    wp = (_ANTIALIAS_PASSBAND_RATIO * target) / nyquist
+    ws = (_ANTIALIAS_STOPBAND_RATIO * target) / nyquist
+    if not (0.0 < wp < ws < 1.0):
+        raise ValueError("抗混叠归一化频带不可设计")
+    return iirdesign(
+        wp, ws, _ANTIALIAS_GPASS_DB, _ANTIALIAS_GSTOP_DB,
+        analog=False, ftype="cheby2", output="sos",
+    )
+
+
+def _apply_antialias(values, source_fs, target_fs):
+    """Zero-phase anti-alias. Call only after admission."""
+    from scipy.signal import sosfiltfilt
+
+    sos = _antialias_sos(source_fs, target_fs)
+    return np.asarray(
+        sosfiltfilt(sos, np.asarray(values, dtype=np.float64), padtype="odd"),
+        dtype=np.float64,
+    )
+
+
+def _antialias_edge_count(count: int, source_fs, target_fs) -> int:
+    if count < 2:
+        return 0
+    sections = int(np.asarray(_antialias_sos(source_fs, target_fs)).shape[0])
+    support = 3 * (2 * sections + 1)
+    return min(count - 1, max(support, 16, count // 10))
+
+
+def _align_admission_bytes(fast_count: int, slow_count: int, sections: int) -> int:
+    """Bytes of hash copies, masks, filter pad, grids and both outputs."""
+    pad = 3 * (2 * int(sections) + 1)
+    samples = int(fast_count) + int(slow_count)
+    workspace = int(fast_count) + 2 * pad
+    return 8 * (samples * 6 + workspace * 4 + int(slow_count) * 4)
+
+
+def align_companion_clock(signal_time, values, companion_time, *, name="自定义横坐标"):
+    """Put a companion on the signal clock, or reject a relationship that is not covered.
+
+    Equal length is not evidence that the clocks match. Samples outside the
+    companion coverage are not filled from the endpoint.
+    """
+    signal = np.asarray(signal_time, dtype=np.float64).reshape(-1)
+    companion = np.asarray(values, dtype=np.float64).reshape(-1)
+    clock = np.asarray(companion_time, dtype=np.float64).reshape(-1)
+    if companion.shape[0] != clock.shape[0]:
+        raise ValueError(f"{name} 的值和时间长度不一致")
+    if signal.size < 2 or clock.size < 2:
+        raise ValueError(f"{name} 至少需要 2 个采样点")
+    if (
+        not np.all(np.isfinite(signal))
+        or not np.all(np.isfinite(clock))
+        or not np.all(np.isfinite(companion))
+    ):
+        raise ValueError(f"{name} 含失效或非有限值，不能对齐")
+    if np.any(np.diff(signal) <= 0) or np.any(np.diff(clock) <= 0):
+        raise ValueError(f"{name} 要求时间严格递增")
+    if companion.shape[0] == signal.size and np.allclose(clock, signal, rtol=0.0, atol=1e-9):
+        return np.array(companion, dtype=np.float64, copy=True)
+    if float(signal[-1]) < float(clock[0]) or float(signal[0]) > float(clock[-1]):
+        raise ValueError(f"{name} 时钟与信号不重叠，不能当作同一采样")
+    if np.any(signal < float(clock[0])) or np.any(signal > float(clock[-1])):
+        raise ValueError(f"{name} 时钟未覆盖信号时间，不延长端点")
+    return np.interp(signal, clock, companion).astype(np.float64, copy=False)
 
 
 def frozen_frf_alignment() -> dict:
@@ -698,12 +835,6 @@ def frozen_frf_alignment() -> dict:
         "edge_policy": "drop_filter_support",
         "min_input_fs_band": (0.05, 0.30),
     }
-
-
-def _filter_edge_count(count: int) -> int:
-    if count < 2:
-        return 0
-    return min(count - 1, max(16, count // 10))
 
 
 def _uniform_declared(time, fs: float) -> bool:
@@ -724,7 +855,18 @@ def _uniform_declared(time, fs: float) -> bool:
 
 def _downsample_with_antialias(values, time, source_fs, target_fs, origin, input_count, requested, common):
     count = int(time.shape[0])
-    edge = _filter_edge_count(count)
+    try:
+        edge = _antialias_edge_count(count, source_fs, target_fs)
+    except ValueError as exc:
+        return _reject(
+            str(exc),
+            quality="antialias",
+            input_count=input_count,
+            requested_range=requested,
+            status="unsupported",
+            method="unsupported",
+            **common,
+        )
     if edge * 2 >= count - 1:
         return _reject(
             "抗混叠边缘支持长度吃掉了有效段",
@@ -735,11 +877,7 @@ def _downsample_with_antialias(values, time, source_fs, target_fs, origin, input
             method="unsupported",
             **common,
         )
-    cutoff = 0.5 * float(target_fs) * _ANTIALIAS_CUTOFF_RATIO
-    spec, _message = nyquist_guard(
-        FilterSpec("low", order=_ANTIALIAS_ORDER, cutoff=cutoff), source_fs,
-    )
-    filtered = apply_filter(np.asarray(values, dtype=np.float64), spec, source_fs)
+    filtered = _apply_antialias(values, source_fs, target_fs)
     interior_t = np.asarray(time[edge:count - edge], dtype=np.float64)
     interior_y = np.asarray(filtered[edge:count - edge], dtype=np.float64)
     grid = _covered_grid(float(origin), float(interior_t[0]), float(interior_t[-1]), target_fs)
@@ -763,7 +901,7 @@ def _downsample_with_antialias(values, time, source_fs, target_fs, origin, input
         effective_range=_range_of(grid),
         quality="finite",
         provenance={
-            "value_source": "zero_phase_butterworth",
+            "value_source": "zero_phase_chebyshev2",
             "time_source": "origin_plus_k_over_fs",
             "bandwidth_claim": True,
             "resamples_values": True,
@@ -775,12 +913,37 @@ def _downsample_with_antialias(values, time, source_fs, target_fs, origin, input
     )
 
 
+def _described_signal(
+    time, *, method, source_fs, target_fs, input_count, requested_range,
+    quality, provenance, **common,
+):
+    grid = np.asarray(time, dtype=np.float64)
+    return PreparedSignal(
+        status="ready",
+        reason="",
+        values=None,
+        time=grid,
+        input_count=int(input_count),
+        output_count=int(grid.shape[0]),
+        requested_range=requested_range,
+        effective_range=_range_of(grid),
+        source_fs=source_fs,
+        target_fs=target_fs,
+        method=method,
+        quality=quality,
+        boundary="none",
+        policy_version=POLICY_VERSION,
+        provenance=provenance,
+        bytes_charged=0,
+        **common,
+    )
+
+
 def _align_uniform_pair(
     left_values, left_time, right_values, right_time,
     left_rate, right_rate, facts, source_revision, byte_limit,
-    left_identity, right_identity,
+    left_identity, right_identity, *, materialize=True,
 ):
-    del byte_limit
     facts = dict(facts)
     facts["resampled"] = False
     if not integers_exact_in_float64(left_values) or not integers_exact_in_float64(right_values):
@@ -829,10 +992,16 @@ def _align_uniform_pair(
         fast_values, fast_time, fast_fs = right_values, right_time, right_rate
         slow_values, slow_time = left_values, left_time
         fast_is_left = False
-    edge = _filter_edge_count(int(fast_time.shape[0]))
+    fast_axis = np.asarray(fast_time, dtype=np.float64)
+    slow_axis = np.asarray(slow_time, dtype=np.float64)
+    try:
+        edge = _antialias_edge_count(int(fast_axis.shape[0]), fast_fs, target)
+        sections = int(np.asarray(_antialias_sos(fast_fs, target)).shape[0])
+    except ValueError as exc:
+        return _pair("unsupported", str(exc), "unsupported", "unsupported", facts)
     edge_s = edge / float(fast_fs)
-    start = max(float(fast_time[0]), float(slow_time[0])) + edge_s
-    stop = min(float(fast_time[-1]), float(slow_time[-1])) - edge_s
+    start = max(float(fast_axis[0]), float(slow_axis[0])) + edge_s
+    stop = min(float(fast_axis[-1]), float(slow_axis[-1])) - edge_s
     if not stop > start:
         return _pair(
             "unsupported",
@@ -841,11 +1010,25 @@ def _align_uniform_pair(
             "unsupported",
             facts,
         )
-    slow_axis = np.asarray(slow_time, dtype=np.float64)
+    if byte_limit is not None:
+        needed = _align_admission_bytes(
+            int(fast_axis.shape[0]), int(slow_axis.shape[0]), sections,
+        )
+        if needed > int(byte_limit):
+            return _pair(
+                "rejected",
+                "准备副本超过字节预算，未分配分析数组",
+                "byte_limit",
+                "rejected",
+                facts,
+            )
     slow_mask = (slow_axis >= start - 1e-12) & (slow_axis <= stop + 1e-12)
+    fast_mask = (fast_axis >= start - edge_s - 1e-12) & (fast_axis <= stop + edge_s + 1e-12)
     grid = slow_axis[slow_mask]
     slow_out = np.asarray(slow_values, dtype=np.float64)[slow_mask]
-    if grid.size < 2:
+    fast_window = np.asarray(fast_values, dtype=np.float64)[fast_mask]
+    fast_window_time = fast_axis[fast_mask]
+    if grid.size < 2 or fast_window.size < 2:
         return _pair(
             "unsupported",
             "对齐后的共同网格不足 2 点",
@@ -853,50 +1036,81 @@ def _align_uniform_pair(
             "unsupported",
             facts,
         )
-    cutoff = 0.5 * target * _ANTIALIAS_CUTOFF_RATIO
-    spec, _message = nyquist_guard(
-        FilterSpec("low", order=_ANTIALIAS_ORDER, cutoff=cutoff), fast_fs,
-    )
-    filtered = apply_filter(np.asarray(fast_values, dtype=np.float64), spec, fast_fs)
-    fast_out = np.interp(grid, np.asarray(fast_time, dtype=np.float64), filtered)
+    if not np.all(np.isfinite(slow_out)) or not np.all(np.isfinite(fast_window)):
+        return _pair(
+            "rejected",
+            "对齐段或抗混叠支持内含失效或非有限值，不能计算",
+            "nonfinite",
+            "rejected",
+            facts,
+        )
+    if materialize:
+        filtered = _apply_antialias(fast_window, fast_fs, target)
+        fast_out = np.interp(grid, fast_window_time, filtered)
+    else:
+        fast_out = None
     left_out, right_out = (fast_out, slow_out) if fast_is_left else (slow_out, fast_out)
     left_fs_out = target
+    hash_inputs = bool(materialize)
     common_left = dict(
         source_id=str(left_identity), physical_id="", source_revision=str(source_revision),
-        segment="", original_values_hash=array_content_hash(np.asarray(left_values)),
-        original_time_hash=array_content_hash(np.asarray(left_time)),
+        segment="",
+        original_values_hash=array_content_hash(np.asarray(left_values)) if hash_inputs else "",
+        original_time_hash=array_content_hash(np.asarray(left_time)) if hash_inputs else "",
     )
     common_right = dict(
         source_id=str(right_identity), physical_id="", source_revision=str(source_revision),
-        segment="", original_values_hash=array_content_hash(np.asarray(right_values)),
-        original_time_hash=array_content_hash(np.asarray(right_time)),
+        segment="",
+        original_values_hash=array_content_hash(np.asarray(right_values)) if hash_inputs else "",
+        original_time_hash=array_content_hash(np.asarray(right_time)) if hash_inputs else "",
     )
     design = frozen_frf_alignment()
     provenance = {
-        "value_source": "zero_phase_butterworth" if fast_is_left else "unchanged_samples",
+        "value_source": "zero_phase_chebyshev2" if fast_is_left else "unchanged_samples",
         "time_source": "lower_rate_grid",
         "bandwidth_claim": True,
         "resamples_values": fast_is_left,
         "origin": float(grid[0]),
         "alignment": design,
+        "delay_compensation": 0,
+        "precision_policy": _PRECISION_POLICY,
     }
-    left = _ready(
-        left_out, np.array(grid, dtype=np.float64, copy=True),
-        method="antialiased_lower_fs", source_fs=float(left_rate), target_fs=left_fs_out,
-        input_count=int(np.asarray(left_values).shape[0]),
-        requested_range=_range_of(left_time), effective_range=_range_of(grid),
-        quality="finite", provenance=provenance, **common_left,
-    )
-    right_provenance = dict(provenance)
-    right_provenance["value_source"] = "unchanged_samples" if fast_is_left else "zero_phase_butterworth"
-    right_provenance["resamples_values"] = not fast_is_left
-    right = _ready(
-        right_out, np.array(grid, dtype=np.float64, copy=True),
-        method="antialiased_lower_fs", source_fs=float(right_rate), target_fs=target,
-        input_count=int(np.asarray(right_values).shape[0]),
-        requested_range=_range_of(right_time), effective_range=_range_of(grid),
-        quality="finite", provenance=right_provenance, **common_right,
-    )
+    grid_copy = np.array(grid, dtype=np.float64, copy=True)
+    if materialize:
+        left = _ready(
+            left_out, grid_copy,
+            method="antialiased_lower_fs", source_fs=float(left_rate), target_fs=left_fs_out,
+            input_count=int(np.asarray(left_values).shape[0]),
+            requested_range=_range_of(left_time), effective_range=_range_of(grid),
+            quality="finite", provenance=provenance, **common_left,
+        )
+        right_provenance = dict(provenance)
+        right_provenance["value_source"] = "unchanged_samples" if fast_is_left else "zero_phase_chebyshev2"
+        right_provenance["resamples_values"] = not fast_is_left
+        right = _ready(
+            right_out, np.array(grid, dtype=np.float64, copy=True),
+            method="antialiased_lower_fs", source_fs=float(right_rate), target_fs=target,
+            input_count=int(np.asarray(right_values).shape[0]),
+            requested_range=_range_of(right_time), effective_range=_range_of(grid),
+            quality="finite", provenance=right_provenance, **common_right,
+        )
+    else:
+        left = _described_signal(
+            grid_copy, method="antialiased_lower_fs", source_fs=float(left_rate),
+            target_fs=left_fs_out, input_count=int(np.asarray(left_values).shape[0]),
+            requested_range=_range_of(left_time), quality="finite",
+            provenance=provenance, **common_left,
+        )
+        right_provenance = dict(provenance)
+        right_provenance["value_source"] = "unchanged_samples" if fast_is_left else "zero_phase_chebyshev2"
+        right_provenance["resamples_values"] = not fast_is_left
+        right = _described_signal(
+            np.array(grid, dtype=np.float64, copy=True),
+            method="antialiased_lower_fs", source_fs=float(right_rate), target_fs=target,
+            input_count=int(np.asarray(right_values).shape[0]),
+            requested_range=_range_of(right_time), quality="finite",
+            provenance=right_provenance, **common_right,
+        )
     facts["resampled"] = True
     facts["rejected_proof"] = ""
     facts["target_fs"] = target
@@ -1203,6 +1417,7 @@ __all__ = [
     "PrepareByteLedger",
     "PreparedPair",
     "PreparedSignal",
+    "align_companion_clock",
     "array_content_hash",
     "batch_stage_facts",
     "load_native_channel",

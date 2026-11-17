@@ -656,7 +656,10 @@ def test_native_antialias_suppresses_a_stopband_tone():
     )
 
     design = frozen_antialias_design()
-    required = {"order", "cutoff_ratio", "padding", "delay_compensation", "edge_samples"}
+    required = {
+        "kind", "passband_end_ratio", "stopband_start_ratio",
+        "padding", "delay_compensation", "edge_samples",
+    }
     assert not required.difference(design)
     assert float(design["stopband_db"]) >= 60.0
     source_fs = 4000.0

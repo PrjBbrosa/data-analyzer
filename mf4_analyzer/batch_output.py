@@ -894,7 +894,7 @@ def _segment_of(segments, index) -> int:
     return 0
 
 
-def _series_rows(source, read_signal, channels=None, staged=None):
+def _series_rows(source, read_signal, channels=None, staged=None, span=None):
     store = source.native_store
     rows = []
     grouped = {}
@@ -906,17 +906,24 @@ def _series_rows(source, read_signal, channels=None, staged=None):
             else:
                 if channels is None and store.channel(name).support_status != "numeric":
                     continue
-                series = read_signal(source, name, representation="physical")
+                series = read_signal(source, name, representation="physical", span=span)
         except SignalAccessError as exc:
             raise NativeExportError(str(exc)) from exc
         grouped.setdefault(series.axis_id, []).append((name, series))
         validity = None if series.validity is None else np.asarray(series.validity, dtype=bool)
+        if series.sample_index is not None:
+            records = np.asarray(series.sample_index, dtype=int)
+        elif series.index_start is not None:
+            records = np.arange(int(series.index_start), int(series.index_start) + len(series.time))
+        else:
+            records = np.arange(len(series.time))
         for index, (time, value) in enumerate(zip(series.time, series.values)):
             invalid = validity is not None and bool(validity[index])
+            record = int(records[index])
             rows.append({
                 "channel": name,
-                "record": index,
-                "segment": _segment_of(series.segments, index),
+                "record": record,
+                "segment": _segment_of(series.segments, record),
                 "time": time,
                 "value": value,
                 "valid": not invalid,
@@ -1046,7 +1053,7 @@ def _interpolate(series, stamp):
 
 
 def export_native_samples(source, path, *, layout="long", grid=None, channels=None, staged=None,
-                          max_data_rows: int = _XLSX_MAX_DATA_ROWS) -> NativeExportResult:
+                          span=None, max_data_rows: int = _XLSX_MAX_DATA_ROWS) -> NativeExportResult:
     """Write original samples as a long table or one table per shared axis.
 
     ``layout="uniform"`` is the only wide time grid, and it has to carry an
@@ -1058,7 +1065,7 @@ def export_native_samples(source, path, *, layout="long", grid=None, channels=No
     if target.suffix.lower() in {".png", ".pdf", ".svg"}:
         raise NativeExportError("PNG/PDF 维持原来的渲染导出，不能当作原始数值表")
     file_data, _store, read_signal = _export_source(source)
-    rows, grouped = _series_rows(file_data, read_signal, channels, staged)
+    rows, grouped = _series_rows(file_data, read_signal, channels, staged, span)
     layout = str(layout or "long")
     if layout == "uniform":
         if grid is None:
@@ -1087,11 +1094,19 @@ def export_native_samples(source, path, *, layout="long", grid=None, channels=No
             for name, _series in channels:
                 header.extend((name, f"{name}__valid"))
             records = []
+            lead = channels[0][1]
+            if lead.sample_index is not None:
+                record_index = np.asarray(lead.sample_index, dtype=int)
+            elif lead.index_start is not None:
+                record_index = np.arange(int(lead.index_start), int(lead.index_start) + width)
+            else:
+                record_index = np.arange(width)
             for index in range(width):
+                original = int(record_index[index])
                 record = {
-                    "record": index,
-                    "segment": _segment_of(channels[0][1].segments, index),
-                    "time": channels[0][1].time[index],
+                    "record": original,
+                    "segment": _segment_of(lead.segments, original),
+                    "time": lead.time[index],
                 }
                 for name, series in channels:
                     validity = None if series.validity is None else np.asarray(series.validity, dtype=bool)

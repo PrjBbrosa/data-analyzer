@@ -130,6 +130,7 @@ class OrderMixin:
             else:
                 time_range = None
         unit = str((getattr(fd, "channel_units", None) or {}).get(ch, "") or "")
+        rpm_invalid = None
         if getattr(fd, "is_native", False):
             from ...io.signal_access import SignalAccessError, TimeSpan, read_signal
             span = None
@@ -143,6 +144,7 @@ class OrderMixin:
                 return None
             rpm = np.asarray(series.values)
             t_rpm = np.asarray(series.time, dtype=float)
+            rpm_invalid = series.validity
             if not unit:
                 unit = str(series.unit or "")
         else:
@@ -156,6 +158,10 @@ class OrderMixin:
                 if rejections is not None:
                     rejections.append(f"{ch}: 转速整数样本不能精确表示为 float64")
                 return None
+            if rpm_invalid is not None and np.any(np.asarray(rpm_invalid, dtype=bool)):
+                if rejections is not None:
+                    rejections.append(f"{ch}: 转速样本含失效位，不能计算")
+                return None
             if len(rpm) != n:
                 return None
             return np.asarray(rpm, dtype=float) * float(factor)
@@ -166,6 +172,7 @@ class OrderMixin:
             rpm_unit=unit,
             rpm_source=(fid, ch),
             require_full_coverage=True,
+            invalid=rpm_invalid,
         )
         if (
             prepared.status != "ready"
