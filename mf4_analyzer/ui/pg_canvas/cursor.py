@@ -45,7 +45,13 @@ from mf4_analyzer.ui.plot_helpers import (
     _interp_cursor_value,
     resolve_cursor_source_label,
 )
-from mf4_analyzer.ui.time_xaxis import CHANNEL_MODE, CursorXAxisContext, TIME_MODE
+from mf4_analyzer.ui.time_xaxis import (
+    CHANNEL_MODE,
+    CursorXAxisContext,
+    TIME_MODE,
+    native_sample_statistics,
+    query_native_cursor,
+)
 
 
 def _finite_float(value):
@@ -101,6 +107,7 @@ class CursorController(_CanvasBackref):
         "_custom_x_path_cache",
         "_cursor_data_revision",
         "_x_axis_context",
+        "_native_sample_markers",
         "visible",
         "dual",
         "ax",
@@ -163,6 +170,7 @@ class CursorController(_CanvasBackref):
         self._custom_x_path_cache = {}
         self._cursor_data_revision = 0
         self._x_axis_context = None
+        self._native_sample_markers = []
 
     @property
     def visible(self):
@@ -247,7 +255,9 @@ class CursorController(_CanvasBackref):
         # by ``_cursor_item_owners``, so hide their data explicitly before
         # dropping the wrappers during a canvas rebuild.
         self._hide_dual_cursor_extreme_markers()
+        self._hide_native_sample_markers()
         self._dual_cursor_extreme_markers = []
+        self._native_sample_markers = []
         self._dual_cursor_extreme_points = ()
         self.cursor_info.emit("")
         self.dual_cursor_info.emit("")
@@ -906,6 +916,166 @@ class CursorController(_CanvasBackref):
                 pass
         return hidden
 
+    def _native_query_for(self, channel_key):
+        queries = getattr(self, "_native_queries", None) or {}
+        return queries.get(channel_key)
+
+    def _native_single_cursor_row(
+        self, query, x, ch, channel_key, source_label, channel_label, color, unit_s,
+    ):
+        revision = str(query.revision or "")
+        if query.is_closed():
+            return "", CursorDisplayChannel(
+                identity=channel_key,
+                source_label=source_label,
+                channel_label=channel_label,
+                color=color,
+                unit_suffix=unit_s,
+                current_value=None,
+                diagnostic="无数据",
+                read_mode="nearest",
+                content_revision=revision,
+            )
+        reading = query_native_cursor(query.series, x, mode="nearest")
+        if reading.value is None:
+            text = reading.text or "无数据"
+            return (
+                f'<span style="color:{color};">{ch}: {text}</span>',
+                CursorDisplayChannel(
+                    identity=channel_key,
+                    source_label=source_label,
+                    channel_label=channel_label,
+                    color=color,
+                    unit_suffix=unit_s,
+                    current_value=None,
+                    diagnostic=text,
+                    sample_time=reading.sample_time,
+                    record_indices=reading.record_indices,
+                    read_mode="nearest",
+                    content_revision=revision,
+                ),
+            )
+        html = _format_single_cursor_channel_html(ch, reading.value, unit_s, color)
+        if reading.text:
+            html = f"{html} <span style=\"color:#64748b;\">{reading.text}</span>"
+        return html, CursorDisplayChannel(
+            identity=channel_key,
+            source_label=source_label,
+            channel_label=channel_label,
+            color=color,
+            unit_suffix=unit_s,
+            current_value=float(reading.value),
+            diagnostic=reading.text,
+            sample_time=reading.sample_time,
+            sample_delta_s=reading.delta_s,
+            record_indices=reading.record_indices,
+            read_mode="nearest",
+            content_revision=revision,
+        )
+
+    def _native_dual_cursor_row(
+        self, query, channel_key, ch, color, unit_suffix, xlo, xhi, ax, bx,
+    ):
+        if query.is_closed():
+            return None, []
+        series = query.series
+        stats = native_sample_statistics(series, (xlo, xhi))
+        left = query_native_cursor(series, ax, mode="nearest")
+        right = query_native_cursor(series, bx, mode="nearest")
+        delta = None
+        if left.value is not None and right.value is not None:
+            delta = float(right.value) - float(left.value)
+        valid = int(stats.get("valid_count") or 0)
+        row = DualCursorRow(
+            channel_name=ch,
+            min_value=stats["min"] if valid else None,
+            max_value=stats["max"] if valid else None,
+            avg=stats["mean"] if valid else None,
+            delta=delta,
+            unit_suffix=unit_suffix,
+            color=color,
+            identity=channel_key,
+            label=ch,
+            mode=TIME_MODE,
+            status="" if valid else "无数据",
+        )
+        extrema = []
+        if valid and stats["coverage"] is not None:
+            time = np.asarray(series.time, dtype=float)
+            values = np.asarray(series.values, dtype=float)
+            validity = getattr(series, "validity", None)
+            mask = (time >= xlo) & (time <= xhi) & np.isfinite(time) & np.isfinite(values)
+            if validity is not None:
+                mask = mask & ~np.asarray(validity, dtype=bool)
+            if np.any(mask):
+                idx = np.flatnonzero(mask)
+                samples = values[mask]
+                min_i = int(idx[int(np.argmin(samples))])
+                max_i = int(idx[int(np.argmax(samples))])
+                extrema.append((
+                    channel_key,
+                    float(time[min_i]),
+                    float(values[min_i]),
+                    float(time[max_i]),
+                    float(values[max_i]),
+                ))
+        return row, extrema
+
+    def _hide_native_sample_markers(self):
+        for marker in getattr(self, "_native_sample_markers", []) or []:
+            def hide_marker(item=marker):
+                item.setData([], [])
+                item.setVisible(False)
+            self._run_marker_cleanup(marker, hide_marker)
+
+    def _ensure_native_sample_markers(self):
+        markers = getattr(self, "_native_sample_markers", [])
+        handles = [
+            handle for handle in self.axes_list
+            if not getattr(handle, "placeholder", False)
+        ]
+        if len(markers) == len(handles) and markers:
+            return markers
+        self._hide_native_sample_markers()
+        created = []
+        for handle in handles:
+            vb = handle.view_box
+            if vb is None:
+                continue
+            marker = pg.ScatterPlotItem(size=9)
+            marker.setZValue(1200)
+            marker.setVisible(False)
+            vb.addItem(marker, ignoreBounds=True)
+            created.append(marker)
+        self._native_sample_markers = created
+        return created
+
+    def _sync_native_sample_markers(self, rows):
+        points = []
+        for row in rows or ():
+            if getattr(row, "read_mode", "") != "nearest":
+                continue
+            sample_time = getattr(row, "sample_time", None)
+            value = getattr(row, "current_value", None)
+            if sample_time is None or value is None:
+                continue
+            points.append((float(sample_time), float(value)))
+        markers = self._ensure_native_sample_markers()
+        if not markers:
+            return
+        if not points:
+            self._hide_native_sample_markers()
+            return
+        xs = [point[0] for point in points]
+        ys = [point[1] for point in points]
+        for marker in markers:
+            marker.setData(
+                xs, ys, symbol="o", size=9,
+                pen=pg.mkPen("#111827", width=1),
+                brush=pg.mkBrush("#1769e0"),
+            )
+            marker.setVisible(True)
+
     def _collect_single_cursor_payload(self, x):
         """Return ``(html_parts, rows)`` for one X without emitting or drawing."""
         custom_x = self._is_custom_x_cursor()
@@ -945,6 +1115,16 @@ class CursorController(_CanvasBackref):
                         unit_s,
                         color,
                     ))
+                continue
+            native = self._native_query_for(channel_key)
+            if native is not None:
+                part, row = self._native_single_cursor_row(
+                    native, x, ch, channel_key, source_label, channel_label,
+                    color, unit_s,
+                )
+                if part:
+                    parts.append(part)
+                rows.append(row)
                 continue
             if len(tf):
                 idx = min(np.searchsorted(tf, x), len(sf) - 1)
@@ -1030,6 +1210,15 @@ class CursorController(_CanvasBackref):
                 dual.append(row)
                 extreme_points.extend(extrema)
                 continue
+            native = self._native_query_for(channel_key)
+            if native is not None:
+                row, extrema = self._native_dual_cursor_row(
+                    native, channel_key, ch, color, y_suffix, xlo, xhi, ax, bx,
+                )
+                if row is not None:
+                    dual.append(row)
+                extreme_points.extend(extrema)
+                continue
             m = (tf >= xlo) & (tf <= xhi)
             seg = sf[m]
             if not len(seg):
@@ -1105,6 +1294,7 @@ class CursorController(_CanvasBackref):
             parts = [f'<span style="color:#111827;">t={x:.4f}s</span>']
         channel_parts, rows = self._collect_single_cursor_payload(x)
         parts.extend(channel_parts)
+        self._sync_native_sample_markers(rows)
         self.cursor_info.emit(sep.join(parts))
         self.single_cursor_rows.emit(rows)
 

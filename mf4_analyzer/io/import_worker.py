@@ -10,7 +10,11 @@ import sys
 import time
 import traceback
 
-from .import_limits import ImportLimits, ImportResourceError, budget_context
+from .import_limits import (
+    MAX_RESOURCE_DETAIL_CHARS, MAX_RESOURCE_MESSAGE_CHARS, ImportLimits,
+    ImportResourceError, budget_context, envelope_for_known_resource,
+    output_transfer_envelope,
+)
 from .import_process import IMPORT_METHODS, _read_json, _runtime_identity, source_snapshot
 
 
@@ -185,9 +189,19 @@ def main(request_path):
     except Exception as exc:
         # This is the process boundary, not a per-channel recovery blanket.
         # Unexpected failures remain internal_error with their full traceback.
-        if (isinstance(exc, (ImportResourceError, ImportTransportLimitError, MemoryError))
-                or isinstance(exc, OSError) and exc.errno in (errno.ENOSPC, getattr(errno, "EDQUOT", -1))):
+        envelope = None
+        if isinstance(exc, ImportResourceError):
             kind = "resource_limit"
+            envelope = envelope_for_known_resource(exc, phase=operation)
+        elif isinstance(exc, ImportTransportLimitError):
+            kind = "resource_limit"
+            envelope = output_transfer_envelope(phase=operation or "transfer")
+        elif isinstance(exc, MemoryError):
+            kind = "resource_limit"
+            envelope = envelope_for_known_resource(exc, phase=operation)
+        elif isinstance(exc, OSError) and exc.errno in (errno.ENOSPC, getattr(errno, "EDQUOT", -1)):
+            kind = "resource_limit"
+            envelope = envelope_for_known_resource(exc, phase=operation)
         elif isinstance(exc, ImportError):
             kind = "dependency_error"
         elif isinstance(exc, TimeoutError):
@@ -196,8 +210,12 @@ def main(request_path):
             kind = "data_error"
         else:
             kind = "internal_error"
-        outcome.update(code=kind, message=str(exc)[:4000],
-                       detail=traceback.format_exc()[-16000:])
+        detail = traceback.format_exc()
+        if len(detail) > MAX_RESOURCE_DETAIL_CHARS:
+            detail = detail[-MAX_RESOURCE_DETAIL_CHARS:]
+        outcome.update(code=kind, message=str(exc)[:MAX_RESOURCE_MESSAGE_CHARS], detail=detail)
+        if kind == "resource_limit" and envelope is not None:
+            outcome["resource"] = envelope
         code = 1
     outcome["reader_runtime"] = _reader_runtime()
     try:

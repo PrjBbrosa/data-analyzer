@@ -45,7 +45,9 @@ def multirate_win(qapp, qtbot):
     fs_rpm = 1000.0
 
     t_sig = np.arange(int(dur * fs_sig)) / fs_sig
-    t_rpm = np.arange(int(dur * fs_rpm)) / fs_rpm
+    # The motor-speed axis must cover the signal. Samples past the last speed
+    # point are not filled by holding the endpoint.
+    t_rpm = np.linspace(0.0, t_sig[-1], int(dur * fs_rpm))
 
     # Motor speed ramps 600 -> 1800 rpm linearly over the second.
     rpm_lo = 600.0
@@ -82,8 +84,9 @@ def test_order_rpm_for_upsamples_motor_speed_to_signal_axis(multirate_win):
     assert rpm is not None, "multi-rate motor speed must align, not be dropped"
     assert len(rpm) == n
 
-    # Contract: linear interpolation of the 1 kHz ramp onto the 48 kHz axis,
-    # with np.interp's endpoint clamp past the last speed sample.
+    # Contract: linear interpolation inside the motor-speed coverage. The
+    # fixture keeps every signal sample inside that coverage, so this is not
+    # an endpoint hold.
     t_rpm = np.asarray(win.files["frpm"].time_array, dtype=float)
     rpm_t = win.files["frpm"].data["n_motor"].to_numpy(copy=False)
     expected = np.interp(t_sig, t_rpm, rpm_t)
@@ -151,6 +154,30 @@ def test_order_rpm_for_equal_length_unchanged(multirate_win):
     # And without t_sig (legacy call), identical result.
     rpm_legacy = win._order_rpm_for(("fsig", "n_same"), n)
     np.testing.assert_array_equal(rpm_legacy, expected)
+
+
+def test_order_rpm_for_does_not_extend_past_speed_coverage(multirate_win):
+    """A signal sample after the last motor-speed sample is not clamped."""
+    win = multirate_win
+    fd_rpm = win.files["frpm"]
+    t_rpm = np.asarray(fd_rpm.time_array, dtype=float)
+    t_sig = np.concatenate([t_rpm[:4], [t_rpm[-1] + 0.05]])
+    rpm = win._order_rpm_for(("frpm", "n_motor"), len(t_sig), t_sig=t_sig)
+    assert rpm is None
+
+
+def test_order_rpm_for_equal_length_shifted_time_does_not_reuse_raw(multirate_win):
+    """Same count and a different timestamp is not already synchronized."""
+    win = multirate_win
+    t_sig = np.linspace(0.01, 0.99, 64)
+    t_rpm = np.linspace(0.0, 1.0, 64)
+    rpm_samples = 600.0 + 1200.0 * t_rpm
+    shifted = pd.DataFrame({"time": t_rpm, "n_shift": rpm_samples})
+    _register_file(win, "fshift", shifted)
+    aligned = win._order_rpm_for(("fshift", "n_shift"), len(t_sig), t_sig=t_sig)
+    assert aligned is not None
+    np.testing.assert_allclose(aligned, 600.0 + 1200.0 * t_sig)
+    assert not np.allclose(aligned, rpm_samples)
 
 
 def test_order_rpm_for_nonmonotonic_motor_axis_skips(multirate_win):

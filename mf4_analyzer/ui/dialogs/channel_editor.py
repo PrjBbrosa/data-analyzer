@@ -10,6 +10,7 @@ from PyQt5.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
+    QFileDialog,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -28,7 +29,11 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import QEvent, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QPalette
 
-from ...io.channel_edit_log import REASON_TEXT, ChannelEditLog
+from ...io.channel_edit_log import (
+    REASON_TEXT,
+    ChannelEditLog,
+    evaluate_native_entry,
+)
 from ...signal.channel_recipe import (
     RecipeError,
     evaluate_derive,
@@ -634,6 +639,9 @@ class ChannelEditorDialog(QDialog):
         if not channels:
             QMessageBox.information(self, "导出", "请先勾选要导出的通道。")
             return
+        if self._is_native_file():
+            self._export_native_channels(channels)
+            return
         self.export_requested.emit(
             self.current_fid, channels,
             self.chk_export_time.isChecked(),
@@ -710,10 +718,26 @@ class ChannelEditorDialog(QDialog):
                 f"通道 {name} 已标记删除，请先创建派生通道，再删除源通道",
             )
             return True
-        if name not in self.fd.data.columns and name not in self.new_channels:
+        if not self._column_exists(name):
             QMessageBox.warning(self, "无法创建", "源通道不存在或参数越界")
             return True
         return False
+
+    def _is_native_file(self) -> bool:
+        return bool(self.fd is not None and getattr(self.fd, "is_native", False))
+
+    def _stored_name(self, name) -> bool:
+        """True only for a name that already belongs to the file, not a staged derive."""
+        if self._is_native_file():
+            return name in set(self.fd.native_store.public_names())
+        return name in self.fd.data.columns or name in self.fd.channels
+
+    def _column_exists(self, name) -> bool:
+        if name in self.new_channels:
+            return True
+        if self._is_native_file():
+            return name in set(self.fd.get_signal_channels())
+        return name in self.fd.data.columns
 
     def _drop_combo_names(self, names):
         drop = {str(name) for name in names}
@@ -749,8 +773,18 @@ class ChannelEditorDialog(QDialog):
             param = max(int(p), 3)
         name = self._unique_name(f"{_SINGLE_PREFIXES[op]}{src}")
         try:
-            entry = make_single(name, self._unit_of(src), fn, src, param)
-            values = evaluate_derive(entry, self.fd.time_array, self._channel_signal)
+            if self._is_native_file():
+                entry = make_single(
+                    name, self._unit_of(src), fn, src, param,
+                    axis="inherit", representation="physical",
+                    source_revision=self.fd.native_store.revision,
+                )
+                values, _time, _axis, _representation = evaluate_native_entry(
+                    self.fd, entry, staged=self.new_channels,
+                )
+            else:
+                entry = make_single(name, self._unit_of(src), fn, src, param)
+                values = evaluate_derive(entry, self.fd.time_array, self._channel_signal)
         except RecipeError as exc:
             QMessageBox.critical(self, "错误", _recipe_error_text(exc))
             return
@@ -806,12 +840,68 @@ class ChannelEditorDialog(QDialog):
         """Signal for a channel name, including ones staged in this session."""
         if name in self.new_channels:
             return np.asarray(self.new_channels[name][0], dtype=float)
+        if self._is_native_file():
+            from ...io.signal_access import read_signal
+            series = read_signal(self.fd, name, representation="physical")
+            return np.asarray(series.values, dtype=float)
         return self.fd.data[name].values.astype(float)
 
     def _unique_name(self, name):
-        while name in self.fd.data.columns or name in self.new_channels:
+        while self._column_exists(name):
             name += "_1"
         return name
+
+    def _staged_axis(self, name):
+        if not self._is_native_file():
+            return None
+        found = self._edit_log.active_derive(name)
+        if found is not None and found.axis and found.axis != "inherit":
+            return found.axis
+        if name in set(self.fd.native_store.public_names()):
+            return self.fd.native_store.channel(name).axis_id
+        return None
+
+    def _export_native_channels(self, channels):
+        """Original-sample export. A shared-time sheet is not offered here."""
+        from ...batch_output import NativeExportError, export_native_samples
+
+        fmt = self._export_format()
+        if fmt in ("wwt", "wwt_compact"):
+            QMessageBox.information(
+                self,
+                "无法导出 WWT",
+                "这条来源的通道各自保留时钟，不能写成一条 Zeit 表。"
+                "请改用原始长表或同轴分组。",
+            )
+            return
+        box = QMessageBox(self)
+        box.setWindowTitle("原始采样导出")
+        box.setText("选择原始采样的表格形状。不同时钟不会被补成一张测量横表。")
+        long_button = box.addButton("长表", QMessageBox.AcceptRole)
+        group_button = box.addButton("同轴分组", QMessageBox.AcceptRole)
+        box.addButton("取消", QMessageBox.RejectRole)
+        box.exec_()
+        clicked = box.clickedButton()
+        if clicked is long_button:
+            layout = "long"
+        elif clicked is group_button:
+            layout = "coaxial"
+        else:
+            return
+        path, _selected = QFileDialog.getSaveFileName(
+            self, "导出原始采样", "", "CSV (*.csv);;Excel (*.xlsx)",
+        )
+        if not path:
+            return
+        try:
+            result = export_native_samples(self.fd, path, layout=layout)
+        except NativeExportError as exc:
+            QMessageBox.warning(self, "无法导出", str(exc))
+            return
+        QMessageBox.information(
+            self, "导出完成",
+            "已写出原始采样：" + "、".join(item.name for item in result.paths),
+        )
 
     def _register_new(self, name, values, unit):
         self.new_channels[name] = (values, unit)
@@ -870,9 +960,17 @@ class ChannelEditorDialog(QDialog):
 
     def _expression_context(self):
         fd = self.fd
+        if fd is None:
+            data_id = None
+            revision = None
+        elif self._is_native_file():
+            data_id = id(fd.native_store)
+            revision = fd.native_store.revision
+        else:
+            data_id = id(fd.data)
+            revision = fd.time_axis_revision
         return (
-            self.current_fid, id(fd), id(fd.data) if fd is not None else None,
-            fd.time_axis_revision if fd is not None else None,
+            self.current_fid, id(fd) if fd is not None else None, data_id, revision,
             self.edit_expr.text(), self.combo_a.currentText(), self.combo_b.currentText(),
         )
 
@@ -900,15 +998,29 @@ class ChannelEditorDialog(QDialog):
                 raise ExpressionError("请先选择源文件")
             # Workers only see owned snapshots, never a live dataframe or
             # staged array that can disappear on a file change.
-            t = np.array(self.fd.time_array, copy=True)
+            if self._is_native_file():
+                axes = [
+                    self._staged_axis(name)
+                    for name in (self.combo_a.currentText(), self.combo_b.currentText())
+                    if name
+                ]
+                axes = [item for item in axes if item]
+                if len(set(axes)) != 1:
+                    raise ExpressionError("跨时钟：请指定目标轴、对齐方法和段。当前未应用")
+                axis = self.fd.native_store.axis(axes[0])
+                if len(axis.segments) > 1:
+                    raise ExpressionError("已知缺口不能跨接。请选择段后再计算")
+                t = np.array(axis.values, copy=True)
+            else:
+                t = np.array(self.fd.time_array, copy=True)
             channels = {}
             for key, name in (("A", self.combo_a.currentText()), ("B", self.combo_b.currentText())):
                 if key.lower() not in used:
                     continue
-                if name in self.removed_channels or (name not in self.fd.data.columns and name not in self.new_channels):
+                if name in self.removed_channels or not self._column_exists(name):
                     raise ExpressionError(f"通道{key} 不存在")
                 try:
-                    raw = self.new_channels[name][0] if name in self.new_channels else self.fd.data[name].values
+                    raw = self._channel_signal(name)
                     channels[key] = np.array(raw, copy=True)
                 except (TypeError, ValueError, OverflowError) as exc:
                     raise ExpressionError(f"通道{key} 必须是数值信号") from exc
@@ -967,14 +1079,22 @@ class ChannelEditorDialog(QDialog):
                 self.edit_name2.text().strip() or self._auto_expr_name(expr)
             )
             try:
-                entry = make_expression(
-                    name,
-                    "",
-                    expr,
-                    self.combo_a.currentText() if "a" in used else None,
-                    self.combo_b.currentText() if "b" in used else None,
-                )
-                values = evaluate_derive(entry, self.fd.time_array, self._channel_signal)
+                left = self.combo_a.currentText() if "a" in used else None
+                right = self.combo_b.currentText() if "b" in used else None
+                if self._is_native_file():
+                    entry = make_expression(
+                        name, "", expr, left, right,
+                        axis=self._staged_axis(left or "") or self._staged_axis(right or ""),
+                        method="direct",
+                        representation="physical",
+                        source_revision=self.fd.native_store.revision,
+                    )
+                    values, _time, _axis, _representation = evaluate_native_entry(
+                        self.fd, entry, staged=self.new_channels,
+                    )
+                else:
+                    entry = make_expression(name, "", expr, left, right)
+                    values = evaluate_derive(entry, self.fd.time_array, self._channel_signal)
             except RecipeError as exc:
                 self._expr_check_message = ("检查未通过", _recipe_error_text(exc), "error")
                 title, body, state = self._expr_check_message
@@ -1015,8 +1135,20 @@ class ChannelEditorDialog(QDialog):
         else:
             unit = ""
         try:
-            entry = make_dual(name, unit, _DUAL_FNS[op], ch_a, ch_b)
-            values = evaluate_derive(entry, self.fd.time_array, self._channel_signal)
+            if self._is_native_file():
+                entry = make_dual(
+                    name, unit, _DUAL_FNS[op], ch_a, ch_b,
+                    axis=self._staged_axis(ch_a) or self._staged_axis(ch_b),
+                    method="direct",
+                    representation="physical",
+                    source_revision=self.fd.native_store.revision,
+                )
+                values, _time, _axis, _representation = evaluate_native_entry(
+                    self.fd, entry, staged=self.new_channels,
+                )
+            else:
+                entry = make_dual(name, unit, _DUAL_FNS[op], ch_a, ch_b)
+                values = evaluate_derive(entry, self.fd.time_array, self._channel_signal)
         except RecipeError as exc:
             QMessageBox.critical(self, "错误", _recipe_error_text(exc))
             return
@@ -1039,10 +1171,7 @@ class ChannelEditorDialog(QDialog):
             QMessageBox.No,
         ) != QMessageBox.Yes:
             return
-        on_file = [
-            name for name in sel
-            if name in self.fd.data.columns or name in self.fd.channels
-        ]
+        on_file = [name for name in sel if self._stored_name(name)]
         self._edit_log.record_remove(sel)
         self.removed_channels.update(on_file)
         for name in sel:

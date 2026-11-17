@@ -24,6 +24,8 @@ from .time_xaxis import (
     EXACT_SOURCE,
     PER_SOURCE_NAME,
     CustomXAxisSpec,
+    _times_prove_relationship,
+    make_native_query,
     resolve_custom_xaxis,
 )
 
@@ -652,8 +654,21 @@ def resolve_time_data_ref(
     if owner is None:
         return None, TimePlotIssue("missing_owner", ref.fid)
     if ref.kind == _CHANNEL:
-        data = getattr(owner, "data", None)
         channel = ref.channel
+        if getattr(owner, "native_store", None) is not None:
+            from ..io.file_data import SourceClosedError
+            from ..io.signal_access import SignalAccessError, read_signal
+
+            try:
+                values = _as_1d(read_signal(owner, channel).values)
+            except (SignalAccessError, SourceClosedError, TypeError, ValueError):
+                values = None
+            if values is None:
+                return None, TimePlotIssue(
+                    "missing_channel", f"{ref.fid}:{channel}"
+                )
+            return values, None
+        data = getattr(owner, "data", None)
         if data is None or channel is None or channel not in getattr(data, "columns", ()):
             return None, TimePlotIssue(
                 "missing_channel", f"{ref.fid}:{channel}"
@@ -694,6 +709,41 @@ def resolve_time_curve_binding(
             f"{int(x_values.shape[0])},{int(y_values.shape[0])}",
             binding.binding_id,
         )
+    y_owner = files.get(binding.y_ref.fid)
+    x_owner = files.get(binding.x_ref.fid)
+    if (
+        binding.x_ref.kind == _CHANNEL
+        and binding.y_ref.kind == _CHANNEL
+        and (
+            getattr(y_owner, "native_store", None) is not None
+            or getattr(x_owner, "native_store", None) is not None
+        )
+    ):
+        from ..io.file_data import SourceClosedError
+        from ..io.signal_access import SignalAccessError, read_signal
+
+        try:
+            y_series = read_signal(y_owner, binding.y_ref.channel)
+            x_series = read_signal(x_owner, binding.x_ref.channel)
+        except (SignalAccessError, SourceClosedError, TypeError, ValueError):
+            return None, None, TimePlotIssue(
+                "time_relationship_required",
+                "点数相同不能证明同步，需要显式时间关系",
+                binding.binding_id,
+            )
+        if not _times_prove_relationship(
+            y_series,
+            x_series,
+            y_owner,
+            x_owner,
+            binding.y_ref.channel,
+            binding.x_ref.channel,
+        ):
+            return None, None, TimePlotIssue(
+                "time_relationship_required",
+                "点数相同不能证明同步，需要显式时间关系",
+                binding.binding_id,
+            )
     return x_values, y_values, None
 
 
@@ -811,4 +861,68 @@ def bound_time_plot_rows(
         issues=issues,
         claimed_channel_keys=claimed,
         successful_channel_keys=successful,
+    )
+
+
+def native_plot_rows(file_data, channels, *, fid, colors=None):
+    """One plot row per native channel. Y/X arrays are ``read_signal`` views."""
+    from ..io.signal_access import read_signal
+
+    rows = []
+    palette = "#1769e0"
+    for channel in channels:
+        series = read_signal(file_data, channel)
+        query = make_native_query(file_data, series)
+        color = palette
+        if colors is not None:
+            color = str(colors.get(channel) or palette)
+        name = channel
+        prefix = getattr(file_data, "get_prefixed_channel", None)
+        if callable(prefix):
+            name = str(prefix(channel))
+        meta = {
+            "appearance_ref": {
+                "kind": "channel",
+                "fid": str(fid),
+                "channel": str(channel),
+            },
+            "native_query": query,
+            "point_marker": query.point_marker,
+        }
+        rows.append((
+            name,
+            True,
+            series.time,
+            series.values,
+            color,
+            str(series.unit or ""),
+            str(fid),
+            meta,
+        ))
+    return rows
+
+
+def load_native_checked_curve(file_data, channel):
+    """Read one checked native channel. ``None`` means the channel cannot be drawn."""
+    from ..io.file_data import SourceClosedError
+    from ..io.signal_access import SignalAccessError, read_signal
+
+    try:
+        series = read_signal(file_data, channel)
+    except (SignalAccessError, SourceClosedError, TypeError, ValueError):
+        return None
+    from types import SimpleNamespace
+
+    sampling = series.sampling
+    fs_hz = None
+    if sampling.status == "known" and sampling.fs_hz:
+        fs_hz = float(sampling.fs_hz)
+    query = make_native_query(file_data, series)
+    return SimpleNamespace(
+        time=series.time,
+        values=series.values,
+        unit=str(series.unit or ""),
+        fs_hz=fs_hz,
+        query=query,
+        point_marker=query.point_marker,
     )

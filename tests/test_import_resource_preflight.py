@@ -267,6 +267,66 @@ def test_mat_supported_variables_keep_values_and_skipped_order(tmp_path, format_
     assert group["source_metadata"]["skipped_vars"] == ["complex", "text", "scalar"]
 
 
+def test_shared_axis_refusal_keeps_structured_facts_at_fixed_budget():
+    """Anonymous stand-in for the reviewed ledger. The fixed budget is the injection, not a raised cap."""
+    from types import SimpleNamespace
+    from asammdf.blocks import v4_constants as c
+    from mf4_analyzer.io.import_limits import (
+        ImportBudget, ImportLimits, ImportResourceError, resource_technical_detail,
+        resource_user_text,
+    )
+    from mf4_analyzer.io.mdf_reader import _reserve_shared_output
+
+    memory = 498_988_944
+    record = 36_601_314
+    catalog = 2_197_504
+    cycles = 471_652
+    shared = cycles * 53 * 8 * 3
+    assert shared == 599_941_344
+    requested = record + catalog + shared
+    assert requested == 638_740_162
+
+    def channel(*, master):
+        return SimpleNamespace(
+            data_type=0,
+            channel_type=c.CHANNEL_TYPE_MASTER if master else 0,
+            sync_type=c.SYNC_TYPE_TIME if master else 0,
+        )
+
+    group = SimpleNamespace(
+        channels=[channel(master=True), *[channel(master=False) for _ in range(52)]],
+        channel_dependencies=[None] * 53,
+        channel_group=SimpleNamespace(cycles_nr=cycles),
+    )
+    budget = ImportBudget(ImportLimits(max_memory_bytes=memory))
+    budget.reserve(record, label="MDF record buffers")
+    budget.reserve(catalog, label="MDF channel metadata/array expansion")
+    with pytest.raises(ImportResourceError) as caught:
+        _reserve_shared_output(SimpleNamespace(groups=[group]), budget)
+    error = caught.value
+    assert budget.used_bytes == record + catalog
+    assert error.requested_bytes == requested
+    assert error.limit_bytes == memory
+    assert error.resource_kind == "memory_estimate"
+    assert error.unit == "bytes"
+    assert error.requested == requested
+    assert error.limit == memory
+    assert error.phase == "mdf_shared_axis"
+    assert error.estimate_basis == "cumulative_admission"
+    amounts = [item.amount for item in error.components]
+    assert amounts == [record, catalog, shared]
+    text = resource_user_text(error)
+    assert "约609 MiB" in text
+    assert "约476 MiB" in text
+    assert "MDF shared-axis conversion/alignment/frame" not in text
+    assert "已分配" not in text
+    assert "释放" not in text
+    detail = resource_technical_detail(error)
+    assert "599,941,344" in detail
+    assert "498,988,944" in detail
+    assert "MDF shared-axis conversion/alignment/frame" in detail
+
+
 def test_mat_channel_budget_is_cumulative_before_loadmat(tmp_path, monkeypatch):
     from scipy import io
     from mf4_analyzer.io.import_limits import ImportResourceError, budget_context

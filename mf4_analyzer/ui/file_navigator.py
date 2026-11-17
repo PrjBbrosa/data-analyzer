@@ -175,6 +175,15 @@ class _FileRow(QFrame):
         self._rows_key = key
 
     def _refresh_meta(self):
+        if any(getattr(fd, "is_native", False) for fd in self._fds):
+            from .time_xaxis import native_catalog_line
+
+            self._lbl_meta.setText(" · ".join(
+                native_catalog_line(fd) if getattr(fd, "is_native", False)
+                else f"{len(fd.data)} 行"
+                for fd in self._fds
+            ))
+            return
         if len(self._fids) == 1:
             fd = self._fds[0]
             dur = fd.time_array[-1] if fd.time_array is not None and len(fd.time_array) else 0

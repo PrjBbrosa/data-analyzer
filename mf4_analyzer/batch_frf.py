@@ -182,6 +182,13 @@ def _inventory_facts(value: object) -> tuple[object, str, frozenset[str] | None]
     return source_id, group_identity, channels
 
 
+def alignment_fact(prepared) -> dict:
+    """Pair alignment is its own fact. It does not resample either channel."""
+    facts = dict(getattr(prepared, "alignment_facts", None) or {})
+    facts["resampled"] = False
+    return facts
+
+
 def resolve_frf_tasks(
     pair_rules: Iterable[FrfPairRule | Mapping[str, object]],
     source_inventories: Iterable[object],

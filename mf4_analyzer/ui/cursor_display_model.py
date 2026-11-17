@@ -48,6 +48,11 @@ class CursorDisplayChannel:
     avg_value: float | None = None
     branches: tuple[CursorDisplayBranch, ...] = ()
     diagnostic: str = ""
+    sample_time: float | None = None
+    sample_delta_s: float | None = None
+    record_indices: tuple = ()
+    read_mode: str = ""
+    content_revision: str = ""
     # Display-only formatted number texts without the unit (R2). Empty when
     # the value is missing or the caller did not provide the display layer.
     min_text: str = ""

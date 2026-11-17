@@ -270,3 +270,47 @@ def test_replay_import_keeps_gui_live_and_parent_close_cancels(qtbot, monkeypatc
     qtbot.waitUntil(lambda: not parent.isVisible())
     assert tab.source_path is None
     assert tab.state == 'idle'
+
+
+def test_replay_resource_failure_uses_the_shared_copy(qtbot, monkeypatch):
+    from mf4_analyzer.io.import_limits import parse_resource_envelope, resource_user_text
+    from mf4_analyzer.io.import_process import ImportProcessError
+
+    label = "MDF shared-axis conversion/alignment/frame"
+    exc = ImportProcessError(
+        "resource_limit",
+        "导入资源超过预算",
+        stage="admission",
+        detail="worker detail",
+        resource=parse_resource_envelope({
+            "schema": 1,
+            "resource_kind": "memory_estimate",
+            "unit": "bytes",
+            "requested": 638_976_000,
+            "limit": 498_988_944,
+            "phase": "admission",
+            "estimate_basis": "test",
+            "label": label,
+        }),
+        request_id="req-replay-1",
+    )
+    tab = ReplayTab()
+    qtbot.addWidget(tab)
+    shown = []
+    monkeypatch.setattr(
+        "mf4_analyzer.acquisition_ui.replay_tab.QMessageBox.critical",
+        lambda *args: shown.append(args),
+    )
+    tab._on_import_done("failed", exc)
+    assert shown
+    assert shown[-1][1] == "无法加载回放文件"
+    assert shown[-1][2] == resource_user_text(exc)
+    assert label not in shown[-1][2]
+    shown.clear()
+    tab._on_import_done("failed", RuntimeError("plain boom"))
+    assert "plain boom" in shown[-1][2]
+    source = Path(__file__).resolve().parents[2].joinpath(
+        "mf4_analyzer", "acquisition_ui", "replay_tab.py",
+    ).read_text(encoding="utf-8")
+    assert "accept_resource_recheck" not in source
+    assert "worker_request_id" not in source

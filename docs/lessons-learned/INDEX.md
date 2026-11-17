@@ -313,6 +313,7 @@ lesson by default.
 | [Import safety needs numeric oracles and allocation admission](import-native-safety-needs-numeric-oracles-and-admission.md) | Changing binary readers, array expansion, native dependencies, import isolation or resource limits. | See lesson |
 | [Application-owned supervisors need weak host references](application-owned-supervisors-need-weak-host-references.md) | A Qt task supervisor outlives its window or tab so a running QThread can finish safely. | See lesson |
 | [Windows Build Preflight Must Resolve Repository Imports](windows-build-preflight-independent-of-cwd.md) | Adding Python import probes to Windows BAT/PowerShell builders. | See lesson |
+| [Dialog Size Guards Must Respect Window Purpose](dialog-size-guards-must-respect-window-purpose.md) | Changing shared top-level window minimum sizes, degenerate-plan rejection, or native frame correction. | See lesson |
 
 ## Selection Rules
 

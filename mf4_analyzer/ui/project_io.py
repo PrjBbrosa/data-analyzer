@@ -14,7 +14,9 @@ Field inventory
 Stable top-level keys (exactly :data:`PROJECT_PAYLOAD_KEYS`):
 
 * ``schema_version`` — codec version. 4 is the default write version; 5 is
-  written only when a file row carries channel-edit recipes. Not user content.
+  written only when a file row carries channel-edit recipes. 6 is written
+  only when a row carries a native sampling policy, physical key, alignment
+  intent, or suspended channel. Ordinary projects stay 4 or 5. Not user content.
 * ``active_file`` — navigator active fid.
 * ``current_mode`` — persisted chart mode (``time`` / analysis sections;
   UltraView is not a source workspace and falls back to ``time`` on load).
@@ -83,7 +85,19 @@ from .view_state import (
 
 SCHEMA_VERSION = 4
 CHANNEL_EDIT_SCHEMA_VERSION = 5
-SUPPORTED_SCHEMA_VERSIONS = {1, 2, 3, 4, 5}
+NATIVE_POLICY_SCHEMA_VERSION = 6
+SUPPORTED_SCHEMA_VERSIONS = {1, 2, 3, 4, 5, 6}
+_PERSISTED_RUNTIME_KEYS = frozenset({
+    "samples",
+    "sample_cache",
+    "cache",
+    "process_token",
+    "temp_path",
+    "diagnostic_snapshot",
+    "render_cache",
+    "envelope_cache",
+    "preview_pixels",
+})
 _SOURCE_MODES = frozenset({"time", "fft", "fft_time", "frf", "order"})
 
 # Top-level keys of the object ``save_project_to_json`` writes. List order
@@ -230,6 +244,10 @@ class ProjectFileRef:
     # single-source file (``root``) and for projects saved before the
     # field existed. Older readers ignore the key.
     source_group: str = ""
+    sampling_policy: str = ""
+    physical_keys: list = field(default_factory=list)
+    alignment_intents: list = field(default_factory=list)
+    suspended_channels: list = field(default_factory=list)
 
 
 @dataclass
@@ -243,6 +261,29 @@ class ProjectDocument:
     analysis_views: dict = field(default_factory=dict)
     filter: dict | None = None
     ultraview: dict | None = None
+    # Load-time mark for schema 1–5. Not written back, so a resave stays 4 or 5.
+    recovery: str = ""
+
+
+def _has_native_policy(doc: ProjectDocument) -> bool:
+    for row in doc.files:
+        if getattr(row, "sampling_policy", "") == "native":
+            return True
+        if getattr(row, "physical_keys", None):
+            return True
+        if getattr(row, "alignment_intents", None):
+            return True
+        if getattr(row, "suspended_channels", None):
+            return True
+    return False
+
+
+def _payload_schema(doc: ProjectDocument) -> int:
+    if _has_native_policy(doc):
+        return NATIVE_POLICY_SCHEMA_VERSION
+    if any(getattr(row, "channel_edits", None) for row in doc.files):
+        return CHANNEL_EDIT_SCHEMA_VERSION
+    return SCHEMA_VERSION
 
 
 def project_document_to_payload(doc: ProjectDocument) -> dict:
@@ -251,14 +292,12 @@ def project_document_to_payload(doc: ProjectDocument) -> dict:
     This is the canonical persistable snapshot. Dirty digest and close/replace
     review must hash this object, not a second hand-built mapping.
     """
-    has_channel_edits = any(getattr(row, "channel_edits", None) for row in doc.files)
+    schema = _payload_schema(doc)
     return {
-        "schema_version": (
-            CHANNEL_EDIT_SCHEMA_VERSION if has_channel_edits else SCHEMA_VERSION
-        ),
+        "schema_version": schema,
         "active_file": doc.active_file,
         "current_mode": doc.current_mode,
-        "files": [_file_ref_to_json(r) for r in doc.files],
+        "files": [_file_ref_to_json(r, schema) for r in doc.files],
         "views": [_retire_view_display_fields(view) for view in doc.views],
         "view_manager": doc.view_manager,
         "analysis_views": doc.analysis_views,
@@ -267,7 +306,7 @@ def project_document_to_payload(doc: ProjectDocument) -> dict:
     }
 
 
-def _file_ref_to_json(ref: ProjectFileRef) -> dict:
+def _file_ref_to_json(ref: ProjectFileRef, schema: int = SCHEMA_VERSION) -> dict:
     payload = {
         "fid": ref.fid,
         "path_abs": ref.path_abs,
@@ -293,6 +332,15 @@ def _file_ref_to_json(ref: ProjectFileRef) -> dict:
     edits = getattr(ref, "channel_edits", None)
     if edits:
         payload["channel_edits"] = list(edits)
+    if schema >= NATIVE_POLICY_SCHEMA_VERSION:
+        policy = str(getattr(ref, "sampling_policy", "") or "")
+        payload["sampling_policy"] = policy if policy in {"native", "legacy"} else "legacy"
+        payload["physical_keys"] = list(getattr(ref, "physical_keys", None) or [])
+        payload["alignment_intents"] = list(getattr(ref, "alignment_intents", None) or [])
+        payload["suspended_channels"] = [
+            str(name) for name in (getattr(ref, "suspended_channels", None) or [])
+            if str(name).strip()
+        ]
     return payload
 
 
@@ -371,6 +419,8 @@ def load_project_from_json(path) -> ProjectDocument:
         version = 1
     if version not in SUPPORTED_SCHEMA_VERSIONS:
         raise UnsupportedProjectVersion(version)
+    if version >= NATIVE_POLICY_SCHEMA_VERSION:
+        _reject_persisted_runtime(raw)
 
     files = [
         ProjectFileRef(
@@ -402,6 +452,10 @@ def load_project_from_json(path) -> ProjectDocument:
                 else []
             ),
             source_group=str(f.get("source_group") or "").strip(),
+            sampling_policy=_sampling_policy(f, version),
+            physical_keys=_identity_rows(f.get("physical_keys"), version),
+            alignment_intents=_dict_rows(f.get("alignment_intents"), version),
+            suspended_channels=_name_rows(f.get("suspended_channels"), version),
         )
         for f in raw.get("files", [])
     ]
@@ -429,6 +483,7 @@ def load_project_from_json(path) -> ProjectDocument:
         analysis_views=dict(raw.get("analysis_views", {})),
         filter=legacy_filter,
         ultraview=uv_payload,
+        recovery="legacy_shared_axis" if version < NATIVE_POLICY_SCHEMA_VERSION else "",
     )
 
 
@@ -938,3 +993,314 @@ def _dropped_pin_identities(raw, fid_map: dict) -> list[tuple[object, object]]:
                 if fid not in mapping:
                     _emit(fid, channel)
     return dropped
+
+
+class UpgradeCancelled(RuntimeError):
+    """The user left the native-sampling upgrade before it was applied."""
+
+
+class UpgradeRefused(ValueError):
+    """An upgrade save would overwrite the original project or a source file."""
+
+
+def legacy_shared_axis_notice(doc: ProjectDocument) -> str | None:
+    """Text for a project restored with the old shared-axis policy."""
+    if getattr(doc, "recovery", "") != "legacy_shared_axis":
+        return None
+    return "该工程按公共轴对齐恢复，不是原生采样。"
+
+
+def _reject_persisted_runtime(value) -> None:
+    if isinstance(value, Mapping):
+        found = sorted(_PERSISTED_RUNTIME_KEYS.intersection(value))
+        if found:
+            raise ValueError(
+                "项目不能保存样本或缓存: " + ", ".join(found)
+            )
+        for item in value.values():
+            _reject_persisted_runtime(item)
+    elif isinstance(value, list):
+        for item in value:
+            if isinstance(item, (Mapping, list)):
+                _reject_persisted_runtime(item)
+
+
+def _sampling_policy(row, version) -> str:
+    if version < NATIVE_POLICY_SCHEMA_VERSION:
+        return ""
+    policy = row.get("sampling_policy")
+    if policy not in {"native", "legacy"}:
+        raise ValueError("schema 6 文件行必须写明 sampling_policy")
+    return str(policy)
+
+
+def _identity_rows(raw, version) -> list:
+    if version < NATIVE_POLICY_SCHEMA_VERSION or not raw:
+        return []
+    if not isinstance(raw, list):
+        raise ValueError("physical_keys 必须是列表")
+    rows = []
+    for item in raw:
+        if not isinstance(item, Mapping) or "token" not in item:
+            raise ValueError("物理键缺少 token")
+        rows.append({
+            "token": str(item["token"]),
+            "group": int(item.get("group", 0)),
+            "index": int(item.get("index", 0)),
+            "parent": list(item.get("parent") or []),
+            "coordinates": list(item.get("coordinates") or []),
+        })
+    return rows
+
+
+def _dict_rows(raw, version) -> list:
+    if version < NATIVE_POLICY_SCHEMA_VERSION or not raw:
+        return []
+    if not isinstance(raw, list):
+        raise ValueError("alignment_intents 必须是列表")
+    return [dict(item) for item in raw if isinstance(item, Mapping)]
+
+
+def _name_rows(raw, version) -> list:
+    if version < NATIVE_POLICY_SCHEMA_VERSION or not raw:
+        return []
+    if isinstance(raw, str) or not isinstance(raw, list):
+        raise ValueError("suspended_channels 必须是列表")
+    return [str(name) for name in raw if str(name).strip()]
+
+
+def _strip_runtime(value):
+    if isinstance(value, Mapping):
+        return {
+            str(key): _strip_runtime(item)
+            for key, item in value.items()
+            if key not in PROJECT_RUNTIME_ONLY_KEYS and key not in _PERSISTED_RUNTIME_KEYS
+        }
+    if isinstance(value, list):
+        return [_strip_runtime(item) for item in value]
+    return value
+
+
+def _derived_names(edits) -> set[str]:
+    names = set()
+    for item in edits or []:
+        if isinstance(item, Mapping) and item.get("op") == "derive":
+            name = item.get("name")
+            if isinstance(name, str) and name.strip():
+                names.add(name.strip())
+    return names
+
+
+def _upgrade_formula(item) -> dict:
+    from ..signal.channel_recipe import DeriveEntry, RecipeError, entry_from_dict
+
+    try:
+        entry = entry_from_dict(item)
+    except RecipeError:
+        return {"op": "derive", "name": "", "status": "unapplied", "apply_status": "unapplied"}
+    if not isinstance(entry, DeriveEntry):
+        return entry.to_dict()
+    if entry.kind == "single":
+        upgraded = replace(
+            entry,
+            axis=entry.axis or "inherit",
+            representation=entry.representation or "physical",
+            apply_status="derived_intent",
+        )
+    elif entry.axis and entry.method and entry.representation and entry.segment is not None:
+        upgraded = replace(entry, apply_status="derived_intent")
+    else:
+        upgraded = replace(entry, apply_status="unapplied")
+    return upgraded.to_dict()
+
+
+def _fs_override(ref: ProjectFileRef):
+    source = str(getattr(ref, "time_source", "") or "")
+    provenance = getattr(ref, "time_axis_provenance", None)
+    if source not in {"manual", "generated"} and not provenance:
+        return None
+    return {
+        "kind": "legacy_fs_reinterpret",
+        "status": "unapplied",
+        "fs_hz": float(ref.fs),
+        "time_source": source,
+        "covers_other_channels": False,
+        "note": "指定 Fs 重解释时间，不覆盖原轴",
+    }
+
+
+def _identity_catalog(identities, fid) -> dict:
+    catalog = {}
+    for item in (identities or {}).get(fid, ()) or ():
+        if isinstance(item, Mapping):
+            token = item.get("token")
+            row = item
+        else:
+            token = getattr(item, "token", None)
+            row = {
+                "token": token,
+                "group": getattr(item, "group", 0),
+                "index": getattr(item, "index", 0),
+                "parent": list(getattr(item, "parent", ()) or ()),
+                "coordinates": list(getattr(item, "coordinates", ()) or ()),
+            }
+        if token:
+            catalog[str(token)] = row
+    return catalog
+
+
+def _explicit_bindings(bindings) -> dict:
+    mapped = {}
+    for key, token in (bindings or {}).items():
+        if not isinstance(key, tuple) or len(key) != 2:
+            continue
+        mapped[(str(key[0]), str(key[1]))] = str(token)
+    return mapped
+
+
+@dataclass
+class NativeUpgradePreview:
+    affected_channels: tuple
+    ranges: tuple
+    formulas: tuple
+    fs_overrides: tuple
+    unresolved: tuple
+    notices: tuple
+    can_apply: bool
+
+
+def _upgrade_plan(doc: ProjectDocument, identities, bindings=None):
+    """Pure plan. Does not mutate ``doc`` or any file."""
+    chosen = _explicit_bindings(bindings)
+    formulas = []
+    overrides = []
+    unresolved = []
+    affected = []
+    files = []
+    for ref in doc.files:
+        catalog = _identity_catalog(identities, ref.fid)
+        derived = _derived_names(ref.channel_edits)
+        names = [
+            str(name).strip()
+            for name in (ref.channel_order or [])
+            if str(name).strip() and str(name).strip() not in derived
+        ]
+        physical = []
+        suspended = []
+        saved_tokens = {
+            str(item.get("token"))
+            for item in (getattr(ref, "physical_keys", None) or [])
+            if isinstance(item, Mapping) and item.get("token")
+        }
+        for token in saved_tokens:
+            row = catalog.get(token)
+            if row is None:
+                continue
+            physical.append({
+                "token": token,
+                "group": int(row.get("group", 0)),
+                "index": int(row.get("index", 0)),
+                "parent": list(row.get("parent") or []),
+                "coordinates": list(row.get("coordinates") or []),
+            })
+        bound_tokens = {item["token"] for item in physical}
+        for name in names:
+            token = chosen.get((str(ref.fid), name))
+            if token and token in catalog and token not in bound_tokens:
+                row = catalog[token]
+                physical.append({
+                    "token": token,
+                    "group": int(row.get("group", 0)),
+                    "index": int(row.get("index", 0)),
+                    "parent": list(row.get("parent") or []),
+                    "coordinates": list(row.get("coordinates") or []),
+                })
+                bound_tokens.add(token)
+                affected.append(name)
+                continue
+            if token and token in bound_tokens:
+                affected.append(name)
+                continue
+            suspended.append(name)
+            unresolved.append(name)
+            affected.append(name)
+        upgraded_edits = [_upgrade_formula(item) for item in (ref.channel_edits or [])]
+        for item in upgraded_edits:
+            if item.get("op") != "derive":
+                continue
+            shown = dict(item)
+            shown["status"] = item.get("apply_status")
+            formulas.append(shown)
+        override = _fs_override(ref)
+        intents = [dict(item) for item in (getattr(ref, "alignment_intents", None) or [])]
+        if override is not None:
+            overrides.append(override)
+            intents.append(dict(override))
+        files.append((ref, physical, intents, suspended, upgraded_edits))
+    ranges = []
+    for view in doc.views or []:
+        if isinstance(view, Mapping) and "xlim" in view:
+            ranges.append({"where": "time", "xlim": view.get("xlim")})
+    for section, block in (doc.analysis_views or {}).items():
+        for view in (block or {}).get("views", []) or []:
+            if isinstance(view, Mapping) and "xlim" in view:
+                ranges.append({"where": str(section), "xlim": view.get("xlim")})
+    preview = NativeUpgradePreview(
+        affected_channels=tuple(affected),
+        ranges=tuple(ranges),
+        formulas=tuple(formulas),
+        fs_overrides=tuple(overrides),
+        unresolved=tuple(unresolved),
+        notices=(
+            "旧工程按公共轴对齐恢复。升级不按显示名猜测通道，未确认的通道保持悬挂。",
+            "指定采样率和已有公式变成派生意图或未应用状态，依赖结果需要重新计算。",
+        ),
+        can_apply=True,
+    )
+    return preview, files
+
+
+def preview_native_upgrade(doc: ProjectDocument, identities, bindings=None) -> NativeUpgradePreview:
+    """Describe an upgrade. Does not mutate the document or write a file."""
+    preview, _files = _upgrade_plan(doc, identities, bindings)
+    return preview
+
+
+def apply_native_upgrade(doc: ProjectDocument, identities, *, accept: bool, bindings=None) -> ProjectDocument:
+    """Return a new native-policy document. ``accept=False`` cancels."""
+    if not accept:
+        raise UpgradeCancelled("已取消升级到原生采样")
+    _preview, planned = _upgrade_plan(doc, identities, bindings)
+    files = []
+    for ref, physical, intents, suspended, edits in planned:
+        files.append(replace(
+            ref,
+            sampling_policy="native",
+            physical_keys=physical,
+            alignment_intents=intents,
+            suspended_channels=suspended,
+            channel_edits=edits,
+        ))
+    return ProjectDocument(
+        active_file=doc.active_file,
+        current_mode=doc.current_mode,
+        files=files,
+        views=_strip_runtime(doc.views),
+        view_manager=_strip_runtime(doc.view_manager),
+        analysis_views=_strip_runtime(doc.analysis_views),
+        filter=doc.filter,
+        ultraview=_strip_runtime(doc.ultraview) if doc.ultraview is not None else None,
+        recovery="",
+    )
+
+
+def save_upgraded_project(doc: ProjectDocument, dest, *, source_project, source_files=()) -> None:
+    """Write an upgraded project somewhere that is not the original or a source."""
+    dest_path = Path(dest).resolve()
+    source_path = Path(source_project).resolve()
+    if dest_path == source_path:
+        raise UpgradeRefused("升级不能覆盖原项目")
+    for item in source_files or ():
+        if Path(item).resolve() == dest_path:
+            raise UpgradeRefused("升级不能覆盖源文件")
+    save_project_to_json(doc, dest_path)

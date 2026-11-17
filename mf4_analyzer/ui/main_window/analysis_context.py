@@ -257,6 +257,14 @@ class AnalysisContext:
         fd = files.get(key[0])
         if fd is None:
             return None
+        if getattr(fd, "is_native", False):
+            from ...io.file_data import SourceClosedError
+            from ...io.signal_access import SignalAccessError, read_signal
+
+            try:
+                return read_signal(fd, key[1]).time
+            except (SignalAccessError, SourceClosedError, TypeError):
+                return None
         return getattr(fd, "time_array", None)
 
     def _source_bounds_from_files(self, section, view_id, pane_index):

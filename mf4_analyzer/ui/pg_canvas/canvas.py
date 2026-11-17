@@ -426,6 +426,10 @@ class TimeDomainCanvasPG(QWidget):
         # composite (fid, name) identity as _channel_lines so the two iterate
         # in lock-step and never collide across same-named files.
         self.channel_data = _ChannelKeyDict()
+        # Native cursor/stats read these full series. The plot item keeps the
+        # envelope. Cleared with the chart so a closed source cannot be written
+        # by a late frame.
+        self._native_queries = {}
         # Raw X extents are immutable for one render generation.  The HDF
         # loader deliberately shares one time ndarray across every channel in
         # a raster, so key the finite-bounds scan by the array fingerprint and
@@ -908,6 +912,10 @@ class TimeDomainCanvasPG(QWidget):
                 name, visible, t, sig, color, unit = row[:6]
                 data_id = None
                 meta = None
+            if meta and meta.get("native_query") is not None:
+                self._native_queries[
+                    _view_state_channel_key(data_id, name)
+                ] = meta["native_query"]
             if meta and meta.get("placeholder"):
                 layout_entries.append((
                     "placeholder",
@@ -3504,6 +3512,7 @@ class TimeDomainCanvasPG(QWidget):
         self._channel_lines = _ChannelKeyDict()
         self._channel_view_state_lines = {}
         self.channel_data = _ChannelKeyDict()
+        self._native_queries = {}
         self._invalidate_raw_x_bounds()
         self._channel_data_id = _ChannelKeyDict()
         self._companion_names = set()
@@ -3773,6 +3782,20 @@ class TimeDomainCanvasPG(QWidget):
             # Display companions (filter overlays) are display-only; never
             # report stats for them — stats mirror acquired channels only.
             if ck in companion_names:
+                continue
+            native = (getattr(self, "_native_queries", None) or {}).get(ck)
+            if native is not None:
+                if native.is_closed():
+                    continue
+                from mf4_analyzer.ui.time_xaxis import native_sample_statistics
+
+                row = native_sample_statistics(
+                    native.series, time_range,
+                )
+                row["unit"] = unit or row.get("unit") or ""
+                row["display_label"] = name
+                if row.get("valid_count"):
+                    stats.set_with_label(ck, name, row)
                 continue
             if time_range is not None:
                 lo, hi = time_range

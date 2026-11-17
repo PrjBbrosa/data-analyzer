@@ -123,6 +123,9 @@ class FFTTimeMixin:
             'weighting': str(p.get('weighting', 'None')),
             'nfft_facts_signature': p.get('nfft_facts_signature'),
         }
+        for name in ('prepare_method', 'prepare_policy'):
+            if p.get(name) not in (None, ''):
+                params[name] = p.get(name)
         return make_fft_time_analysis_key(
             self.analysis_caches['fft_time'].make_key,
             fid,
@@ -168,15 +171,25 @@ class FFTTimeMixin:
             compute_time_range = rng
         else:
             compute_time_range = (float(t[0]), float(t[-1]))
-        from ...analysis_time_axis import prepare_analysis_time_axis
-        try:
-            _axis, fs, _facts = prepare_analysis_time_axis(
-                t, float(getattr(_fd, 'fs', p['fs'])),
-                materialize=False,
+        if getattr(_fd, "is_native", False):
+            from ...analysis_signal_prepare import load_native_channel
+            prepared = load_native_channel(_fd, ch, rng)
+            if prepared.status != "ready" or prepared.source_fs is None:
+                return None
+            fs = prepared.source_fs
+            p = dict(
+                p, fs=fs, prepare_method=prepared.method, prepare_policy="native",
             )
-        except ValueError:
-            return None
-        p = dict(p, fs=fs)
+        else:
+            from ...analysis_time_axis import prepare_analysis_time_axis
+            try:
+                _axis, fs, _facts = prepare_analysis_time_axis(
+                    t, float(getattr(_fd, 'fs', p['fs'])),
+                    materialize=False,
+                )
+            except ValueError:
+                return None
+            p = dict(p, fs=fs)
         return (
             self._resolve_fft_time_effective_params(p, len(sig)),
             compute_time_range,
@@ -235,6 +248,12 @@ class FFTTimeMixin:
         if fid not in self.files:
             return None, None, None, None, None
         fd = self.files[fid]
+        if getattr(fd, "is_native", False):
+            from ...analysis_signal_prepare import load_native_channel
+            prepared = load_native_channel(fd, ch, None)
+            if prepared.status != "ready":
+                return None, None, None, None, None
+            return fid, ch, prepared.time, prepared.values, fd
         if not hasattr(fd, 'data') or ch not in fd.data.columns:
             return None, None, None, None, None
         t = np.asarray(fd.time_array, dtype=float)
@@ -495,16 +514,29 @@ class FFTTimeMixin:
         if sig is None or len(sig) < 2:
             self.toast("当前范围内样本不足", "warning")
             return
-        from ...analysis_time_axis import prepare_analysis_time_axis
-        try:
-            _axis, analysis_fs, _facts = prepare_analysis_time_axis(
-                t, float(getattr(fd, 'fs', compute_p['fs'])),
-                materialize=False,
+        if getattr(fd, "is_native", False):
+            from ...analysis_signal_prepare import load_native_channel
+            prepared = load_native_channel(fd, ch, rng)
+            if prepared.status != "ready" or prepared.source_fs is None:
+                self.toast(prepared.reason or "时间轴无效", "warning")
+                return
+            t, sig = prepared.time, prepared.values
+            analysis_fs = prepared.source_fs
+            compute_p = dict(
+                compute_p, fs=analysis_fs,
+                prepare_method=prepared.method, prepare_policy="native",
             )
-        except ValueError as issue:
-            self.toast(str(issue), "warning")
-            return
-        compute_p = dict(compute_p, fs=analysis_fs)
+        else:
+            from ...analysis_time_axis import prepare_analysis_time_axis
+            try:
+                _axis, analysis_fs, _facts = prepare_analysis_time_axis(
+                    t, float(getattr(fd, 'fs', compute_p['fs'])),
+                    materialize=False,
+                )
+            except ValueError as issue:
+                self.toast(str(issue), "warning")
+                return
+            compute_p = dict(compute_p, fs=analysis_fs)
         effective_compute_p = self._resolve_fft_time_effective_params(
             compute_p, len(sig))
         render_p = {**effective_compute_p, **display_p}
@@ -583,7 +615,7 @@ class FFTTimeMixin:
         if len(sig) < 2:
             self._record_fft_time_skip("信号过短")
             return None
-        if not self._check_uniform_or_prompt(fd, 'fft_time'):
+        if not getattr(fd, "is_native", False) and not self._check_uniform_or_prompt(fd, 'fft_time'):
             self._record_fft_time_skip("时间轴无效")
             return None
         if time_range is _INSPECTOR_TIME_RANGE:
@@ -600,16 +632,34 @@ class FFTTimeMixin:
             if len(sig) < 2:
                 self._record_fft_time_skip("样本不足")
                 return None
-        from ...analysis_time_axis import prepare_analysis_time_axis
-        try:
-            t, analysis_fs, time_facts = prepare_analysis_time_axis(
-                t, float(getattr(fd, 'fs', raw_params['fs'])),
-                time_source=getattr(fd, '_time_source', 'column'),
+        if getattr(fd, "is_native", False):
+            from ...analysis_signal_prepare import load_native_channel
+            prepared = load_native_channel(fd, ch, rng)
+            if prepared.status != "ready" or prepared.source_fs is None:
+                self._record_fft_time_skip(prepared.reason or "时间轴无效")
+                return None
+            t, sig = prepared.time, prepared.values
+            analysis_fs = prepared.source_fs
+            time_facts = {
+                "method": prepared.method,
+                "policy": "native",
+                **prepared.provenance,
+            }
+            raw_params = dict(
+                raw_params, fs=analysis_fs,
+                prepare_method=prepared.method, prepare_policy="native",
             )
-        except ValueError as issue:
-            self._record_fft_time_skip(str(issue))
-            return None
-        raw_params = dict(raw_params, fs=analysis_fs)
+        else:
+            from ...analysis_time_axis import prepare_analysis_time_axis
+            try:
+                t, analysis_fs, time_facts = prepare_analysis_time_axis(
+                    t, float(getattr(fd, 'fs', raw_params['fs'])),
+                    time_source=getattr(fd, '_time_source', 'column'),
+                )
+            except ValueError as issue:
+                self._record_fft_time_skip(str(issue))
+                return None
+            raw_params = dict(raw_params, fs=analysis_fs)
         p = self._resolve_fft_time_effective_params(raw_params, len(sig))
         decision = p.get('nfft_decision')
         if p.get('nfft_effective') is None:

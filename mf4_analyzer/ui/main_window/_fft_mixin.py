@@ -181,7 +181,7 @@ class FFTMixin:
 
     @staticmethod
     def _fft_compute_cache_params(fft_params):
-        return {
+        out = {
             'window': fft_params.get('window'),
             'nfft': fft_params.get('nfft_effective', fft_params.get('nfft')),
             # fs is a compute input (frequency axis + PSD scaling). Stamped by
@@ -195,6 +195,10 @@ class FFTMixin:
             # must miss. Display-only knobs stay out of this dict.
             'nfft_facts_signature': fft_params.get('nfft_facts_signature'),
         }
+        for name in ('prepare_method', 'prepare_policy'):
+            if fft_params.get(name) not in (None, ''):
+                out[name] = fft_params.get(name)
+        return out
 
     @staticmethod
     def _call_fft_analyzer(func, *args, weighting='None', **kwargs):
@@ -422,8 +426,18 @@ class FFTMixin:
             ctx.mark_effective_facts_stale()
 
     def _fft_time_facts_for_source(self, fid, ch, time_range, params):
-        from ...analysis_time_axis import prepare_analysis_time_axis
         fd = self.files[fid]
+        if getattr(fd, "is_native", False):
+            from ...analysis_signal_prepare import load_native_channel
+            prepared = load_native_channel(fd, ch, time_range)
+            return {
+                "method": prepared.method,
+                "policy": "native",
+                "status": prepared.status,
+                "reason": prepared.reason,
+                **prepared.provenance,
+            }
+        from ...analysis_time_axis import prepare_analysis_time_axis
         t, sig = fd.time_array, fd.data[ch].values
         if time_range is not None:
             t, sig = self._mask_time_range(t, sig, time_range=time_range)
@@ -432,14 +446,19 @@ class FFTMixin:
             time_source=getattr(fd, '_time_source', 'column'), materialize=False,
         )[2]
 
+    def _stamp_fft_prepare(self, params, facts, fd):
+        params['analysis_time_axis'] = facts
+        if getattr(fd, "is_native", False) and isinstance(facts, dict):
+            params['prepare_method'] = facts.get('method')
+            params['prepare_policy'] = 'native'
+        return params
+
     def _fft_fetch_signal(self, fid, ch, time_range=_INSPECTOR_TIME_RANGE, *, params=None):
         """Fetch + range-gate a single FFT source's signal. Returns
         ``(sig, fs)`` or ``(None, None)`` when unavailable."""
         fd = self.files.get(fid)
-        if fd is None or ch not in fd.data.columns:
+        if fd is None:
             return None, None
-        sig = fd.data[ch].values
-        t = fd.time_array
         if time_range is _INSPECTOR_TIME_RANGE:
             resolver = getattr(self, "_resolve_job_time_range", None)
             if callable(resolver):
@@ -448,6 +467,16 @@ class FFTMixin:
                 time_range = self.inspector.top.range_values()
             else:
                 time_range = None
+        if getattr(fd, "is_native", False):
+            from ...analysis_signal_prepare import load_native_channel
+            prepared = load_native_channel(fd, ch, time_range)
+            if prepared.status != "ready" or prepared.source_fs is None:
+                return None, None
+            return prepared.values, prepared.source_fs
+        if ch not in fd.data.columns:
+            return None, None
+        sig = fd.data[ch].values
+        t = fd.time_array
         if time_range is not None and t is not None:
             t, sig = self._mask_time_range(t, sig, time_range=time_range)
         from ...analysis_time_axis import prepare_analysis_time_axis
@@ -577,7 +606,7 @@ class FFTMixin:
             pane_keys = []
             for fid, ch in sources:
                 fd = self.files.get(fid)
-                if not self._check_uniform_or_prompt(fd, "fft"):
+                if not getattr(fd, "is_native", False) and not self._check_uniform_or_prompt(fd, "fft"):
                     continue
                 sig, fs = self._fft_fetch_signal(
                     fid, ch, time_range=time_range, params=fft_params)
@@ -586,8 +615,11 @@ class FFTMixin:
                 effective_params = self._resolve_fft_effective_params(
                     fft_params, len(sig), fs
                 )
-                effective_params['analysis_time_axis'] = self._fft_time_facts_for_source(
-                    fid, ch, time_range, fft_params)
+                self._stamp_fft_prepare(
+                    effective_params,
+                    self._fft_time_facts_for_source(fid, ch, time_range, fft_params),
+                    fd,
+                )
                 key = self._fft_analysis_cache_key(
                     fid, ch, effective_params, time_range
                 )
@@ -657,7 +689,7 @@ class FFTMixin:
             time_range = self._dispatch_time_range('fft', state, pane_idx)
             for fid, ch in sources:
                 fd = self.files.get(fid)
-                if not self._check_uniform_or_prompt(fd, 'fft'):
+                if not getattr(fd, "is_native", False) and not self._check_uniform_or_prompt(fd, 'fft'):
                     outcome.skipped.append("时间轴无效")
                     continue
                 sig, fs = self._fft_fetch_signal(
@@ -670,8 +702,11 @@ class FFTMixin:
                     continue
                 effective_params = self._resolve_fft_effective_params(
                     fft_params, len(sig), fs)
-                effective_params['analysis_time_axis'] = self._fft_time_facts_for_source(
-                    fid, ch, time_range, fft_params)
+                self._stamp_fft_prepare(
+                    effective_params,
+                    self._fft_time_facts_for_source(fid, ch, time_range, fft_params),
+                    fd,
+                )
                 key = self._fft_analysis_cache_key(
                     fid, ch, effective_params, time_range)
                 result = cache.get(key)
@@ -728,11 +763,6 @@ class FFTMixin:
         pane_idx = self._dispatch_focus_index('fft', state)
         pane = state.panes[pane_idx]
         mark_pending(pane)
-        t, sig, fs = self._get_sig()
-        if sig is None or len(sig) < 10:
-            self.toast("请选择有效信号", "warning"); return
-        # Validate original source timing; reconstruction is local below,
-        # after applying the physical time selection.
         mode = self.toolbar.current_mode()
         ctx_mode = 'fft' if mode == 'fft' else 'order'
         sig_data = (
@@ -742,26 +772,46 @@ class FFTMixin:
         )
         fid = sig_data[0] if sig_data else None
         fd = self.files.get(fid) if fid else None
-        if not self._check_uniform_or_prompt(fd, ctx_mode):
-            return
         rng = None
         resolver = getattr(self, "_pane_time_range_for", None)
         if callable(resolver):
             rng = resolver("fft" if ctx_mode == "fft" else "order")
         if rng is None and self.inspector.top.range_enabled():
             rng = self.inspector.top.range_values()
-        if rng is not None and t is not None:
-            lo, hi = rng
-            m = (t >= lo) & (t <= hi)
-            t = t[m]
-            sig = sig[m]
-        from ...analysis_time_axis import prepare_analysis_time_axis
+        if getattr(fd, "is_native", False):
+            from ...analysis_signal_prepare import load_native_channel
+            prepared = load_native_channel(fd, sig_data[1], rng)
+            if (
+                prepared.status != "ready"
+                or prepared.values is None
+                or len(prepared.values) < 10
+                or prepared.source_fs is None
+            ):
+                self.toast(prepared.reason or "请选择有效信号", "warning")
+                return
+            t, sig, fs = prepared.time, prepared.values, prepared.source_fs
+            time_facts = {
+                "method": prepared.method,
+                "policy": "native",
+                **prepared.provenance,
+            }
+        else:
+            t, sig, fs = self._get_sig()
+            if sig is None or len(sig) < 10:
+                self.toast("请选择有效信号", "warning"); return
+            if not self._check_uniform_or_prompt(fd, ctx_mode):
+                return
+            if rng is not None and t is not None:
+                lo, hi = rng
+                m = (t >= lo) & (t <= hi)
+                t = t[m]
+                sig = sig[m]
+            from ...analysis_time_axis import prepare_analysis_time_axis
+            t, fs, time_facts = prepare_analysis_time_axis(t, fs)
         fft_params = self.inspector.fft_ctx.compute_params()
-        t, fs, time_facts = prepare_analysis_time_axis(
-            t, fs)
         fft_params = self._resolve_fft_effective_params(
             fft_params, len(sig), fs)
-        fft_params['analysis_time_axis'] = time_facts
+        self._stamp_fft_prepare(fft_params, time_facts, fd)
         win = fft_params['window']
         nfft = fft_params['nfft']
         state = self._analysis_state_for_dispatch('fft')

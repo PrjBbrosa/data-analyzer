@@ -3595,6 +3595,20 @@ QStatusBar#surfaceStatusBar QProgressBar#computeProgressBar::chunk {
     background-color: #1a7be8;
 }
 
+/* The import dialog is not in the status bar, so the selector above does
+   not apply. QStyleSheetStyle otherwise paints the groove and the chunk
+   the same white as the dialog, and busy cannot be told from 100%. */
+QProgressBar#importProgressBar {
+    border: 1px solid #c9d8ea;
+    border-radius: 4px;
+    background-color: #eef4fb;
+}
+
+QProgressBar#importProgressBar::chunk {
+    border-radius: 3px;
+    background-color: #1a7be8;
+}
+
 QStatusBar#surfaceStatusBar QToolButton#surfaceVersionButton {
     min-height: 20px;
     max-height: 22px;

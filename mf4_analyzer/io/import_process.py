@@ -20,14 +20,18 @@ import threading
 import time
 import uuid
 
-from .import_limits import ImportLimits, ImportResourceError, default_limits
+from .import_limits import (
+    ImportLimits, ImportResourceError, clamp_resource_detail, default_limits,
+    diagnostic_output_envelope, output_transfer_envelope, parse_resource_envelope,
+    worker_memory_envelope,
+)
 
 
 logger = logging.getLogger(__name__)
 _SLOT = threading.Semaphore(1)
 _CANCEL_CHECK = ContextVar("import_cancel_check", default=None)
 IMPORT_METHODS = frozenset({
-    "load_mf4", "load_csv", "load_excel", "load_ascii", "load_tdms",
+    "load_mf4", "load_mf4_native", "load_csv", "load_excel", "load_ascii", "load_tdms",
     "load_wwt", "load_wwt_document", "load_zfd", "load_mat", "load_hdf",
     "load_audio_video", "load_blf", "load_blf_dataframe", "read_blf_frames",
     "load_blf_frames", "probe_blf_dbc", "probe_blf_dbc_frames", "probe_mdf",
@@ -35,12 +39,25 @@ IMPORT_METHODS = frozenset({
 
 
 class ImportProcessError(RuntimeError):
-    def __init__(self, code, message, *, stage="", detail="", returncode=None):
+    def __init__(self, code, message, *, stage="", detail="", returncode=None,
+                 resource=None, request_id="", detail_truncated=False):
         self.code = str(code)
         self.stage = str(stage)
         self.detail = str(detail)
         self.returncode = returncode
+        self.resource = resource
+        self.request_id = str(request_id or "")
+        self.detail_truncated = bool(detail_truncated)
         super().__init__(str(message))
+
+
+def _resource_error(envelope, message, *, stage="", detail="", returncode=None, request_id=""):
+    text, truncated = clamp_resource_detail(detail)
+    return ImportProcessError(
+        "resource_limit", message, stage=stage, detail=text, returncode=returncode,
+        resource=parse_resource_envelope(envelope), request_id=request_id,
+        detail_truncated=truncated,
+    )
 
 
 def source_snapshot(path):
@@ -277,7 +294,9 @@ def _run_import(method, path, kwargs, cancel_check, progress_callback, limits, s
             write_import_result(kwargs, root / "arguments", request_id=request_id,
                                 max_bytes=limits.max_output_bytes)
         except ImportTransportLimitError as exc:
-            raise ImportProcessError("resource_limit", str(exc), detail=str(exc)) from exc
+            raise _resource_error(output_transfer_envelope(phase="arguments", label="arguments"),
+                                  str(exc), detail=str(exc), stage="准备读取参数",
+                                  request_id=request_id) from exc
         request = {"schema": 1, "request_id": request_id, "method": method,
                    "path": str(path), "snapshot": snapshot,
                    "wait_for_admission": os.name == "nt",
@@ -334,10 +353,21 @@ def _run_import(method, path, kwargs, cancel_check, progress_callback, limits, s
                         last_memory_check = now
                         rss = _rss_bytes(proc.pid)
                         if rss is not None and rss > limits.max_memory_bytes:
-                            raise ImportProcessError("resource_limit", "文件读取超过内存预算，已停止", stage=stage,
-                                                     detail=f"RSS {rss} > {limits.max_memory_bytes}")
-                        if stderr_path.stat().st_size > limits.max_manifest_bytes:
-                            raise ImportProcessError("resource_limit", "读取进程诊断输出超过预算", stage=stage)
+                            raise _resource_error(
+                                worker_memory_envelope(requested=rss, limit=limits.max_memory_bytes, phase=stage),
+                                "文件读取超过内存预算，已停止", stage=stage,
+                                detail=f"RSS {rss} > {limits.max_memory_bytes}",
+                                request_id=request_id,
+                            )
+                        stderr_size = stderr_path.stat().st_size
+                        if stderr_size > limits.max_manifest_bytes:
+                            raise _resource_error(
+                                diagnostic_output_envelope(
+                                    requested=stderr_size, limit=limits.max_manifest_bytes, phase=stage),
+                                "读取进程诊断输出超过预算", stage=stage,
+                                detail=f"stderr {stderr_size} > {limits.max_manifest_bytes}",
+                                request_id=request_id,
+                            )
                     time.sleep(.025)
                 proc.wait()
             finally:
@@ -361,14 +391,19 @@ def _run_import(method, path, kwargs, cancel_check, progress_callback, limits, s
                 os.name == "nt" and proc.returncode & 0xC0000000 == 0xC0000000
             )
             code = "native_crash" if native_exit else (outcome or {}).get("code", "internal_error")
-            detail = str((outcome or {}).get("detail") or tail)
+            detail, truncated = clamp_resource_detail(str((outcome or {}).get("detail") or tail))
             message = str((outcome or {}).get("message") or
                           f"读取进程异常结束（退出码 {proc.returncode}），此文件未导入")
+            facts = None
+            if code == "resource_limit":
+                raw_resource = outcome.get("resource") if isinstance(outcome, dict) else None
+                facts = parse_resource_envelope(raw_resource)
             logger.error("Import %s failed: method=%s path=%s code=%s exit=%s stage=%s runtime=%s %s",
                          request_id, method, path, code, proc.returncode, stage,
                          (outcome or {}).get("reader_runtime", request["runtime"]), detail)
             raise ImportProcessError(code, message, stage=stage, detail=detail,
-                                     returncode=proc.returncode)
+                                     returncode=proc.returncode, resource=facts,
+                                     request_id=request_id, detail_truncated=truncated)
         try:
             current_snapshot = source_snapshot(path)
         except OSError as exc:
@@ -378,8 +413,13 @@ def _run_import(method, path, kwargs, cancel_check, progress_callback, limits, s
         try:
             value = read_import_result(root / "result", request_id=request_id,
                                        max_bytes=limits.max_output_bytes)
-        except (ImportResourceError, ImportTransportLimitError) as exc:
-            raise ImportProcessError("resource_limit", str(exc), detail=str(exc)) from exc
+        except ImportResourceError as exc:
+            raise _resource_error(exc.to_envelope(), str(exc), detail=str(exc), stage=stage,
+                                  request_id=request_id) from exc
+        except ImportTransportLimitError as exc:
+            raise _resource_error(output_transfer_envelope(phase="result", label="result"),
+                                  str(exc), detail=str(exc), stage=stage,
+                                  request_id=request_id) from exc
         except (OSError, ValueError) as exc:
             raise ImportProcessError("internal_error", "读取结果不完整或超过预算", detail=str(exc)) from exc
         if progress_callback is not None:

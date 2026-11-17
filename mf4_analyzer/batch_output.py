@@ -3,8 +3,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import csv
+import io
 import json
 import logging
+import math
 import os
 from pathlib import Path
 import re
@@ -14,6 +17,7 @@ import tempfile
 from typing import Any, Callable, Iterable, Mapping, Sequence
 import uuid
 
+import numpy as np
 import pandas as pd
 
 from .batch_recipe import recipe_fingerprint
@@ -818,6 +822,294 @@ def write_workbook(
     return atomic_write(path, write)
 
 
+class NativeExportError(ValueError):
+    """A numeric export request is not an original-sample export."""
+
+
+@dataclass(frozen=True)
+class NativeExportResult:
+    paths: tuple
+    kind: str
+    layout: str
+    notes: tuple
+
+
+_EXACT_INT_LIMIT = 2 ** 53
+
+
+def _export_source(source):
+    from .io.file_data import FileData
+    from .io.native_signal_store import NativeSignalStore
+    from .io.signal_access import read_signal
+
+    if isinstance(source, NativeSignalStore):
+        source = FileData.from_native_store("native-export", source)
+    store = getattr(source, "native_store", None)
+    if store is None:
+        raise NativeExportError("原始采样导出需要 native 来源")
+    return source, store, read_signal
+
+
+def _cell_text(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (bool, np.bool_)):
+        return "1" if bool(value) else "0"
+    array_value = np.asarray(value)
+    if getattr(array_value, "shape", ()) == () and array_value.dtype.kind in "iu":
+        return str(int(array_value))
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if not math.isfinite(number):
+        return ""
+    return format(number, ".17g")
+
+
+def _excel_cell(value):
+    if value is None or value == "":
+        return None
+    array_value = np.asarray(value)
+    if getattr(array_value, "shape", ()) == () and array_value.dtype.kind in "iu":
+        number = int(array_value)
+        if abs(number) > _EXACT_INT_LIMIT:
+            return str(number)
+        return number
+    if isinstance(value, str):
+        return value
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if not math.isfinite(number):
+        return None
+    return number
+
+
+def _segment_of(segments, index) -> int:
+    for segment in segments or ():
+        if int(segment.start) <= index < int(segment.stop):
+            return int(segment.index)
+    return 0
+
+
+def _series_rows(source, read_signal):
+    store = source.native_store
+    rows = []
+    grouped = {}
+    for name in store.public_names():
+        channel = store.channel(name)
+        if channel.support_status != "numeric":
+            continue
+        series = read_signal(source, name, representation="physical")
+        grouped.setdefault(channel.axis_id, []).append((name, series))
+        validity = None if series.validity is None else np.asarray(series.validity, dtype=bool)
+        for index, (time, value) in enumerate(zip(series.time, series.values)):
+            invalid = validity is not None and bool(validity[index])
+            rows.append({
+                "channel": name,
+                "record": index,
+                "segment": _segment_of(series.segments, index),
+                "time": time,
+                "value": value,
+                "valid": not invalid,
+                "axis_id": channel.axis_id,
+            })
+    return rows, grouped
+
+
+def _csv_text(header, records, comment=""):
+    buffer = io.StringIO()
+    if comment:
+        buffer.write("# " + comment + "\n")
+    writer = csv.DictWriter(buffer, fieldnames=header, extrasaction="ignore", lineterminator="\n")
+    writer.writeheader()
+    for record in records:
+        writer.writerow({key: _cell_text(record.get(key)) for key in header})
+    return buffer.getvalue()
+
+
+def _write_csv(path, header, records, comment=""):
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(_csv_text(header, records, comment), encoding="utf-8")
+    return target
+
+
+def _write_xlsx(path, sheets, notes, max_data_rows):
+    from openpyxl import Workbook
+
+    book = Workbook()
+    default = book.active
+    book.remove(default)
+    split = False
+    for title, header, records in sheets:
+        blocks = [records[start:start + max_data_rows] for start in range(0, len(records), max_data_rows)] or [[]]
+        if len(blocks) > 1:
+            split = True
+        for index, block in enumerate(blocks, start=1):
+            sheet_title = title if len(blocks) == 1 else f"{title}{index}"
+            sheet = book.create_sheet(sheet_title[:31])
+            sheet.append(header)
+            for record in block:
+                sheet.append([_excel_cell(record.get(key)) for key in header])
+    if split:
+        note = book.create_sheet("说明")
+        note.append(["说明"])
+        note.append(["Excel 单表行数上限已到，已分片保存，没有截掉末尾。"])
+    target = Path(path)
+    if target.suffix.lower() != ".xlsx":
+        target = target.with_suffix(".xlsx")
+
+    def write(temp):
+        book.save(temp)
+
+    atomic_write(target, write)
+    result_notes = tuple(notes)
+    if split:
+        result_notes = result_notes + ("Excel 已按行数上限分片，没有截掉末尾。",)
+    return target, result_notes
+
+
+def _uniform_table(grouped, grid):
+    required = {"origin", "fs_hz", "start", "stop", "method", "invalid_policy", "gap_policy"}
+    if not isinstance(grid, Mapping) or not required.issubset(grid):
+        raise NativeExportError("统一时间横表必须显式给出 grid，不能把补点当作采样原值")
+    if grid.get("method") != "linear":
+        raise NativeExportError("当前只接受显式 linear 均匀时间表")
+    origin = float(grid["origin"])
+    fs = float(grid["fs_hz"])
+    if not math.isfinite(fs) or fs <= 0:
+        raise NativeExportError("fs_hz 必须是有限正数")
+    start = float(grid["start"])
+    stop = float(grid["stop"])
+    first = math.ceil((start - origin) * fs - 1e-9)
+    last = math.floor((stop - origin) * fs + 1e-9)
+    times = [origin + index / fs for index in range(first, last + 1)]
+    names = [name for _axis, channels in grouped.items() for name, _series in channels]
+    records = []
+    for stamp in times:
+        row = {"time": stamp}
+        for _axis, channels in grouped.items():
+            for name, series in channels:
+                row[name] = _interpolate(series, stamp)
+        records.append(row)
+    return ["time", *names], records
+
+
+def _interpolate(series, stamp):
+    time = np.asarray(series.time, dtype=float)
+    values = np.asarray(series.values)
+    if time.size == 0 or stamp < float(time[0]) or stamp > float(time[-1]):
+        return ""
+    validity = None if series.validity is None else np.asarray(series.validity, dtype=bool)
+    covered = None
+    for segment in series.segments or ():
+        part = time[int(segment.start):int(segment.stop)]
+        if part.size and float(part[0]) - 1e-12 <= stamp <= float(part[-1]) + 1e-12:
+            covered = segment
+            break
+    if covered is None:
+        return ""
+    start = int(covered.start)
+    stop = int(covered.stop)
+    seg_time = time[start:stop]
+    seg_values = values[start:stop]
+    seg_invalid = None if validity is None else validity[start:stop]
+    exact = np.where(np.abs(seg_time - stamp) <= 1e-12)[0]
+    if exact.size:
+        index = int(exact[0])
+        if seg_invalid is not None and bool(seg_invalid[index]):
+            return ""
+        return seg_values[index]
+    right = int(np.searchsorted(seg_time, stamp, side="left"))
+    left = right - 1
+    if left < 0 or right >= seg_time.size:
+        return ""
+    if seg_invalid is not None and (bool(seg_invalid[left]) or bool(seg_invalid[right])):
+        return ""
+    left_value = seg_values[left]
+    right_value = seg_values[right]
+    if _cell_text(left_value) != format(float(left_value), ".17g") and abs(int(left_value)) > _EXACT_INT_LIMIT:
+        return ""
+    if abs(float(seg_time[right]) - float(seg_time[left])) == 0:
+        return ""
+    weight = (stamp - float(seg_time[left])) / (float(seg_time[right]) - float(seg_time[left]))
+    return float(left_value) + (float(right_value) - float(left_value)) * weight
+
+
+def export_native_samples(source, path, *, layout="long", grid=None,
+                          max_data_rows: int = _XLSX_MAX_DATA_ROWS) -> NativeExportResult:
+    """Write original samples as a long table or one table per shared axis.
+
+    ``layout="uniform"`` is the only wide time grid, and it has to carry an
+    explicit grid. PNG/PDF stay on :func:`write_image`.
+    """
+    import numpy as np
+
+    target = Path(path)
+    if target.suffix.lower() in {".png", ".pdf", ".svg"}:
+        raise NativeExportError("PNG/PDF 维持原来的渲染导出，不能当作原始数值表")
+    file_data, _store, read_signal = _export_source(source)
+    rows, grouped = _series_rows(file_data, read_signal)
+    layout = str(layout or "long")
+    if layout == "uniform":
+        if grid is None:
+            raise NativeExportError("统一时间横表必须显式请求，并给出 grid")
+        header, records = _uniform_table(grouped, grid)
+        comment = "派生均匀时间表；范围外、缺口和失效点留空。这不是采样原值。"
+        notes = ("显式派生均匀时间表，范围外和失效点留空。",)
+        kind = "derived_uniform_grid"
+        if target.suffix.lower() == ".xlsx":
+            written, notes = _write_xlsx(target, [("派生", header, records)], notes, max_data_rows)
+            paths = (written,)
+        else:
+            paths = (_write_csv(target if target.suffix.lower() == ".csv" else target.with_suffix(".csv"), header, records, comment),)
+        return NativeExportResult(paths, kind, layout, notes)
+    if layout == "coaxial":
+        notes = ("同轴分组保留各时钟自己的时间和有效性，没有把其他时钟补进同一张表。",)
+        paths = []
+        sheets = []
+        for axis_id, channels in grouped.items():
+            width = channels[0][1].time.shape[0]
+            header = ["record", "segment", "time"]
+            for name, _series in channels:
+                header.extend((name, f"{name}__valid"))
+            records = []
+            for index in range(width):
+                record = {
+                    "record": index,
+                    "segment": _segment_of(channels[0][1].segments, index),
+                    "time": channels[0][1].time[index],
+                }
+                for name, series in channels:
+                    validity = None if series.validity is None else np.asarray(series.validity, dtype=bool)
+                    invalid = validity is not None and bool(validity[index])
+                    record[name] = series.values[index]
+                    record[f"{name}__valid"] = not invalid
+                records.append(record)
+            if target.suffix.lower() == ".xlsx":
+                sheets.append((str(axis_id), header, records))
+            else:
+                group_path = target.with_name(f"{target.stem}__{axis_id}{target.suffix or '.csv'}")
+                paths.append(_write_csv(group_path, header, records))
+        if sheets:
+            written, notes = _write_xlsx(target, sheets, notes, max_data_rows)
+            paths = [written]
+        return NativeExportResult(tuple(paths), "original_samples", layout, notes)
+    if layout != "long":
+        raise NativeExportError(f"未知导出布局 {layout!r}")
+    header = ["channel", "record", "segment", "time", "value", "valid"]
+    notes = ("原始采样长表，每条记录保留自己的时间和有效性。",)
+    kind = "original_samples"
+    if target.suffix.lower() == ".xlsx":
+        written, notes = _write_xlsx(target, [("原始采样", header, rows)], notes, max_data_rows)
+        return NativeExportResult((written,), kind, layout, notes)
+    csv_path = target if target.suffix.lower() == ".csv" else target.with_suffix(".csv")
+    return NativeExportResult((_write_csv(csv_path, header, rows),), kind, layout, notes)
+
+
 def write_image(
     payload,
     path,
@@ -864,6 +1156,9 @@ __all__ = [
     "release_output_reservation",
     "reserve_output_paths",
     "unicode_slug",
+    "NativeExportError",
+    "NativeExportResult",
+    "export_native_samples",
     "write_dataframe",
     "write_workbook",
     "write_image",

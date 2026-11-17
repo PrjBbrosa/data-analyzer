@@ -320,7 +320,7 @@ _HINTS = (
     ),
     Hint(
         id="file.import_cancel",
-        text="读取可取消；超时可选择「延长并重试」",
+        text="超时选「延长并重试」只加倍时限；内存预估可重新检查，重新检查后仍可能无法导入",
         surface="discovery",
         priority=43,
     ),
@@ -337,6 +337,12 @@ _HINTS = (
         priority=41,
     ),
     Hint(
+        id="file.native_sampling_project",
+        text="旧工程仍按公共轴恢复；原生采样政策、原始长表和回放事件要单独确认",
+        surface="discovery",
+        priority=40,
+    ),
+    Hint(
         id="replay.mf4_alignment",
         text="回放对齐可能含非原始值",
         surface="discovery",
@@ -349,6 +355,13 @@ _HINTS = (
         modes=frozenset({"time"}),
         retire_on="custom_x_dual_cursor",
         priority=43,
+    ),
+    Hint(
+        id="time.native_samples",
+        text="时域游标读各通道原始采样点，不读屏幕包络；等距取较早的点，缺口处无数据",
+        surface="discovery",
+        modes=frozenset({"time"}),
+        priority=42,
     ),
     Hint(
         id="chart.toolbar_pan",

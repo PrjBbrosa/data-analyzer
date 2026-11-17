@@ -69,6 +69,19 @@ def _plain_replay_value(value):
 
 
 @dataclass(frozen=True)
+class ReplayEvent:
+    """One original sample. Invalid events keep their place and have no filled value."""
+
+    channel: str
+    time_s: float
+    value: float | int | None
+    record: int
+    segment: int
+    valid: bool
+    order: int
+
+
+@dataclass(frozen=True)
 class ReplaySource:
     """MF4-derived replay payload for :class:`ReplayRecorderBackend`."""
 
@@ -78,6 +91,10 @@ class ReplaySource:
     duration_s: float
     warnings: tuple[str, ...] = ()
     source_metadata: dict = field(default_factory=dict)
+    events: tuple = ()
+    replay_mode: str = "legacy_table"
+    segment_choice: int | None = None
+    notices: tuple = ()
 
 
 # ---------------------------------------------------------------------------
@@ -368,14 +385,143 @@ class ReplayRecorderBackend(RecorderBackend):
         return cls.source_from_loaded(path, run_import("load_mf4", str(path)))
 
     @classmethod
+    def source_from_native(cls, path: str | Path, source, *, segment=None) -> ReplaySource:
+        """Replay original records. Does not build a shared time table."""
+        from mf4_analyzer.io.file_data import FileData
+        from mf4_analyzer.io.native_signal_store import NativeSignalStore
+        from mf4_analyzer.io.signal_access import read_signal
+
+        source_path = Path(path)
+        if isinstance(source, NativeSignalStore):
+            file_data = FileData.from_native_store(source_path, source)
+        else:
+            file_data = source
+        store = file_data.native_store
+        if store is None:
+            raise TypeError("source_from_native 需要 NativeSignalStore")
+        events: list[ReplayEvent] = []
+        notices: list[str] = []
+        order = 0
+        selected_names: list[str] = []
+        units = store.units()
+        for name in store.public_names():
+            channel = store.channel(name)
+            if channel.support_status != "numeric":
+                notices.append(f"通道 {name} 不是数值通道，未补成采集值")
+                continue
+            series = read_signal(file_data, name, representation="physical")
+            selected_names.append(name)
+            if int(series.time.shape[0]) == 1:
+                notices.append(f"通道 {name} 是单点，没有采样率")
+            validity = None if series.validity is None else series.validity
+            for index in range(int(series.time.shape[0])):
+                segment_index = 0
+                for item in series.segments:
+                    if int(item.start) <= index < int(item.stop):
+                        segment_index = int(item.index)
+                        break
+                raw_time = series.time[index]
+                try:
+                    finite_time = bool(math.isfinite(float(raw_time)))
+                except (TypeError, ValueError):
+                    finite_time = False
+                invalid = validity is not None and bool(validity[index])
+                if not finite_time:
+                    notices.append(f"通道 {name} 记录 {index} 的时间无效，未补成采集事实")
+                    value = None
+                    stamp = float("nan")
+                    valid = False
+                elif invalid:
+                    value = None
+                    stamp = float(raw_time)
+                    valid = False
+                else:
+                    sample = series.values[index]
+                    kind = getattr(getattr(sample, "dtype", None), "kind", "")
+                    if kind in "iu" or (isinstance(sample, int) and not isinstance(sample, bool)):
+                        value = int(sample)
+                    else:
+                        value = float(sample)
+                        if not math.isfinite(value):
+                            value = None
+                    stamp = float(raw_time)
+                    valid = value is not None
+                events.append(ReplayEvent(
+                    channel=name,
+                    time_s=stamp,
+                    value=value,
+                    record=index,
+                    segment=segment_index,
+                    valid=valid,
+                    order=order,
+                ))
+                order += 1
+        segment_ids = {event.segment for event in events}
+        if segment is None and len(segment_ids) > 1:
+            return ReplaySource(
+                path=source_path,
+                selected=tuple(
+                    SelectedMeasurement(name=name, unit=str(units.get(name, "") or ""))
+                    for name in selected_names
+                ),
+                source_samples=[],
+                duration_s=0.0,
+                warnings=(),
+                source_metadata={"layout": "native_events"},
+                events=tuple(events),
+                replay_mode="segment_required",
+                segment_choice=None,
+                notices=tuple(dict.fromkeys([
+                    *notices,
+                    "时间回退，请选择要回放的段",
+                ])),
+            )
+        chosen = list(events)
+        if segment is not None:
+            chosen = [event for event in events if event.segment == segment]
+            if not chosen and events:
+                raise ValueError(f"segment {segment} 超出范围，共有 {len(segment_ids)} 段")
+        playable = [event for event in chosen if event.valid and math.isfinite(event.time_s)]
+        playable.sort(key=lambda event: (event.time_s, event.order))
+        source_samples = [
+            (event.channel, event.time_s, event.value) for event in playable
+        ]
+        duration = max((event.time_s for event in playable), default=0.0)
+        note_list = list(dict.fromkeys(notices))
+        if not any("单点" in text for text in note_list):
+            note_list.append("各通道按自己的事件时间和原记录顺序回放，没有补点。")
+        if any(not event.valid for event in chosen):
+            note_list.append("失效样本不作为采集值。")
+        return ReplaySource(
+            path=source_path,
+            selected=tuple(
+                SelectedMeasurement(name=name, unit=str(units.get(name, "") or ""))
+                for name in selected_names
+            ),
+            source_samples=source_samples,
+            duration_s=float(duration),
+            warnings=(),
+            source_metadata={"layout": "native_events"},
+            events=tuple(chosen),
+            replay_mode="native_events",
+            segment_choice=None if segment is None else int(segment),
+            notices=tuple(note_list),
+        )
+
+    @classmethod
     def source_from_loaded(cls, path: str | Path, loaded_result) -> ReplaySource:
         """Convert an already isolated loader result; perform no file I/O.
 
         Building/sorting replay samples can be expensive too. GUI supervisors
         call this off-thread, then adopt the resulting ReplaySource on the GUI
         thread. The original result and its metadata are not mutated.
+        A native store keeps its own event list. It is not resampled onto the
+        legacy shared time column.
         """
         source_path = Path(path)
+        native_store = getattr(loaded_result, "native_store", None)
+        if native_store is not None:
+            return cls.source_from_native(source_path, loaded_result)
         df, channels, units = loaded_result
         attrs = getattr(df, "attrs", None)
         extra = attrs.get("source_metadata") if isinstance(attrs, Mapping) else None

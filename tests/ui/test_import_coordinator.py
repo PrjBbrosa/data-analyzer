@@ -1,4 +1,5 @@
 """GUI import tasks keep the event loop live and retire before window teardown."""
+from pathlib import Path
 from threading import Event
 from time import monotonic
 
@@ -549,6 +550,15 @@ def test_timeout_requires_explicit_extension_choice(qtbot, monkeypatch, retry):
 
     def choose(box):
         decisions.append((box.text(), box.informativeText()))
+        snap = window._imports.current_progress
+        assert snap is not None and snap.kind == 'waiting_user'
+        assert snap.indeterminate is False
+        assert '等待确认是否延长并重试' in snap.headline
+        assert '剩余' not in snap.headline
+        dialog = window._imports.progress_dialog
+        assert dialog is not None and dialog.isVisible()
+        assert dialog.progress_bar.minimum() != dialog.progress_bar.maximum()
+        assert dialog.progress_bar.value() != dialog.progress_bar.maximum()
         text = '延长并重试' if retry else '取消导入'
         next(button for button in box.buttons() if button.text() == text).click()
         return 0
@@ -563,6 +573,118 @@ def test_timeout_requires_explicit_extension_choice(qtbot, monkeypatch, retry):
     assert not errors
     assert len(terminals) == 1
     assert terminals[0][1] == ('success' if retry else 'cancelled')
+
+
+def test_broker_completion_is_not_import_success_when_registration_fails(qtbot, monkeypatch):
+    def broker(method, path, *, progress_callback=None, **kwargs):
+        if progress_callback is not None:
+            progress_callback(0.4, '读取通道')
+            progress_callback(1.0, '读取完成')
+        return _csv_result()
+
+    window, errors = _main_window(qtbot, monkeypatch, broker)
+    updates = []
+
+    def capture(current, total, label=None, token=None, **kwargs):
+        updates.append((current, total, label))
+
+    monkeypatch.setattr(window, '_update_compute_progress', capture)
+
+    def fail(_fid):
+        raise RuntimeError('register failed')
+
+    monkeypatch.setattr(window, '_on_file_activated', fail)
+    window._load_one('register-fail.csv')
+    qtbot.waitUntil(lambda: not window._imports.busy)
+    log = list(window._imports.progress_log)
+    kinds = [item.kind for item in log]
+    assert 'stage' in kinds
+    assert 'handoff' in kinds
+    assert 'waiting_user' in kinds
+    assert 'success' not in kinds
+    assert kinds[-1] == 'failed'
+    stage = next(item for item in log if item.kind == 'stage')
+    assert '当前阶段 40%' in stage.headline
+    assert stage.indeterminate is False
+    assert stage.bar_current == 400 and stage.bar_total == 1000
+    handoff = next(item for item in log if item.kind == 'handoff')
+    assert handoff.indeterminate is True
+    assert handoff.bar_total == 0
+    assert '读取完成' in handoff.headline
+    assert '导入成功' not in handoff.headline
+    assert '100%' not in handoff.headline
+    failed = log[-1]
+    assert failed.terminal is True
+    assert failed.bar_current != failed.bar_total
+    assert '导入成功' not in failed.headline
+    assert '100%' not in failed.headline
+    assert not window.files
+    assert errors
+    for item in log:
+        assert (item.bar_current, item.bar_total, item.status_label) in updates
+
+
+def test_success_close_does_not_cancel_the_queued_import(qtbot, monkeypatch, tmp_path):
+    window, errors = _main_window(qtbot, monkeypatch, lambda *a, **k: _csv_result())
+    first = tmp_path / 'first.csv'
+    second = tmp_path / 'second.csv'
+    first.write_text('Time,sig\n0,1\n.1,2\n')
+    second.write_text('Time,sig\n0,3\n.1,4\n')
+    window._load_one(first)
+    window._load_one(second)
+    qtbot.waitUntil(lambda: not window._imports.busy, timeout=15000)
+    assert not errors
+    assert len(window.files) == 2
+    successes = [item for item in window._imports.progress_log if item.kind == 'success']
+    assert len(successes) == 2
+    assert all(item.terminal and item.bar_current == item.bar_total == 1000 for item in successes)
+
+
+def test_cancel_stays_up_until_reap_and_the_next_import_is_not_cancelled(qtbot, monkeypatch, tmp_path):
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtWidgets import QPushButton
+
+    entered = Event()
+    release = Event()
+    mode = {'slow': True}
+
+    def broker(*args, cancel_check, **kwargs):
+        if mode['slow']:
+            entered.set()
+            while not cancel_check():
+                Event().wait(0.01)
+            assert release.wait(2)
+        return _csv_result()
+
+    window, errors = _main_window(qtbot, monkeypatch, broker)
+    window.show()
+    try:
+        window._load_one('slow.csv')
+        qtbot.waitUntil(entered.is_set)
+        dialog = window._imports.progress_dialog
+        button = next(item for item in dialog.findChildren(QPushButton) if item.text() == '取消导入')
+        qtbot.mouseClick(button, Qt.LeftButton)
+        snap = window._imports.current_progress
+        assert dialog.isVisible()
+        assert snap is not None and snap.kind == 'cancelling'
+        assert snap.headline == '正在取消…'
+        assert not dialog.cancel_button.isEnabled()
+        assert '正在取消' in dialog.phase_label.text()
+        release.set()
+        qtbot.waitUntil(lambda: not window._imports.busy, timeout=4000)
+        assert not window.files
+        assert not errors
+        mode['slow'] = False
+        path = tmp_path / 'next.csv'
+        path.write_text('Time,sig\n0,1\n.1,2\n')
+        window._load_one(path)
+        qtbot.waitUntil(lambda: not window._imports.busy, timeout=15000)
+        assert len(window.files) == 1
+        assert not errors
+    finally:
+        release.set()
+        window._imports.cancel()
+        qtbot.waitUntil(lambda: not window._imports.busy, timeout=4000)
 
 
 def test_can_candidate_after_auto_probe_budget_is_selectable(qtbot, monkeypatch, tmp_path):
@@ -718,3 +840,446 @@ def test_active_host_deletion_retains_supervisor_until_cancelled_drain(qapp, qtb
         _drain_lifecycle_deletes()
         release.set()
         qtbot.waitUntil(lambda: sip.isdeleted(owner) or not owner.busy)
+
+
+_SHARED_AXIS = "MDF shared-axis conversion/alignment/frame"
+
+
+def _resource_exc(kind, *, requested=None, limit=None, unit="bytes"):
+    from mf4_analyzer.io.import_limits import parse_resource_envelope
+    from mf4_analyzer.io.import_process import ImportProcessError
+
+    payload = {
+        "schema": 1,
+        "resource_kind": kind,
+        "unit": unit,
+        "phase": "admission",
+        "estimate_basis": "test",
+        "label": _SHARED_AXIS,
+    }
+    if requested is not None:
+        payload["requested"] = int(requested)
+        payload["limit"] = int(limit)
+        payload["components"] = [{
+            "name": _SHARED_AXIS, "amount": int(requested), "unit": unit,
+        }]
+    return ImportProcessError(
+        "resource_limit",
+        "导入资源超过预算",
+        stage="admission",
+        detail="worker detail",
+        resource=parse_resource_envelope(payload),
+        request_id="req-fixed-1",
+    )
+
+
+def _csv_file(path):
+    path.write_text("Time,sig\n0,1\n.1,2\n.2,3\n")
+    return path
+
+
+def _patch_message_boxes(monkeypatch, on_resource):
+    from PyQt5.QtWidgets import QMessageBox
+    from mf4_analyzer.ui_kit.message_dialog import AppMessageDialog
+
+    shown, critical = [], []
+
+    def drive(self):
+        shown.append(self)
+        on_resource(self)
+        if self.message_result is None:
+            self.button("close").click()
+        return 0
+
+    monkeypatch.setattr(AppMessageDialog, "exec_", drive)
+    monkeypatch.setattr(QMessageBox, "critical", lambda *args, **kwargs: critical.append(args))
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: None)
+    monkeypatch.setattr(QMessageBox, "exec_", lambda self: 0)
+    return shown, critical
+
+
+def _window_for_broker(qtbot, monkeypatch, broker):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window._imports.broker = broker
+    toasts, recent = [], []
+    monkeypatch.setattr(window, "toast", lambda *args, **kwargs: toasts.append(args))
+    original = window._recent_files.record_file
+
+    def spy(path, *args, **kwargs):
+        recent.append(str(path))
+        return original(path)
+
+    monkeypatch.setattr(window._recent_files, "record_file", spy)
+    return window, toasts, recent
+
+
+def _action_ids(dialog):
+    return [
+        button.property("appMessageActionId")
+        for button in dialog._buttons.values()
+    ]
+
+
+@pytest.mark.parametrize(
+    ("kind", "unit", "requested", "limit", "needle", "recheck", "forbid"),
+    [
+        ("memory_estimate", "bytes", 638_976_000, 498_988_944, "约609 MiB", True, "638,976,000"),
+        ("temp_disk", "bytes", 10 * 1024 * 1024, 1024 * 1024, "这不是内存预算不足", False, None),
+        ("channel_count", "count", 120_000, 100_000, "通道数量为 120,000", False, "MiB"),
+        ("not_a_real_kind", "bytes", None, None, "未提供估算", False, "MiB"),
+    ],
+)
+def test_resource_failure_dialog_uses_structured_copy(
+    qtbot, monkeypatch, tmp_path, kind, unit, requested, limit, needle, recheck, forbid,
+):
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtWidgets import QApplication
+    from mf4_analyzer.io.import_limits import (
+        resource_action_ids, resource_technical_detail, resource_user_text,
+    )
+
+    exc = _resource_exc(kind, requested=requested, limit=limit, unit=unit)
+    path = _csv_file(tmp_path / "sample.csv")
+    calls = []
+
+    def broker(method, file_path, **kwargs):
+        calls.append(str(file_path))
+        raise exc
+
+    captured = {}
+
+    def on_resource(dialog):
+        snap = window._imports.current_progress
+        progress = window._imports.progress_dialog
+        captured["snap"] = snap
+        captured["text"] = dialog._text_label.text()
+        captured["actions"] = _action_ids(dialog)
+        captured["plain"] = dialog._text_label.textFormat() == Qt.PlainText
+        captured["detail_hidden"] = dialog._detailed_label.isHidden()
+        dialog.button("copy_diagnostics").click()
+        captured["clipboard"] = QApplication.clipboard().text()
+        dialog.button("toggle_details").click()
+        captured["detail"] = dialog._detailed_label.text()
+        captured["detail_open"] = not dialog._detailed_label.isHidden()
+        captured["toggle_id"] = dialog.button("toggle_details").property("appMessageActionId")
+        assert progress is not None and progress.isVisible()
+        assert progress.progress_bar.minimum() != progress.progress_bar.maximum()
+        assert snap is not None and snap.kind == "waiting_user" and snap.indeterminate is False
+        assert "等待处理导入错误" in snap.headline
+
+    shown, critical = _patch_message_boxes(monkeypatch, on_resource)
+    window, toasts, recent = _window_for_broker(qtbot, monkeypatch, broker)
+    window._load_one(str(path))
+    qtbot.waitUntil(lambda: not window._imports.busy, timeout=15000)
+    assert len(shown) == 1 and not critical
+    assert captured["plain"] is True
+    assert captured["detail_hidden"] is True and captured["detail_open"] is True
+    assert captured["toggle_id"] == "toggle_details"
+    assert captured["text"] == resource_user_text(exc)
+    assert needle in captured["text"]
+    assert "shared-axis" not in captured["text"]
+    assert set(captured["actions"]) == set(resource_action_ids(exc))
+    assert ("recheck_retry" in captured["actions"]) is recheck
+    if forbid:
+        assert forbid not in captured["text"]
+    assert captured["detail"] == resource_technical_detail(
+        exc, stage=exc.stage, detail=exc.detail, request_id=exc.request_id,
+    )
+    assert _SHARED_AXIS in captured["detail"]
+    assert "req-fixed-1" in captured["clipboard"]
+    if requested is not None:
+        assert f"{int(requested):,}" in captured["clipboard"]
+        assert f"{int(requested):,}" in captured["detail"]
+    else:
+        assert "未提供估算" in captured["clipboard"]
+    assert calls == [str(path)]
+    assert not window.files
+    assert str(path) not in recent
+    assert not any(len(item) > 1 and item[1] == "success" for item in toasts)
+
+
+def test_recheck_uses_new_default_limits_for_the_failed_file_only(
+    qtbot, monkeypatch, tmp_path,
+):
+    from mf4_analyzer.io.import_limits import ImportLimits
+
+    good = _csv_file(tmp_path / "good.csv")
+    bad = _csv_file(tmp_path / "bad.csv")
+    exc = _resource_exc(
+        "memory_estimate", requested=638_976_000, limit=498_988_944,
+    )
+    first = ImportLimits(max_memory_bytes=300_000_000, max_output_bytes=150_000_000)
+    second = ImportLimits(max_memory_bytes=200_000_000, max_output_bytes=100_000_000)
+    produced, seen, ids, parsed = [], [], [], []
+
+    def fake_default():
+        value = second if produced else first
+        produced.append(value)
+        return value
+
+    monkeypatch.setattr(
+        "mf4_analyzer.io.import_limits.default_limits", fake_default,
+    )
+
+    def forbid_parent_parse(*args, **kwargs):
+        parsed.append(args)
+        raise AssertionError("parent parsed MF4 during recheck")
+
+    monkeypatch.setattr(
+        "mf4_analyzer.io.loader.DataLoader.load_mf4", forbid_parent_parse,
+    )
+
+    bad_attempts = []
+
+    def broker(method, file_path, **kwargs):
+        seen.append(kwargs.get("limits"))
+        active = window._imports._active
+        ids.append(getattr(active, "worker_request_id", ""))
+        if Path(str(file_path)).name == bad.name:
+            bad_attempts.append(1)
+            if len(bad_attempts) == 1:
+                raise exc
+        return _csv_result()
+
+    held = {}
+
+    def on_resource(dialog):
+        held["fids"] = list(window.files)
+        held["recent"] = list(recent)
+        held["old_limits"] = window._imports._active.limits
+        button = dialog.button("recheck_retry")
+        assert button.property("appMessageActionId") == "recheck_retry"
+        button.setText("关闭")
+        button.click()
+
+    _patch_message_boxes(monkeypatch, on_resource)
+    window, toasts, recent = _window_for_broker(qtbot, monkeypatch, broker)
+    window._open_data_paths([str(good), str(bad)])
+    qtbot.waitUntil(lambda: not window._imports.busy, timeout=15000)
+    assert produced == [first, second]
+    assert seen == [first, first, second]
+    assert seen[2] is second and seen[2] is not held["old_limits"]
+    assert second.max_memory_bytes < first.max_memory_bytes
+    assert seen[2].max_output_bytes == second.max_output_bytes
+    assert ids[2] and ids[2] != ids[1]
+    assert held["fids"] and all(fid in window.files for fid in held["fids"])
+    assert len(window.files) == len(held["fids"]) + 1
+    assert recent.count(str(good)) == 1 and recent.count(str(bad)) == 1
+    assert str(bad) not in held["recent"]
+    assert not parsed
+
+
+def test_close_does_not_retry_or_reregister_successful_files(
+    qtbot, monkeypatch, tmp_path,
+):
+    first = _csv_file(tmp_path / "a.csv")
+    failed = _csv_file(tmp_path / "bad.csv")
+    third = _csv_file(tmp_path / "c.csv")
+    exc = _resource_exc("memory_estimate", requested=638_976_000, limit=498_988_944)
+    names = []
+
+    def broker(method, file_path, **kwargs):
+        names.append(Path(str(file_path)).name)
+        if Path(str(file_path)).name == failed.name:
+            raise exc
+        return _csv_result()
+
+    captured = {}
+
+    def on_close(dialog):
+        captured["actions"] = _action_ids(dialog)
+
+    shown, critical = _patch_message_boxes(monkeypatch, on_close)
+    window, toasts, recent = _window_for_broker(qtbot, monkeypatch, broker)
+    window._open_data_paths([str(first), str(failed), str(third)])
+    qtbot.waitUntil(lambda: not window._imports.busy, timeout=15000)
+    assert len(shown) == 1 and not critical
+    assert "recheck_retry" in captured["actions"]
+    assert names == ["a.csv", "bad.csv", "c.csv"]
+    assert len(window.files) == 2
+    loaded = {fd.filename for fd in window.files.values()}
+    assert loaded == {"a.csv", "c.csv"}
+    assert str(failed) not in recent
+    assert not any(len(item) > 1 and item[1] == "success" and "bad.csv" in item[0] for item in toasts)
+
+
+def test_recheck_refuses_a_changed_source_or_a_missing_target(
+    qtbot, monkeypatch, tmp_path,
+):
+    path = _csv_file(tmp_path / "moving.csv")
+    exc = _resource_exc("memory_estimate", requested=638_976_000, limit=498_988_944)
+    calls = []
+
+    def broker(method, file_path, **kwargs):
+        calls.append(str(file_path))
+        raise exc
+
+    captured = {}
+
+    def change_source(dialog):
+        captured["actions"] = _action_ids(dialog)
+        path.write_text("Time,sig\n0,1\n.1,2\n.2,3\n.3,4\n")
+        dialog.button("recheck_retry").click()
+
+    shown, _critical = _patch_message_boxes(monkeypatch, change_source)
+    window, _toasts, _recent = _window_for_broker(qtbot, monkeypatch, broker)
+    window._load_one(str(path))
+    qtbot.waitUntil(lambda: not window._imports.busy, timeout=15000)
+    assert len(shown) == 1 and "recheck_retry" in captured["actions"]
+    assert calls == [str(path)]
+    assert not window.files
+
+    target = _csv_file(tmp_path / "target.csv")
+    calls.clear()
+    shown.clear()
+
+    def drop_target(dialog):
+        window.view_manager.views = [window.view_manager._make(0)]
+        dialog.button("recheck_retry").click()
+
+    shown, _critical = _patch_message_boxes(monkeypatch, drop_target)
+    window, _toasts, _recent = _window_for_broker(qtbot, monkeypatch, broker)
+    window._load_one(str(target))
+    qtbot.waitUntil(lambda: not window._imports.busy, timeout=15000)
+    assert len(shown) == 1
+    assert calls == [str(target)]
+    assert not window.files
+
+
+def test_recheck_does_not_start_while_the_worker_is_alive(qtbot, tmp_path):
+    path = _csv_file(tmp_path / "busy.csv")
+    entered, release = Event(), Event()
+    calls = []
+
+    def broker(method, file_path, **kwargs):
+        calls.append(str(file_path))
+        entered.set()
+        assert release.wait(2)
+        return _csv_result()
+
+    host = QWidget()
+    qtbot.addWidget(host)
+    owner = ImportCoordinator(host, broker=broker)
+
+    def workflow(request):
+        yield ImportCall("load_csv", str(path))
+
+    owner.submit(workflow)
+    qtbot.waitUntil(entered.is_set)
+    try:
+        assert owner._thread is not None
+        assert owner.accept_resource_recheck(owner._active, owner._last_call) is False
+        assert calls == [str(path)]
+    finally:
+        release.set()
+    qtbot.waitUntil(lambda: not owner.busy, timeout=15000)
+
+
+def test_timeout_extension_does_not_offer_resource_recheck(qtbot, monkeypatch, tmp_path):
+    from mf4_analyzer.io.import_limits import default_limits
+    from mf4_analyzer.io.import_process import ImportProcessError
+    from mf4_analyzer.ui_kit import message_dialog
+    from PyQt5.QtWidgets import QMessageBox
+
+    path = _csv_file(tmp_path / "slow.csv")
+    probes = {"defaults": 0, "resource_dialogs": 0}
+    real_default = default_limits
+
+    def counting_default():
+        probes["defaults"] += 1
+        return real_default()
+
+    def refuse_resource_dialog(*args, **kwargs):
+        probes["resource_dialogs"] += 1
+        raise AssertionError("timeout dialog must not become a resource recheck")
+
+    monkeypatch.setattr("mf4_analyzer.io.import_limits.default_limits", counting_default)
+    monkeypatch.setattr(
+        message_dialog, "build_import_resource_dialog", refuse_resource_dialog, raising=False,
+    )
+    calls = []
+
+    def broker(method, file_path, **kwargs):
+        limits = kwargs.get("limits")
+        calls.append(None if limits is None else (
+            limits.max_memory_bytes, limits.max_output_bytes, limits.timeout_seconds,
+        ))
+        if len(calls) == 1:
+            raise ImportProcessError("timeout", "timed out", stage="读取")
+        return _csv_result()
+
+    window, _toasts, _recent = _window_for_broker(qtbot, monkeypatch, broker)
+
+    def choose(box):
+        labels = [button.text() for button in box.buttons()]
+        ids = [button.property("appMessageActionId") for button in box.buttons()]
+        assert "延长并重试" in labels and "取消导入" in labels
+        assert "recheck_retry" not in ids
+        assert "重新检查并重试" not in labels
+        next(button for button in box.buttons() if button.text() == "延长并重试").click()
+        return 0
+
+    monkeypatch.setattr(QMessageBox, "exec_", choose)
+    window._load_one(str(path))
+    qtbot.waitUntil(lambda: not window._imports.busy, timeout=15000)
+    assert probes["resource_dialogs"] == 0
+    assert len(calls) == 2
+    assert calls[0][0] == calls[1][0] and calls[0][1] == calls[1][1]
+    assert calls[1][2] == calls[0][2] * 2
+    assert probes["defaults"] == 1
+
+
+def test_project_restore_and_batch_dbc_use_the_resource_dialog(
+    qtbot, monkeypatch, tmp_path,
+):
+    from mf4_analyzer.io.import_limits import resource_user_text
+
+    exc = _resource_exc("memory_estimate", requested=638_976_000, limit=498_988_944)
+    source = _csv_file(tmp_path / "restore.csv")
+    state = {"fail": False}
+    calls = []
+
+    def broker(method, file_path, **kwargs):
+        calls.append(Path(str(file_path)).name)
+        if state["fail"]:
+            raise exc
+        return _csv_result()
+
+    shown, critical = _patch_message_boxes(monkeypatch, lambda dialog: None)
+    window, _toasts, _recent = _window_for_broker(qtbot, monkeypatch, broker)
+    window._load_one(str(source))
+    qtbot.waitUntil(lambda: not window._imports.busy, timeout=15000)
+    project = tmp_path / "restore.tlproj"
+    assert window.save_project(project)
+    state["fail"] = True
+    before = len(calls)
+    window.open_project(project)
+    qtbot.waitUntil(lambda: not window._imports.busy, timeout=15000)
+    assert len(shown) == 1 and not critical
+    assert shown[0]._text_label.text() == resource_user_text(exc)
+    assert "shared-axis" not in shown[0]._text_label.text()
+    assert calls[before:] == ["restore.csv"]
+    assert not window.files
+
+    blf = tmp_path / "batch.blf"
+    blf.write_bytes(b"not-a-real-blf")
+    calls.clear()
+    resolved = []
+
+    def batch_broker(method, file_path, **kwargs):
+        calls.append(method)
+        raise exc
+
+    window._imports.broker = batch_broker
+    window.resolve_blf_dbc_paths_for_batch_async(
+        [blf], coordinator=window._imports, on_resolved=resolved.append,
+    )
+    qtbot.waitUntil(lambda: not window._imports.busy, timeout=15000)
+    assert calls == ["read_blf_frames"]
+    assert len(shown) == 2
+    assert shown[-1]._text_label.text() == resource_user_text(exc)
+    assert not critical
+    assert resolved == []

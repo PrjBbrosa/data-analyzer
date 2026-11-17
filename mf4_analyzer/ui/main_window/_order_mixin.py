@@ -49,6 +49,20 @@ class OrderMixin:
         if fid not in self.files:
             return None, None
         fd = self.files[fid]
+        if getattr(fd, "is_native", False):
+            from ...analysis_signal_prepare import load_native_channel
+            if time_range is _INSPECTOR_TIME_RANGE:
+                resolver = getattr(self, "_resolve_job_time_range", None)
+                if callable(resolver):
+                    time_range = resolver("order", time_range)
+                elif self.inspector.top.range_enabled():
+                    time_range = self.inspector.top.range_values()
+                else:
+                    time_range = None
+            prepared = load_native_channel(fd, ch, time_range)
+            if prepared.status != "ready":
+                return None, None
+            return prepared.time, prepared.values
         if ch not in fd.data.columns:
             return None, None
         t = fd.time_array
@@ -99,14 +113,12 @@ class OrderMixin:
         if fid not in self.files:
             return None
         fd = self.files[fid]
-        if ch not in fd.data.columns:
+        if not getattr(fd, "is_native", False) and ch not in fd.data.columns:
             return None
         if p is not None and 'rpm_factor' in p:
             factor = p['rpm_factor']
         else:
             factor = self.inspector.order_ctx.rpm_factor()
-        rpm = fd.data[ch].values.copy() * factor
-        t_rpm = fd.time_array
         if time_range is _INSPECTOR_TIME_RANGE:
             resolver = getattr(self, "_resolve_job_time_range", None)
             if callable(resolver):
@@ -115,15 +127,41 @@ class OrderMixin:
                 time_range = self.inspector.top.range_values()
             else:
                 time_range = None
-        if time_range is not None and t_rpm is not None:
-            t_rpm, rpm = self._mask_time_range(
-                t_rpm, rpm, time_range=time_range)
-        if len(rpm) != n:
-            aligned = self._align_rpm_to_signal_axis(rpm, t_rpm, t_sig, n)
-            if aligned is None:
+        unit = str((getattr(fd, "channel_units", None) or {}).get(ch, "") or "")
+        if getattr(fd, "is_native", False):
+            from ...analysis_signal_prepare import load_native_channel
+            loaded = load_native_channel(fd, ch, time_range)
+            if loaded.status != "ready":
                 return None
-            return aligned
-        return rpm
+            rpm = np.asarray(loaded.values, dtype=float)
+            t_rpm = np.asarray(loaded.time, dtype=float)
+        else:
+            if ch not in fd.data.columns:
+                return None
+            rpm = np.asarray(fd.data[ch].values, dtype=float)
+            t_rpm = fd.time_array
+            if time_range is not None and t_rpm is not None:
+                t_rpm, rpm = self._mask_time_range(
+                    t_rpm, rpm, time_range=time_range)
+        if t_sig is None:
+            if len(rpm) != n:
+                return None
+            return np.asarray(rpm, dtype=float) * float(factor)
+        from ...analysis_signal_prepare import prepare_order_speed
+        prepared = prepare_order_speed(
+            t_sig, rpm, t_rpm,
+            rpm_factor=factor,
+            rpm_unit=unit,
+            rpm_source=(fid, ch),
+            require_full_coverage=True,
+        )
+        if (
+            prepared.status != "ready"
+            or prepared.values is None
+            or len(prepared.values) != int(n)
+        ):
+            return None
+        return np.asarray(prepared.values, dtype=float)
 
     @staticmethod
     def _align_rpm_to_signal_axis(rpm, t_rpm, t_sig, n):
@@ -133,29 +171,21 @@ class OrderMixin:
         time axes, or either axis not strictly increasing). Pure upsample/
         resample of the speed channel — the signal is never touched.
 
-        Same-source files share the time origin and overlapping span, so
-        ``np.interp`` (which clamps to endpoint values outside the range) is
-        safe without extrapolation here.
+        Points outside the motor-speed coverage are not filled from the
+        endpoint. Equal length is not treated as proof that the timestamps match.
         """
-        if t_sig is None or t_rpm is None:
+        from ...analysis_signal_prepare import prepare_order_speed
+        prepared = prepare_order_speed(
+            t_sig, rpm, t_rpm, rpm_factor=1.0, rpm_unit="",
+            require_full_coverage=True,
+        )
+        if (
+            prepared.status != "ready"
+            or prepared.values is None
+            or len(prepared.values) != int(n)
+        ):
             return None
-        t_sig_arr = np.asarray(t_sig, dtype=float).reshape(-1)
-        t_rpm_arr = np.asarray(t_rpm, dtype=float).reshape(-1)
-        rpm_arr = np.asarray(rpm, dtype=float).reshape(-1)
-        if t_sig_arr.size != n or t_rpm_arr.size != rpm_arr.size:
-            return None
-        if t_rpm_arr.size < 2 or t_sig_arr.size < 2:
-            return None
-        if not np.all(np.isfinite(t_rpm_arr)) or not np.all(np.isfinite(t_sig_arr)):
-            return None
-        # Both the source (xp) and the query (x) axes must be strictly
-        # increasing for np.interp to be well-defined / monotone-safe.
-        if np.any(np.diff(t_rpm_arr) <= 0) or np.any(np.diff(t_sig_arr) <= 0):
-            return None
-        aligned = np.interp(t_sig_arr, t_rpm_arr, rpm_arr)
-        if aligned.size != n:
-            return None
-        return aligned
+        return np.asarray(prepared.values, dtype=float)
 
     # Revolution counting and the angle-domain sample count are pure numerics
     # shared with the batch auto-NFFT resolver, so they live in
@@ -240,7 +270,7 @@ class OrderMixin:
         # (it builds the analysis window from it); registering it here keeps
         # the key field-aligned with the dataclass so a window change forces a
         # recompute instead of reusing a result built with the old window.
-        return {
+        out = {
             'nfft': int(nfft),
             'nfft_mode': p.get('nfft_mode', 'fixed'),
             'window': p.get('window', DEFAULT_ANALYSIS_WINDOW),
@@ -264,6 +294,10 @@ class OrderMixin:
             ),
             'time_range': time_range,
         }
+        for name in ("prepare_method", "prepare_policy"):
+            if p.get(name) not in (None, ""):
+                out[name] = p.get(name)
+        return out
 
     def _order_analysis_cache_key(self, fid, ch, p, rpm_source, time_range):
         return self.analysis_caches['order'].make_key(
@@ -302,6 +336,37 @@ class OrderMixin:
             return
         self.chart_stack.cancel_page_transition("order-live-result")
 
+    def _order_analysis_axis(self, fid, ch, t, sig, fs, time_range, *, materialize=True):
+        """Legacy index rebuild stays on old sources. Native keeps its own clock."""
+        fd = self.files.get(fid)
+        if getattr(fd, "is_native", False):
+            from ...analysis_signal_prepare import load_native_channel
+            span = time_range
+            if time_range is _INSPECTOR_TIME_RANGE:
+                resolver = getattr(self, "_resolve_job_time_range", None)
+                if callable(resolver):
+                    span = resolver("order", time_range)
+                elif self.inspector.top.range_enabled():
+                    span = self.inspector.top.range_values()
+                else:
+                    span = None
+            loaded = load_native_channel(fd, ch, span)
+            if loaded.status != "ready" or loaded.source_fs is None:
+                return None
+            return loaded.time, loaded.values, loaded.source_fs, {
+                "method": loaded.method,
+                "policy": "native",
+                **loaded.provenance,
+            }
+        t_arr = np.asarray(t, dtype=float) if t is not None else np.array([])
+        if len(t_arr) < 2 or np.any(np.diff(t_arr) <= 0):
+            t_arr = np.arange(len(sig), dtype=float) / float(fs)
+        from ...analysis_time_axis import prepare_analysis_time_axis
+        axis, analysis_fs, facts = prepare_analysis_time_axis(
+            t_arr, fs, materialize=materialize,
+        )
+        return axis, sig, analysis_fs, facts
+
     def _order_effective_params_for_source(self, p, fid, ch, rpm_source, time_range):
         t, sig = self._order_sig_for((fid, ch), time_range=time_range)
         if sig is None or len(sig) < 100:
@@ -311,16 +376,17 @@ class OrderMixin:
         if rpm is None:
             return None
         fs = p.get('fs') or self.inspector.order_ctx.fs()
-        t_arr = np.asarray(t, dtype=float) if t is not None else np.array([])
-        if len(t_arr) < 2 or np.any(np.diff(t_arr) <= 0):
-            t_arr = np.arange(len(sig), dtype=float) / float(fs)
-        from ...analysis_time_axis import prepare_analysis_time_axis
-        _axis, analysis_fs, _facts = prepare_analysis_time_axis(
-            t_arr, fs, materialize=False,
+        resolved = self._order_analysis_axis(
+            fid, ch, t, sig, fs, time_range, materialize=False,
         )
-        return self._resolve_order_effective_params(
-            dict(p, fs=analysis_fs), rpm, t_arr,
-        )
+        if resolved is None:
+            return None
+        t_arr, _sig, analysis_fs, facts = resolved
+        params = dict(p, fs=analysis_fs)
+        if isinstance(facts, dict) and facts.get("policy") == "native":
+            params["prepare_method"] = facts.get("method")
+            params["prepare_policy"] = "native"
+        return self._resolve_order_effective_params(params, rpm, t_arr)
 
     def _warn_if_order_speed_unsuitable(self, rpm):
         ok, message = assess_speed_for_order(rpm)
@@ -561,14 +627,19 @@ class OrderMixin:
         if warn:
             self._warn_if_order_speed_unsuitable(rpm)
         fs = op.get('fs') or self.inspector.order_ctx.fs()
-        # Audit fix R6/C7: COT requires strictly monotonic ``t``; synthesise a
-        # uniform grid from the inspector fs when the timestamps are degenerate.
-        t_arr = np.asarray(t, dtype=float) if t is not None else np.array([])
-        if len(t_arr) < 2 or np.any(np.diff(t_arr) <= 0):
-            t_arr = np.arange(len(sig), dtype=float) / float(fs)
-        from ...analysis_time_axis import prepare_analysis_time_axis
-        t_arr, fs, time_facts = prepare_analysis_time_axis(t_arr, fs)
+        resolved = self._order_analysis_axis(
+            fid, ch, t, sig, fs, time_range, materialize=True,
+        )
+        if resolved is None:
+            outcome = getattr(self, '_order_outcome', None)
+            if outcome is not None:
+                outcome.skipped.append("时间轴无效")
+            return None
+        t_arr, sig, fs, time_facts = resolved
         op = dict(op, fs=fs)
+        if isinstance(time_facts, dict) and time_facts.get("policy") == "native":
+            op["prepare_method"] = time_facts.get("method")
+            op["prepare_policy"] = "native"
         orig_auto = (
             op.get('nfft') is None
             or op.get('nfft_mode') == 'auto'

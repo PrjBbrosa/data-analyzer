@@ -103,6 +103,15 @@ def _time_axis(time, size):
     return axis
 
 
+_ALIGN_METHODS = frozenset({"direct", "linear", "zoh"})
+_APPLY_STATUS = frozenset({"derived_intent", "unapplied", "applied"})
+_REPRESENTATIONS = frozenset({"raw", "physical"})
+_OPTIONAL_KEYS = frozenset({
+    "axis", "method", "segment", "representation", "source_revision",
+    "apply_status", "input_tokens",
+})
+
+
 @dataclass(frozen=True)
 class DeriveEntry:
     name: str
@@ -114,6 +123,13 @@ class DeriveEntry:
     a: str | None = None
     b: str | None = None
     expr: str | None = None
+    axis: str | None = None
+    method: str | None = None
+    segment: int | None = None
+    representation: str | None = None
+    source_revision: str | None = None
+    apply_status: str | None = None
+    input_tokens: tuple | None = None
 
     def inputs(self) -> tuple[str, ...]:
         if self.kind == "single":
@@ -173,6 +189,7 @@ class DeriveEntry:
                 payload["a"] = self.a
             if self.b is not None:
                 payload["b"] = self.b
+        payload.update(_present_alignment(self))
         return payload
 
 
@@ -184,7 +201,65 @@ class RemoveEntry:
         return {"op": "remove", "names": list(self.names)}
 
 
-def make_single(name, unit, fn, src, param) -> DeriveEntry:
+def _present_alignment(entry) -> dict:
+    payload = {}
+    for key in ("axis", "method", "representation", "source_revision", "apply_status"):
+        value = getattr(entry, key)
+        if value is not None:
+            payload[key] = value
+    if entry.segment is not None:
+        payload["segment"] = int(entry.segment)
+    if entry.input_tokens:
+        payload["input_tokens"] = list(entry.input_tokens)
+    return payload
+
+
+def _alignment_kwargs(raw) -> dict:
+    segment = None
+    if "segment" in raw and raw.get("segment") is not None:
+        segment = raw.get("segment")
+        if isinstance(segment, bool) or not isinstance(segment, int) or segment < 0:
+            raise RecipeError("unrecognized", "segment 必须是非负整数")
+    method = raw.get("method")
+    if method is not None:
+        method = _text(method, "method")
+        if method not in _ALIGN_METHODS:
+            raise RecipeError("unrecognized", f"不支持的对齐方法: {method}")
+    representation = raw.get("representation")
+    if representation is not None:
+        representation = _text(representation, "representation")
+        if representation not in _REPRESENTATIONS:
+            raise RecipeError("unrecognized", "representation 只能是 raw 或 physical")
+    apply_status = raw.get("apply_status")
+    if apply_status is not None:
+        apply_status = _text(apply_status, "apply_status")
+        if apply_status not in _APPLY_STATUS:
+            raise RecipeError("unrecognized", "apply_status 无法识别")
+    axis = None if raw.get("axis") is None else _text(raw.get("axis"), "axis")
+    revision = None if raw.get("source_revision") is None else _text(
+        raw.get("source_revision"), "source_revision",
+    )
+    tokens = raw.get("input_tokens")
+    if tokens is None:
+        stored_tokens = None
+    elif isinstance(tokens, str) or not isinstance(tokens, (list, tuple)):
+        raise RecipeError("unrecognized", "input_tokens 必须是列表")
+    else:
+        stored_tokens = tuple(_text(item, "input_tokens") for item in tokens)
+    return dict(
+        axis=axis,
+        method=method,
+        segment=segment,
+        representation=representation,
+        source_revision=revision,
+        apply_status=apply_status,
+        input_tokens=stored_tokens,
+    )
+
+
+def make_single(name, unit, fn, src, param, *, axis=None, method=None,
+                segment=None, representation=None, source_revision=None,
+                apply_status=None, input_tokens=None) -> DeriveEntry:
     fn = _text(fn, "fn")
     if fn not in SINGLE_FNS:
         raise RecipeError("unrecognized", f"不支持的单通道运算: {fn}")
@@ -203,10 +278,19 @@ def make_single(name, unit, fn, src, param) -> DeriveEntry:
         fn=fn,
         src=_text(src, "src"),
         param=stored,
+        axis=None if axis is None else _text(axis, "axis"),
+        method=None if method is None else _text(method, "method"),
+        segment=segment,
+        representation=None if representation is None else _text(representation, "representation"),
+        source_revision=None if source_revision is None else _text(source_revision, "source_revision"),
+        apply_status=None if apply_status is None else _text(apply_status, "apply_status"),
+        input_tokens=None if input_tokens is None else tuple(input_tokens),
     )
 
 
-def make_dual(name, unit, fn, a, b) -> DeriveEntry:
+def make_dual(name, unit, fn, a, b, *, axis=None, method=None, segment=None,
+              representation=None, source_revision=None, apply_status=None,
+              input_tokens=None) -> DeriveEntry:
     fn = _text(fn, "fn")
     if fn not in DUAL_FNS:
         raise RecipeError("unrecognized", f"不支持的双通道运算: {fn}")
@@ -217,10 +301,19 @@ def make_dual(name, unit, fn, a, b) -> DeriveEntry:
         fn=fn,
         a=_text(a, "a"),
         b=_text(b, "b"),
+        axis=None if axis is None else _text(axis, "axis"),
+        method=None if method is None else _text(method, "method"),
+        segment=segment,
+        representation=None if representation is None else _text(representation, "representation"),
+        source_revision=None if source_revision is None else _text(source_revision, "source_revision"),
+        apply_status=None if apply_status is None else _text(apply_status, "apply_status"),
+        input_tokens=None if input_tokens is None else tuple(input_tokens),
     )
 
 
-def make_expression(name, unit, expr, a=None, b=None) -> DeriveEntry:
+def make_expression(name, unit, expr, a=None, b=None, *, axis=None, method=None,
+                    segment=None, representation=None, source_revision=None,
+                    apply_status=None, input_tokens=None) -> DeriveEntry:
     return DeriveEntry(
         name=_text(name, "name"),
         unit=_unit(unit),
@@ -228,6 +321,13 @@ def make_expression(name, unit, expr, a=None, b=None) -> DeriveEntry:
         expr=_text(expr, "expr"),
         a=None if a is None else _text(a, "a"),
         b=None if b is None else _text(b, "b"),
+        axis=None if axis is None else _text(axis, "axis"),
+        method=None if method is None else _text(method, "method"),
+        segment=segment,
+        representation=None if representation is None else _text(representation, "representation"),
+        source_revision=None if source_revision is None else _text(source_revision, "source_revision"),
+        apply_status=None if apply_status is None else _text(apply_status, "apply_status"),
+        input_tokens=None if input_tokens is None else tuple(input_tokens),
     )
 
 
@@ -235,18 +335,26 @@ def derive_from_dict(raw) -> DeriveEntry:
     if not isinstance(raw, dict) or raw.get("op") != "derive":
         raise RecipeError("unrecognized")
     kind = raw.get("kind")
+    alignment = _alignment_kwargs(raw)
     if kind == "single":
-        _reject_unknown(raw, {"op", "name", "unit", "kind", "fn", "src", "param"})
+        _reject_unknown(raw, {"op", "name", "unit", "kind", "fn", "src", "param"} | _OPTIONAL_KEYS)
         if "param" not in raw:
             raise RecipeError("unrecognized", "缺少 param")
-        return make_single(raw.get("name"), raw.get("unit"), raw.get("fn"), raw.get("src"), raw.get("param"))
+        return make_single(
+            raw.get("name"), raw.get("unit"), raw.get("fn"), raw.get("src"), raw.get("param"),
+            **alignment,
+        )
     if kind == "dual":
-        _reject_unknown(raw, {"op", "name", "unit", "kind", "fn", "a", "b"})
-        return make_dual(raw.get("name"), raw.get("unit"), raw.get("fn"), raw.get("a"), raw.get("b"))
+        _reject_unknown(raw, {"op", "name", "unit", "kind", "fn", "a", "b"} | _OPTIONAL_KEYS)
+        return make_dual(
+            raw.get("name"), raw.get("unit"), raw.get("fn"), raw.get("a"), raw.get("b"),
+            **alignment,
+        )
     if kind == "expression":
-        _reject_unknown(raw, {"op", "name", "unit", "kind", "expr", "a", "b"})
+        _reject_unknown(raw, {"op", "name", "unit", "kind", "expr", "a", "b"} | _OPTIONAL_KEYS)
         return make_expression(
             raw.get("name"), raw.get("unit"), raw.get("expr"), raw.get("a"), raw.get("b"),
+            **alignment,
         )
     raise RecipeError("unrecognized")
 

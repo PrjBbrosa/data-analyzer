@@ -36,6 +36,7 @@ from .channel_frame import (
     is_tabular_frame,
 )
 from .file_data import FileData, _TIME_NAMES
+from .native_signal_store import NativeSignalStore, SourceClosedError
 from .import_process import ImportProcessError, run_import
 from . import loader as _loader
 from .loader import (
@@ -429,6 +430,41 @@ def _safe_metadata(value):
     return str(value)
 
 
+def _native_descriptor(
+    loaded: LoadedSource,
+    *,
+    adapter_key: str,
+    probe_cost: str,
+) -> SourceDescriptor:
+    """Describe a native source without reading a shared row count or Fs."""
+    fd = loaded.file_data
+    store = fd.native_store
+    channels = tuple(str(name) for name in fd.get_signal_channels())
+    units = {name: str(fd.channel_units.get(name, "") or "") for name in channels}
+    metadata = _safe_metadata(dict(loaded.metadata))
+    metadata.update({
+        "adapter_key": adapter_key,
+        "probe_cost": probe_cost,
+        "layout": "native",
+        "sample_count": None,
+        "sample_rate": None,
+        "time_start": None,
+        "time_end": None,
+        "axis_ids": store.axis_ids(),
+        "channel_sample_counts": store.sample_counts(),
+    })
+    return SourceDescriptor(
+        source_id=loaded.source_id,
+        source_path=loaded.source_path,
+        group_id=loaded.group_id,
+        display_name=loaded.display_name,
+        channel_names=channels,
+        units=units,
+        fs=None,
+        metadata=metadata,
+    )
+
+
 def _descriptor_from_loaded(
     loaded: LoadedSource,
     *,
@@ -436,6 +472,10 @@ def _descriptor_from_loaded(
     probe_cost: str,
 ) -> SourceDescriptor:
     fd = loaded.file_data
+    if getattr(fd, "native_store", None) is not None:
+        return _native_descriptor(
+            loaded, adapter_key=adapter_key, probe_cost=probe_cost,
+        )
     channels = tuple(str(name) for name in fd.get_signal_channels())
     units = {name: str(fd.channel_units.get(name, "") or "") for name in channels}
     metadata = _safe_metadata(dict(loaded.metadata))
@@ -750,6 +790,86 @@ class SourceAdapter:
         if self.return_shape == "groups":
             return self._loaded_groups(text_path, result)
         return (self._loaded_single(text_path, result),)
+
+    def load_native_payload(
+        self,
+        path: os.PathLike[str] | str,
+        store,
+        *,
+        context: Mapping[str, object] | None = None,
+    ) -> tuple[LoadedSource, ...]:
+        """Bind an already-built native store. Does not call ``load_mf4``.
+
+        The logical source stays the existing MF4 root id. Clock groups are
+        internal and do not split the file card. Other formats have no native
+        payload and are not given a guessed sampling rate here.
+        """
+        del context  # The payload is already decoded; this branch does not probe.
+        if self.key != "mdf":
+            raise SourceUnavailableError(f"{self.key} 没有 native payload 分支")
+        if not isinstance(store, NativeSignalStore):
+            raise TypeError("native payload 必须是 NativeSignalStore")
+        if store.closed:
+            raise SourceClosedError("已关闭的 native store 不能装入来源")
+        canonical = canonical_source_path(path)
+        group_id = "root"
+        source_id = stable_source_id(self.key, canonical, group_id)
+        if store.source_id != source_id:
+            raise SourceIdentityError(
+                f"native store source_id {store.source_id} 与 MF4 root {source_id} 不一致"
+            )
+        channel_metadata = store.channel_metadata()
+        source_metadata = {
+            "adapter_key": self.key,
+            "layout": "native",
+            "source_root": group_id,
+            "capability_notes": self.capability_notes,
+            "channel_metadata_capability": "unit_and_physical_occurrence",
+            "quantity_reference_metadata": False,
+            "renamed_channels": list(store.renamed_channels()),
+            "channel_metadata": channel_metadata,
+        }
+        fd = FileData.from_native_store(
+            canonical,
+            store,
+            source_metadata=source_metadata,
+            channel_metadata=channel_metadata,
+        )
+        return (LoadedSource(
+            source_id=source_id,
+            source_path=canonical,
+            group_id=group_id,
+            display_name=Path(path).name,
+            file_data=fd,
+            metadata=dict(source_metadata),
+        ),)
+
+    def load_native_sources(
+        self,
+        path: os.PathLike[str] | str,
+        *,
+        context: Mapping[str, object] | None = None,
+    ) -> tuple[LoadedSource, ...]:
+        """Read an MF4 through the native broker. ``load_sources`` stays on ``load_mf4``."""
+        del context
+        if self.key != "mdf":
+            raise SourceUnavailableError(f"{self.key} 没有 native 读取")
+        text_path = os.fspath(path)
+        result = run_import("load_mf4_native", text_path)
+        store = getattr(result, "native_store", None)
+        if not isinstance(store, NativeSignalStore):
+            raise TypeError("load_mf4_native 必须返回带 NativeSignalStore 的结果")
+        return self.load_native_payload(text_path, store)
+
+    def explicit_native_method(self) -> str:
+        """Broker method for a caller-explicit native read.
+
+        ``loader_name`` stays ``load_mf4``. This does not open a file and is
+        not the default open, drag, recent, project, Batch, or Replay path.
+        """
+        if self.key != "mdf" or self.loader_name != "load_mf4":
+            raise SourceUnavailableError(f"{self.key} 没有显式原生读取")
+        return "load_mf4_native"
 
     def _loaded_single(self, path: str, result) -> LoadedSource:
         if not isinstance(result, tuple) or len(result) not in {3, 5}:

@@ -434,6 +434,10 @@ def preprocess_batch_signal(
     }
     if x_values_arr is not None:
         effective["x_channel_aligned"] = True
+    from .analysis_signal_prepare import batch_stage_facts
+    effective["prepare"] = batch_stage_facts(
+        pair_alignment=params.get("pair_alignment"),
+    )
 
     return BatchPreprocessResult(
         signal=np.asarray(signal_arr, dtype=float),
