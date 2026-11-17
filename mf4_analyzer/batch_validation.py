@@ -8,6 +8,7 @@ from typing import Any, Mapping
 
 import numpy as np
 
+from .batch_preprocess import time_request_needs_rate
 from .batch_recipe import TIME_RENDER_DEFAULTS
 from .signal.fft import get_analysis_window
 
@@ -566,13 +567,19 @@ def validate_task(
     issues = list(validate_recipe(
         method, params, rpm_channel=rpm_channel, rpm_signal=rpm_signal,
     ))
-    if not _positive_number(fs):
+    original_time_export = (
+        method == "time"
+        and time is not None
+        and int(sample_count) >= 1
+        and not time_request_needs_rate(params)
+    )
+    if not _positive_number(fs) and not original_time_export:
         issues.append(ValidationIssue(
             "fs", "invalid_effective_fs", "effective fs must be finite and > 0",
         ))
         return tuple(issues)
 
-    if int(sample_count) < 2:
+    if int(sample_count) < 1 or (int(sample_count) < 2 and not original_time_export):
         issues.append(ValidationIssue(
             "samples", "too_few_samples", "task requires at least 2 samples",
         ))

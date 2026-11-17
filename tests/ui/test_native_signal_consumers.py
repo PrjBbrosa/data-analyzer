@@ -548,7 +548,7 @@ def test_native_preview_stats_and_export_use_channel_clocks(native_file, tmp_pat
         )
         mw._do_export_excel("f", ["grid", "fast"], include_time=True, use_range=False)
         headers = [cell.value for cell in openpyxl.load_workbook(wide).active[1]]
-        assert headers == ["Time", "grid", "fast"]
+        assert headers == ["channel", "record", "segment", "time", "value", "valid"]
 
         flagged = tmp_path / "flagged.xlsx"
         monkeypatch.setattr(
@@ -557,10 +557,10 @@ def test_native_preview_stats_and_export_use_channel_clocks(native_file, tmp_pat
         mw._do_export_excel("f", ["flagged"], include_time=True, use_range=False)
         sheet = openpyxl.load_workbook(flagged).active
         headers = [cell.value for cell in sheet[1]]
-        assert headers == ["Channel", "Time", "Value", "Invalid"]
+        assert headers == ["channel", "record", "segment", "time", "value", "valid"]
         body = list(sheet.iter_rows(min_row=2, values_only=True))
         assert any(
-            row[2] == pytest.approx(20.0) and row[3] in (True, 1)
+            row[4] == pytest.approx(20.0) and row[5] in (False, 0)
             for row in body
         )
 
@@ -573,6 +573,81 @@ def test_native_preview_stats_and_export_use_channel_clocks(native_file, tmp_pat
         mw._do_export_wwt("f", ["fast", "other"], use_range=False)
         assert dialogs == []
         assert notes and "共同" in notes[-1][0]
+    finally:
+        mw.files.pop("f", None)
+        mw.close()
+
+
+def test_native_excel_export_keeps_exact_integers_as_text(qapp, tmp_path, monkeypatch):
+    from PyQt5.QtWidgets import QFileDialog
+    import openpyxl
+
+    from mf4_analyzer.io.file_data import FileData
+    from mf4_analyzer.io.native_signal_store import AxisSpec, ChannelSpec, NativeSignalStore
+    from mf4_analyzer.ui.main_window.window import MainWindow
+
+    raw = np.array([2**53 + 3, 2**53 + 5], dtype=np.int64)
+    store = NativeSignalStore.build(
+        "wide-int",
+        (AxisSpec("t", "clk", "time", "s", np.array([0.0, 1.0])),),
+        (ChannelSpec(0, 1, "wide", "t", raw, unit="count"),),
+    )
+    mw = MainWindow()
+    mw.files["f"] = FileData.from_native_store(tmp_path / "wide.mf4", store)
+    out = tmp_path / "wide.xlsx"
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *args, **kwargs: (str(out), ""))
+    try:
+        mw._do_export_excel("f", ["wide"], include_time=True, use_range=False)
+        sheet = openpyxl.load_workbook(out).active
+        values = [row[4] for row in sheet.iter_rows(min_row=2, values_only=True)]
+        assert values == [str(2**53 + 3), str(2**53 + 5)]
+    finally:
+        mw.files.pop("f", None)
+        mw.close()
+
+
+def test_native_wwt_export_reports_a_failed_channel_instead_of_saving(qapp, tmp_path, monkeypatch):
+    from PyQt5.QtWidgets import QFileDialog
+
+    from mf4_analyzer.io.file_data import FileData
+    from mf4_analyzer.io.native_signal_store import AxisSpec, ChannelSpec, NativeSignalStore
+    from mf4_analyzer.io import signal_access
+    from mf4_analyzer.io.signal_access import SignalAccessError
+    from mf4_analyzer.ui.main_window.window import MainWindow
+
+    store = NativeSignalStore.build(
+        "wwt-fail",
+        (AxisSpec("t", "clk", "time", "s", np.array([0.0, 1.0, 2.0])),),
+        (
+            ChannelSpec(0, 1, "kept", "t", np.array([1.0, 2.0, 3.0]), unit="Nm"),
+            ChannelSpec(0, 2, "broken", "t", np.array([4.0, 5.0, 6.0]), unit="Nm"),
+        ),
+    )
+    mw = MainWindow()
+    notes = []
+    dialogs = []
+    mw.files["f"] = FileData.from_native_store(tmp_path / "wwt.mf4", store)
+    mw.toast = lambda msg, level="info": notes.append((str(msg), level))
+
+    real_read = signal_access.read_signal
+
+    def fail_broken(source, channel, *args, **kwargs):
+        if channel == "broken":
+            raise SignalAccessError("broken 样本不可读")
+        return real_read(source, channel, *args, **kwargs)
+
+    monkeypatch.setattr(signal_access, "read_signal", fail_broken)
+    monkeypatch.setattr(
+        QFileDialog, "getSaveFileName",
+        lambda *args, **kwargs: dialogs.append(args) or (str(tmp_path / "out.wwt"), ""),
+    )
+    try:
+        mw._do_export_wwt("f", ["kept", "broken"], use_range=False)
+        assert dialogs == []
+        assert notes
+        assert "broken" in notes[-1][0]
+        assert notes[-1][1] == "warning"
+        assert not (tmp_path / "out.wwt").exists()
     finally:
         mw.files.pop("f", None)
         mw.close()

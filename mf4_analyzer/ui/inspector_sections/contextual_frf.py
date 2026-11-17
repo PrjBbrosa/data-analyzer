@@ -224,6 +224,13 @@ class FrfContextual(QWidget):
         compute_form.addRow(
             "段长:", _fit_field(self.spin_t_win, max_width=_SHORT_FIELD_MAX_WIDTH)
         )
+        self.chk_align_then_compute = QCheckBox("对齐后计算", params_card)
+        self.chk_align_then_compute.setObjectName("frfAlignThenCompute")
+        self.chk_align_then_compute.setToolTip(
+            "不同采样率时，勾选后才把较快的一侧滤到较慢的采样率。"
+            "只支持同一起点的整数倍；非整数比和分数延时保持不计算。"
+        )
+        compute_form.addRow("异采样:", self.chk_align_then_compute)
 
         self.spin_overlap = _no_buttons(QSpinBox(params_card))
         self.spin_overlap.setRange(0, 95)
@@ -490,7 +497,7 @@ class FrfContextual(QWidget):
             self.spin_coherence_threshold,
         ):
             spin.valueChanged.connect(self._on_param_changed)
-        for check in (self.chk_fade_low_coherence,):
+        for check in (self.chk_fade_low_coherence, self.chk_align_then_compute):
             check.toggled.connect(self._on_param_changed)
     def time_range_layout(self):
         return self._time_range_slot
@@ -756,12 +763,15 @@ class FrfContextual(QWidget):
             "window": str(self.combo_window.currentData()),
             "periodic_window": True,
             "detrend": "constant",
+            "align_then_compute": bool(self.chk_align_then_compute.isChecked()),
         }
 
     def frf_params(self):
         from ...signal.frf import FrfParams
 
-        return FrfParams(**self.compute_params())
+        raw = dict(self.compute_params())
+        raw.pop("align_then_compute", None)
+        return FrfParams(**raw)
 
     def display_params(self) -> dict:
         return {
@@ -828,6 +838,8 @@ class FrfContextual(QWidget):
                 self.chk_fade_low_coherence.setChecked(
                     bool(values["fade_low_coherence"])
                 )
+            if "align_then_compute" in values:
+                self.chk_align_then_compute.setChecked(bool(values["align_then_compute"]))
         finally:
             self._applying_preset = False
         self._sync_nfft_enabled()

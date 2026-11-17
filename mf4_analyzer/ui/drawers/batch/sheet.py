@@ -2061,13 +2061,16 @@ class BatchSheet(QDialog):
                 )
             # ``apply_preset`` is a full-recipe boundary.  Canonical time
             # recipes omit default-valued sparse fields, so materialize those
-            # defaults for the controls here.  ``apply_params`` itself remains
+            # defaults for the controls here.  FRF recipes likewise omit a
+            # disabled alignment flag; the checkbox must return to unchecked
+            # or the captured baseline stays checked while the saved recipe
+            # still submits alignment off.  ``apply_params`` itself remains
             # incremental for built-in presets and other partial patches.
-            control_params = (
-                {**TIME_RENDER_DEFAULTS, **params}
-                if method == "time"
-                else params
-            )
+            control_params = dict(params)
+            if method == "time":
+                control_params = {**TIME_RENDER_DEFAULTS, **params}
+            elif method == "frf":
+                control_params.setdefault("align_then_compute", False)
             self.apply_params(control_params)
             if "rpm_factor" in params:
                 self._input_panel.apply_rpm_factor(params["rpm_factor"])

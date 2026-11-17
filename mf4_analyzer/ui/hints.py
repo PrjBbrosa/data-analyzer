@@ -344,9 +344,16 @@ _HINTS = (
     ),
     Hint(
         id="replay.mf4_alignment",
-        text="回放对齐可能含非原始值",
+        text="回放页按各通道自己的时间打开",
         surface="discovery",
         priority=40,
+    ),
+    Hint(
+        id="frf.align_then_compute",
+        text="异采样先勾选对齐再计算",
+        surface="discovery",
+        modes=frozenset({"frf"}),
+        priority=44,
     ),
     Hint(
         id="time.custom_x_paths",

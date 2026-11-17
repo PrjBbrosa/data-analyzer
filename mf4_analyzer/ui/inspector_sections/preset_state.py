@@ -60,7 +60,7 @@ _PARAM_KEYS = {
     "frf": frozenset({
         "estimator", "window", "t_win_s", "overlap", "nfft_mode", "nfft",
         "magnitude_scale", "frequency_scale", "phase_mode",
-        "coherence_threshold", "fade_low_coherence",
+        "coherence_threshold", "fade_low_coherence", "align_then_compute",
     }),
 }
 

@@ -40,7 +40,7 @@ class BatchPreprocessResult:
 
     signal: np.ndarray
     time: np.ndarray
-    effective_fs: float
+    effective_fs: float | None
     rpm: np.ndarray | None
     x_values: np.ndarray | None
     pre_filter_signal: np.ndarray
@@ -67,6 +67,26 @@ def _finite_number(value: Any) -> bool:
 
 def _positive_number(value: Any) -> bool:
     return _finite_number(value) and float(value) > 0.0
+
+
+def time_request_needs_rate(params: Mapping[str, Any] | None) -> bool:
+    """True when the request resamples or filters and therefore needs Fs.
+
+    An original time export can keep the supplied clock without a rate.
+    Spectrum, decimation, a new target rate, and the user filter cannot.
+    """
+
+    params = params or {}
+    time_preprocess = params.get("time_preprocess") or {}
+    if not isinstance(time_preprocess, Mapping):
+        return True
+    mode = str(time_preprocess.get("sample_mode", "original") or "original").strip().lower()
+    if mode != "original":
+        return True
+    filter_raw = params.get("filter") or {}
+    if not isinstance(filter_raw, Mapping):
+        return True
+    return bool(filter_raw.get("enabled", False))
 
 
 def _time_range_mask(time: np.ndarray, time_range) -> np.ndarray:
@@ -239,9 +259,6 @@ def preprocess_batch_signal(
     if nonfinite_policy not in {"drop", "reject", "preserve"}:
         raise ValueError("unknown nonfinite_policy")
 
-    if not _positive_number(fs):
-        raise ValueError("fs must be finite and > 0")
-    fs = float(fs)
     if params is None:
         params = {}
     if not isinstance(params, Mapping):
@@ -283,6 +300,16 @@ def preprocess_batch_signal(
     if not isinstance(filter_raw, Mapping):
         raise TypeError("filter must be a mapping")
     requested_filter = deepcopy(dict(filter_raw))
+    rate_required = time_request_needs_rate({
+        "time_preprocess": time_preprocess,
+        "filter": filter_raw,
+    })
+    if not _positive_number(fs):
+        if rate_required or time is None:
+            raise ValueError("fs must be finite and > 0")
+        fs = None
+    else:
+        fs = float(fs)
 
     requested = {
         "time_range": deepcopy(params.get("time_range")),
@@ -336,7 +363,9 @@ def preprocess_batch_signal(
         rpm_arr = rpm_arr[finite_mask]
     if x_values_arr is not None:
         x_values_arr = x_values_arr[finite_mask]
-    if len(signal_arr) < 2:
+    if len(signal_arr) < 1 or (
+        len(signal_arr) < 2 and (nonfinite_policy != "preserve" or rate_required)
+    ):
         raise ValueError("fewer than 2 finite aligned samples remain")
     if finite_samples_dropped:
         warnings.append(
@@ -360,8 +389,17 @@ def preprocess_batch_signal(
         signal_arr = signal_arr - float(np.mean(signal_arr))
 
     # 5. Sampling, including independent RPM and X anti-alias paths.
-    mode, target_fs, decimation_factor = _sampling_request(time_preprocess, fs)
-    if target_fs < fs * (1.0 - 1e-12):
+    if fs is None:
+        mode, target_fs, decimation_factor = "original", None, 1
+        anti_alias = {
+            "enabled": False,
+            "method": None,
+            "spec": None,
+            "regularized_input": False,
+        }
+    else:
+        mode, target_fs, decimation_factor = _sampling_request(time_preprocess, fs)
+    if fs is not None and target_fs < fs * (1.0 - 1e-12):
         if np.any(np.diff(time_arr) <= 0.0):
             raise ValueError(
                 "sampling requires a strictly increasing aligned time axis"
@@ -416,7 +454,7 @@ def preprocess_batch_signal(
             else None
         ),
         "decimation_factor": decimation_factor,
-        "effective_fs": float(target_fs),
+        "effective_fs": None if target_fs is None else float(target_fs),
         "anti_alias": anti_alias,
     }
     effective = {
@@ -430,7 +468,7 @@ def preprocess_batch_signal(
         "remove_mean": remove_mean,
         "sampling": sampling_facts,
         "filter": filter_state,
-        "effective_fs": float(target_fs),
+        "effective_fs": None if target_fs is None else float(target_fs),
     }
     if x_values_arr is not None:
         effective["x_channel_aligned"] = True
@@ -442,7 +480,7 @@ def preprocess_batch_signal(
     return BatchPreprocessResult(
         signal=np.asarray(signal_arr, dtype=float),
         time=np.asarray(time_arr, dtype=float),
-        effective_fs=float(target_fs),
+        effective_fs=None if target_fs is None else float(target_fs),
         rpm=(None if rpm_arr is None else np.asarray(rpm_arr, dtype=float)),
         x_values=(
             None
@@ -456,4 +494,8 @@ def preprocess_batch_signal(
     )
 
 
-__all__ = ["BatchPreprocessResult", "preprocess_batch_signal"]
+__all__ = [
+    "BatchPreprocessResult",
+    "preprocess_batch_signal",
+    "time_request_needs_rate",
+]

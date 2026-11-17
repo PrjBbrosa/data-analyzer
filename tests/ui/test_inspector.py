@@ -197,6 +197,7 @@ def test_frf_contextual_separates_compute_and_display_params(qtbot):
         "window": "hamming",
         "periodic_window": True,
         "detrend": "constant",
+        "align_then_compute": False,
     }
     assert display == {
         "magnitude_scale": "linear",

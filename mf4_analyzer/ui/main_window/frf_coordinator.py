@@ -31,6 +31,7 @@ def frf_compute_cache_params(params: Mapping) -> dict:
     for name in ("prepare_method", "prepare_policy"):
         if params.get(name) not in (None, ""):
             out[name] = params.get(name)
+    out["align_then_compute"] = bool(params.get("align_then_compute"))
     return out
 
 

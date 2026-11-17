@@ -705,6 +705,42 @@ def test_method_group_off_and_light_rest_keep_gradient_and_checked_hover(
         qapp.setStyleSheet(old)
 
 
+def test_frf_full_preset_resets_omitted_alignment_without_losing_incremental_patches(qtbot):
+    from mf4_analyzer.batch import AnalysisPreset
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    sheet = BatchSheet(parent=None, files={}, current_preset=None)
+    qtbot.addWidget(sheet)
+    sheet.apply_method("frf")
+    form = sheet._analysis_panel._param_form
+    box = form._w_align_then_compute
+    box.setChecked(True)
+    form.apply_params({"estimator": "h2"})
+    assert box.isChecked() is True
+
+    sheet.apply_preset(AnalysisPreset.free_config(
+        name="saved off",
+        method="frf",
+        params={"estimator": "h1"},
+    ))
+    assert box.isChecked() is False
+    assert "align_then_compute" not in sheet._merged_params()
+
+    box.setChecked(True)
+    assert sheet._merged_params()["align_then_compute"] is True
+    box.setChecked(False)
+    box.setChecked(True)
+    assert sheet._merged_params()["align_then_compute"] is True
+
+    sheet.apply_preset(AnalysisPreset.free_config(
+        name="saved on",
+        method="frf",
+        params={"align_then_compute": True},
+    ))
+    assert box.isChecked() is True
+    assert sheet._merged_params()["align_then_compute"] is True
+
+
 def test_batch_frf_param_form_uses_canonical_compute_and_display_fields(qtbot):
     from mf4_analyzer.batch_recipe import normalize_batch_params
     from mf4_analyzer.ui.drawers.batch.method_buttons import DynamicParamForm
@@ -714,7 +750,7 @@ def test_batch_frf_param_form_uses_canonical_compute_and_display_fields(qtbot):
     form.set_method("frf")
     assert {
         "estimator", "window", "t_win_s", "overlap", "nfft_mode", "nfft",
-        "magnitude_scale",
+        "align_then_compute", "magnitude_scale",
         "frequency_scale", "phase_mode", "coherence_threshold",
         "fade_low_coherence",
     } == form.visible_field_names()
@@ -747,6 +783,7 @@ def test_batch_frf_keeps_estimation_and_display_in_stable_columns(qtbot):
 
     estimation = (
         "estimator", "window", "t_win_s", "overlap", "nfft_mode", "nfft",
+        "align_then_compute",
     )
     display = (
         "magnitude_scale", "frequency_scale", "phase_mode",

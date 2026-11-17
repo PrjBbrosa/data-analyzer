@@ -452,7 +452,7 @@ class FrfMixin:
         return (origin, end)
 
     def _frf_prepare_native_pair(self, state, pane, input_fd, output_fd, *, materialize):
-        """Native pair uses each channel's clock. Cross-rate stays unsupported."""
+        """Native pair uses each channel's clock. Cross-rate runs only after an explicit align request."""
         from ...analysis_signal_prepare import load_native_channel, prepare_pair
 
         if input_fd is None or output_fd is None:
@@ -477,9 +477,17 @@ class FrfMixin:
             policy="native", align_then_compute=align,
             left_identity=input_key[1], right_identity=output_key[1],
             source_revision=left.source_revision,
+            materialize=materialize,
         )
-        if pair.status != "ready":
+        if pair.status != "ready" or pair.left is None or pair.right is None:
             raise FrfPreflightError(pair.reason)
+        target_fs = pair.left.target_fs
+        if (
+            target_fs is None
+            or pair.right.target_fs is None
+            or not np.isclose(float(target_fs), float(pair.right.target_fs), rtol=1e-9, atol=0.0)
+        ):
+            raise FrfPreflightError("两端 prepared 采样率不一致，不能计算频响")
         facts = dict(pair.alignment_facts)
         facts["method"] = pair.method
         facts["policy"] = "native"
@@ -494,7 +502,7 @@ class FrfMixin:
             "output_time": pair.right.time,
             "input_values": values_in,
             "output_values": values_out,
-            "input_fs": pair.left.source_fs,
+            "input_fs": float(target_fs),
             "input_unit": str((getattr(input_fd, "channel_units", None) or {}).get(input_key[1], "") or ""),
             "output_unit": str((getattr(output_fd, "channel_units", None) or {}).get(output_key[1], "") or ""),
             "requested_range": requested,
@@ -671,6 +679,7 @@ class FrfMixin:
                 "window": defaults.window,
                 "periodic_window": defaults.periodic_window,
                 "detrend": defaults.detrend,
+                "align_then_compute": False,
             }
         values.update({
             key: stored[key]
@@ -681,11 +690,14 @@ class FrfMixin:
 
     def _frf_canonical_params(self, state, analysis_fs):
         """Normalized compute params plus the analysis Fs the job will store."""
+        raw = dict(self._frf_compute_values_for_state(state))
+        align = bool(raw.pop("align_then_compute", False))
         try:
-            params = FrfParams(**self._frf_compute_values_for_state(state))
+            params = FrfParams(**raw)
         except ValueError as exc:
             raise FrfPreflightError(str(exc)) from exc
-        return params, {"fs": float(analysis_fs), **params.__dict__}
+        canonical = {"fs": float(analysis_fs), **params.__dict__, "align_then_compute": align}
+        return params, canonical
 
     def _build_frf_candidate(self, state, pane_idx, *, force=False):
         idx = min(int(pane_idx), len(state.panes) - 1)

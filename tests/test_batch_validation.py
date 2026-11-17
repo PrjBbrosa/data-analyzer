@@ -456,6 +456,22 @@ def test_slice_validation_does_not_check_out_of_range_positions():
     assert not any(issue.field == "slice" for issue in issues)
 
 
+def test_original_time_export_does_not_inherit_spectrum_fs_or_length_rules():
+    from mf4_analyzer.batch_validation import validate_task
+
+    accepted = validate_task(
+        "time", {}, fs=None, sample_count=1, time=[1.25],
+    )
+    spectrum = validate_task("fft", {}, fs=None, sample_count=1, time=[1.25])
+    filtered = validate_task(
+        "time", {"filter": {"enabled": True}}, fs=None, sample_count=8, time=[0.0, 1.0],
+    )
+
+    assert accepted == ()
+    assert any(issue.field == "fs" for issue in spectrum)
+    assert any(issue.field == "fs" for issue in filtered)
+
+
 def test_validate_task_rejects_invalid_effective_fs_and_nyquist():
     invalid_fs = validate_task("fft", {}, fs=float("inf"), sample_count=32)
     above_nyquist = validate_task(

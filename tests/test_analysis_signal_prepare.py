@@ -23,11 +23,14 @@ def test_frozen_designs_name_order_cutoff_and_the_supported_ratio():
     )
 
     design = frozen_antialias_design()
-    assert design["order"] == 8
-    assert design["cutoff_ratio"] == 0.9
-    assert design["padding"] == "odd_reflect"
+    assert design["kind"] == "cheby2_zero_phase"
+    assert design["passband_end_ratio"] == 0.30
+    assert design["stopband_start_ratio"] == 0.50
+    assert design["padding"] == "odd"
     assert design["delay_compensation"] == 0
+    assert design["passband_db"] <= 0.1
     assert design["stopband_db"] >= 60.0
+    assert design["precision_policy"] == "m4-same-axis-2"
     alignment = frozen_frf_alignment()
     assert alignment["origin"] == "shared_start"
     assert alignment["ratio"] == "integer_lower_fs"
@@ -534,7 +537,7 @@ def test_cross_rate_alignment_preserves_integer_precision_admission(wide_side, m
     def observed_filter(values, spec, fs):
         calls.append(True)
         return values
-    monkeypatch.setattr('mf4_analyzer.analysis_signal_prepare.apply_filter', observed_filter)
+    monkeypatch.setattr('mf4_analyzer.analysis_signal_prepare._apply_antialias', observed_filter)
     pair = prepare_pair(left, np.arange(1024.) / 128,
                         right, np.arange(512.) / 64,
                         left_fs=128, right_fs=64, align_then_compute=True)
@@ -542,3 +545,254 @@ def test_cross_rate_alignment_preserves_integer_precision_admission(wide_side, m
     assert 'float64' in pair.reason
     assert pair.left is None and pair.right is None
     assert not calls
+
+
+def _tone_db(source_fs, target_fs, frequency, count=40000, phase=0.0):
+    from mf4_analyzer.analysis_signal_prepare import prepare_signal
+
+    time = np.arange(count) / source_fs
+    tone = np.sin(2.0 * np.pi * frequency * time + phase)
+    prepared = prepare_signal(
+        tone, time, fs=source_fs, policy="native", intent="explicit_uniform",
+        value_kind="continuous", target_fs=target_fs, origin=0.0,
+    )
+    assert prepared.status == "ready", prepared.reason
+    reference = np.sin(2.0 * np.pi * frequency * prepared.time + phase)
+    output_rms = float(np.sqrt(np.mean(np.square(prepared.values))))
+    source_rms = float(np.sqrt(np.mean(np.square(tone))))
+    gain = float(np.dot(prepared.values, reference) / np.dot(reference, reference))
+    return 20.0 * np.log10(output_rms / source_rms), 20.0 * np.log10(abs(gain)), prepared.target_fs
+
+
+@pytest.mark.parametrize("ratio", (2, 4, 8))
+@pytest.mark.parametrize("phase", (0.0, 0.7))
+def test_antialias_contract_covers_passband_and_folded_stopband(ratio, phase):
+    source_fs = 4000.0
+    target_fs = source_fs / ratio
+    stop_db, _gain_db, actual_fs = _tone_db(source_fs, target_fs, 0.60 * target_fs, phase=phase)
+    edge_db, _edge_gain, _fs = _tone_db(source_fs, target_fs, 1.02 * target_fs, phase=phase)
+    _stop_pass, pass_db, _actual = _tone_db(source_fs, target_fs, 0.30 * target_fs, phase=phase)
+    assert actual_fs == pytest.approx(target_fs)
+    assert stop_db <= -60.0
+    assert edge_db <= -60.0
+    assert abs(pass_db) <= 0.1
+
+
+def test_reported_300_and_510_hertz_counterexample_stays_in_the_stopband():
+    for frequency in (300.0, 510.0):
+        stop_db, _gain_db, target_fs = _tone_db(4000.0, 500.0, frequency, phase=1.3)
+        assert target_fs == pytest.approx(500.0)
+        assert stop_db <= -60.0
+
+
+def test_pair_byte_limit_rejects_before_the_antialias_filter(monkeypatch):
+    from mf4_analyzer.analysis_signal_prepare import prepare_pair
+
+    calls = []
+
+    def spy(values, source_fs, target_fs):
+        calls.append(int(np.asarray(values).shape[0]))
+        raise AssertionError("filter started")
+
+    monkeypatch.setattr("mf4_analyzer.analysis_signal_prepare._apply_antialias", spy)
+    left_time = np.arange(8000) / 2000.0
+    right_time = np.arange(4000) / 1000.0
+    pair = prepare_pair(
+        np.sin(left_time), left_time, np.sin(right_time), right_time,
+        left_fs=2000.0, right_fs=1000.0, align_then_compute=True, byte_limit=1,
+    )
+    assert pair.status == "rejected"
+    assert pair.bytes_charged == 0
+    assert "预算" in pair.reason
+    assert calls == []
+
+
+def test_invalid_sample_inside_the_aligned_segment_rejects_without_nan_output():
+    from mf4_analyzer.analysis_signal_prepare import prepare_pair
+
+    left_time = np.arange(8000) / 2000.0
+    right_time = np.arange(4000) / 1000.0
+    right = np.sin(right_time)
+    right[1000] = np.nan
+    pair = prepare_pair(
+        np.sin(left_time), left_time, right, right_time,
+        left_fs=2000.0, right_fs=1000.0, align_then_compute=True,
+    )
+    assert pair.status == "rejected"
+    assert pair.left is None or pair.left.values is None
+    assert "非有限" in pair.reason
+
+
+def test_invalid_sample_outside_the_alignment_support_does_not_block_it():
+    from mf4_analyzer.analysis_signal_prepare import prepare_pair
+
+    left_time = np.arange(8000) / 2000.0
+    right_time = np.arange(4000) / 1000.0
+    right = np.sin(right_time)
+    right[0] = np.nan
+    pair = prepare_pair(
+        np.sin(left_time), left_time, right, right_time,
+        left_fs=2000.0, right_fs=1000.0, align_then_compute=True,
+    )
+    assert pair.status == "ready"
+    assert np.all(np.isfinite(pair.left.values))
+    assert np.all(np.isfinite(pair.right.values))
+
+
+def test_companion_clock_rejects_equal_length_nonoverlap_and_does_not_extend():
+    from mf4_analyzer.analysis_signal_prepare import align_companion_clock
+
+    signal = np.array([0.0, 1.0, 2.0])
+    values = np.array([10.0, 11.0, 12.0])
+    with pytest.raises(ValueError, match="不重叠"):
+        align_companion_clock(signal, values, np.array([10.0, 11.0, 12.0]))
+    with pytest.raises(ValueError, match="不延长"):
+        align_companion_clock(signal, np.array([1.0, 2.0, 3.0, 4.0]), np.array([0.5, 1.0, 1.5, 1.8]))
+    aligned = align_companion_clock(
+        signal, np.array([100.0, 200.0, 300.0]), np.array([0.0, 1.0, 2.0]),
+    )
+    np.testing.assert_allclose(aligned, [100.0, 200.0, 300.0])
+
+
+def test_order_speed_rejects_an_invalid_sample_on_the_signal_clock():
+    from mf4_analyzer.analysis_signal_prepare import prepare_order_speed
+
+    time = np.array([0.0, 1.0, 2.0])
+    prepared = prepare_order_speed(
+        time, np.array([100.0, 999.0, 300.0]), time,
+        rpm_unit="rpm", invalid=np.array([False, True, False]),
+    )
+    assert prepared.status == "rejected"
+    assert prepared.values is None
+    assert prepared.quality == "invalid"
+
+
+def _aligned_frf(lower_fs, ratio, *, high_side, estimator, delay, origin, tones):
+    from mf4_analyzer.analysis_signal_prepare import prepare_pair
+    from mf4_analyzer.signal.frf import FrfParams, compute_frf
+
+    higher_fs = lower_fs * ratio
+    duration = 2.0
+    left_fs = higher_fs if high_side == "input" else lower_fs
+    right_fs = lower_fs if high_side == "input" else higher_fs
+    left_time = origin + np.arange(int(duration * left_fs)) / left_fs
+    right_time = origin + np.arange(int(duration * right_fs)) / right_fs
+    stimulus = np.zeros(left_time.shape, dtype=float)
+    response = np.zeros(right_time.shape, dtype=float)
+    for tone in tones:
+        stimulus += np.sin(2.0 * np.pi * tone * (left_time - origin))
+        response += 2.0 * np.sin(2.0 * np.pi * tone * (right_time - origin - delay))
+    prepared = prepare_pair(
+        stimulus, left_time, response, right_time,
+        left_fs=left_fs, right_fs=right_fs, align_then_compute=True,
+    )
+    assert prepared.status == "ready", prepared.reason
+    assert prepared.left.target_fs == pytest.approx(lower_fs)
+    assert prepared.right.target_fs == pytest.approx(lower_fs)
+    assert prepared.left.time[0] == pytest.approx(prepared.right.time[0])
+    params = FrfParams(
+        estimator=estimator, t_win_s=0.5, overlap=0.0, nfft_mode="auto",
+        window="hanning", periodic_window=True, detrend="none",
+    )
+    result = compute_frf(
+        prepared.left.values, prepared.right.values, fs=lower_fs, params=params,
+        input_time=prepared.left.time, output_time=prepared.right.time,
+    )
+    return result
+
+
+@pytest.mark.parametrize("ratio", (2, 4, 8))
+@pytest.mark.parametrize("high_side", ("input", "output"))
+@pytest.mark.parametrize("estimator", ("h1", "h2"))
+@pytest.mark.parametrize("origin", (0.0, 1.25))
+def test_integer_ratio_alignment_keeps_inband_gain_and_delay(ratio, high_side, estimator, origin):
+    lower_fs = 1000.0
+    tone = 0.15 * lower_fs
+    delay = 0.001
+    result = _aligned_frf(
+        lower_fs, ratio, high_side=high_side, estimator=estimator,
+        delay=delay, origin=origin, tones=(tone,),
+    )
+    expected_phase = -360.0 * tone * delay
+    band = (
+        (result.coherence >= 0.99)
+        & (np.abs(result.frequencies - tone) <= lower_fs / result.frequencies.size)
+    )
+    assert np.any(band)
+    gain_db = 20.0 * np.log10(np.abs(result.transfer[band]))
+    phase = np.angle(result.transfer[band], deg=True)
+    assert np.max(np.abs(gain_db - 20.0 * np.log10(2.0))) <= 0.1
+    assert np.max(np.abs(phase - expected_phase)) <= 1.0
+
+
+def test_multisine_alignment_keeps_each_safe_band_tone():
+    lower_fs = 1000.0
+    tones = (80.0, 160.0)
+    result = _aligned_frf(
+        lower_fs, 4, high_side="input", estimator="h1",
+        delay=0.0, origin=0.5, tones=tones,
+    )
+    for tone in tones:
+        band = np.abs(result.frequencies - tone) <= lower_fs / result.frequencies.size
+        assert np.any(band)
+        assert float(np.max(result.coherence[band])) >= 0.99
+        gain_db = 20.0 * np.log10(np.abs(result.transfer[band]))
+        assert np.max(np.abs(gain_db - 20.0 * np.log10(2.0))) <= 0.1
+
+
+def test_non_integer_ratio_and_split_origin_stay_unsupported():
+    from mf4_analyzer.analysis_signal_prepare import prepare_pair
+
+    left_time = np.arange(3000) / 1500.0
+    right_time = np.arange(2000) / 1000.0
+    ratio = prepare_pair(
+        np.sin(left_time), left_time, np.sin(right_time), right_time,
+        left_fs=1500.0, right_fs=1000.0, align_then_compute=True,
+    )
+    assert ratio.status == "unsupported"
+    fast_time = np.arange(4000) / 2000.0
+    shifted = np.arange(2000) / 1000.0 + 0.01
+    origin = prepare_pair(
+        np.sin(fast_time), fast_time, np.sin(shifted), shifted,
+        left_fs=2000.0, right_fs=1000.0, align_then_compute=True,
+    )
+    assert origin.status == "unsupported"
+
+
+def test_short_alignment_is_unsupported_instead_of_a_truncated_answer():
+    from mf4_analyzer.analysis_signal_prepare import prepare_pair
+
+    left_time = np.arange(32) / 2000.0
+    right_time = np.arange(16) / 1000.0
+    pair = prepare_pair(
+        np.sin(left_time), left_time, np.sin(right_time), right_time,
+        left_fs=2000.0, right_fs=1000.0, align_then_compute=True,
+    )
+    assert pair.status == "unsupported"
+    assert pair.left is None
+
+
+def test_preview_alignment_describes_the_grid_without_filtering_or_hashing(monkeypatch):
+    from mf4_analyzer.analysis_signal_prepare import prepare_pair
+
+    calls = []
+
+    def spy(values, source_fs, target_fs):
+        calls.append(int(np.asarray(values).shape[0]))
+        raise AssertionError("preview started the anti-alias filter")
+
+    monkeypatch.setattr("mf4_analyzer.analysis_signal_prepare._apply_antialias", spy)
+    left_time = np.arange(4000) / 2000.0
+    right_time = np.arange(2000) / 1000.0
+    pair = prepare_pair(
+        np.sin(left_time), left_time, np.sin(right_time), right_time,
+        left_fs=2000.0, right_fs=1000.0, align_then_compute=True, materialize=False,
+    )
+    assert calls == []
+    assert pair.status == "ready"
+    assert pair.left.values is None and pair.right.values is None
+    assert pair.left.target_fs == pytest.approx(1000.0)
+    assert pair.right.target_fs == pytest.approx(1000.0)
+    assert pair.left.original_values_hash == ""
+    assert pair.bytes_charged == 0
+    assert pair.left.effective_range[0] < pair.left.effective_range[1]

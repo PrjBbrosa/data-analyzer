@@ -23,7 +23,7 @@ from PyQt5 import sip
 from PyQt5.QtCore import QEvent, QPointF, QRectF, QSize, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
 from PyQt5.QtWidgets import (
-    QButtonGroup, QComboBox, QFormLayout,
+    QButtonGroup, QCheckBox, QComboBox, QFormLayout,
     QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QSpinBox,
     QStyle, QStyleOptionButton, QVBoxLayout, QWidget,
 )
@@ -343,6 +343,7 @@ _BINARY_CHOICE_FIELDS = frozenset({
 })
 _FRF_ESTIMATION_FIELDS = (
     "estimator", "window", "t_win_s", "overlap", "nfft_mode", "nfft",
+    "align_then_compute",
 )
 _FRF_DISPLAY_FIELDS = (
     "magnitude_scale", "frequency_scale", "phase_mode",
@@ -375,7 +376,7 @@ _METHOD_FIELDS: dict[str, tuple[str, ...]] = {
     ),
     "frf": (
         "estimator", "window", "t_win_s", "overlap",
-        "nfft_mode", "nfft", "magnitude_scale",
+        "nfft_mode", "nfft", "align_then_compute", "magnitude_scale",
         "frequency_scale", "phase_mode", "coherence_threshold",
         "fade_low_coherence",
     ),
@@ -887,6 +888,7 @@ class DynamicParamForm(QWidget):
             "phase_mode": "相位",
             "coherence_threshold": "相干阈值",
             "fade_low_coherence": "低相干淡化",
+            "align_then_compute": "对齐后计算",
             "nfft_mode": "NFFT 模式",
             "nfft": "NFFT",
             "t_win_s": "窗长",
@@ -983,6 +985,15 @@ class DynamicParamForm(QWidget):
         self._w_fade_low_coherence.setChecked(True)
         self._w_fade_low_coherence.toggled.connect(self.paramsChanged)
         self._widgets["fade_low_coherence"] = self._w_fade_low_coherence
+
+        self._w_align_then_compute = QCheckBox("整数倍降到较慢采样率", self)
+        self._w_align_then_compute.setObjectName("batchFrfAlignThenCompute")
+        self._w_align_then_compute.setToolTip(
+            "默认不跨采样率计算。勾选后，同一起点的整数倍才会抗混叠对齐；"
+            "非整数比和分数延时仍然不计算。"
+        )
+        self._w_align_then_compute.toggled.connect(self.paramsChanged)
+        self._widgets["align_then_compute"] = self._w_align_then_compute
 
         self._w_t_win_s = no_buttons(CompactDoubleSpinBox(self))
         self._w_t_win_s.setRange(0.001, 3600.0)
@@ -1423,6 +1434,11 @@ class DynamicParamForm(QWidget):
             params["fade_low_coherence"] = bool(
                 self._w_fade_low_coherence.isChecked()
             )
+        if (
+            "align_then_compute" in self.visible_field_names()
+            and self._w_align_then_compute.isChecked()
+        ):
+            params["align_then_compute"] = True
         return params
 
     def apply_params(self, params: dict) -> None:
@@ -1520,6 +1536,8 @@ class DynamicParamForm(QWidget):
             self._w_fade_low_coherence.setChecked(
                 bool(params["fade_low_coherence"])
             )
+        if "align_then_compute" in params:
+            self._w_align_then_compute.setChecked(bool(params["align_then_compute"]))
         if "weighting" in params:
             txt = str(params["weighting"])
             idx = self._w_weighting.findText(txt)

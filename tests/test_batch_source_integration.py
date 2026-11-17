@@ -686,3 +686,121 @@ def test_zfd_disk_one_bad_one_good_continues_without_success_artifact(tmp_path):
     assert "不完整" in (bad_item.message or "")
     assert good_item.data_path
     assert Path(good_item.data_path).exists()
+
+
+def test_native_rpm_follows_the_clock_not_the_signal_amplitude(tmp_path):
+    from mf4_analyzer.io.native_signal_store import AxisSpec, ChannelSpec, NativeSignalStore
+
+    time = np.array([0.0, 1.0, 2.0])
+    store = NativeSignalStore.build(
+        "native-rpm",
+        [AxisSpec("t", "clk", "time", "s", time, fs_status="known", fs_hz=1.0)],
+        [
+            ChannelSpec(0, 1, "sig", "t", np.array([0.2, 1.0, 1.8]), unit="Nm"),
+            ChannelSpec(0, 2, "rpm", "t", np.array([100.0, 200.0, 300.0]), unit="rpm"),
+        ],
+    )
+    fd = FileData.from_native_store(tmp_path / "rpm.mf4", store)
+    preset = AnalysisPreset.from_current_single(
+        name="rpm",
+        method="order_time",
+        signal=("native-rpm", "sig"),
+        rpm_signal=("native-rpm", "rpm"),
+        params={"rpm_factor": 1.0},
+    )
+    rpm = BatchRunner({"native-rpm": fd})._rpm_values(
+        fd, preset, target_source_id="native-rpm", target_channel="sig",
+    )
+    np.testing.assert_allclose(rpm, [100.0, 200.0, 300.0])
+
+
+def test_custom_x_runner_rejects_an_equal_length_nonoverlapping_clock(tmp_path):
+    from mf4_analyzer.io.native_signal_store import AxisSpec, ChannelSpec, NativeSignalStore
+
+    store = NativeSignalStore.build(
+        "native-x",
+        [
+            AxisSpec("sig", "clk-sig", "time", "s", np.array([0.0, 1.0, 2.0]), fs_status="known", fs_hz=1.0),
+            AxisSpec("xpos", "clk-x", "time", "s", np.array([10.0, 11.0, 12.0]), fs_status="known", fs_hz=1.0),
+        ],
+        [
+            ChannelSpec(0, 1, "sig", "sig", np.array([1.0, 2.0, 3.0]), unit="Nm"),
+            ChannelSpec(1, 1, "xpos", "xpos", np.array([4.0, 5.0, 6.0]), unit="mm"),
+        ],
+    )
+    fd = FileData.from_native_store(tmp_path / "x.mf4", store)
+    preset = AnalysisPreset.from_current_single(
+        name="custom x",
+        method="time",
+        signal=("native-x", "sig"),
+        params={"x_source": "channel", "x_channel": "xpos"},
+        outputs=BatchOutput(export_data=True, export_image=False),
+    )
+    result = BatchRunner({"native-x": fd}).run(preset, tmp_path / "out")
+    assert result.items
+    item = result.items[0]
+    assert item.status == "failed"
+    assert "不重叠" in (item.message or "")
+    assert not item.data_path
+
+
+def test_native_time_export_keeps_unknown_fs_and_a_single_sample(tmp_path):
+    from mf4_analyzer.io.native_signal_store import AxisSpec, ChannelSpec, NativeSignalStore
+
+    store = NativeSignalStore.build(
+        "native-unknown",
+        [AxisSpec("t", "clk", "time", "s", np.array([1.25]))],
+        [ChannelSpec(0, 1, "sig", "t", np.array([7.5]), unit="Nm")],
+    )
+    fd = FileData.from_native_store(tmp_path / "one.mf4", store)
+    preset = AnalysisPreset.from_current_single(
+        name="one point",
+        method="time",
+        signal=("native-unknown", "sig"),
+        outputs=BatchOutput(export_data=True, export_image=False),
+    )
+    result = BatchRunner({"native-unknown": fd}).run(preset, tmp_path / "out")
+    item = result.items[0]
+    assert item.status == "done", item.message
+    text = Path(item.data_path).read_text(encoding="utf-8")
+    assert "7.5" in text
+    assert "1.25" in text
+
+
+def test_native_frf_job_uses_the_prepared_lower_rate(tmp_path):
+    from mf4_analyzer.batch_compute import _prepare_native_frf_task
+    from mf4_analyzer.io.native_signal_store import AxisSpec, ChannelSpec, NativeSignalStore
+
+    left_fs = 2000.0
+    right_fs = 1000.0
+    left_time = np.arange(4000) / left_fs
+    right_time = np.arange(2000) / right_fs
+    tone = 80.0
+    store = NativeSignalStore.build(
+        "native-frf",
+        [
+            AxisSpec("in", "clk-in", "time", "s", left_time, fs_status="known", fs_hz=left_fs),
+            AxisSpec("out", "clk-out", "time", "s", right_time, fs_status="known", fs_hz=right_fs),
+        ],
+        [
+            ChannelSpec(0, 1, "stimulus", "in", np.sin(2.0 * np.pi * tone * left_time), unit="Nm"),
+            ChannelSpec(1, 1, "response", "out", 2.0 * np.sin(2.0 * np.pi * tone * right_time), unit="Nm"),
+        ],
+    )
+    fd = FileData.from_native_store(tmp_path / "frf.mf4", store)
+    prepared = _prepare_native_frf_task(
+        fd, "stimulus", "response",
+        {
+            "align_then_compute": True,
+            "estimator": "h1",
+            "t_win_s": 0.5,
+            "overlap": 0.0,
+            "nfft_mode": "auto",
+            "window": "hanning",
+            "periodic_window": True,
+            "detrend": "none",
+        },
+    )
+    assert prepared.fs == pytest.approx(right_fs)
+    assert prepared.input_values.shape == prepared.output_values.shape
+    assert prepared.input_time.shape == prepared.output_time.shape
