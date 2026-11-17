@@ -159,6 +159,10 @@ opening, the quick-reference panel, and popup teardown.
 8.4.4 makes analysis View tabs open their own pages, keeps remembered comparison
 indicators visible across navigation, and prevents cross-canvas heatmap dB cache
 collisions. Canvas clicks still change only the editing focus.
+8.4.5 corrects heatmap automatic windows, comparison edit targets and teardown,
+and engineering-coordinate log ranges. It adds explicit FRF pin source-change
+status, HEAD HDF encoding and truncation checks, a torque NVH dB reference of
+1e-6 Nm with manual and metadata priority, and Windows Lite UNC build fixes.
 8.4.6 preserves safely readable import channels with visible diagnostics, keeps
 original tabular gaps, and fixes analysis result ownership, FFT-time error
 feedback, View presentation and pinned-cursor teardown callbacks.

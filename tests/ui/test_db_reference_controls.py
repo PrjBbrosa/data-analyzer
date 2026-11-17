@@ -267,6 +267,25 @@ def test_source_line_elides_but_tooltip_keeps_full_text(qtbot):
 # DbReferenceDefaultsDialog
 # ---------------------------------------------------------------------------
 
+def test_dialog_displays_torque_system_reference(qtbot, tmp_path, qapp):
+    from mf4_analyzer.ui_kit import load_stylesheet
+
+    load_stylesheet(qapp)
+    store = DbReferenceSettingsStore(settings=_settings(tmp_path))
+    dlg = DbReferenceDefaultsDialog(None, store, current_mode="auto")
+    qtbot.addWidget(dlg)
+    dlg.show()
+    qtbot.waitExposed(dlg)
+    row = next(i for i, entry in enumerate(dlg._rows) if entry.builtin_id == "torque.si")
+    assert dlg.table.item(row, 0).text() == "Torque (NVH reference)"
+    assert "Nm" in dlg.table.item(row, 1).text()
+    assert dlg._reference_editors[row].value() == 1e-6
+    assert dlg.table.item(row, 3).text() == "系统"
+    assert dlg._reference_editors[row].isVisible()
+    assert dlg.grab().save(str(tmp_path / "torque-reference-dialog.png"))
+    _dispose_dialog(dlg)
+
+
 def test_dialog_cancel_and_escape_leave_store_and_view_unchanged(qtbot, tmp_path):
     store = DbReferenceSettingsStore(settings=_settings(tmp_path))
     before = store.snapshot()

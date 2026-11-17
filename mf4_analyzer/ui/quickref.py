@@ -541,7 +541,7 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             ),
             QuickRow(
                 "管理默认值",
-                sub="新增/编辑单位的系统与用户默认参考值",
+                sub="新增/编辑单位的系统与用户默认参考值；Nm 扭矩的 NVH 默认值为 1e-6 Nm，通道 metadata 优先",
                 gesture="tune 按钮",
             ),
         ),

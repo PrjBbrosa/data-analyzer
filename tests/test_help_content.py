@@ -27,8 +27,8 @@ def test_deck_data_valid_and_version_bumped():
     assert d["meta"]["version"] == "v8.4.8"
     assert d["meta"]["updated"] == "2026-11-17"
     assert d["meta"]["docVersion"] == "3.1"
-    assert [c["v"] for c in d["changelog"]][:15] == [
-        "v8.4.8", "v8.4.7", "v8.4.6", "v8.4.4", "v8.4.2", "v8.4.1", "v8.4", "v8.3.2", "v8.3.1", "v8.3.0", "v8.2.5", "v8.2.4", "v8.2.3", "v8.2.2", "v8.2.1",
+    assert [c["v"] for c in d["changelog"]][:17] == [
+        "v8.4.8", "v8.4.7", "v8.4.6", "v8.4.5", "v8.4.4", "v8.4.2", "v8.4.1", "v8.4", "v8.3.2", "v8.3.1", "v8.3.0", "v8.2.5", "v8.2.4", "v8.2.3", "v8.2.2", "v8.2.1", "v8.2.0",
     ]
     current_manual, _changelog = MANUAL.read_text(encoding="utf-8").split(
         '  "changelog": [', 1,

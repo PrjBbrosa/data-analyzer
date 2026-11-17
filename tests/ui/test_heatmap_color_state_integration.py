@@ -385,7 +385,7 @@ def _color_ownership(state):
 
 
 @pytest.mark.parametrize("section", ["fft_time", "order"])
-@pytest.mark.parametrize("action", ["cancel", "title-only", "apply-restore"])
+@pytest.mark.parametrize("action", ["cancel", "title-only", "cmap-only", "apply-restore"])
 def test_chart_options_respect_request_scope_and_opening_basis(
     color_win, qapp, qtbot, monkeypatch, section, action,
 ):
@@ -413,6 +413,9 @@ def test_chart_options_respect_request_scope_and_opening_basis(
             return QDialog.Rejected
         if action == "title-only":
             dialog.edit_title.setText("Unchanged color intent")
+            dialog.apply_changes()
+        elif action == "cmap-only":
+            dialog.combo_cmap.setCurrentIndex(dialog.combo_cmap.findData("gnuplot2"))
             dialog.apply_changes()
         else:
             dialog.chk_color_auto.setChecked(False)

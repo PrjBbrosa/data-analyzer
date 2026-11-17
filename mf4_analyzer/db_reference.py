@@ -133,6 +133,18 @@ FACTORY_CATALOG_V1: tuple[DbReferenceEntry, ...] = (
         builtin_id="force.si",
     ),
     DbReferenceEntry(
+        id="torque.si",
+        quantity="torque",
+        label="Torque (NVH reference)",
+        unit="Nm",
+        aliases=("Nm", "N·m", "N⋅m", "N*m", "N.m", "N m", "N-m"),
+        # Literature-backed NVH default, not an ISO 1683 torque requirement.
+        # Vogt & Geimer, IJFP, section 3.2 uses 1e-6 Nm explicitly:
+        # https://journals.riverpublishers.com/index.php/IJFP/article/download/30411/23655?inline=1
+        reference=1e-6,
+        builtin_id="torque.si",
+    ),
+    DbReferenceEntry(
         id="acceleration.g",
         quantity="acceleration",
         label="Acceleration g (SI-equivalent compatibility value)",
@@ -158,11 +170,18 @@ def normalize_unit(unit):
     ``m/s²`` / ``m/s^2`` / ``m/s2`` all collapse to one canonical token.
     Intentionally exact-match only: ``g`` must never collapse onto ``kg``/
     ``deg``, nor ``Pa`` onto ``kPa`` — normalization never does substring
-    matching, only canonical-form equality.
+    matching, only canonical-form equality. Compact ``Nm`` / ``N m`` retain
+    their torque meaning separately from lowercase ``nm`` (nanometres).
     """
     if unit is None:
         return ''
-    s = str(unit).strip().lower()
+    raw = ''.join(str(unit).split())
+    # SI symbols are case-sensitive: Nm (newton metre) is not nm (nanometre).
+    # Keep the historical case folding for other aliases, but disambiguate
+    # the compact torque spelling before folding; N m follows the same rule.
+    if raw == "Nm":
+        return "n·m"
+    s = raw.lower()
     s = (
         s.replace('²', '2')
          .replace('³', '3')
@@ -353,7 +372,7 @@ def resolve_db_reference(
     Priority: ``manual`` View value > legal channel ``metadata`` (only when
     ``prefer_channel_metadata``) > ``user`` catalog override/custom entry >
     unhidden immutable ``system`` builtin > ``generic`` (unit simply absent
-    from the catalog — the COMMON case for EPS units like Nm/rpm/A/deg/V:
+    from the catalog — the COMMON case for EPS units like rpm/A/deg/V:
     reference 1.0, NO warning) > ``fallback`` (a genuine resolution failure
     — ambiguous unit-only match across quantities, or the Pa-without-hint
     SPL guard: reference 1.0, WITH a visible warning).

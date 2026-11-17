@@ -1,5 +1,6 @@
 from pathlib import Path
 import json
+import os
 import re
 import subprocess
 import sys
@@ -12,6 +13,33 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def _powershell_literal(path: Path) -> str:
     return "'" + str(path).replace("'", "''") + "'"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="requires Windows UNC filesystem")
+def test_lite_unc_repo_path_is_readable_by_native_python():
+    unc_root = os.environ.get("TRACELAB_TEST_UNC_REPO_ROOT")
+    if not unc_root:
+        pytest.skip("set TRACELAB_TEST_UNC_REPO_ROOT to a reachable repository share")
+    text = (ROOT / "tools/build_windows_folder_lite.ps1").read_text(encoding="utf-8")
+    root_line = next(line for line in text.splitlines() if line.startswith("$RepoRoot ="))
+    push_line = next((line for line in text.splitlines() if line == "Push-Location -LiteralPath $RepoRoot"), "")
+    probe = "\n".join([
+        '$ErrorActionPreference = "Stop"',
+        "Set-Location -LiteralPath 'C:\\Windows'",
+        "$PSScriptRoot = " + _powershell_literal(Path(unc_root) / "tools"),
+        root_line,
+        push_line,
+        '$Requirements = Join-Path $RepoRoot "requirements.txt"',
+        "& " + _powershell_literal(Path(sys.executable))
+        + " -c 'import pathlib,sys; assert pathlib.Path(sys.argv[1]).read_bytes(); assert pathlib.Path(sys.argv[2]).read_bytes(); print(sys.argv[1])' $Requirements requirements.txt",
+        "exit $LASTEXITCODE",
+    ])
+    completed = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-Command", probe],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "FileSystem::" not in completed.stdout
 
 
 def test_windows_folder_build_script_uses_onedir_pyinstaller_contract():

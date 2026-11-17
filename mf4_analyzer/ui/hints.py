@@ -1056,7 +1056,7 @@ _HINTS = (
     # underlying config fact itself flips, same as amp_disparate/clipped).
     Hint(
         id="nudge.db_ref_manual_default",
-        text="手动dB参考1.0，可切自动",
+        text="手动dB参考1.0，可切自动（支持Nm）",
         surface="nudge",
         modes=frozenset({"fft", "fft_time", "order"}),
         priority=50,
