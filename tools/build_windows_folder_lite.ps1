@@ -285,7 +285,8 @@ if (-not $SkipInstall) {
 }
 
 Write-Step "Recording Python and installed package versions"
-Invoke-LoggedNative -Executable $VenvPython -Arguments @("-c", "from mf4_analyzer.io.mdf_reader import _require_fixed_arrays; _require_fixed_arrays()")
+# BAT/Explorer callers may start in tools/ or another directory.
+Invoke-LoggedNative -Executable $VenvPython -Arguments @("-c", "import sys; sys.path.insert(0, sys.argv[1]); from mf4_analyzer.io.mdf_reader import _require_fixed_arrays; _require_fixed_arrays()", $RepoRoot)
 if (-not (Test-Path $MdfSourceArchive)) { throw "Modified MDF source archive is required for distribution" }
 Copy-Item -Path (Join-Path $MdfWheelDir "*.whl.json") -Destination $BuildEvidenceDir -Force
 Invoke-LoggedNative -Executable $VenvPython -Arguments @("-c", "import sys, platform; print(sys.executable); print(sys.version); print(platform.platform()); print(platform.machine())")

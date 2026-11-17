@@ -311,6 +311,7 @@ lesson by default.
 | [Project Replay Validates Evidence And Recovers Generations](project-replay-validates-evidence-and-recovers-generations.md) | Changing recipe replay, source-matching evidence, or cleanup of failed channel references. | See lesson |
 | [Import safety needs numeric oracles and allocation admission](import-native-safety-needs-numeric-oracles-and-admission.md) | Changing binary readers, array expansion, native dependencies, import isolation or resource limits. | See lesson |
 | [Application-owned supervisors need weak host references](application-owned-supervisors-need-weak-host-references.md) | A Qt task supervisor outlives its window or tab so a running QThread can finish safely. | See lesson |
+| [Windows Build Preflight Must Resolve Repository Imports](windows-build-preflight-independent-of-cwd.md) | Adding Python import probes to Windows BAT/PowerShell builders. | See lesson |
 
 ## Selection Rules
 
