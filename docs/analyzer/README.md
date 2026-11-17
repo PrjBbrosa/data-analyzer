@@ -24,7 +24,7 @@ Published guide entry points:
 
 ## Current Product Baseline
 
-The current baseline is TraceLab 8.4.7. It retains the 7.6 ASCII (`.asc`),
+The current baseline is TraceLab 8.4.8. It retains the 7.6 ASCII (`.asc`),
 NI TDMS (`.tdms`), and the original 12-View expansion (time-domain is now 24
 Views; the four analysis sections stay at 12), as well as the native WinWert
 (`.wwt`), ZFGE2/TestRunPRO (`.zfd`), and MATLAB (`.mat`) imports introduced
@@ -169,6 +169,21 @@ without edits stay schema 4. When one file splits into multiple logical
 sources, restore matches sample rate, channel order, and edit recipes by group
 identity. If that identity cannot be confirmed, those edits and the saved
 sample rate are left unapplied and the user is told.
+8.4.8 parses imports in a separate process. A bad MF4 read, a timeout, or an
+oversized import leaves the main window up: the import can be cancelled or
+retried after extending the time limit, and an import that would exceed the
+memory budget is refused before allocation, with a reason. Reopening a project
+does not apply saved derivations to a source that cannot be matched, and
+closing the image markup editor returns focus to the previous page. UltraView
+no longer opens as an unusable miniature window; a minimized tool window can
+be restored and returns to its page, and an unfinished drag is cleared when
+the window actually deactivates. Shift+wheel scrolls sideways. The resize
+cursor appears inside the card edge, and the drag ghost follows the pointer.
+Notes, text, shapes, strokes, and connectors can be marquee-selected and moved
+together. Image markup starts drawing on press, asks before discarding unsaved
+marks on Esc, pans with the pointer, and zooms about the same scene point.
+The preview matches the committed mark, and the editor opens at the image size
+and is released on close.
 Update the published guides when these behaviours change; preserve each loader's
 timing and unit boundaries instead of describing inferred metadata as measured
 truth.

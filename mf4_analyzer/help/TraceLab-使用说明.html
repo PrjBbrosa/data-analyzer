@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>TraceLab v8.4.7 · 使用说明</title>
+<title>TraceLab v8.4.8 · 使用说明</title>
 <!-- ===== FONTS ===== -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -263,11 +263,11 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
 {
   "meta": {
     "title": "TraceLab",
-    "version": "v8.4.7",
-    "versionLabel": "使用说明 · V8.4.7",
+    "version": "v8.4.8",
+    "versionLabel": "使用说明 · V8.4.8",
     "subtitle": "从导入数据到分析与导出，一份可直接照做的操作指南",
     "docVersion": "3.1",
-    "updated": "2026-11-12",
+    "updated": "2026-11-17",
     "credit": "GC02689"
   },
   "slides": [
@@ -827,7 +827,7 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
       "sec": "照着做",
       "kicker": "PLAYBOOK",
       "title": "三个常见场景，<c>照着做就行</c>",
-      "foot": "TraceLab v8.4.7 · 使用说明",
+      "foot": "TraceLab v8.4.8 · 使用说明",
       "density": "compact",
       "blocks": [
         {
@@ -873,7 +873,7 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
         {
           "type": "lead",
           "center": true,
-          "html": "从数据到结论，按场景完成查看、分析与导出。 —— TraceLab v8.4.7"
+          "html": "从数据到结论，按场景完成查看、分析与导出。 —— TraceLab v8.4.8"
         }
       ]
     },
@@ -882,6 +882,13 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
   ],
 
   "changelog": [
+    { "v": "v8.4.8", "date": "2026-11-17", "items": [
+      "文件解析改到独立进程。MF4 读坏、超时或超出内存预算时主窗口还在：可以取消，也可以延长时限后重试；过大的导入会在开始分配前拒绝，并说明原因。",
+      "重新打开项目时，对不上的来源不会套用旧的派生结果。图片标注关掉后，焦点回到原来的页面。",
+      "UltraView 不再打开成无法使用的小窗。最小化后可以还原并回到原来的页面；窗口真正失焦时，未完成的拖动会清掉。按住 Shift 滚轮改为横向滚动。",
+      "卡片边缘内就能看到缩放光标，拖动虚影跟着指针。便签、文字、形状、画笔和连线可以一起框选，并一次移动。",
+      "图片标注按下就开始画；还有未保存的标注时，Esc 会先确认。平移跟着手，缩放落在同一个画面点上。预览和画上去的标记一致，编辑窗口按图片尺寸打开，关闭后释放。"
+    ] },
     { "v": "v8.4.7", "date": "2026-11-12", "items": [
       "通道编辑里的派生通道和删除写入项目。重新打开时按保存的运算配方，用当前源数据重算；源文件变了，结果跟着变。某条配方算不出来时会提示，不会改名或补数。",
       "含通道编辑的项目写成工程格式 v5，需要本版本或更高版本才能打开；没有通道编辑的项目仍是 v4。",

@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "8.4.7",
+    [string]$Version = "8.4.8",
     [string]$AppName = "",
     [switch]$Console,
     [switch]$SkipInstall,
@@ -260,7 +260,7 @@ if (Get-Command git -ErrorAction SilentlyContinue) {
     & git -C $RepoRoot status --short | Out-Host
 }
 Copy-Item -LiteralPath $PSCommandPath -Destination $BuildEvidenceDir
-# Default output: dist\TraceLabAnalyzer8.4.7\TraceLabAnalyzer8.4.7.exe
+# Default output: dist\TraceLabAnalyzer8.4.8\TraceLabAnalyzer8.4.8.exe
 # (override with -Version or -AppName)
 
 foreach ($RequiredPath in @($EntryScript, $Requirements, $StyleQss, $RuntimeDependencyTool, $BundlePolicyTool, $BatchRenderSmokeTool, $ImporterSmokeTool)) {
