@@ -1,8 +1,8 @@
 # MF4 原始采样保留与按需分析 Spec
 
-日期：2026-11-17。状态：**设计已形成，未实施；性能与平台验收待执行。**
+日期：2026-11-17；同日按 `c126fcae`、导入恢复 M6 报告及消费者反例修订。状态：**needs revision / partial：已存在可复现的功能阻断，禁止当前候选切默认或随版本发布。先关闭 §10.1 的问题，再验收产品全链、资源/性能及平台。**
 
-配套 [执行 Plan](../plans/2026-11-17-mf4-native-sampling-plan.md)。本次交付为分析与设计文档；用户随后授权提交并推送文档，尚未授权实施产品变更或版本发布。
+配套 [执行 Plan](../plans/2026-11-17-mf4-native-sampling-plan.md)。本合同与[导入恢复 Spec](2026-11-17-import-budget-and-dialog-recovery-spec.md)共同约束后续实施：本文拥有原生数据、分析与性能合同；恢复 Spec 拥有几何/进度/资源错误与重试，并补充固定预算 R01。初版已提交，恢复任务随后产生候选代码；本次仅修订两份文档，不实施产品变更、启动 agent 或发布。
 
 ## 1. 决策与成功定义
 
@@ -15,15 +15,25 @@
 3. 数据量按原始各通道点数增长，不按“最大点数 × 所有通道数”增长。显示抽样不改变分析输入。
 4. 同时关闭正确性、内存/耗时、GUI 响应、项目兼容和平台门禁，才能切换产品默认。
 
+当前候选不满足成功定义。§10.1 的 N01–N06 是前轮实际调用/画布探针复现的问题，N09 是新取得的 M6 正式链路失败；N07/N08 分别为源码可见的性能风险和未闭合的兼容范围，不能混称已测故障或已通过。全部纳入放行账本。关闭 native 开关并不能证明版本安全：共享 Order、renderer、准备层等改动仍可能影响 legacy MF4 和其他格式；拟发布快照必须验证实际包含的共享变更。
+
 范围为 MF4 与共用 MDF reader 的 MDF2/3 正常标量兼容、已验证 MDF4 数组元素。其他格式通过统一取数适配保持原语义，不借机全部重写。新增的“无损”承诺限于明确支持的测量类型；未知主轴、结构/VLSD/文本等必须列明能力与原因，不能声称整个 MDF 二进制文件无损重建。
 
 不包含：修改源文件、完整 MDF 编辑器、硬件时钟同步校正、自动修复时钟复位、运行时版本升级、全格式存储引擎迁移。现有 UI/分析结果所有权和绘图 ink 阈值保持合同。
 
-## 2. 已确认事实与证据等级
+## 2. 实施快照、历史事实与证据等级
 
-源码基线 HEAD：`5bac5a2c9ae40e1ea7a45ac4fbab3d7d6a652867`，含导入鲁棒性等未提交修改。实施前必须重新记录相关文件指纹；HEAD 相同不足以证明源码相同。
+修订核对 HEAD 为 `c126fcae24b73961eb798b989df1068a94327197`，产品版本由 `app_meta.py` 读取为 `v8.4.8`；工作区有未提交的原生与导入恢复实现。`161e5387` 已集成隔离/安全导入；`febfc01d`、`c64caaba` 与 `c126fcae` 的 LF 补丁、Lite 导入路径/UNC 修复需保留。`c126fcae` 新增的扭矩 `1e-6 Nm` 默认 dB 参考属于当前分析基线，数值对照须固定单位、reference、weighting 与 scale/offset，不能将参考值变化归因为原生采样误差。
 
-| 事实 | 当前 owner / 证据 | 含义 |
+当前源码已存在 `NativeSignalStore`、`read_signal`、`DataLoader.load_mf4_native`、native transport、`analysis_signal_prepare.py` 和 schema 6。普通 adapter、GUI 打开分派及 Replay 仍调用 `load_mf4`；因此“能构造 native FileData”不代表产品默认已迁移。同轴分析已接候选准备接口，异轴抗混叠/FRF 尚未闭环，`tests/test_mf4_native_fidelity.py` 的 F08/F09 仍 strict xfail。
+
+本地执行证据在 `.state/import-budget-recovery-20261117/` 的 `progress.md`、`m0-result.md` 至 `m6-result.md`，M0 oracle 在 `.state/mf4-native-m0-20261117/thresholds.md`。这些是阶段报告，不是本次重跑的当前树验收。新取得的 M6 报告记录：匿名文件显式正式链路通过；事故样本在 transport 读回报 `identity physical must share raw`，GUI 注册为 0，R01 未关闭。进度表“进行中”不覆盖这份实际结果。图2缺样本、Windows 未测，offscreen 不证明 Cocoa 画布；对话框 T4-U 也不能替代。状态与剩余 owner 详见 Plan §0。
+
+以下表格及 buffer 普查保留为**初始调查证据**，不能把旧缺陷描述当作候选代码的当前行为：
+
+初始调查 HEAD：`5bac5a2c9ae40e1ea7a45ac4fbab3d7d6a652867`，当时含导入鲁棒性等未提交修改。接续实施必须重新记录相关文件指纹；HEAD 相同不足以证明源码相同。
+
+| 初始调查事实 | 当时 owner / 证据 | 含义 |
 | --- | --- | --- |
 | 点数最多轴、线性插值、端点填充、跳过无重叠与单点 | `io/loader.py::_prepare_mdf_time_series`、`_load_mf4_channels` | 原始测试点可能消失，属于导入语义 |
 | 文件级时间与 Fs | `io/file_data.py::FileData`；`ui/main_window/analysis_context.py::_file_time_array` | 仅替换 loader 不足以完成迁移 |
@@ -35,7 +45,7 @@
 | 子进程结果使用受预算限制的独立数组 | `io/import_transport.py`、`io/import_limits.py` | 当前没有持久 mmap；新方案不默认引入 |
 | 缓存按未绑定条目数淘汰，已绑定结果保留 | `ui/analysis_cache.py::AnalysisResultCache` | 必须限制新增临时准备缓存，不能破坏 View 已应用结果 |
 
-本轮只读探针：`.state/mf4-native-plan-20261117/probe.py`、`results.json`。使用已验证本地 `asammdf 8.8.32+tracelab.1`，通过 `open_mdf` 做读取安全准入；原生计数读取 `raw=True, ignore_invalidation_bits=True`，工程值用库的物理转换，未调用公共轴整理。时间数组按完整内容核对后统计共享体积。探针不是候选产品实现。
+初始只读探针：`.state/mf4-native-plan-20261117/probe.py`、`results.json`。使用已验证本地 `asammdf 8.8.32+tracelab.1`，通过 `open_mdf` 做读取安全准入；原生计数读取 `raw=True, ignore_invalidation_bits=True`，工程值用库的物理转换，未调用公共轴整理。时间数组按完整内容核对后统计共享体积。探针不是候选产品实现。
 
 | 数据集 | 当前公共表数组字节 | 原生紧凑数组字节 | 解释 |
 | --- | ---: | ---: | --- |
@@ -48,6 +58,8 @@
 本地样本原生计数为 967 个可转换数值标量/元素序列，其中 915 个单点，1,879,975 个样本，8 条按内容区分的时间轴；不能把库展开元素数称为原始物理通道数。22 个非本探针数值向量候选未纳入数组统计，包含结构父项等，须在实施中逐类归因，不能将 967 宣称为所有变量完整导入。计入的体积包括时间 8,482,200、raw 3,717,626、额外 physical 12,889,928 字节；此样本未返回独立失效位数组。源文件 hash 前后相同。
 
 这些数字是**数值 buffer 普查**，不包含目录、Python 对象、解析器/解压、传输副本、分析结果、绘图缓存和 RSS；不证明候选读取速度或前台无卡顿。探针中的一次性秒数不作为性能 SLA。此前临时 MF4 还复现了 `t=[.10,.11,.12], y=[0,100,0]` 被投影到 `.25s` 公共轴后全为零；该反例须固化为回归。
+
+后续 M2 报告对同 hash 事故样本记录 979 个数值通道、927 个单点、84 个轴身份、10 个 unsupported 目录项，数组量 25,090,366 字节。它与上述历史 967/915/8/22、25,089,754 字节不是同一目录/轴计数口径，不能直接替换历史数字或认定差异必然正确。M0/M2 接收必须按 `(group,index,element)` 对账主轴/标量/数组父项/元素，分别报告轴身份数与去重 buffer 数，并以独立 raw/physical/质量 oracle 解释新增及排除项；这些计数均不是通用验收常量。
 
 ## 3. 数据量、方案取舍与预算
 
@@ -78,14 +90,23 @@
 
 OS RSS 不等于数组账本，现有监督也不是硬内存沙箱。任务完成/取消、View 删除、源关闭、项目替换必须释放对应 reservation；执行中的 worker 可暂持只读源引用，失效结果不得发布，最终释放由现有 job 生命周期负责。
 
+### 3.1 与导入恢复 R 轨道共享的资源合同
+
+- 固定回归预算为 memory **498,988,944**、output **≤249,494,472** 字节，必须同时注入，不能只改 memory 而留下更高 output 默认值。历史事故样本以 §2 SHA256 锁定；完整 `adapter → broker → typed transport → GUI 注册` 在此预算下保留全部支持样本才满足 R01 的文件链路项。M2 直接/子进程读取报告仅是阶段证据。
+- 对该预算分别保留计费分项与父/worker 同时间线 RSS、临时磁盘、GUI 心跳/取消证据；不能将账本数、buffer 数或独立 RSS 峰值相加充当进程实测。Windows Full/Lite 单独验收。
+- `ImportBudget.used_bytes` 是单调累计准入估算；现有 `record_lifecycle/release_lifecycle` 是独立生命周期记录，释放记录不降低累计值。候选的局部 `PrepareByteLedger` 和缓存 key 也不证明 §3 的应用级 reservation/byte LRU 已实现。接续时将它们接入同一中立资源 owner，证明存活源、绑定结果、并发任务及临时量一并计费、各终态对称释放；不得简单减小 `copies=3` 或调高预算。
+- 复用 T3 的有界资源 envelope，区分 memory estimate、worker memory、output、temp disk 与 count；native 拒绝必须保留类型、单位、需求/上限、phase/basis 与分项，不从中文 message 解析数字。未知值不编造。
+- “重新检查并重试”沿 T3：旧 worker 回收、源快照/target 有效后获取新 limits 和 request；超时重试只改时限。native 接线不绕过这些合同，不重复注册已成功文件，broker 1.0 不代表 GUI 事务成功。
+- 图2 `2.W04_360_1s_rt_11201724.mf4` 尚无独立样本验收，保持 UNKNOWN，不以事故样本代替。固定预算确实不可达时报告实测瓶颈与 needs revision，不事后抬预算；U 完成不等于 R 完成。
+
 ## 4. 原生存储与读取接口
 
-以下名称为**拟新增合同**，不是已存在 API：
+以下 API 已有未提交候选；这是目标合同，是否完全满足仍按各阶段验收，不重新创建同名模块：
 
 - `io/native_signal_store.py::NativeSignalStore`：不可变数值源，轴表、通道表、有效性、原始编码与工程值；无 Qt、无 MDF handle。
 - `io/signal_access.py::read_signal(fd, channel_key, span=None, representation='physical') -> SignalSeries`：统一取数，旧表格来源经适配使用原轴；返回 time、values、validity、segment facts、单位、sampling facts 和 stable revision。
-- `io/mdf_reader.py::load_native...`：现有 MDF reader owner 承担原生读取、安全校验与转换。`DataLoader.load_mf4_native` 为薄入口；旧 `DataLoader.load_mf4` 三元组公共表 API 暂保留兼容，必须标明 legacy shared-axis 语义。
-- `SourceAdapter` 增加明确 native payload 分支，产品 UI/Batch/Replay 均走此分支；不能让 legacy API 在这些入口中悄悄回退。
+- `io/mdf_reader.py::open_native_mdf/load_native_mdf`：现有 MDF reader owner 承担原生读取、安全校验与转换。`DataLoader.load_mf4_native` 为薄入口；旧 `DataLoader.load_mf4` 三元组公共表 API 暂保留兼容，必须标明 legacy shared-axis 语义。
+- `SourceAdapter.load_native_payload/load_native_sources` 已提供显式分支；最终产品 UI/Batch/Replay 按 native policy 走此分支，不能悄悄回退。当前默认仍 legacy，仅允许受控候选入口使用 native，最终切换受 §1/§8 门禁约束。
 
 FileData 可持原生 store 或现有表格，新增状态在构造时显式初始化。多轴源没有伪造的 `time_array`/单一 `fs`/公共 `row_count`；未迁移消费者访问这些能力应得到可定位的明确错误，不能选择第一轴作为 fallback。原生 store 不伪装成 ChannelFrame，不把不同长度列塞入 pandas。单轴旧格式 API 不变。
 
@@ -117,6 +138,10 @@ raw 与 physical 在经证明的身份转换下引用同一 buffer；非身份�
 
 请求裁切先按原始时间定位；对齐计算允许额外读取左右必要邻点或滤波 halo，但输出范围仍严格遵守请求和真实有效覆盖。不可因先裁掉边界邻点而制造误差。默认无范围外端点填充，无跨缺口插值。
 
+采样率事实与可分析性分别判断。禁止用相邻浮点时间差逐位相等作为唯一均匀条件；也禁止用宽松 `allclose` 掩盖真实抖动。实施 N01 前必须冻结：时间 dtype/量化精度、时间原点量级、ULP/绝对与相对误差界、采样间隔的求法、元数据声明与实际时间冲突的处理，以及 known/estimated/unknown 的来源。用 10/100/1000/1024 Hz、非零原点与真实抖动的独立输入固定边界；容差不足以区分时应明确 unknown，不能捏造 Fs。空/单点、重复、回退、非有限时间的规则不因此放宽，原数组不被“修整”。
+
+选段可以分析不等于整条通道可以分析。FFT/时频/Order/FRF 必须先解析实际 View/pane 的请求与 segment，再验证该段及算法必需邻点/halo；区间外无关失效点不能阻止完整有效段，区间内失效或无法满足的 halo 必须返回真实原因。不能先对整条通道准备失败，再把失败伪装成“源通道缺失”。
+
 ## 6. 显示、游标、统计与交互
 
 1. `window.py::_build_time_plot_data` 及 bindings/custom-X 通过 signal_access 给每条曲线自己的 X/Y。既有 canvas 已接收 per-curve t/sig，沿用 renderer/envelope、ink/AA/raster owner，不改阈值来掩盖性能退化。
@@ -127,11 +152,13 @@ raw 与 physical 在经证明的身份转换下引用同一 buffer；非身份�
 6. Custom-X 仅同时间关系确证时直接配对；等长不构成证明。异轴请求使用第 7 节显式对齐，保留多值分支/非单调 X，禁止按 X 排序改变采样序列。
 7. 热路径禁止完整 signal hash、全局表物化、MDF 解析和完整转换。单调段定位用索引/searchsorted；重复/复位走预建 segment 索引。stable revision 在载入/派生时形成，不能用 ndarray wrapper id 判定源变更。
 
+有效性约束贯穿首次 attach、pan/zoom、resize、隐藏后重显、View 恢复、raster 与图片导出。显示值可以为断线而派生，raw buffer 始终保留；renderer 后续刷新不得从 raw 重新画出已标无效的值。游标 marker 必须按 composite source/channel、原始/滤波 companion 和所属轴/ViewBox 分配，各子图不能收到其他通道的点；移除、无数据和切 View 必须清除旧点。游标读数、标记、区间统计与导出使用一致的质量事实，但不共用有损显示包络作为数值输入。
+
 显示示例：原始点 `(1.000s,10Nm)` 与 `(1.010s,14Nm)` 可用线连接，但连线不增加测量点。游标在 `1.005s` 时，原始模式显示 `10Nm @ 1.000s，Δt=-5ms`；显式线性插值模式显示 `≈12Nm @ 1.005s，线性插值`。两种读数均查询原生数组，不读取屏幕包络，缩放不能改变相同查询/模式的数值。
 
 ## 7. 分析准备合同
 
-新增中立 `analysis_signal_prepare.py`（拟）负责单/双通道请求准备，复用已证明等价的 signal 工具；GUI 和 Batch 都使用它。`signal/` 中现有 FFT/时频/FRF/COT 核心数学原则上不变。绘图包络和显示缓存绝不作为输入。
+已有候选中立 `analysis_signal_prepare.py` 负责单/双通道请求准备，继续补齐其合同，复用已证明等价的 signal 工具；GUI 和 Batch 都使用它。`signal/` 中现有 FFT/时频/FRF/COT 核心数学原则上不变。绘图包络和显示缓存绝不作为输入。
 
 每份 PreparedSignal/Pair 必须带 source/physical identity、source revision、segment、实际输入/输出点数、请求/有效范围、原始/目标 Fs、方法、质量、滤波与边界处理、policy_version。缓存键包含这些确定性输入及原有算法参数，不能只改 Fs 数字而仍复用旧结果。
 
@@ -154,6 +181,10 @@ raw 与 physical 在经证明的身份转换下引用同一 buffer；非身份�
 - 恢复旧项目中的“指定 Fs 重解释时间”与重采样是两种意图：前者只能以标明的 legacy 派生策略执行，不覆盖原轴，不默认扩散到其他通道。
 
 本节增加的严格校验可能使过去静默计算的错误请求转为需要处理。UI 应给出通道、范围和可行动原因；不能为了保持历史曲线不变而继续使用错误输入。计算仅在用户点击计算时应用；编辑、显示调整和切 View 的已应用结果合同继续有效。
+
+后续 M4 分为已实现候选的同轴准备与未完成的 F08/F09。独立 oracle 固定：FFT 使用 Fs=N=1024、32 Hz 单位幅值正弦、hanning/remove_mean；频率误差≤1 bin、幅值误差≤1%。同率 FRF 使用 Fs=1000、N=8000、50/80/120/180/250/300 Hz 多正弦、增益2、稳态循环延时4点、hanning/periodic、detrend=none、1s窗、overlap=0；H1/H2 在被激发频点 coherence≥0.99、增益误差≤0.1 dB、相位误差≤1°。此整数延时 oracle 不能证明异轴 fractional-delay 正确。
+
+F08/F09 接续前仍须冻结实际滤波阶数/截止/padding/延时补偿/支持长度，以及支持的比率、origin、fractional delay 和边缘裁切；降采样带外抑制≥60 dB，FRF 安全通带0.05–0.30×较低 Fs。当前两条 strict xfail 只检查缺失设计入口，须扩为带输入输出的频率/幅值/相位/边缘测试，不能靠返回一份设计字典即宣布通过。现有 Batch legacy 采样行为不自动取得 native F08 资格。未通过支持组合仍明确 unsupported，M4 保持 partial；本次文档修订不缩减第一版目标来提前放行。
 
 ## 8. 导入隔离、传输和性能边界
 
@@ -184,9 +215,9 @@ transport 按同一 buffer identity 去重；时钟表共享跨进程后仍共�
 
 - 原始采样导出默认按通道/同轴组输出真实 time/value/validity，或带 channel/record/segment 字段的长表；不为了 Excel 横表静默填满。CSV 用足够的浮点往返精度与整数文本，不能先丢精度再保存；Excel 不能精确表达的大整数/超行数使用文本或明确分片/格式建议，不能截断。
 - 统一时间表是显式导出模式，声明 grid、method、范围、无效/缺口策略；范围外为空值，附插值/有效性信息。绘图 PNG/PDF 使用现有 render contract，与数值导出分开验收。
-- 项目继续 reference-only。引入 native sampling policy、物理身份映射、通道级时间处理和派生对齐意图需要新增 schema（当前支持 1–5，预留 6；实施前核对未被并行工作占用），由现有 project codec 一个 owner 管理。不能加字段却仍写旧 schema 让旧版静默误读。
+- 项目继续 reference-only。候选 codec 已支持 1–6：普通项目写4，带配方写5，带 native sampling policy、物理身份、对齐意图或悬挂通道写6。继续由现有 project codec 一个 owner 管理，不另分配新 schema 或让旧版本静默误读。schema 6 helper 已有测试不证明恢复入口已遵守 policy；必须补 native/legacy 分派及保存重开真实链路。
 - 旧项目默认按 legacy 语义恢复，明确提示存在公共轴对齐；提供显式升级到原生采样，先预览受影响通道/范围/公式，不覆盖原文件或原项目。升级使依赖结果失效/待计算，保留用户范围和视图意图，不能将旧缓存当新结果。不能唯一确认物理身份时悬挂并提示，不按相似名称迁移。
-- 原生新开文件默认 native；legacy 仅供明确旧项目/公开兼容 API。新产品工作流不得自动回退。旧项目选择不升级不应被标为原生保真验收通过。
+- 最终放行后新开文件默认 native；legacy 仅供明确旧项目/公开兼容 API。当前默认仍 legacy，不能据此认定迁移完成。新 native 产品工作流不得自动回退；旧项目选择不升级不应被标为原生保真验收通过。
 - Replay 使用原通道事件顺序/时间，不凭公共 Fs 重放多率数据；相同时间多记录按原序，时间回退需用户选 segment。未知主轴/无效事件明确处理，不能补成采集事实。
 - 来源关闭/移除、Pin 挂起、比较 B 面、UltraView 捕获复用 stable revision 与既有 owner，不复制原始数组到每个 View；项目不持久化 cache、进程 token、临时路径或诊断快照作为意图。
 - 更新 hints、quickref、主帮助/分析指南中受影响的原始/采样/导出说明；历史发布记录保留，不改写为过去已支持。
@@ -210,6 +241,38 @@ transport 按同一 buffer identity 去重；时钟表共享跨进程后仍共�
 
 浮点一致性：未转换 raw 保留 dtype/bit pattern（含 signed zero、NaN payload 在 reader 可提供时）；未经重采样 physical 使用既有独立公式容差；新增 DSP 容差须在 Plan M0 冻结数值 oracle 与适用频带，禁止事后用宽阈值吞掉失败。没有完成 F01–F12 与性能平台门禁前，状态只能是 partial/UNKNOWN。
 
+### 10.1 当前阻断清单与必须固化的反例
+
+以下为 `c126fcae` 加未提交候选的 2026-11-17 观察，路径均相对 `mf4_analyzer/`。行号会随其他任务变化，按符号定位。N01–N06 的临时探针尚不是持久回归测试；Plan B0 必须将它们固化并确认修复前失败。不能把下列“应满足”写成已通过。
+
+| ID / 当前状态 | 证据、用户影响与回归输入 | 应满足 / 关联合同 |
+| --- | --- | --- |
+| N01 / P1 已复现 | `io/native_signal_store.py::_sampling` 用 `dt != dt0`。`arange(100)/fs` 在 10/100/1000 Hz 被判 unknown，1024 Hz 对照可准备；100 Hz 真实 MDF 写入/读取也使分析报采样率未知。常见正常数据无法 FFT/滤波等 | 按 §5 冻结的精度合同识别合法均匀段，同时拒绝真实抖动/复位；检查 reader→transport→分析，不只测人工声明 Fs 的 store。F07/F09 |
+| N02 / P1 已复现部分入口，其余源码确认 | `ui/main_window/window.py` 的 `_on_inspector_signal_changed`、`_on_fft_time_signal_changed`、`_on_file_activated`、`_build_time_statistics` 仍触发文件级 fs/time/data；`analysis_time_range.py::axis_facts_from_files`、`ultraview_capture_coordinator.py::_channel_signature`、`batch_export_size.py::source_size_facts` 同样不兼容。真实 native FileData 调用这些生产方法抛 `LegacyAxisUnavailable`。`batch.py` 分组/单项/RPM仍有旧表读取，完整 Runner 尚未实测 | 完成 §10.2 的真实事件路由；多率源按通道提供事实，不能用首通道伪造全局 Fs/axis/frame，也不能捕获错误后静默漏项。F06/F07/F10/F11 |
+| N03 / P1 已复现 | `ui/pg_canvas/overlay_axes.py` 初画用有效显示值，`renderer.py::_refresh_visible_data` 又从 `channel_data` 取 raw。真实 offscreen canvas，值 `[10,999,30,40,50]` 第二点失效，首次为 NaN，刷新后 999 重新出现 | 每次显示变换均保留失效/复位断线；raw不改，峰值/统计不计无效999。验证首次、刷新、恢复、图像输出以及 Cocoa可见结果。F01/F03 |
+| N04 / P2 已复现 | `ui/main_window/_order_mixin.py::_order_rpm_for` 先裁 RPM 再对齐。RPM `t=[0,1,2], y=[100,200,300]`，目标 `t=[.2,1,1.8]`、选区 `[.2,1.8]` 返回 None；保留邻点应得到 `[120,200,280]`。legacy分支也先裁切 | 读取必要邻点后对齐，输出严格落在请求/真实覆盖内；真越界、gap不得端点填充。native与legacy、手动RPM、单位/倍率、Order与Order-vs-Time均覆盖。F06 |
+| N05 / P2 已复现 | `ui/main_window/_fft_time_mixin.py::_fft_time_signal_for` 用范围 None 准备整条信号，`_build_fft_time_job` 之后才解析范围。`t=arange(8)/4` 首点失效，选 `[.25,1.5]` 直接准备 ready，实际 getter 返回五个 None | 请求范围先解析；有效段能从实际计算入口执行，段内无效返回原因且不启动job；预览、作业、缓存使用一致范围。二进制精确时间作为控制，独立于N01。F03/F07/F11 |
+| N06 / P2 已复现 | `ui/pg_canvas/cursor.py::_sync_native_sample_markers` 把全部 rows 的点赋给每个 marker。两子图在 t=2 的值30与3，两个 marker 都收到两个点 | 按通道/轴映射，双Y轴/子图/overlay/滤波伴随曲线正确，隐藏/重排/移除/重名来源/无数据不残留或串位；读数与实际点位置一致。F01/F11 |
+| N07 / 性能风险，SLA UNKNOWN | `analysis_signal_prepare.py::prepare_signal` 每次 hash 两个完整输入，部分预览走此准备；`ui/pg_canvas/cursor.py` 双游标路径有全段统计和额外 mask。源码说明可能产生重复O(N)工作，尚无足够实测证明超时幅度 | 元数据预览不触发完整准备，revision不在交互中重算；必要统计切片/索引或worker执行，缓存按字节计费。记录调用计数、分配与主线程耗时，再按 §3/§8验收，不用小测试耗时作性能证明。F11/F12 |
+| N08 / 兼容与端到端 UNKNOWN | 共享 Order/准备/显示层会影响旧MF4和其他格式；helper成功不证明选择、计算、项目重开、Batch/Replay与生命周期正确 | §10.2 全链矩阵、旧结果控制和明确计算行为通过；既有功能不因原生迁移消失，不能通过禁用这些功能交付。F06–F12 |
+| N09 / P1 M6报告失败，源码协议冲突确认 | `io/import_transport.py` 写端将 physical/raw 同缓冲区编码为 identity，读端要求 conversion也为identity。事故样本12个enum通道共享raw，读回报 `identity physical must share raw`，GUI注册0；非预算不足 | 冻结“缓冲区共享”与“转换语义”的独立表示；合法enum保留raw/code/标签及共享关系，不谎改conversion、不转object数组、不禁用校验。匿名enum与事故样本真实broker往返均注册，恶意/不一致manifest仍拒绝。F04/F12/R01 |
+
+前轮定向命令覆盖 `tests/test_native_signal_store.py`、`tests/test_signal_access.py`、`tests/test_analysis_signal_prepare.py`、`tests/ui/test_native_signal_consumers.py`、`tests/ui/test_order_multirate_rpm.py`，结果为 **60 passed in 1.63s**；运行前后源码指纹一致（排序后的 `mf4_analyzer/**/*.py` 与上述5个测试文件，依次散列相对路径及文件内容，SHA256 `7ad68e9448e5ef89e9ba5e140da0e36342ee32f709560c15252a499afd8a40fb`）。这些测试未覆盖上述反例，不能用通过数抵消反例。M6报告另记录正式入口7 passed、边界/fidelity 36 passed及2 xfailed；它们不与60条相加，也不证明事故样本成功。本次仅修订文档，未重跑这些命令。
+
+### 10.2 产品兼容与结果变化验收
+
+| 场景 / 必测路由 | 验收内容 |
+| --- | --- |
+| 导入与选择 | 显式候选入口→真实adapter/broker/transport→MainWindow注册→激活文件/勾选通道/Inspector选择；普通打开、拖入、最近及项目策略分别验证。禁止替换被测consumer/helper以绕开文件级访问异常 |
+| FFT、时频、Order、Order-vs-Time、FRF、时间滤波 | 多率/同率、完整/局部段、空/短/非有限、等长错位/不重叠；真正点击计算并等待任务终态，比对独立oracle。合法请求产出；非法请求给准确原因、不发布半结果；GUI/Batch同请求parity加绝对正确性 |
+| 游标/统计/显示 | 单/双游标、区间统计、原始/滤波、Custom-X、双Y轴/子图/overlay、Pin；原始点/质量/轴映射在缩放、重排、隐藏、View恢复前后相符。offscreen数值与真实Cocoa几何/像素分开记录 |
+| 旧格式与混合来源 | 既有legacy MF4、CSV、HDF、BLF的受影响边界；与native混用、同名通道、不同Fs/时钟。已合法的旧输入保留单位、dB参考、范围与结果；新保留峰值造成的预期变化单独说明，不以错误旧结果作golden |
+| 意图、缓存与生命周期 | 编辑范围/参数、预览、选择、切View及项目恢复不隐式计算；应用后结果、比较B面、Pin、UltraView对应正确source revision/view/pane。关闭/取消/替换源时无迟到发布，reservation/引用释放 |
+| 项目/通道编辑/导出 | 旧项目legacy复现、新schema6 native恢复、显式迁移预览/取消、单/多输入公式和派生轴；数值导出回读逐点/质量/大整数一致，PNG/PDF保留断线；源变化悬挂不猜配 |
+| Batch / Replay | 实际Runner的probe、普通/分组任务、RPM、Custom-X、导出尺寸建议、输出与取消；拆分逻辑来源保留identity。Replay通过实际UI选择/启动/停止，保留原时间/顺序/segment，独立进程测试 |
+
+每项结果只能填 PASS（附证据）、FAIL、UNKNOWN 或明确未完成的 partial；必需项的 xfail/skip不是PASS。N01–N09、F01–F12、R01及资源/性能/平台门禁逐项关闭，才能提出默认切换与发布。缺少Windows、图2样本或数值设计不能自行改成非目标；若确需调整已约定交付范围，先单独提出并取得用户决定。
+
 ## 11. 外部依据与文档边界
 
 - [ASAM MDF](https://www.asam.net/standards/detail/mdf/)：可存原始编码与转换规则；多率/非等间隔见 [4.3 规范概述](https://www.asam.net/index.php?eID=dumpFile&f=9630&t=f&token=39c75c0c8841fd89a6caa29376c9483b5ecc40d4)。
@@ -217,4 +280,4 @@ transport 按同一 buffer identity 去重；时钟表共享跨进程后仍共�
 - [SciPy resample_poly](https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.resample_poly.html)：低通与采样组合，以及边界扩展必须显式考虑；此引用不授权新增运行时依赖。
 - [Vector CANape 产品说明](https://www.vector.com/dam/jcr%3A67ae5dbf-fe3c-4ea5-8008-d285fa47eeb2/CANape_ProductInformation_EN.2026-06-29-07-00-35.pdf) 说明直接使用 MDF/MF4，不足以证明每项 CANape 操作的内部算法。CANape 同文件对照可作独立参考，不能替代原始字节、人工公式与采样身份 oracle。
 
-本轮未运行新实现、原生 GUI 性能或 Windows EXE，也未修改产品源代码。全量测试不是文档交付门禁。该 spec 替代未来 native 路径的共享轴行为，不追溯改写已有 8.3.2/8.4.1 历史记录或其他任务的执行授权。
+本次修订只更新本 Spec/Plan，读取当前候选源码与阶段报告，未重跑实现测试、原生 GUI 性能或 Windows EXE，也未修改产品源代码。检查全文、引用/路径、历史与当前状态、R01/F01–F12 映射及 `git diff --check`；文档交付不运行 runtime/full suite。该 spec 约束最终 native 路径，不改写历史发布记录或其他任务的执行授权。

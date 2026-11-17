@@ -257,6 +257,73 @@ def test_project_reopen_recomputes_diagnostics_and_keeps_details(qapp, qtbot, tm
     assert not any("缺口" in text and level == "warning" for text, level in calls)
 
 
+def test_resource_dialog_copies_exact_bytes_and_keeps_shared_axis_out_of_the_body(
+    qapp, qtbot, tmp_path, monkeypatch,
+):
+    from PyQt5.QtWidgets import QApplication, QMessageBox
+    from mf4_analyzer.io.import_limits import resource_technical_detail, resource_user_text
+    from mf4_analyzer.io.import_process import ImportProcessError
+    from mf4_analyzer.io.import_limits import parse_resource_envelope
+    from mf4_analyzer.ui.main_window import MainWindow
+    from mf4_analyzer.ui_kit.message_dialog import AppMessageDialog
+
+    label = "MDF shared-axis conversion/alignment/frame"
+    requested = 638_976_000
+    exc = ImportProcessError(
+        "resource_limit",
+        "导入资源超过预算",
+        stage="admission",
+        detail="worker detail",
+        resource=parse_resource_envelope({
+            "schema": 1,
+            "resource_kind": "memory_estimate",
+            "unit": "bytes",
+            "requested": requested,
+            "limit": 498_988_944,
+            "phase": "admission",
+            "estimate_basis": "test",
+            "label": label,
+            "components": [{"name": label, "amount": requested, "unit": "bytes"}],
+        }),
+        request_id="req-copy-1",
+    )
+    path = tmp_path / "copy.csv"
+    path.write_text("Time,sig\n0,1\n.1,2\n")
+    copied = {}
+
+    def drive(self):
+        self.button("copy_diagnostics").click()
+        copied["body"] = self._text_label.text()
+        copied["clip"] = QApplication.clipboard().text()
+        copied["detail_hidden"] = self._detailed_label.isHidden()
+        self.button("toggle_details").click()
+        copied["detail"] = self._detailed_label.text()
+        self.button("close").click()
+        return 0
+
+    monkeypatch.setattr(AppMessageDialog, "exec_", drive)
+    monkeypatch.setattr(QMessageBox, "critical", lambda *args, **kwargs: None)
+    mw = MainWindow()
+    qtbot.addWidget(mw)
+
+    def broker(method, file_path, **kwargs):
+        raise exc
+
+    mw._imports.broker = broker
+    mw._load_one(str(path))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
+    assert copied["body"] == resource_user_text(exc)
+    assert label not in copied["body"]
+    assert "638,976,000" not in copied["body"]
+    assert copied["detail_hidden"] is True
+    assert copied["detail"] == resource_technical_detail(
+        exc, stage=exc.stage, detail=exc.detail, request_id=exc.request_id,
+    )
+    assert "638,976,000" in copied["clip"] and "498,988,944" in copied["clip"]
+    assert label in copied["clip"]
+    assert not mw.files
+
+
 @pytest.fixture(autouse=True)
 def _local_import_broker(monkeypatch):
     """Exercise GUI continuations with existing loader fakes; broker has its own gates."""

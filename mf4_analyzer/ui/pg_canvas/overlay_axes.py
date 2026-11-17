@@ -325,7 +325,17 @@ class OverlayAxisManager(_CanvasBackref):
         is_monotonic = self._cached_is_monotonic(data_id, name, t_arr)
         ck = _view_state_channel_key(data_id, name)
         profiles = self._channel_render_profiles
-        source_revision = source_revision_for(t_arr, sig_arr)
+        query = (getattr(self, "_native_queries", None) or {}).get(ck)
+        plot_t = t_arr
+        plot_s = sig_arr
+        explicit_revision = None
+        if query is not None:
+            plot_t = np.asarray(query.display_time)
+            plot_s = np.asarray(query.display_values)
+            explicit_revision = query.revision
+        source_revision = source_revision_for(
+            t_arr, sig_arr, explicit_revision=explicit_revision,
+        )
         profile = profiles.get(ck)
         if profile is None or profile.source_revision != source_revision:
             profile = classify_render_profile(
@@ -350,8 +360,8 @@ class OverlayAxisManager(_CanvasBackref):
                 interactive=False,
             )
             bind_t, bind_s = envelope_builder(
-                t_arr,
-                sig_arr,
+                plot_t,
+                plot_s,
                 xlim=None,
                 pixel_width=initial_width,
                 is_monotonic=is_monotonic,
@@ -371,6 +381,11 @@ class OverlayAxisManager(_CanvasBackref):
                 add_line_item(pdi)
         else:
             pdi = pi.plot(bind_t, bind_s, pen=pen, name=name)
+        if query is not None and query.point_marker:
+            pdi.setSymbol("o")
+            pdi.setSymbolSize(8)
+            pdi.setSymbolBrush(pg.mkBrush(color))
+            pdi.setSymbolPen(pg.mkPen(color, width=1))
         # IDENTITY is the composite (data_id, name) key so two same-named
         # channels from differently-truncated files never overwrite each other
         # (multi-file same-name root fix); the display ``name`` is recorded for

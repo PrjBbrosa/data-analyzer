@@ -28,11 +28,17 @@ COMPACT_WORK_WIDTH = 640
 COMPACT_WORK_HEIGHT = 360
 ANCHOR_GAP = 8
 # D-W1 floors. These are calibrated cutoffs, not preferences: a work area
-# below 320×240 is untrusted, and a decorated top-level client below 200
-# is not applied.
+# below 320×240 is untrusted. A workspace-purpose decorated top-level
+# client below 200 is not applied. Content prompts opt out explicitly;
+# frameless, popup, and embedded windows never enter this floor.
 UNTRUSTED_WORK_WIDTH = 320
 UNTRUSTED_WORK_HEIGHT = 240
 MIN_DECORATED_CLIENT = 200
+# Explicit owner contract. Do not infer this from the title, object name,
+# or the fact that the widget happens to be a QDialog.
+PURPOSE_WORKSPACE = "workspace"
+PURPOSE_CONTENT = "content"
+_DIALOG_PURPOSES = frozenset({PURPOSE_WORKSPACE, PURPOSE_CONTENT})
 # Unshown decorated windows have no native frame yet. This is an estimate
 # used only before Show; after Show the real frameGeometry is measured.
 # A measured Windows value is still pending.
@@ -692,13 +698,32 @@ def _release_size_conflicts(widget: QWidget, client: Size) -> None:
         )
 
 
-def _shrink_unaccounted_frame(widget: QWidget, planned_frame: IntRect) -> None:
+def _require_purpose(purpose: str) -> str:
+    if purpose not in _DIALOG_PURPOSES:
+        raise ValueError(
+            f"unknown dialog purpose {purpose!r}; "
+            f"expected one of {sorted(_DIALOG_PURPOSES)}"
+        )
+    return purpose
+
+
+def _shrink_unaccounted_frame(
+    widget: QWidget,
+    planned_frame: IntRect,
+    *,
+    purpose: str = PURPOSE_WORKSPACE,
+) -> None:
     """If live chrome exceeds the insets used to plan, shrink the client.
 
     Tests may stub ``frame_insets_of`` to zero while the shown widget still
     has a native frame. Planning then treats client size as frame size, and
     the real frame overflows the safe area by a few pixels.
+
+    ``purpose`` is the same contract as ``apply_plan``. Workspace windows
+    keep the 200 client floor; content prompts shrink with the chrome and
+    are not lifted back to that floor.
     """
+    _require_purpose(purpose)
     if not widget.isVisible():
         return
     try:
@@ -711,10 +736,10 @@ def _shrink_unaccounted_frame(widget: QWidget, planned_frame: IntRect) -> None:
         return
     target_w = widget.width() - extra_w
     target_h = widget.height() - extra_h
-    # A decorated top-level may lose unaccounted chrome, but not so much
-    # that the client falls under the D-W1 floor. Popovers and frameless
-    # windows keep the old shrink-to-fit behavior.
-    if _is_decorated_toplevel(widget):
+    # A workspace decorated top-level may lose unaccounted chrome, but not
+    # so much that the client falls under the D-W1 floor. Content prompts,
+    # popovers, and frameless windows keep the shrink-to-fit behavior.
+    if purpose == PURPOSE_WORKSPACE and _is_decorated_toplevel(widget):
         if extra_w > 0:
             target_w = max(MIN_DECORATED_CLIENT, target_w)
         if extra_h > 0:
@@ -782,8 +807,24 @@ def _is_decorated_toplevel(widget: QWidget) -> bool:
     return True
 
 
-def decorated_plan_is_degenerate(widget: QWidget, plan: GeometryPlan) -> bool:
-    """True when applying ``plan`` would make a titled top-level unusably small."""
+def decorated_plan_is_degenerate(
+    widget: QWidget,
+    plan: GeometryPlan,
+    *,
+    purpose: str = PURPOSE_WORKSPACE,
+) -> bool:
+    """True when applying ``plan`` would make a workspace window unusably small.
+
+    The default purpose keeps the historical rule: a titled top-level client
+    under ``MIN_DECORATED_CLIENT`` in either dimension is refused. Content
+    prompts pass ``PURPOSE_CONTENT`` and are sized by their own body, icon,
+    and actions, including a normal short height. Frameless, popup, and
+    embedded widgets are not decorated top-levels, so they are never refused
+    here.
+    """
+    _require_purpose(purpose)
+    if purpose == PURPOSE_CONTENT:
+        return False
     if not _alive(widget) or not _is_decorated_toplevel(widget):
         return False
     return (
@@ -858,18 +899,27 @@ def apply_plan(
     plan: GeometryPlan,
     *,
     release_conflicts: bool = True,
+    purpose: str = PURPOSE_WORKSPACE,
 ) -> bool:
     """Resize the client, then move by the frame origin for top-level windows.
 
-    Returns True when geometry actually changed. Hidden windows and the
-    post-show correction share this convention: estimate insets before the
-    native frame exists, then re-apply with measured ``frameGeometry()``.
-    A decorated top-level whose planned client is under
-    ``MIN_DECORATED_CLIENT`` in either dimension is left untouched.
+    Returns True when geometry actually changed. False leaves the widget as
+    it was: the widget is gone, the geometry was already the plan, or a
+    workspace plan was refused. Callers must not treat False as proof that
+    the planned size is now showing.
+
+    Hidden windows and the post-show correction share this convention:
+    estimate insets before the native frame exists, then re-apply with
+    measured ``frameGeometry()``. ``purpose`` is that same contract.
+    ``PURPOSE_WORKSPACE`` still refuses a titled top-level client under
+    ``MIN_DECORATED_CLIENT`` and keeps the floor while shrinking unaccounted
+    chrome. ``PURPOSE_CONTENT`` applies the content size, including a short
+    height, and the chrome shrink does not lift it back to 200.
     """
+    _require_purpose(purpose)
     if not _alive(widget):
         return False
-    if decorated_plan_is_degenerate(widget, plan):
+    if decorated_plan_is_degenerate(widget, plan, purpose=purpose):
         from mf4_analyzer.ui_kit.layout_diagnostics import warn_degenerate_decorated_plan
 
         warn_degenerate_decorated_plan(_degenerate_plan_details(widget, plan))
@@ -880,7 +930,7 @@ def apply_plan(
     before = (widget.x(), widget.y(), widget.width(), widget.height())
     widget.resize(client.width, client.height)
     move_in_screen(widget, _plan_move_origin(widget, plan))
-    _shrink_unaccounted_frame(widget, plan.frame)
+    _shrink_unaccounted_frame(widget, plan.frame, purpose=purpose)
     after = (widget.x(), widget.y(), widget.width(), widget.height())
     return after != before
 
@@ -972,8 +1022,10 @@ def fit_window(
     content_minimum=None,
     clamp_width_to_parent: bool = False,
     margin: int = SCREEN_MARGIN,
+    purpose: str = PURPOSE_WORKSPACE,
 ) -> GeometryPlan:
     """Fit an ordinary window: content owner must already be measurable."""
+    _require_purpose(purpose)
     plan = plan_for_widget(
         widget,
         preferred,
@@ -983,7 +1035,7 @@ def fit_window(
         clamp_width_to_parent=clamp_width_to_parent,
         margin=margin,
     )
-    apply_plan(widget, plan)
+    apply_plan(widget, plan, purpose=purpose)
     return plan
 
 
@@ -996,8 +1048,10 @@ def fit_popover(
     prefer_below: bool = True,
     margin: int = SCREEN_MARGIN,
     content_minimum=None,
+    purpose: str = PURPOSE_WORKSPACE,
 ) -> GeometryPlan:
     """Place a popover using final size: below, then above, then clamp."""
+    _require_purpose(purpose)
     if preferred is None:
         if widget.layout() is not None:
             widget.layout().activate()
@@ -1013,7 +1067,7 @@ def fit_popover(
         gap=gap,
         margin=margin,
     )
-    apply_plan(widget, plan)
+    apply_plan(widget, plan, purpose=purpose)
     return plan
 
 
@@ -1138,8 +1192,10 @@ def nudge_into_work_area(
     parent: QWidget | None = None,
     margin: int = SCREEN_MARGIN,
     content_minimum=None,
+    purpose: str = PURPOSE_WORKSPACE,
 ) -> GeometryPlan | None:
     """Correct overflow only. Do not restore a default preferred size."""
+    _require_purpose(purpose)
     if not _alive(widget):
         return None
     available = resolve_available_rect(widget=widget, parent=parent)
@@ -1162,7 +1218,7 @@ def nudge_into_work_area(
         host=current,
         position=POSITION_CENTER,
     )
-    apply_plan(widget, plan)
+    apply_plan(widget, plan, purpose=purpose)
     return plan
 
 

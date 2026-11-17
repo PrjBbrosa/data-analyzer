@@ -288,6 +288,7 @@ lesson by default.
 | [FRF live cursor publishes structured facts](frf-live-cursor-publishes-structured-facts.md) | Wiring an analysis cursor into the shared ChartStack pill, or changing full/mini labels for a domain whose rows are different quantities. | See lesson |
 | [Parentless Popup Final Reference Can Break SIP Exit Iteration](parentless-popup-final-reference-can-break-sip-exit-iteration.md) | Changing cached parentless Qt popups, destroyed callbacks, or diagnosing crashes in cleanup_qobject / sip_api_visit_wrappers at interpreter exit. | See lesson |
 | [Chart Options Restore Commits The Opening Snapshot](pyqt-ui/2026-09-25-chart-options-restore-commits-opening-snapshot.md) | Changing ChartOptionsDialog reset, apply, axis range, or color-scale commit. | See lesson |
+| [Runtime Resources Must Survive Duplicate Cleaning](runtime-resources-must-survive-duplicate-cleaning.md) | Runtime resources disappear, the app loses its global styling, or a cleanup proposes deleting duplicate files inside a working repository. | See lesson |
 | [FRF Faded Strokes Need Native Paint Profiling](frf-faded-strokes-need-native-paint-profiling.md) | FRF cursor or zoom stalls although curve antialiasing is already off. | See lesson |
 | [Time Range Editors Preserve Unedited Physical Endpoints](time-range-editors-preserve-unedited-physical-endpoints.md) | Editing, restoring or validating physical time endpoints through rounded numeric widgets. | See lesson |
 | [FRF Attempt Errors Do Not Block Request Recovery](frf-attempt-errors-do-not-block-request-recovery.md) | Changing FRF validation, retry, range correction, or View/pane projection. | See lesson |
@@ -312,6 +313,7 @@ lesson by default.
 | [Import safety needs numeric oracles and allocation admission](import-native-safety-needs-numeric-oracles-and-admission.md) | Changing binary readers, array expansion, native dependencies, import isolation or resource limits. | See lesson |
 | [Application-owned supervisors need weak host references](application-owned-supervisors-need-weak-host-references.md) | A Qt task supervisor outlives its window or tab so a running QThread can finish safely. | See lesson |
 | [Windows Build Preflight Must Resolve Repository Imports](windows-build-preflight-independent-of-cwd.md) | Adding Python import probes to Windows BAT/PowerShell builders. | See lesson |
+| [Dialog Size Guards Must Respect Window Purpose](dialog-size-guards-must-respect-window-purpose.md) | Changing shared top-level window minimum sizes, degenerate-plan rejection, or native frame correction. | See lesson |
 
 ## Selection Rules
 

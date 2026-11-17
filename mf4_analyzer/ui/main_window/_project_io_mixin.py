@@ -45,6 +45,13 @@ from ...ui_kit.message_box_buttons import fit_message_box_buttons_to_text
 logger = logging.getLogger(__name__)
 
 
+def _saved_file_fs(fd) -> float:
+    """Legacy files persist ``fs``. A native source has no shared rate."""
+    if getattr(fd, "is_native", False):
+        return 0.0
+    return float(fd.fs)
+
+
 def _channel_edit_payload(fd):
     log = getattr(fd, "channel_edits", None)
     entries = getattr(log, "entries", None)
@@ -142,6 +149,27 @@ def _restore_load_kwargs(ref, resolved, pio, path) -> dict:
         # historical 1 kHz must never become a verified sample rate.
         load_kwargs["sampling_rate"] = float(ref.fs)
     return load_kwargs
+
+
+def _native_policy_unapplied(ref, new_fid):
+    """A native-policy project opened through the legacy loader stays unapplied."""
+    from ...signal.channel_recipe import DeriveEntry, RecipeError, entry_from_dict
+
+    skipped = []
+    for item in getattr(ref, "channel_edits", None) or []:
+        try:
+            entry = entry_from_dict(item)
+        except RecipeError:
+            skipped.append((new_fid, "", "条目无法识别"))
+            continue
+        if isinstance(entry, DeriveEntry) and entry.apply_status == "unapplied":
+            reason = "配方保持未应用"
+        else:
+            reason = "原生采样政策已记录，当前打开仍是公共轴，配方未应用"
+        names = (entry.name,) if isinstance(entry, DeriveEntry) else entry.names
+        for name in names:
+            skipped.append((new_fid, name, reason))
+    return skipped
 
 
 def _unverified_channel_edit_skips(ref, new_fid):
@@ -579,10 +607,57 @@ class ProjectIOMixin:
                 return
         self._start_import_paths(data_files)
 
+    def _apply_import_snapshot(self, snapshot, token):
+        """Status bar reads the snapshot. It does not choose busy versus percent."""
+        self._update_compute_progress(
+            snapshot.bar_current,
+            snapshot.bar_total,
+            label=snapshot.status_label,
+            token=token,
+            flush_events=False,
+        )
+
+    def _bind_import_progress(
+        self, coordinator, request, *, parent, title, file_count,
+        path="", phase="读取数据", token=None,
+    ):
+        from functools import partial
+        from ...ui_kit.import_progress_dialog import ImportProgressDialog
+
+        dialog = ImportProgressDialog(parent, title=title)
+        dialog.cancel_requested.connect(coordinator.on_progress_cancel)
+        sink = None
+        finish = None
+        if token is not None:
+            sink = partial(self._apply_import_snapshot, token=token)
+            finish = partial(self._finish_compute_progress, token=token)
+        coordinator.open_progress(
+            request,
+            dialog,
+            status_sink=sink,
+            finish_status=finish,
+            title=title,
+            file_count=file_count,
+            path=path,
+            phase=phase,
+        )
+        dialog.show()
+        return dialog
+
+    def request_explicit_native_import(self, path, *, limits=None):
+        """Open one MF4 through the native broker only when the caller asks.
+
+        Default open, drag-drop, recent files, project restore, Batch, and
+        Replay do not call this. Their method table stays ``load_mf4``.
+        """
+        return self._start_import_paths(
+            [os.fspath(path)], limits=limits, explicit_native=True,
+        )
+
     def _start_import_paths(self, paths, *, load_kwargs=None, notify=True,
-                            progress_callback=None):
+                            progress_callback=None, limits=None,
+                            explicit_native=False):
         """Explicit asynchronous entry; returns a request ID, never loaded data."""
-        from PyQt5.QtWidgets import QProgressDialog
         from .import_coordinator import ImportCall
         paths = list(paths)
         coordinator = self._imports
@@ -590,16 +665,20 @@ class ProjectIOMixin:
 
         def workflow(request):
             token = self._begin_compute_progress("加载文件", total=0)
-            dialog = QProgressDialog("读取数据", "取消导入", 0, 0, self)
-            dialog.setWindowTitle("导入文件")
-            dialog.setWindowModality(Qt.NonModal)
-            dialog.canceled.connect(coordinator.cancel)
-            coordinator.progress_dialog = dialog
-            dialog.show()
             loaded_count = 0
             diagnostic_count = 0
             self._wwt_import.begin_open_batch()
             try:
+                first = str(paths[0]) if paths else ""
+                self._bind_import_progress(
+                    coordinator, request,
+                    parent=self,
+                    title="导入文件",
+                    file_count=len(paths),
+                    path=first,
+                    phase="读取数据",
+                    token=token,
+                )
                 can_paths = [Path(path) for path in paths if self._is_can_log_path(path)]
                 shared_dbc = None
                 if len(can_paths) >= 2:
@@ -613,20 +692,13 @@ class ProjectIOMixin:
                 for index, fp in enumerate(paths):
                     if not coordinator.is_valid(request):
                         return
-                    label = f"加载 {index + 1}/{len(paths)} · {Path(fp).name}"
-                    dialog.setLabelText(label)
-                    self._update_compute_progress(0, 0, label=label, token=token,
-                                                  flush_events=False)
-                    def report(fraction, phase):
-                        self._update_compute_progress(
-                            0 if fraction < 0 else int(1000 * fraction),
-                            0 if fraction < 0 else 1000,
-                            label=f"{label} · {phase}", token=token, flush_events=False,
-                        )
-                        if progress_callback:
-                            progress_callback(fraction, phase)
-
-                    request.progress_callback = report
+                    coordinator.note_file(
+                        request,
+                        index=index + 1,
+                        total=len(paths),
+                        path=str(fp),
+                        phase="读取数据",
+                    )
                     try:
                         options = dict(load_kwargs or {})
                         if shared_dbc is not None and self._is_can_log_path(fp):
@@ -651,7 +723,8 @@ class ProjectIOMixin:
                             if not options.get("blf_dbc_validated"):
                                 continue
                         fids = yield from self._import_one_steps(
-                            request, fp, notify=notify and len(paths) == 1, **options,
+                            request, fp, notify=notify and len(paths) == 1,
+                            explicit_native=bool(request.explicit_native), **options,
                         )
                     except Exception as exc:
                         coordinator.record_failure(request, exc)
@@ -659,7 +732,13 @@ class ProjectIOMixin:
                             request.cancel_event.set()
                             self.statusBar.showMessage("已取消导入")
                             return
-                        self._show_async_import_error(exc)
+                        if not getattr(exc, "resource_dialog_presented", False):
+                            coordinator.note_user_wait(request, "等待处理导入错误")
+                            try:
+                                self._show_async_import_error(exc)
+                            finally:
+                                if coordinator.is_valid(request):
+                                    coordinator.resume_after_user_wait(request)
                         continue
                     if fids:
                         request.loaded_files += 1
@@ -690,21 +769,33 @@ class ProjectIOMixin:
                 from PyQt5 import sip
                 if not sip.isdeleted(self):
                     self._wwt_import.end_open_batch()
-                    self._finish_compute_progress(token=token)
-                    # Programmatic close also emits QProgressDialog.canceled.
-                    # Cleanup must not cancel this completed or the next task.
-                    dialog.blockSignals(True)
-                    dialog.close()
-                    dialog.deleteLater()
-                coordinator.progress_dialog = None
+                    # The coordinator publishes one terminal snapshot, then
+                    # dismisses with signals blocked. Closing here would run
+                    # before that snapshot and could cancel the next request.
+                    if not coordinator.progress_owned(request):
+                        self._finish_compute_progress(token=token)
 
-        return coordinator.submit(workflow, target=target,
-                                  progress_callback=progress_callback)
+        return coordinator.submit(
+            workflow, target=target, progress_callback=progress_callback,
+            limits=limits, explicit_native=explicit_native,
+        )
 
     def _show_async_import_error(self, exc):
+        if getattr(exc, "resource_dialog_presented", False):
+            return "close"
+        if getattr(exc, "code", "") == "resource_limit":
+            request = self._imports._active
+            if request is None:
+                return "close"
+            action = self._imports._present_resource_dialog(request, exc)
+            try:
+                exc.resource_dialog_presented = True
+            except (AttributeError, TypeError):
+                pass
+            return action
         if isinstance(exc, ImportError) or self._offer_extension_manager_for(exc):
             self._show_load_import_error(exc)
-            return
+            return "close"
         code = getattr(exc, "code", "")
         if code == "cancelled":
             self.statusBar.showMessage("已取消导入")
@@ -715,6 +806,7 @@ class ProjectIOMixin:
         if code == "timeout":
             detail += "\n可重新选择该文件重试。"
         QMessageBox.critical(self, labels.get(code, "错误"), detail)
+        return "close"
 
     def save_project_via_dialog(self):
         """「保存」handler: overwrite the current .tlproj if one is open,
@@ -873,7 +965,13 @@ class ProjectIOMixin:
                 for fid, fd in zip(fids, prepared):
                     self._present_registered_file(fid, fd)
                 if fids:
-                    self._on_file_activated(fids[-1])
+                    if getattr(prepared[-1], "is_native", False):
+                        # Legacy activation reads one shared fs/time_array.
+                        # Native registration keeps the file active without that.
+                        self._active = fids[-1]
+                        self._update_info()
+                    else:
+                        self._on_file_activated(fids[-1])
             except Exception:
                 for fid in reversed(fids):
                     self.files.pop(fid, None)
@@ -916,9 +1014,18 @@ class ProjectIOMixin:
                 )
                 if callable(apply_audio_default):
                     apply_audio_default((fid, signal_channels[0]))
-        if fd.time_array is not None and len(fd.time_array):
+        if getattr(fd, "is_native", False):
+            from ..time_xaxis import acquisition_span
+
+            span = acquisition_span(fd)
+            source_hi = None if span is None else span[1]
+        elif fd.time_array is not None and len(fd.time_array):
+            source_hi = fd.time_array[-1]
+        else:
+            source_hi = None
+        if source_hi is not None:
             current_hi = self.inspector.top.spin_end.maximum()
-            new_hi = max(current_hi, fd.time_array[-1])
+            new_hi = max(current_hi, source_hi)
             self.inspector.top.set_range_limits(0, new_hi)
             # Expanding limits is required so a longer source can display.
             # Do not write spin values: that leaked the first file's last
@@ -1062,6 +1169,10 @@ class ProjectIOMixin:
         the GUI assigns the current palette index when it publishes each row.
         """
         document = None
+        if method == "load_mf4_native":
+            if not getattr(result, "is_native", False):
+                raise TypeError("load_mf4_native 必须返回带原生存储的 FileData")
+            return [result], None
         if method == "load_wwt_document":
             document, groups = result.document, list(result.groups)
         elif method in {"load_hdf", "load_mat", "load_zfd"}:
@@ -1091,7 +1202,7 @@ class ProjectIOMixin:
 
     def _import_one_steps(self, request, fp, *, notify=True, sampling_rate=None,
                           blf_dbc_paths=None, blf_frames=None,
-                          blf_dbc_validated=False):
+                          blf_dbc_validated=False, explicit_native=False):
         from functools import partial
         from .import_coordinator import ImportCall
         from ..view_state import is_reusable_blank_view
@@ -1124,6 +1235,12 @@ class ProjectIOMixin:
             can_metadata = {"source_kind": "blf" if ext == ".blf" else "canoe_asc",
                             "dbc_paths": list(dbc_paths),
                             "warnings": list(getattr(frames, "warnings", ()))}
+        if explicit_native:
+            from ...io.source_adapters import SourceAdapterRegistry
+
+            method = SourceAdapterRegistry.default().adapter_for(str(p)).explicit_native_method()
+            kwargs = {}
+            can_metadata = None
         prepared, document = yield ImportCall(
             method, fp, kwargs, transform=partial(
                 self._prepare_import_result, method=method,
@@ -1645,56 +1762,50 @@ class ProjectIOMixin:
 
     def resolve_blf_dbc_paths_for_batch_async(self, paths, *, coordinator, on_resolved):
         """Resolve sheet intake through its own cancellable supervisor lifecycle."""
-        from PyQt5 import sip
-        from PyQt5.QtWidgets import QProgressDialog
         from .import_coordinator import ImportCall
 
         paths = [Path(path) for path in paths if self._is_can_log_path(path)]
 
         def workflow(request):
-            dialog = QProgressDialog("读取 CAN 帧并匹配 DBC", "取消导入", 0, 0, coordinator.host)
-            dialog.setWindowModality(Qt.NonModal)
-            dialog.canceled.connect(coordinator.cancel)
-            coordinator.progress_dialog = dialog
-            dialog.show()
-            try:
-                if not paths:
-                    on_resolved([])
-                    return
-                path = paths[0]
-                action = self._ask_blf_batch_dbc_action(paths) if len(paths) > 1 else "individual"
-                chosen = None
-                if action in {"batch", "individual"}:
-                    frames = yield ImportCall("read_blf_frames", str(path), phase="读取 CAN 帧")
-                    if action == "individual":
-                        chosen = yield from self._import_dbc_choice_steps(
-                            request, path, frames, coordinator=coordinator,
+            self._bind_import_progress(
+                coordinator, request,
+                parent=coordinator.host,
+                title="读取 CAN 帧并匹配 DBC",
+                file_count=max(1, len(paths)),
+                path=str(paths[0]) if paths else "",
+                phase="读取 CAN 帧",
+            )
+            if not paths:
+                on_resolved([])
+                return
+            path = paths[0]
+            action = self._ask_blf_batch_dbc_action(paths) if len(paths) > 1 else "individual"
+            chosen = None
+            if action in {"batch", "individual"}:
+                frames = yield ImportCall("read_blf_frames", str(path), phase="读取 CAN 帧")
+                if action == "individual":
+                    chosen = yield from self._import_dbc_choice_steps(
+                        request, path, frames, coordinator=coordinator,
+                    )
+                else:
+                    while coordinator.is_valid(request):
+                        chosen = self._prompt_blf_dbc(path)
+                        if not chosen:
+                            break
+                        probe = yield ImportCall(
+                            "probe_blf_dbc_frames", str(path),
+                            {"frames": frames, "dbc_paths": list(chosen)}, "校验 DBC",
                         )
-                    else:
-                        while coordinator.is_valid(request):
-                            chosen = self._prompt_blf_dbc(path)
-                            if not chosen:
-                                break
-                            probe = yield ImportCall(
-                                "probe_blf_dbc_frames", str(path),
-                                {"frames": frames, "dbc_paths": list(chosen)}, "校验 DBC",
-                            )
-                            if probe.is_match:
-                                break
-                            action = self._ask_blf_dbc_mismatch_action(path, chosen)
-                            chosen = None
-                            if action != "retry":
-                                break
-                if coordinator.is_valid(request):
-                    on_resolved(chosen)
-                    if not chosen:
-                        request.skipped_files += 1
-            finally:
-                if not sip.isdeleted(dialog):
-                    dialog.blockSignals(True)
-                    dialog.close()
-                    dialog.deleteLater()
-                coordinator.progress_dialog = None
+                        if probe.is_match:
+                            break
+                        action = self._ask_blf_dbc_mismatch_action(path, chosen)
+                        chosen = None
+                        if action != "retry":
+                            break
+            if coordinator.is_valid(request):
+                on_resolved(chosen)
+                if not chosen:
+                    request.skipped_files += 1
 
         def done(status, value):
             if status == "failed" and isinstance(value, Exception):
@@ -2619,17 +2730,37 @@ class ProjectIOMixin:
                 provenance = provenance.to_dict()
             elif not isinstance(provenance, dict):
                 provenance = None
+            sampling_policy = ""
+            physical_keys = []
+            alignment_intents = list(getattr(fd, "alignment_intents", ()) or [])
+            suspended_channels = list(getattr(fd, "suspended_channels", ()) or [])
+            if getattr(fd, "is_native", False) and getattr(fd, "native_store", None) is not None:
+                sampling_policy = "native"
+                metadata = fd.native_store.channel_metadata()
+                for meta in metadata.values():
+                    group, index = meta["physical_occurrence"]
+                    physical_keys.append({
+                        "token": meta["physical_key"],
+                        "group": int(group),
+                        "index": int(index),
+                        "parent": list(meta.get("parent") or ()),
+                        "coordinates": list(meta.get("coordinates") or ()),
+                    })
             file_refs.append(pio.ProjectFileRef(
                 fid=fid,
                 path_abs=abs_p,
                 path_rel=pio.make_relative(abs_p, path),
-                fs=float(fd.fs),
-                time_source=fd._time_source,
+                fs=_saved_file_fs(fd),
+                time_source=str(getattr(fd, "_time_source", "") or ""),
                 dbc_refs=dbc_refs,
                 channel_order=list(self.navigator_order.channel_order(fid)),
                 time_axis_provenance=provenance,
                 channel_edits=_channel_edit_payload(fd),
                 source_group=_persisted_source_group(fd),
+                sampling_policy=sampling_policy,
+                physical_keys=physical_keys,
+                alignment_intents=alignment_intents,
+                suspended_channels=suspended_channels,
             ))
 
         vm = {
@@ -2811,6 +2942,11 @@ class ProjectIOMixin:
         """Replay number-changing state onto a source the file confirmed."""
         from ...io.head_hdf import classify_saved_hdf_sampling
 
+        if getattr(ref, "sampling_policy", "") == "native" and not getattr(fd, "is_native", False):
+            timebase_notices.append(
+                "该来源记录了原生采样政策，当前仍按公共轴读取；指定采样率和公式保持未应用。"
+            )
+            return _native_policy_unapplied(ref, new_fid)
         decision = classify_saved_hdf_sampling(
             fd.source_metadata,
             fd.channel_metadata,
@@ -2962,21 +3098,24 @@ class ProjectIOMixin:
             self._unbind_project_save_target()
             old_restoring = self._restoring_project
             self._restoring_project = True
-            from PyQt5.QtWidgets import QProgressDialog
             token = self._begin_compute_progress("恢复项目", total=0)
-            dialog = QProgressDialog("恢复项目来源", "取消导入", 0, 0, self)
-            dialog.setWindowModality(Qt.NonModal)
-            dialog.canceled.connect(self._imports.cancel)
-            self._imports.progress_dialog = dialog
-            dialog.show()
             try:
+                self._bind_import_progress(
+                    self._imports, request,
+                    parent=self,
+                    title="恢复项目来源",
+                    file_count=max(1, len(getattr(doc, "files", ()) or ())),
+                    path=str(path),
+                    phase="恢复项目来源",
+                    token=token,
+                )
                 self.close_all(force=True)
                 self._analysis_restore_pending = set()
                 restore = yield from self._restore_project_file_refs(doc, path, pio, request)
                 if self._imports.is_valid(request):
                     self._restoring_project = old_restoring
                     failure_details = [
-                        f"{item['path']}：{item['detail']}"
+                        f"{item['path']}：{item.get('user_text') or item['detail']}"
                         for item in self._imports.failures
                         if item['request_id'] == request.request_id
                     ]
@@ -2988,19 +3127,14 @@ class ProjectIOMixin:
                 from PyQt5 import sip
                 self._restoring_project = old_restoring
                 if not sip.isdeleted(self):
-                    self._finish_compute_progress(token=token)
-                    # Programmatic close also emits QProgressDialog.canceled.
-                    # Cleanup must not cancel this completed or the next task.
-                    dialog.blockSignals(True)
-                    dialog.close()
-                    dialog.deleteLater()
+                    if not self._imports.progress_owned(request):
+                        self._finish_compute_progress(token=token)
                     if not self._imports.is_valid(request):
                         # An interrupted restore must not retain the prior
                         # project's save target against a partial new session.
                         self._unbind_project_save_target()
                         if self.files:
                             self._note_user_project_mutation()
-                self._imports.progress_dialog = None
                 if dirty is not None:
                     dirty.end_restore()
 

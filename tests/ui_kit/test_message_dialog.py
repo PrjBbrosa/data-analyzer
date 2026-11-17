@@ -11,10 +11,16 @@ from mf4_analyzer.ui_kit import load_stylesheet
 from mf4_analyzer.ui_kit.control_style import CONTROL_HEIGHTS
 from mf4_analyzer.ui_kit.dialog_geometry import IntRect, SCREEN_MARGIN, as_rect
 from mf4_analyzer.ui_kit.message_dialog import (
+    BODY_STACK_SPACING,
     CLOSE_REASON_BUTTON,
     CLOSE_REASON_DEFAULT_KEY,
     CLOSE_REASON_ESCAPE,
     CLOSE_REASON_WINDOW_CLOSE,
+    GAP_BODY_ACTIONS,
+    ICON_LOGICAL_PX,
+    MARGIN_BOTTOM,
+    MARGIN_TOP,
+    PREFERRED_WIDTH,
     AppMessageDialog,
     MessageAction,
     build_unsaved_project_dialog,
@@ -374,3 +380,173 @@ def test_optional_checkbox_survives_hidden_parent_then_show(qapp, qtbot):
     dialog.show()
     qtbot.waitExposed(dialog)
     assert dialog._checkbox.isVisible() is True
+
+
+_NORMAL_WORK = IntRect(0, 0, 1366, 768)
+_SHORT_UNSAVED_TEXT = "项目有未保存的更改。是否保存？"
+
+
+def _show_production_unsaved(qapp, qtbot, **kwargs):
+    previous = _load_sheet(qapp)
+    dialog = build_unsaved_project_dialog(
+        available_rect=kwargs.pop("available_rect", _NORMAL_WORK),
+        **kwargs,
+    )
+    qtbot.addWidget(dialog)
+    dialog.show()
+    qtbot.waitExposed(dialog)
+    qapp.processEvents()
+    return previous, dialog
+
+
+def _content_formula(dialog) -> tuple[int, int, int]:
+    """Spec height from live margins, wrapped text, icon, and the button row.
+
+    Returns ``(formula, text height, body slot)``. The body slot is
+    ``max(wrapped text, icon)`` and must not follow ``QScrollArea.sizeHint``.
+    """
+    margins = dialog._root.contentsMargins()
+    top = margins.top()
+    bottom = margins.bottom()
+    assert top == MARGIN_TOP
+    assert bottom == MARGIN_BOTTOM
+    icon_h = 0 if dialog._icon_label.isHidden() else max(
+        dialog._icon_label.height(), ICON_LOGICAL_PX,
+    )
+    body_w = dialog._scroll.width()
+    if body_w < 40:
+        body_w = max(1, PREFERRED_WIDTH - margins.left() - margins.right() - ICON_LOGICAL_PX - 16)
+    text_h = 0
+    visible = 0
+    for label in (dialog._text_label, dialog._informative_label, dialog._detailed_label):
+        if label.isHidden() or not label.text():
+            continue
+        visible += 1
+        text_h += max(
+            label.heightForWidth(max(1, body_w)),
+            label.fontMetrics().height(),
+        )
+    if visible > 1:
+        text_h += BODY_STACK_SPACING * (visible - 1)
+    actions_h = dialog._button_box.height()
+    if actions_h <= 0:
+        actions_h = max(
+            CONTROL_HEIGHTS["base"],
+            dialog._button_box.sizeHint().height(),
+        )
+    formula = top + max(text_h, icon_h) + GAP_BODY_ACTIONS + actions_h + bottom
+    return formula, text_h, max(text_h, icon_h)
+
+
+def _assert_content_height(dialog) -> int:
+    formula, _text_h, body_slot = _content_formula(dialog)
+    surplus = dialog.height() - formula
+    assert 0 <= surplus <= 8, (
+        f"client {dialog.width()}x{dialog.height()} formula {formula} "
+        f"surplus {surplus} scroll {dialog._scroll.width()}x{dialog._scroll.height()}"
+    )
+    assert dialog.height() < 200
+    assert dialog.width() == PREFERRED_WIDTH
+    assert dialog._scroll.height() <= body_slot + 8
+    assert dialog._scroll.height() < 160
+    return formula
+
+
+def test_production_unsaved_prompt_uses_content_height(qapp, qtbot):
+    previous, dialog = _show_production_unsaved(qapp, qtbot)
+    try:
+        _assert_content_height(dialog)
+        assert dialog.windowTitle() == "未保存的项目"
+        assert dialog._text_label.text() == _SHORT_UNSAVED_TEXT
+        assert dialog.default_button() is dialog.button("save")
+        assert dialog.escape_button() is dialog.button("cancel")
+        assert dialog.button("save").text() == "保存"
+        assert dialog.button("discard").text() == "不保存"
+        assert dialog.button("cancel").text() == "取消"
+        save_top = dialog.button("save").mapTo(dialog, dialog.button("save").rect().topLeft())
+        assert save_top.y() >= dialog._scroll.geometry().bottom()
+        assert dialog._scroll.widget() is not None
+        assert dialog._scroll.verticalScrollBarPolicy() == Qt.ScrollBarAlwaysOff
+        assert int(dialog.windowFlags() & Qt.WindowContextHelpButtonHint) == 0
+    finally:
+        qapp.setStyleSheet(previous)
+
+
+def test_unsaved_prompt_returns_to_content_height_after_long_text(qapp, qtbot):
+    previous, dialog = _show_production_unsaved(qapp, qtbot)
+    try:
+        short_height = dialog.height()
+        _assert_content_height(dialog)
+        dialog._text_label.setText(("方向盘扭矩出现周期性波动，需要继续观察。" * 12))
+        dialog.relayout()
+        qapp.processEvents()
+        assert dialog.height() > short_height
+        assert dialog._scroll.verticalScrollBarPolicy() in (
+            Qt.ScrollBarAsNeeded,
+            Qt.ScrollBarAlwaysOff,
+        )
+        long_height = dialog.height()
+        dialog._text_label.setText(_SHORT_UNSAVED_TEXT)
+        dialog.relayout()
+        qapp.processEvents()
+        _assert_content_height(dialog)
+        assert dialog.height() < long_height
+        assert dialog.height() <= short_height + 8
+        assert dialog.button("save").isVisible()
+        assert dialog.button("discard").isVisible()
+        assert dialog.button("cancel").isVisible()
+        assert dialog.default_button() is dialog.button("save")
+        assert dialog.escape_button() is dialog.button("cancel")
+        save_top = dialog.button("save").mapTo(dialog, dialog.button("save").rect().topLeft())
+        assert save_top.y() >= dialog._scroll.geometry().bottom()
+    finally:
+        qapp.setStyleSheet(previous)
+
+
+def test_import_resource_dialog_folds_details_and_copies_exact_bytes(qapp):
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtWidgets import QApplication
+
+    from mf4_analyzer.ui_kit.message_dialog import build_import_resource_dialog
+
+    detail = "估算请求：638,976,000 bytes\n上限：498,988,944 bytes"
+    dialog = build_import_resource_dialog(
+        None,
+        text="本次未导入此文件。预计导入资源需求约609 MiB，当前预算约476 MiB。",
+        detail=detail,
+        action_ids=("close", "toggle_details", "copy_diagnostics", "recheck_retry"),
+    )
+    qt_ids = [
+        button.property("appMessageActionId") for button in dialog._buttons.values()
+    ]
+    assert qt_ids == ["close", "toggle_details", "copy_diagnostics", "recheck_retry"]
+    assert dialog._text_label.textFormat() == Qt.PlainText
+    assert dialog._detailed_label.isHidden()
+    assert "638,976,000" not in dialog._text_label.text()
+    assert dialog.default_button() is dialog.button("close")
+    assert dialog.escape_button() is dialog.button("close")
+    dialog.button("copy_diagnostics").click()
+    assert QApplication.clipboard().text() == detail
+    assert dialog.message_result is None
+    toggle = dialog.button("toggle_details")
+    toggle.click()
+    assert toggle.property("appMessageActionId") == "toggle_details"
+    assert not dialog._detailed_label.isHidden()
+    assert "638,976,000" in dialog._detailed_label.text()
+    assert "498,988,944" in dialog._detailed_label.text()
+    dialog.button("recheck_retry").click()
+    assert dialog.message_result.action_id == "recheck_retry"
+
+
+def test_import_resource_dialog_omits_recheck_when_the_action_is_absent(qapp):
+    from mf4_analyzer.ui_kit.message_dialog import build_import_resource_dialog
+
+    dialog = build_import_resource_dialog(
+        None,
+        text="本次未导入此文件。通道数量为 120,000，当前上限为 100,000。",
+        detail="估算请求：120,000 count",
+        action_ids=("close", "toggle_details", "copy_diagnostics"),
+    )
+    ids = [button.property("appMessageActionId") for button in dialog._buttons.values()]
+    assert "recheck_retry" not in ids
+    assert "MiB" not in dialog._text_label.text()

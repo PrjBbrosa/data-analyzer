@@ -36,6 +36,13 @@ REASON_TEXT = {
     "expression_all_invalid": "表达式结果全部无效",
     "upstream_skipped": "依赖的上游配方被跳过",
     "unrecognized": "条目无法识别",
+    "cross_clock": "跨时钟：请指定目标轴、对齐方法和段。当前未应用",
+    "known_gap": "已知缺口不能跨接。请选择段后再计算",
+    "source_changed": "来源已变化。请按当前物理通道重新确认后再计算",
+    "identity_unresolved": "物理通道不在当前来源，不能按显示名替补",
+    "unapplied": "配方保持未应用",
+    "alignment_unfrozen": "对齐方法尚未冻结，保持未应用",
+    "integer_precision": "原始整数超过 2^53，不能先变成浮点再计算",
 }
 
 
@@ -220,6 +227,228 @@ def _lookup(fd, name):
         raise RecipeError("non_numeric") from exc
 
 
+def _is_native(fd) -> bool:
+    return bool(getattr(fd, "is_native", False) and getattr(fd, "native_store", None) is not None)
+
+
+def _ensure_catalog(fd):
+    catalog = getattr(fd, "logical_channels", None)
+    if not isinstance(catalog, dict):
+        catalog = {}
+        fd.logical_channels = catalog
+    hidden = getattr(fd, "logical_hidden", None)
+    if not isinstance(hidden, set):
+        hidden = set(hidden or ())
+        fd.logical_hidden = hidden
+    return catalog, hidden
+
+
+def _install_logical_view(fd):
+    """List derived and hidden names without editing ``file_data.py``."""
+    if getattr(fd, "_native_logical_view", False):
+        return
+    original = fd.get_signal_channels
+
+    def listed():
+        names = [name for name in original() if name not in fd.logical_hidden]
+        for name in fd.logical_channels:
+            if name not in names and name not in fd.logical_hidden:
+                names.append(name)
+        return names
+
+    fd.get_signal_channels = listed
+    fd._native_logical_view = True
+
+
+def _segment_count(series) -> int:
+    return len(tuple(getattr(series, "segments", ()) or ()))
+
+
+def _invalid_mask(series):
+    validity = getattr(series, "validity", None)
+    if validity is None:
+        return None
+    return np.asarray(validity, dtype=bool)
+
+
+def _too_wide_integer(values) -> bool:
+    array = np.asarray(values)
+    if array.dtype.kind not in "iu":
+        return False
+    if array.size == 0:
+        return False
+    return bool(np.max(np.abs(array.astype(object))) > 2 ** 53)
+
+
+def _native_series(fd, name, representation, segment, staged):
+    from .signal_access import SignalAccessError, read_signal
+
+    if staged and name in staged:
+        values, _unit = staged[name]
+        array = np.asarray(values)
+        if _too_wide_integer(array):
+            raise RecipeError("integer_precision")
+        return array, None, 1, ""
+    try:
+        series = read_signal(
+            fd, name, representation=representation or "physical", segment=segment,
+        )
+    except SignalAccessError as exc:
+        text = str(exc)
+        if "segment" in text:
+            raise RecipeError("known_gap", text) from exc
+        raise RecipeError("missing_input") from exc
+    values = series.values
+    if _too_wide_integer(values):
+        raise RecipeError("integer_precision")
+    return series, _invalid_mask(series), _segment_count(series), series.public_name
+
+
+def _axis_of(fd, name, staged):
+    catalog, _hidden = _ensure_catalog(fd)
+    if name in catalog and catalog[name].get("axis_id"):
+        return catalog[name]["axis_id"]
+    if staged and name in staged:
+        return ""
+    return fd.native_store.channel(name).axis_id
+
+
+def evaluate_native_entry(fd, entry, staged=None):
+    """Compute one native recipe. Does not modify raw arrays or the catalog."""
+    from ..signal.channel_recipe import DeriveEntry, derive_from_dict
+
+    if not isinstance(entry, DeriveEntry):
+        entry = derive_from_dict(entry)
+    if entry.apply_status == "unapplied":
+        raise RecipeError("unapplied")
+    store = fd.native_store
+    if entry.source_revision and entry.source_revision != store.revision:
+        raise RecipeError("source_changed")
+    if entry.input_tokens:
+        from .native_signal_store import NativeContractError
+
+        for token in entry.input_tokens:
+            try:
+                store.channel(token)
+            except NativeContractError as exc:
+                raise RecipeError("identity_unresolved") from exc
+    representation = entry.representation or "physical"
+    if entry.kind == "single":
+        series, _mask, segments, _name = _native_series(
+            fd, entry.src, representation, entry.segment, staged,
+        )
+        if not isinstance(series, np.ndarray) and segments > 1 and entry.segment is None and entry.fn in {"derivative", "integral"}:
+            raise RecipeError("known_gap")
+        time = series if isinstance(series, np.ndarray) else series.time
+        values = series if isinstance(series, np.ndarray) else series.values
+        produced = evaluate_derive(
+            entry, time, lambda key, values=values: values,
+        )
+        axis_id = _axis_of(fd, entry.src, staged)
+        return produced, time, axis_id, representation
+    if entry.method not in {None, "direct"}:
+        raise RecipeError("alignment_unfrozen")
+    names = [name for name in entry.inputs() if name]
+    axes = {_axis_of(fd, name, staged) for name in names}
+    if entry.method != "direct" or len(axes) != 1 or "" in axes and len(names) > 1:
+        if len(axes) != 1:
+            raise RecipeError("cross_clock")
+        raise RecipeError("cross_clock")
+    left, _mask, segments, _name = _native_series(
+        fd, names[0], representation, entry.segment, staged,
+    )
+    if not isinstance(left, np.ndarray) and segments > 1 and entry.segment is None:
+        raise RecipeError("known_gap")
+    time = left if isinstance(left, np.ndarray) else left.time
+
+    def lookup(name, staged=staged, representation=representation, segment=entry.segment):
+        found, _mask, _segments, _public = _native_series(
+            fd, name, representation, segment, staged,
+        )
+        return found if isinstance(found, np.ndarray) else found.values
+
+    produced = evaluate_derive(entry, time, lookup)
+    return produced, time, next(iter(axes)), representation
+
+
+def _remember_derived(fd, name, values, time, unit, axis_id, representation):
+    catalog, _hidden = _ensure_catalog(fd)
+    catalog[name] = {
+        "time": None if time is None else np.asarray(time),
+        "values": np.asarray(values),
+        "unit": "" if unit is None else str(unit),
+        "axis_id": "" if axis_id is None else str(axis_id),
+        "representation": representation or "physical",
+        "segments": (),
+    }
+    _install_logical_view(fd)
+
+
+def _hide_name(fd, name):
+    catalog, hidden = _ensure_catalog(fd)
+    catalog.pop(name, None)
+    store = fd.native_store
+    if name in set(store.public_names()):
+        hidden.add(name)
+    _ephemeral(fd).discard(name)
+    _install_logical_view(fd)
+
+
+def _replay_native(fd, items) -> list:
+    from ..signal.channel_recipe import DeriveEntry, RemoveEntry
+
+    catalog, _hidden = _ensure_catalog(fd)
+    created = set()
+    skipped_outputs = set()
+    results = []
+    for item in items:
+        try:
+            entry = item if isinstance(item, (DeriveEntry, RemoveEntry)) else entry_from_dict(item)
+        except RecipeError:
+            name = _peek_derive_name(item)
+            if name:
+                skipped_outputs.add(name)
+            reason = _reason("unrecognized")
+            logger.warning("channel edit skipped: %s (%s)", name or "<unknown>", reason)
+            results.append(ReplayResult("skipped", reason, name, None))
+            continue
+        if isinstance(entry, RemoveEntry):
+            for name in entry.names:
+                _hide_name(fd, name)
+                created.discard(name)
+            results.append(ReplayResult("applied", None, ", ".join(entry.names), entry))
+            continue
+        name = entry.name
+        upstream = [item_name for item_name in entry.inputs() if item_name in skipped_outputs]
+        if upstream:
+            skipped_outputs.add(name)
+            reason = _reason("upstream_skipped")
+            logger.warning("channel edit skipped: %s (%s)", name, reason)
+            results.append(ReplayResult("skipped", reason, name, entry))
+            continue
+        if name in catalog or (
+            name in set(fd.native_store.public_names()) and name not in fd.logical_hidden
+        ):
+            skipped_outputs.add(name)
+            reason = _reason("name_taken")
+            logger.warning("channel edit skipped: %s (%s)", name, reason)
+            results.append(ReplayResult("skipped", reason, name, entry))
+            continue
+        try:
+            values, time, axis_id, representation = evaluate_native_entry(fd, entry)
+        except RecipeError as exc:
+            skipped_outputs.add(name)
+            reason = _reason(exc.code, str(exc) if exc.code == "expression_error" else "")
+            logger.warning("channel edit skipped: %s (%s)", name, reason)
+            results.append(ReplayResult("skipped", reason, name, entry))
+            continue
+        _remember_derived(fd, name, values, time, entry.unit, axis_id, representation)
+        created.add(name)
+        skipped_outputs.discard(name)
+        results.append(ReplayResult("applied", None, name, entry))
+    return results
+
+
 def replay(fd, entries) -> list:
     """Apply ``entries`` to ``fd`` and return one result per entry.
 
@@ -233,6 +462,9 @@ def replay(fd, entries) -> list:
     else:
         logger.warning("channel edit skipped: <unknown> (%s)", _reason("unrecognized"))
         return [ReplayResult("skipped", _reason("unrecognized"), None, None)]
+
+    if _is_native(fd):
+        return _replay_native(fd, items)
 
     original = set(_columns(fd.data))
     created = set()
@@ -306,6 +538,15 @@ def replay(fd, entries) -> list:
 
 def apply_unlogged(fd, new_channels, removed_channels):
     """Session-only channel writes that have no replayable recipe."""
+    if _is_native(fd):
+        ephemeral = _ephemeral(fd)
+        for name, payload in (new_channels or {}).items():
+            values, unit = payload
+            _remember_derived(fd, name, values, None, unit, "", "physical")
+            ephemeral.add(name)
+        for name in removed_channels or ():
+            _hide_name(fd, name)
+        return
     ephemeral = _ephemeral(fd)
     for name, payload in (new_channels or {}).items():
         values, unit = payload

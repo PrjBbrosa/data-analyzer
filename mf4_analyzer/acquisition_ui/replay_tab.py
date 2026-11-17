@@ -18,7 +18,6 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMessageBox,
-    QProgressDialog,
     QPushButton,
     QSlider,
     QSplitter,
@@ -183,6 +182,16 @@ class ReplayTab(QWidget):
 
     def _apply_source_warning(self, source: ReplaySource) -> None:
         """Show loader alignment text before transport is enabled."""
+        mode = str(getattr(source, "replay_mode", "legacy_table") or "legacy_table")
+        if mode != "legacy_table":
+            details = tuple(getattr(source, "notices", ()) or ())
+            if not details:
+                self._alignment_warning.clear()
+                self._alignment_warning.setVisible(False)
+                return
+            self._alignment_warning.setText("\n".join(str(item) for item in details))
+            self._alignment_warning.setVisible(True)
+            return
         details = tuple(source.warnings or ())
         if not details:
             self._alignment_warning.clear()
@@ -200,10 +209,17 @@ class ReplayTab(QWidget):
         self._set_transport_enabled(False)
 
         def workflow(request):
-            dialog = QProgressDialog("读取回放文件", "取消导入", 0, 0, self)
-            dialog.setWindowModality(Qt.NonModal)
-            dialog.canceled.connect(self._imports.cancel)
-            self._imports.progress_dialog = dialog
+            from mf4_analyzer.ui_kit.import_progress_dialog import ImportProgressDialog
+            dialog = ImportProgressDialog(self, title="读取回放文件")
+            dialog.cancel_requested.connect(self._imports.on_progress_cancel)
+            self._imports.open_progress(
+                request,
+                dialog,
+                title="读取回放文件",
+                file_count=1,
+                path=str(path),
+                phase="读取回放文件",
+            )
             dialog.show()
             try:
                 source = yield ImportCall(
@@ -214,21 +230,22 @@ class ReplayTab(QWidget):
                 request.loaded_files += 1
             finally:
                 from PyQt5 import sip
-                if not sip.isdeleted(self):
-                    # Programmatic close also emits QProgressDialog.canceled.
-                    # Cleanup must not cancel this completed or the next task.
-                    dialog.blockSignals(True)
-                    dialog.close()
-                    dialog.deleteLater()
-                    if not self._imports.closing:
-                        self._set_transport_enabled(self._source is not None)
-                self._imports.progress_dialog = None
+                if not sip.isdeleted(self) and not self._imports.closing:
+                    self._set_transport_enabled(self._source is not None)
 
         self._imports.submit(workflow, on_done=self._on_import_done)
 
     def _on_import_done(self, status, value):
-        if status == "failed":
-            QMessageBox.critical(self, "无法加载回放文件", str(value))
+        if status != "failed":
+            return
+        if getattr(value, "resource_dialog_presented", False):
+            return
+        from mf4_analyzer.io.import_limits import resource_user_text
+
+        text = str(value)
+        if getattr(value, "code", "") == "resource_limit":
+            text = resource_user_text(value)
+        QMessageBox.critical(self, "无法加载回放文件", text)
 
     def eventFilter(self, watched, event):
         # Parent close does not deliver closeEvent to every child. Hold its

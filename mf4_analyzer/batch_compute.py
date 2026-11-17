@@ -111,6 +111,7 @@ class PreparedBatchFrf:
     output_unit: str = ""
     warnings: tuple[str, ...] = ()
     time_axis: dict[str, Any] | None = None
+    alignment_facts: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -172,6 +173,8 @@ def prepare_frf_task(fd, input_channel: str, output_channel: str, params) -> Pre
 
     if fd is None:
         raise BatchFrfDataError("FRF requires a loaded logical source")
+    if getattr(fd, "is_native", False):
+        return _prepare_native_frf_task(fd, input_channel, output_channel, params)
     input_channel = str(input_channel or "").strip()
     output_channel = str(output_channel or "").strip()
     if not input_channel or not output_channel:
@@ -315,6 +318,14 @@ def prepare_frf_task(fd, input_channel: str, output_channel: str, params) -> Pre
     time.setflags(write=False)
     input_values.setflags(write=False)
     output_values.setflags(write=False)
+    from .analysis_signal_prepare import POLICY_VERSION
+    alignment_facts = {
+        "resampled": False,
+        "relationship": "same_axis",
+        "method": "legacy_index_rebuild" if time_axis_facts else "same_axis_passthrough",
+        "policy_version": POLICY_VERSION,
+        "align_then_compute": bool(params.get("align_then_compute")),
+    }
     return PreparedBatchFrf(
         input_channel=input_channel,
         output_channel=output_channel,
@@ -328,6 +339,84 @@ def prepare_frf_task(fd, input_channel: str, output_channel: str, params) -> Pre
         output_unit=_frf_channel_unit(fd, output_channel),
         warnings=tuple(adapter_warnings),
         time_axis=time_axis_facts,
+        alignment_facts=alignment_facts,
+    )
+
+
+def _prepare_native_frf_task(fd, input_channel, output_channel, params) -> PreparedBatchFrf:
+    """Native FRF inputs stay on their own clocks. Cross-rate stays unsupported."""
+    from .analysis_signal_prepare import load_native_channel, prepare_pair
+    from .batch_frf import alignment_fact
+
+    input_channel = str(input_channel or "").strip()
+    output_channel = str(output_channel or "").strip()
+    if not input_channel or not output_channel:
+        raise BatchFrfDataError("FRF input and output channels are required")
+    if input_channel == output_channel:
+        raise BatchFrfDataError("FRF input and output channels must differ")
+    time_range = params.get("time_range")
+    left = load_native_channel(fd, input_channel, time_range)
+    right = load_native_channel(fd, output_channel, time_range)
+    if left.status != "ready" or right.status != "ready":
+        raise BatchFrfDataError(left.reason or right.reason or "native 分析输入不可用")
+    pair = prepare_pair(
+        left.values,
+        left.time,
+        right.values,
+        right.time,
+        left_fs=left.source_fs,
+        right_fs=right.source_fs,
+        policy="native",
+        align_then_compute=bool(params.get("align_then_compute")),
+        left_identity=input_channel,
+        right_identity=output_channel,
+        source_revision=left.source_revision,
+    )
+    if pair.status != "ready":
+        raise BatchFrfDataError(pair.reason)
+    try:
+        frf_params = FrfParams(
+            estimator=str(params.get("estimator", "h1") or "").strip().lower(),
+            t_win_s=params.get("t_win_s", 2.0),
+            overlap=params.get("overlap", 0.5),
+            nfft_mode=str(params.get("nfft_mode", "auto") or "").strip().lower(),
+            nfft=params.get("nfft"),
+            window=str(params.get("window", "hanning") or "").strip().lower(),
+            periodic_window=params.get("periodic_window", True),
+            detrend=str(params.get("detrend", "constant") or "").strip().lower(),
+        )
+    except ValueError as exc:
+        raise BatchFrfDataError(str(exc)) from exc
+    try:
+        plan_frf_request(
+            n_samples=int(pair.left.values.size),
+            fs=pair.left.source_fs,
+            params=frf_params,
+        )
+    except FrfRequestValidationError as exc:
+        raise BatchFrfDataError(str(exc)) from exc
+    input_values = np.array(pair.left.values, dtype=np.float64, copy=True)
+    output_values = np.array(pair.right.values, dtype=np.float64, copy=True)
+    input_time = np.array(pair.left.time, dtype=np.float64, copy=True)
+    output_time = np.array(pair.right.time, dtype=np.float64, copy=True)
+    input_time.setflags(write=False)
+    output_time.setflags(write=False)
+    input_values.setflags(write=False)
+    output_values.setflags(write=False)
+    return PreparedBatchFrf(
+        input_channel=input_channel,
+        output_channel=output_channel,
+        input_values=input_values,
+        output_values=output_values,
+        input_time=input_time,
+        output_time=output_time,
+        fs=float(pair.left.source_fs),
+        params=frf_params,
+        input_unit=_frf_channel_unit(fd, input_channel),
+        output_unit=_frf_channel_unit(fd, output_channel),
+        warnings=(),
+        time_axis=pair.alignment_facts,
+        alignment_facts=alignment_fact(pair),
     )
 
 

@@ -697,3 +697,62 @@ def test_shrink_keeps_a_decorated_window_at_the_floor_and_lets_frameless_shrink(
     assert frameless.width() < MIN_DECORATED_CLIENT
     assert frameless.height() < MIN_DECORATED_CLIENT
 
+
+def test_content_purpose_applies_short_height_default_still_refuses(
+    qapp, qtbot, caplog,
+):
+    """Content owners may be shorter than 200; the default workspace floor stays."""
+    from mf4_analyzer.ui_kit.dialog_geometry import PURPOSE_CONTENT, PURPOSE_WORKSPACE
+
+    plan = _small_plan((380, 134))
+    assert plan.client.width >= MIN_DECORATED_CLIENT
+    assert plan.client.height < MIN_DECORATED_CLIENT
+
+    content = QDialog()
+    content.setWindowTitle("content prompt")
+    qtbot.addWidget(content)
+    content.resize(640, 480)
+    with caplog.at_level(logging.WARNING, logger="mf4_analyzer.diagnostics"):
+        assert apply_plan(content, plan, purpose=PURPOSE_CONTENT) is True
+    assert content.width() == plan.client.width
+    assert content.height() == plan.client.height
+    assert content.height() < MIN_DECORATED_CLIENT
+    assert "degenerate decorated plan refused" not in caplog.text
+
+    workspace = QDialog()
+    workspace.setWindowTitle("workspace")
+    qtbot.addWidget(workspace)
+    workspace.resize(640, 480)
+    before = (workspace.x(), workspace.y(), workspace.width(), workspace.height())
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="mf4_analyzer.diagnostics"):
+        assert apply_plan(workspace, plan) is False
+        assert apply_plan(workspace, plan, purpose=PURPOSE_WORKSPACE) is False
+    assert (workspace.x(), workspace.y(), workspace.width(), workspace.height()) == before
+    assert "degenerate decorated plan refused" in caplog.text
+    assert PURPOSE_WORKSPACE == "workspace"
+    assert PURPOSE_CONTENT == "content"
+
+
+def test_content_frame_correction_does_not_lift_short_height_to_floor(qapp, qtbot):
+    """Post-show chrome shrink must not max a content client back up to 200."""
+    from mf4_analyzer.ui_kit.dialog_geometry import PURPOSE_CONTENT
+
+    plan = GeometryPlan(
+        client=IntRect(0, 0, 380, 134),
+        frame=IntRect(0, 0, 380, 90),
+        compact=False,
+        needs_scroll=False,
+        margin_used=8,
+    )
+    dialog = QDialog()
+    dialog.setWindowTitle("short prompt")
+    qtbot.addWidget(dialog)
+    dialog.resize(420, 280)
+    dialog.show()
+    qtbot.waitExposed(dialog)
+    assert apply_plan(dialog, plan, purpose=PURPOSE_CONTENT) is True
+    assert dialog.height() < MIN_DECORATED_CLIENT
+    assert dialog.height() <= plan.client.height
+    assert dialog.height() != MIN_DECORATED_CLIENT
+

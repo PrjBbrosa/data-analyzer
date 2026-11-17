@@ -3690,10 +3690,15 @@ class MainWindow(
         if not self.files:
             self.statusBar.showMessage("未加载文件")
         else:
-            parts = [
-                f"{'▶' if fid == self._active else '  '} {fd.short_name}: {len(fd.data)}"
-                for fid, fd in self.files.items()
-            ]
+            parts = []
+            for fid, fd in self.files.items():
+                if getattr(fd, "is_native", False):
+                    from ..time_xaxis import native_catalog_line
+                    detail = native_catalog_line(fd)
+                else:
+                    detail = str(len(fd.data))
+                marker = "▶" if fid == self._active else "  "
+                parts.append(f"{marker} {fd.short_name}: {detail}")
             self.statusBar.showMessage(" | ".join(parts))
         refresh = getattr(self, "_refresh_project_session_chrome", None)
         if callable(refresh):
@@ -3715,8 +3720,18 @@ class MainWindow(
             self.inspector.top.spin_start.setValue(0)
             self.inspector.top.spin_end.setValue(0)
         else:
+            from ..time_xaxis import acquisition_span
+
+            def _source_hi(source):
+                if getattr(source, "is_native", False):
+                    span = acquisition_span(source)
+                    return None if span is None else span[1]
+                if source.time_array is not None and len(source.time_array):
+                    return source.time_array[-1]
+                return None
+
             max_t = max(
-                (fd.time_array[-1] for fd in self.files.values() if len(fd.time_array)),
+                (hi for hi in (_source_hi(fd) for fd in self.files.values()) if hi is not None),
                 default=0,
             )
             self.inspector.top.set_range_limits(0, max_t)
@@ -3727,7 +3742,9 @@ class MainWindow(
                     self.inspector.top.spin_end.setValue(max_t)
                 if lo > max_t:
                     self.inspector.top.spin_start.setValue(0)
-            if self._active in self.files:
+            if self._active in self.files and not getattr(
+                self.files[self._active], "is_native", False,
+            ):
                 fs = self.files[self._active].fs
                 self.inspector.fft_ctx.set_fs(fs)
                 self.inspector.order_ctx.set_fs(fs)
@@ -4861,11 +4878,18 @@ class MainWindow(
                 continue
             result.attempted_channel_keys.add((fid, ch))
             fd = self.channel_list.get_file_data(fid)
-            if fd is None or ch not in fd.data.columns:
+            if fd is None:
                 continue
-            # Range masking and filtering both scale with source samples. A
-            # filtered trace has a second full-array pass, hence two units.
-            source_samples = max(1, len(fd.data))
+            if getattr(fd, "is_native", False):
+                source_samples = max(
+                    1, int(fd.native_store.sample_counts().get(ch, 1)),
+                )
+            elif ch not in fd.data.columns:
+                continue
+            else:
+                # Range masking and filtering both scale with source samples. A
+                # filtered trace has a second full-array pass, hence two units.
+                source_samples = max(1, len(fd.data))
             channel_work[(fid, ch)] = source_samples * (2 if filt_enabled else 1)
         total_work = max(1, sum(channel_work.values()))
         completed_work = 0
@@ -4904,7 +4928,11 @@ class MainWindow(
                     continue
                 candidate_x = resolved.x_values
                 if range_enabled:
-                    time_axis = source.time_array
+                    time_axis = (
+                        resolved.sample_time
+                        if resolved.sample_time is not None
+                        else source.time_array
+                    )
                     mask = (
                         (time_axis >= range_lo)
                         & (time_axis <= range_hi)
@@ -4943,7 +4971,25 @@ class MainWindow(
             source_label = str(
                 getattr(fd, 'short_name', '') or fid
             ) if fd is not None else str(fid)
-            if fd is None or ch not in fd.data.columns:
+            native_curve = None
+            if fd is not None and getattr(fd, "is_native", False):
+                from ..time_curve_bindings import load_native_checked_curve
+
+                native_curve = load_native_checked_curve(fd, ch)
+                if native_curve is None:
+                    append_placeholder(TimePlotIssue(
+                        code='missing_target_channel',
+                        source_fid=str(fid),
+                        source_label=source_label,
+                        target_channel=str(ch),
+                        x_channel=str(applied_x.channel or ''),
+                        detail='目标通道已不存在',
+                    ))
+                    continue
+                source_work = max(1, len(native_curve.values))
+                time_axis = native_curve.time
+                sig = native_curve.values
+            elif fd is None or ch not in fd.data.columns:
                 append_placeholder(TimePlotIssue(
                     code='missing_target_channel',
                     source_fid=str(fid),
@@ -4953,9 +4999,10 @@ class MainWindow(
                     detail='目标通道已不存在',
                 ))
                 continue
-            source_work = max(1, len(fd.data))
-            time_axis = fd.time_array
-            sig = fd.data[ch].to_numpy(copy=False)
+            else:
+                source_work = max(1, len(fd.data))
+                time_axis = fd.time_array
+                sig = fd.data[ch].to_numpy(copy=False)
             if applied_x.mode == CHANNEL_MODE:
                 resolved = resolve_custom_xaxis(
                     target_fid=fid,
@@ -5004,15 +5051,22 @@ class MainWindow(
             filtered = None
             gspec = None
             if filt_enabled:
-                fs = float(getattr(fd, "fs", 0.0)) or self._estimate_fs(time_axis)
-                try:
-                    gspec, _msg = _filters.nyquist_guard(spec, fs)
-                except ValueError:
-                    # band/bandstop with lo >= hi → draw original only.
-                    gspec = None
-                if gspec is not None:
-                    with _pp.filter_apply():
-                        filtered = _filters.apply(sig, gspec, fs)
+                # Native single points and unknown clocks do not invent Fs.
+                if native_curve is not None and not native_curve.fs_hz:
+                    fs = None
+                elif native_curve is not None:
+                    fs = float(native_curve.fs_hz)
+                else:
+                    fs = float(fd.fs) or self._estimate_fs(time_axis)
+                if fs is not None:
+                    try:
+                        gspec, _msg = _filters.nyquist_guard(spec, fs)
+                    except ValueError:
+                        # band/bandstop with lo >= hi → draw original only.
+                        gspec = None
+                    if gspec is not None:
+                        with _pp.filter_apply():
+                            filtered = _filters.apply(sig, gspec, fs)
 
             if applied_x.mode == CHANNEL_MODE:
                 finite_x = np.isfinite(np.asarray(x_axis, dtype=float))
@@ -5059,6 +5113,9 @@ class MainWindow(
                 "fid": str(fid),
                 "channel": str(ch),
             }}
+            if native_curve is not None:
+                appearance_meta["native_query"] = native_curve.query
+                appearance_meta["point_marker"] = native_curve.point_marker
             if gid is not None:
                 appearance_meta["axis_group"] = gid
             primary_row = (

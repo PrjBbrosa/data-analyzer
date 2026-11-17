@@ -12,6 +12,7 @@ import numpy as np
 from .._palette import FILE_PALETTES
 from .channel_edit_log import ChannelEditLog
 from .channel_frame import frame_column_names, frame_get_column, frame_row_count
+from .native_signal_store import NativeSignalStore, SourceClosedError
 
 
 # Authoritative set of channel names treated as the time master.
@@ -251,9 +252,26 @@ def apply_verified_zfd_sampling(fd):
     return fd
 
 
+class LegacyAxisUnavailable(RuntimeError):
+    """A native FileData was asked for the shared-axis table.
+
+    The attribute name stays in the message so the caller can be found.
+    The first axis is never substituted.
+    """
+
+    def __init__(self, source_id, attribute):
+        self.source_id = str(source_id or "")
+        self.attribute = str(attribute)
+        super().__init__(
+            f"FileData.{self.attribute} 是 legacy-only，native 来源 {self.source_id} "
+            "没有公共轴；请使用 read_signal。未选择第一轴作为回退。"
+        )
+
+
 class FileData:
     def __init__(self, fp, df, chs, units, idx=0, *, fs=None,
-                 source_metadata=None, channel_metadata=None, label_suffix=""):
+                 source_metadata=None, channel_metadata=None, label_suffix="",
+                 native_store=None):
         self.filepath = Path(fp)
         self.filename = self.filepath.name
         self.source_metadata = dict(source_metadata or {})
@@ -270,19 +288,30 @@ class FileData:
             self.short_name = f"{base} ·{self.label_suffix}"
         else:
             self.short_name = middle_ellipsis(stem, _SHORT_NAME_BUDGET)
-        self.data = df
+        self._native_store = None
+        self._source_closed = False
+        self._data = None
+        self._fs = None
         self.channels = chs
         self.channel_units = units
         self.file_index = idx
         self._time_array = None
         self._time_axis_revision = 0
-        self.fs = 1000.0
         self._time_source = 'auto'  # 'auto', 'column', 'generated'
         self.time_axis_provenance = None
         # Editor recipes for this logical source. Empty until the user creates
         # or deletes a channel; closed with the source, never a second copy.
         self.channel_edits = ChannelEditLog()
         self.session_ephemeral_channels = set()
+        if native_store is not None:
+            if df is not None:
+                raise TypeError("native FileData 不接收表格")
+            self._bind_native(native_store)
+            return
+        if df is None:
+            raise TypeError("FileData 需要表格或 native_store")
+        self.data = df
+        self.fs = 1000.0
 
         if fs is not None:
             self.fs = float(fs)
@@ -339,17 +368,106 @@ class FileData:
                 self.fs = 1.0 / dt
                 self._time_source = "column"
 
+    @classmethod
+    def from_native_store(cls, fp, store, idx=0, *, source_metadata=None,
+                          channel_metadata=None, label_suffix=""):
+        """Bind one immutable native store. Does not build a shared table."""
+        return cls(
+            fp, None, [], {}, idx,
+            source_metadata=source_metadata,
+            channel_metadata=channel_metadata,
+            label_suffix=label_suffix,
+            native_store=store,
+        )
+
+    def _legacy_blocked(self, attribute):
+        source_id = ""
+        if self._native_store is not None:
+            source_id = self._native_store.source_id
+        raise LegacyAxisUnavailable(source_id, attribute)
+
+    def _bind_native(self, store):
+        if not isinstance(store, NativeSignalStore):
+            raise TypeError("native_store 必须是 NativeSignalStore")
+        if store.closed:
+            raise SourceClosedError("已关闭的 native store 不能绑定到 FileData")
+        self._native_store = store
+        self._data = None
+        self._fs = None
+        self._time_array = None
+        self._time_source = "native"
+        self.channels = list(store.public_names())
+        self.channel_units = dict(store.units())
+        merged = dict(self.channel_metadata)
+        merged.update(store.channel_metadata())
+        self.channel_metadata = merged
+        self.source_metadata = dict(self.source_metadata)
+        self.source_metadata["layout"] = "native"
+        self.source_metadata["renamed_channels"] = list(store.renamed_channels())
+        self.source_metadata.setdefault("source_root", "root")
+
+    @property
+    def native_store(self):
+        return self._native_store
+
+    @property
+    def is_native(self):
+        return self._native_store is not None
+
+    @property
+    def source_closed(self):
+        return bool(self._source_closed)
+
+    def close_source(self):
+        """Drop this source. A job hold keeps the same store, not a sample copy."""
+        self._source_closed = True
+        if self._native_store is not None:
+            self._native_store.close()
+
+    def job_hold(self):
+        return JobSourceHold(self)
+
+    @property
+    def data(self):
+        if self._native_store is not None:
+            self._legacy_blocked("data")
+        return self._data
+
+    @data.setter
+    def data(self, value):
+        if getattr(self, "_native_store", None) is not None:
+            self._legacy_blocked("data")
+        self._data = value
+
+    @property
+    def fs(self):
+        if self._native_store is not None:
+            self._legacy_blocked("fs")
+        return self._fs
+
+    @fs.setter
+    def fs(self, value):
+        if getattr(self, "_native_store", None) is not None:
+            self._legacy_blocked("fs")
+        self._fs = value
+
     @property
     def time_array(self):
+        if self._native_store is not None:
+            self._legacy_blocked("time_array")
         return self._time_array
 
     @time_array.setter
     def time_array(self, value):
+        if getattr(self, "_native_store", None) is not None:
+            self._legacy_blocked("time_array")
         self._time_array = value
         self._time_axis_revision = int(getattr(self, "_time_axis_revision", 0)) + 1
 
     @property
     def time_axis_revision(self):
+        if self._native_store is not None:
+            self._legacy_blocked("time_axis_revision")
         return int(self._time_axis_revision)
 
     @property
@@ -365,6 +483,8 @@ class FileData:
         current axis *before* overwrite so two consecutive rebuilds record
         the immediate neighbor, not the original original.
         """
+        if self._native_store is not None:
+            self._legacy_blocked("rebuild_time_axis")
         n = len(self.data)
         snapshot = build_time_axis_provenance(
             self.time_array,
@@ -474,6 +594,10 @@ class FileData:
         return 1.0 / median_dt
 
     def get_signal_channels(self):
+        if self._native_store is not None:
+            if self._native_store.closed or self._source_closed:
+                raise SourceClosedError("来源已关闭")
+            return list(self._native_store.public_names())
         if "time_column" in self.source_metadata:
             explicit = self.source_metadata.get("time_column")
             return [c for c in self.channels if c != explicit]
@@ -484,6 +608,17 @@ class FileData:
 
     def get_color_palette(self):
         return FILE_PALETTES[self.file_index % len(FILE_PALETTES)]
+
+
+class JobSourceHold:
+    """A job owner holds the FileData, which holds the store. No sample copy."""
+
+    def __init__(self, file_data):
+        self.file_data = file_data
+
+    @property
+    def native_store(self):
+        return self.file_data.native_store
 
 
 def _occurrence_key(value):

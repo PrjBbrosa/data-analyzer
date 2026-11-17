@@ -709,7 +709,14 @@ class Renderer(_CanvasBackref):
                 env_t, env_s = straddling_segment(t, sig, xlim)
 
             try:
-                line_facade.plot_data_item.setData(env_t, env_s)
+                connect = None
+                env_values = np.asarray(env_s)
+                if env_values.dtype.kind == "f" and not np.isfinite(env_values).all():
+                    connect = "finite"
+                if connect is None:
+                    line_facade.plot_data_item.setData(env_t, env_s)
+                else:
+                    line_facade.plot_data_item.setData(env_t, env_s, connect=connect)
             except Exception as exc:
                 _log.warning("PlotDataItem.setData failed for %r: %s", name, exc)
                 if self._raster_backend_eligible(ck):

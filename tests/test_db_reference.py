@@ -3,8 +3,9 @@
 Covers spec ``docs/analyzer/specs/2026-07-12-db-reference-defaults-and-labeling-spec.md``
 sections 5-7 and 14, and plan Step 1.1's literal test names. The resolver's
 priority chain (spec S8.1) treats "unit simply absent from the catalog" as
-the COMMON case for this project's EPS signals (Nm/rpm/A/deg/V): source
-``generic``, reference 1.0, NO warning. ``fallback`` is reserved for a
+the COMMON case for this project's EPS signals (rpm/A/deg/V): source
+``generic``, reference 1.0, NO warning. Torque Nm now has an explicit NVH
+catalog default. ``fallback`` is reserved for a
 genuine resolution failure (ambiguous unit-only match across quantities, or
 the Pa-without-audio-hint SPL guard) and is the only path carrying a
 warning / ``⚠`` marker.
@@ -36,6 +37,7 @@ def test_builtin_db_reference_catalog_matches_spec_values():
         "displacement.si",
         "force.si",
         "acceleration.g",
+        "torque.si",
     }
 
     assert catalog["sound_pressure.pa"].reference == 2e-5
@@ -54,6 +56,8 @@ def test_builtin_db_reference_catalog_matches_spec_values():
 
     assert catalog["force.si"].reference == 1e-6
     assert catalog["force.si"].quantity == "force"
+    assert catalog["torque.si"].reference == 1e-6
+    assert catalog["torque.si"].quantity == "torque"
 
     # acceleration.g stores the double-precision expression result, not a
     # rounded display value.
@@ -190,12 +194,44 @@ def test_pa_without_sound_quantity_or_audio_hint_does_not_assume_spl():
 def test_unit_not_in_catalog_resolves_generic_without_warning():
     # Common EPS-signal units: not in the acoustics/vibration catalog, and
     # this is the NORMAL case, not an error.
-    for unit in ("Nm", "rpm", "A", "deg", "V"):
+    for unit in ("rpm", "A", "deg", "V"):
         facts = db_reference.ChannelReferenceFacts(quantity="", unit=unit)
         result = db_reference.resolve_db_reference(mode="auto", facts=facts)
         assert result.source == "generic", unit
         assert result.value == 1.0
         assert result.warning == ""
+
+
+@pytest.mark.parametrize("quantity", ["", "torque"])
+@pytest.mark.parametrize("unit", ["Nm", "N·m", "N⋅m", "N*m", "N.m", "N m", "N-m"])
+def test_torque_aliases_use_nvh_reference(quantity, unit):
+    facts = db_reference.ChannelReferenceFacts(quantity=quantity, unit=unit)
+    result = db_reference.resolve_db_reference(facts=facts)
+    assert result.source == "system"
+    assert result.value == 1e-6
+    assert result.quantity == "torque"
+    assert not result.warning
+    assert db_reference.format_amplitude_label(result) == "Amplitude (dB re 1×10⁻⁶ Nm)"
+
+
+@pytest.mark.parametrize("unit", ["nm", "n m", "mNm", "kNm", "N/mm", "Nm/rad", "Nm/s"])
+def test_torque_aliases_do_not_capture_other_units_or_scales(unit):
+    result = db_reference.resolve_db_reference(
+        facts=db_reference.ChannelReferenceFacts(quantity="", unit=unit))
+    assert result.source == "generic"
+    assert result.value == 1.0
+
+
+def test_torque_reference_preserves_explicit_metadata_manual_and_user_choice():
+    facts = db_reference.ChannelReferenceFacts(quantity="torque", unit="Nm", metadata_reference=1e-3)
+    assert db_reference.resolve_db_reference(facts=facts).value == 1e-3
+    assert db_reference.resolve_db_reference(facts=facts, mode="manual", manual_value=1.).value == 1.
+    entry = _entry_by_unit(db_reference.FACTORY_CATALOG_V1, "torque", "Nm")
+    override = dataclasses.replace(entry, reference=2e-6)
+    result = db_reference.resolve_db_reference(facts=facts, prefer_channel_metadata=False,
+                                              user_catalog=(override,))
+    assert result.source == "user"
+    assert result.value == 2e-6
 
 
 def test_generic_label_uses_actual_unit_and_no_warning_marker():

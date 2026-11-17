@@ -1,5 +1,6 @@
 """Real supervised children fail without killing or blocking their caller."""
 from dataclasses import replace
+import json
 from pathlib import Path
 import runpy
 import subprocess
@@ -343,3 +344,275 @@ def test_hidden_entry_rejects_ambiguous_modes(arguments, monkeypatch):
     with pytest.raises(SystemExit) as caught:
         runpy.run_path(str(Path(__file__).parents[1] / "MF4 Data Analyzer V1.py"), run_name="__main__")
     assert caught.value.code == 2
+
+
+BAIT_MESSAGE = "导入资源超过预算：bait，请求 638,740,162，上限 498,988,944"
+
+
+def _publish_outcome_script(resource, *, code="resource_limit", detail="worker detail",
+                            message=BAIT_MESSAGE):
+    encoded = json.dumps(resource, ensure_ascii=False)
+    return f'''
+import json, sys
+from pathlib import Path
+request_path = Path(sys.argv[1])
+request = json.loads(request_path.read_text(encoding="utf-8"))
+outcome = {{
+    "request_id": request["request_id"],
+    "state": "failed",
+    "code": {code!r},
+    "message": {message!r},
+    "detail": {detail!r},
+    "resource": json.loads({encoded!r}),
+}}
+(request_path.parent / "outcome.json").write_text(
+    json.dumps(outcome, ensure_ascii=False), encoding="utf-8")
+raise SystemExit(1)
+'''
+
+
+def _run_scripted_child(tmp_path, monkeypatch, script):
+    from mf4_analyzer.io import import_process as process
+    monkeypatch.setattr(process, "_worker_command", lambda request: [
+        sys.executable, "-c", script, str(request)])
+    with pytest.raises(ImportProcessError) as caught:
+        run_import("load_csv", _csv(tmp_path))
+    return caught.value
+
+
+def test_structured_resource_envelope_survives_real_child(tmp_path, monkeypatch):
+    from mf4_analyzer.io.import_limits import resource_technical_detail, resource_user_text
+    resource = {
+        "schema": 1,
+        "resource_kind": "memory_estimate",
+        "unit": "bytes",
+        "requested": 638_740_162,
+        "limit": 498_988_944,
+        "phase": "mdf_shared_axis",
+        "estimate_basis": "cumulative_admission",
+        "label": "MDF shared-axis conversion/alignment/frame",
+        "components": [
+            {"name": "record-buffer", "amount": 36_601_314, "unit": "bytes"},
+            {"name": "channel-catalog", "amount": 2_197_504, "unit": "bytes"},
+            {"name": "shared-axis", "amount": 599_941_344, "unit": "bytes"},
+        ],
+    }
+    error = _run_scripted_child(tmp_path, monkeypatch, _publish_outcome_script(resource))
+    assert error.code == "resource_limit"
+    assert error.resource.resource_kind == "memory_estimate"
+    assert error.resource.unit == "bytes"
+    assert error.resource.requested == 638_740_162
+    assert error.resource.limit == 498_988_944
+    assert error.resource.phase == "mdf_shared_axis"
+    assert error.resource.estimate_basis == "cumulative_admission"
+    assert [(item.name, item.amount, item.unit) for item in error.resource.components] == [
+        ("record-buffer", 36_601_314, "bytes"),
+        ("channel-catalog", 2_197_504, "bytes"),
+        ("shared-axis", 599_941_344, "bytes"),
+    ]
+    assert error.resource.recheck_allowed is True
+    assert len(error.request_id) == 32
+    text = resource_user_text(error)
+    assert "约609 MiB" in text and "约476 MiB" in text
+    assert "shared-axis" not in text
+    detail = resource_technical_detail(error)
+    assert "638,740,162" in detail
+    assert error.request_id in detail
+    assert BAIT_MESSAGE.split("：", 1)[0] in str(error) or "638,740,162" in str(error)
+
+
+def test_worker_preserves_import_resource_error_fields(tmp_path, monkeypatch):
+    from mf4_analyzer.io import import_process as process
+    from mf4_analyzer.io.import_limits import resource_user_text
+    script = '''
+import sys
+from mf4_analyzer.io import import_worker as worker
+from mf4_analyzer.io.import_limits import ImportResourceError
+def broken(*args, **kwargs):
+    raise ImportResourceError(
+        "MDF shared-axis conversion/alignment/frame",
+        638740162,
+        498988944,
+        phase="mdf_shared_axis",
+        estimate_basis="cumulative_admission",
+        components=(
+            ("record-buffer", 36601314, "bytes"),
+            ("channel-catalog", 2197504, "bytes"),
+            ("shared-axis", 599941344, "bytes"),
+        ),
+    )
+worker._dispatch = broken
+raise SystemExit(worker.main(sys.argv[1]))
+'''
+    monkeypatch.setattr(process, "_worker_command", lambda request: [
+        sys.executable, "-c", script, str(request)])
+    with pytest.raises(ImportProcessError) as caught:
+        run_import("load_csv", _csv(tmp_path))
+    error = caught.value
+    assert error.code == "resource_limit"
+    assert error.resource.resource_kind == "memory_estimate"
+    assert error.resource.requested == 638_740_162
+    assert error.resource.limit == 498_988_944
+    assert error.resource.phase == "mdf_shared_axis"
+    assert error.resource.estimate_basis == "cumulative_admission"
+    assert error.resource.components[-1].amount == 599_941_344
+    assert "MDF shared-axis conversion/alignment/frame" in str(error)
+    assert "shared-axis" not in resource_user_text(error)
+    assert "约609 MiB" in resource_user_text(error)
+
+
+def test_old_resource_envelope_parses_without_invented_numbers(tmp_path, monkeypatch):
+    from mf4_analyzer.io.import_limits import resource_user_text
+    script = '''
+import json, sys
+from pathlib import Path
+request_path = Path(sys.argv[1])
+request = json.loads(request_path.read_text(encoding="utf-8"))
+outcome = {
+    "request_id": request["request_id"],
+    "state": "failed",
+    "code": "resource_limit",
+    "message": "导入资源超过预算：bait，请求 638,740,162，上限 498,988,944",
+    "detail": "legacy detail",
+}
+(request_path.parent / "outcome.json").write_text(json.dumps(outcome), encoding="utf-8")
+raise SystemExit(1)
+'''
+    error = _run_scripted_child(tmp_path, monkeypatch, script)
+    assert error.code == "resource_limit"
+    assert error.resource.requested is None
+    assert error.resource.limit is None
+    assert error.resource.numbers_available is False
+    assert error.resource.recheck_allowed is False
+    text = resource_user_text(error)
+    assert "未提供估算" in text
+    assert "609" not in text
+    assert "476" not in text
+    assert "MiB" not in text
+    assert "638,740,162" in str(error)
+
+
+def test_hostile_resource_envelope_is_contained(tmp_path, monkeypatch):
+    from mf4_analyzer.io.import_limits import resource_action_ids, resource_user_text
+    resource = {
+        "schema": 1,
+        "resource_kind": "gpu_memory",
+        "unit": "bytes",
+        "requested": -5,
+        "limit": 498_988_944,
+        "recheck_allowed": True,
+        "phase": "p" * 5000,
+        "not_a_field": {"nested": True},
+    }
+    detail = ("HEAD" + ("x" * 20_000) + "DETAIL-TAIL-MARKER")
+    error = _run_scripted_child(
+        tmp_path, monkeypatch,
+        _publish_outcome_script(resource, detail=detail))
+    assert error.code == "resource_limit"
+    assert error.resource.supported is False
+    assert error.resource.recheck_allowed is False
+    assert error.resource.numbers_available is False
+    assert error.resource.requested is None
+    assert len(error.resource.phase) <= 120
+    assert len(error.detail) <= 16_000
+    assert "DETAIL-TAIL-MARKER" in error.detail
+    text = resource_user_text(error)
+    assert "未提供估算" in text
+    assert "609" not in text
+    assert "MiB" not in text
+    assert "预计导入资源需求" not in text
+    assert "recheck_retry" not in resource_action_ids(error)
+
+
+def test_programming_error_is_not_reclassified_as_resource_limit(tmp_path, monkeypatch):
+    from mf4_analyzer.io.import_limits import resource_action_ids, resource_user_text
+    resource = {
+        "schema": 1,
+        "resource_kind": "memory_estimate",
+        "unit": "bytes",
+        "requested": 638_740_162,
+        "limit": 498_988_944,
+        "recheck_allowed": True,
+    }
+    detail = "Traceback (most recent call last):\nRuntimeError: programming\n"
+    error = _run_scripted_child(
+        tmp_path, monkeypatch,
+        _publish_outcome_script(resource, code="internal_error", detail=detail,
+                                message="RuntimeError: programming"))
+    assert error.code == "internal_error"
+    assert error.resource is None
+    assert "Traceback" in error.detail
+    assert "recheck_retry" not in resource_action_ids(error)
+    assert "预计导入资源需求" not in resource_user_text(error)
+
+
+def test_memory_error_across_child_does_not_invent_bytes(tmp_path, monkeypatch):
+    from mf4_analyzer.io import import_process as process
+    from mf4_analyzer.io.import_limits import resource_user_text
+    script = '''
+import sys
+from mf4_analyzer.io import import_worker as worker
+def broken(*args, **kwargs):
+    raise MemoryError("injected parser failure")
+worker._dispatch = broken
+raise SystemExit(worker.main(sys.argv[1]))
+'''
+    monkeypatch.setattr(process, "_worker_command", lambda request: [
+        sys.executable, "-c", script, str(request)])
+    with pytest.raises(ImportProcessError) as caught:
+        run_import("load_csv", _csv(tmp_path))
+    error = caught.value
+    assert error.code == "resource_limit"
+    assert "MemoryError" in error.detail
+    assert error.resource.resource_kind == "memory_error"
+    assert error.resource.requested is None
+    assert error.resource.limit is None
+    text = resource_user_text(error)
+    assert "未提供估算" in text
+    assert "MiB" not in text
+    assert "预计导入资源需求" not in text
+    assert error.resource.recheck_allowed is False
+
+
+def test_disk_full_across_child_is_not_a_memory_estimate(tmp_path, monkeypatch):
+    from mf4_analyzer.io import import_process as process
+    from mf4_analyzer.io.import_limits import resource_user_text
+    script = '''
+import errno, sys
+from mf4_analyzer.io import import_worker as worker, import_transport as transport
+def fail(*args, **kwargs):
+    raise OSError(errno.ENOSPC, "No space left on device")
+transport.write_import_result = fail
+raise SystemExit(worker.main(sys.argv[1]))
+'''
+    monkeypatch.setattr(process, "_worker_command", lambda request: [
+        sys.executable, "-c", script, str(request)])
+    path = _csv(tmp_path)
+    before = path.read_bytes()
+    with pytest.raises(ImportProcessError) as caught:
+        run_import("load_csv", path)
+    error = caught.value
+    assert error.code == "resource_limit"
+    assert path.read_bytes() == before
+    assert error.resource.resource_kind == "temp_disk"
+    assert error.resource.requested is None
+    assert error.resource.limit is None
+    text = resource_user_text(error)
+    assert "磁盘" in text
+    assert "预计导入资源需求" not in text
+    assert "MiB" not in text
+    assert "未提供估算" in text
+
+
+def test_output_budget_is_transfer_not_memory_estimate(tmp_path):
+    from mf4_analyzer.io.import_limits import resource_action_ids, resource_user_text
+    with pytest.raises(ImportProcessError) as caught:
+        run_import("load_csv", _csv(tmp_path),
+                   limits=replace(default_limits(), max_output_bytes=1000))
+    error = caught.value
+    assert error.code == "resource_limit"
+    assert error.resource.resource_kind == "output_transfer"
+    assert error.resource.recheck_allowed is False
+    text = resource_user_text(error)
+    assert "预计导入资源需求" not in text
+    assert "recheck_retry" not in resource_action_ids(error)

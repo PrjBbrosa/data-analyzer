@@ -330,6 +330,16 @@ def test_channel_reference_facts_fall_back_to_channel_units(ctx, files):
     assert ctx.channel_reference_facts("f1", "speed").unit == "rpm"
 
 
+@pytest.mark.parametrize("unit", ["Nm", "U_Nm", "N·m"])
+def test_channel_reference_facts_resolve_torque_default(ctx, files, unit):
+    from mf4_analyzer.db_reference import resolve_db_reference
+
+    files["f1"] = _FileData(channel_units={"torque": unit})
+    result = resolve_db_reference(facts=ctx.channel_reference_facts("f1", "torque"))
+    assert result.source == "system"
+    assert result.value == 1e-6
+
+
 def test_channel_reference_facts_decode_toolchain_safe_units(ctx, files):
     """``U_`` prefix and ``Y`` for ``/`` are identifier-safe encodings."""
     files["f1"] = _FileData(channel_units={"rate": "U_degYsec"})

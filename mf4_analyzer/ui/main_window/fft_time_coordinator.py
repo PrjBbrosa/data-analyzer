@@ -14,7 +14,7 @@ def fft_time_compute_cache_params(params: Mapping, time_range) -> dict:
     independent pane-local ranges.
     """
     nfft = params.get("nfft_effective", params.get("nfft"))
-    return {
+    out = {
         "fs": params.get("fs"),
         "nfft": None if nfft is None else int(nfft),
         "window": params.get("window"),
@@ -24,6 +24,10 @@ def fft_time_compute_cache_params(params: Mapping, time_range) -> dict:
         "nfft_facts_signature": params.get("nfft_facts_signature"),
         "time_range": time_range,
     }
+    for name in ("prepare_method", "prepare_policy"):
+        if params.get(name) not in (None, ""):
+            out[name] = params.get(name)
+    return out
 
 
 def make_fft_time_analysis_key(

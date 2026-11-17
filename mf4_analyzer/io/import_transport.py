@@ -114,6 +114,14 @@ def _class(name):
     return getattr(importlib.import_module(_DATACLASSES[name]), name)
 
 
+def _is_native_result(value):
+    return (
+        type(value).__name__ == "FileData"
+        and type(value).__module__ == "mf4_analyzer.io.file_data"
+        and bool(getattr(value, "is_native", False))
+    )
+
+
 def _open_regular(path):
     # A private task directory is a prerequisite; reject symlinks/reparse
     # escapes and nonregular files rather than blocking on a FIFO/device.
@@ -292,11 +300,141 @@ class _Writer:
             return {"kind": "lazy_zoh", "time": encode(value._ref_t),
                     "series": encode(value._series), "columns": encode(value._column_names),
                     "cache": encode(value._cache), "count": value._zoh_materializations}
+        if _is_native_result(value):
+            return self._native_node(value, encode)
         name = type(value).__name__
         if name in _DATACLASSES and type(value) is _class(name):
             return {"kind": "dataclass", "class": name,
                     "fields": {f.name: encode(getattr(value, f.name)) for f in fields(value)}}
         raise ImportTransportError(f"unsupported transport type: {type(value).__module__}.{name}")
+
+    def _native_node(self, value, encode):
+        store = value.native_store
+        _require(store is not None and not store.closed, "native result has no open store")
+        buffers = []
+        axes = []
+        for axis_id in store.axis_ids():
+            axis = store.axis(axis_id)
+            samples = axis.values
+            _require(type(samples) is np.ndarray and samples.ndim == 1 and not samples.flags.writeable,
+                     "native axis is not a readonly vector")
+            buffers.append(id(samples))
+            declared = axis.sampling.basis.startswith("declared")
+            axes.append({
+                "axis_id": axis.axis_id,
+                "clock_source": axis.clock_source,
+                "kind": axis.kind,
+                "unit": axis.unit,
+                "dtype": samples.dtype.str,
+                "shape": [int(samples.shape[0])],
+                "values": samples,
+                "fs_status": axis.sampling.status if declared else None,
+                "fs_hz": None if not declared or axis.sampling.fs_hz is None else float(axis.sampling.fs_hz),
+            })
+        channels = []
+        for channel in store.channels():
+            raw = channel.raw
+            _require(type(raw) is np.ndarray and raw.ndim == 1 and not raw.flags.writeable,
+                     "native raw is not a readonly vector")
+            buffers.append(id(raw))
+            key = channel.physical_key
+            validity = channel.validity
+            if validity is not None:
+                _require(type(validity) is np.ndarray and validity.shape == raw.shape
+                         and not validity.flags.writeable, "native validity length mismatch")
+                buffers.append(id(validity))
+            if channel.physical is raw:
+                physical = None
+                if channel.conversion == "identity":
+                    physical_mode = "identity"
+                elif channel.conversion in {"enum", "unsupported"}:
+                    # Enum codes and unsupported samples stay on the raw buffer.
+                    # That is not an identity conversion and not a second array.
+                    physical_mode = "shared"
+                else:
+                    raise ImportTransportError(
+                        "converted physical must not share the raw buffer"
+                    )
+            else:
+                physical = channel.physical
+                physical_mode = "buffer"
+                _require(type(physical) is np.ndarray and physical.ndim == 1
+                         and physical.shape[0] == raw.shape[0] and physical is not raw
+                         and not physical.flags.writeable, "native physical buffer is invalid")
+                buffers.append(id(physical))
+            channels.append({
+                "group": int(key.group),
+                "index": int(key.index),
+                "original_name": channel.original_name,
+                "axis_id": channel.axis_id,
+                "unit": channel.unit,
+                "dtype": raw.dtype.str,
+                "shape": [int(raw.shape[0])],
+                "raw": raw,
+                "physical_mode": physical_mode,
+                "physical": physical,
+                "physical_dtype": None if physical is None else physical.dtype.str,
+                "physical_shape": None if physical is None else [int(physical.shape[0])],
+                "validity": validity,
+                "quality_length": None if validity is None else int(validity.shape[0]),
+                "conversion": channel.conversion,
+                "support_status": channel.support_status,
+                "parent": list(key.parent),
+                "coordinates": list(key.coordinates),
+            })
+        _limit(len(self.files) + len(set(buffers)) <= _MAX_FILES,
+               "native transport file count exceeds 10000")
+        encoded_axes = []
+        for axis in axes:
+            encoded_axes.append({
+                "axis_id": axis["axis_id"],
+                "clock_source": axis["clock_source"],
+                "kind": axis["kind"],
+                "unit": axis["unit"],
+                "dtype": axis["dtype"],
+                "shape": axis["shape"],
+                "values": encode(axis["values"]),
+                "fs_status": axis["fs_status"],
+                "fs_hz": axis["fs_hz"],
+            })
+        encoded_channels = []
+        for channel in channels:
+            encoded_channels.append({
+                "group": channel["group"],
+                "index": channel["index"],
+                "original_name": channel["original_name"],
+                "axis_id": channel["axis_id"],
+                "unit": channel["unit"],
+                "dtype": channel["dtype"],
+                "shape": channel["shape"],
+                "raw": encode(channel["raw"]),
+                "physical_mode": channel["physical_mode"],
+                "physical": None if channel["physical"] is None else encode(channel["physical"]),
+                "physical_dtype": channel["physical_dtype"],
+                "physical_shape": channel["physical_shape"],
+                "validity": None if channel["validity"] is None else encode(channel["validity"]),
+                "quality_length": channel["quality_length"],
+                "conversion": channel["conversion"],
+                "support_status": channel["support_status"],
+                "parent": channel["parent"],
+                "coordinates": channel["coordinates"],
+            })
+        unsupported = value.source_metadata.get("unsupported_channels") or []
+        metadata = {
+            "source_kind": "mdf",
+            "layout": "native",
+            "unsupported_channels": list(unsupported),
+        }
+        return {
+            "kind": "native",
+            "path": encode(str(value.filepath)),
+            "source_id": store.source_id,
+            "axis_count": len(encoded_axes),
+            "channel_count": len(encoded_channels),
+            "metadata": encode(metadata),
+            "axes": encoded_axes,
+            "channels": encoded_channels,
+        }
 
     def publish(self, value, request_id):
         root = self.encode(value)
@@ -556,7 +694,135 @@ class _Reader:
             frame._cache = cache
             frame._zoh_materializations = _integer(node["count"])
             return frame
+        if kind == "native":
+            return self._native_result(node, decode)
         raise ImportTransportError(f"unsupported node kind: {kind!r}")
+
+    def _readonly_vector(self, array, dtype, shape, label):
+        _require(type(array) is np.ndarray and array.ndim == 1, f"native {label} is not a vector")
+        _require(array.dtype.str == dtype and list(array.shape) == shape, f"native {label} shape/dtype mismatch")
+        array.setflags(write=False)
+        _require(not array.flags.writeable, f"native {label} stayed writable")
+        return array
+
+    def _native_result(self, node, decode):
+        from .file_data import FileData
+        from .native_signal_store import AxisSpec, ChannelSpec, NativeSignalStore
+
+        path = decode(node["path"])
+        source_id = node["source_id"]
+        _require(type(path) is str and path and type(source_id) is str and source_id, "invalid native identity")
+        axes = node["axes"]
+        channels = node["channels"]
+        _require(type(axes) is list and type(channels) is list, "invalid native tables")
+        _require(node["axis_count"] == len(axes) and node["channel_count"] == len(channels),
+                 "native axis/channel count mismatch")
+        axis_specs = []
+        axis_lengths = {}
+        axis_ids = set()
+        for spec in axes:
+            _require(type(spec) is dict, "invalid native axis")
+            values = self._readonly_vector(
+                decode(spec["values"]), spec["dtype"], spec["shape"], "axis",
+            )
+            axis_id = spec["axis_id"]
+            _require(type(axis_id) is str and axis_id and axis_id not in axis_ids, "invalid native axis id")
+            axis_ids.add(axis_id)
+            axis_lengths[axis_id] = int(values.shape[0])
+            fs_status = spec["fs_status"]
+            fs_hz = spec["fs_hz"]
+            _require(fs_status is None or type(fs_status) is str, "invalid native fs status")
+            _require(fs_hz is None or type(fs_hz) is float, "invalid native fs")
+            axis_specs.append(AxisSpec(
+                axis_id, spec["clock_source"], spec["kind"], spec["unit"], values,
+                fs_status=fs_status, fs_hz=fs_hz,
+            ))
+        channel_specs = []
+        seen = set()
+        for spec in channels:
+            _require(type(spec) is dict, "invalid native channel")
+            group = spec["group"]
+            index = spec["index"]
+            _require(type(group) is int and type(index) is int and group >= 0 and index >= 0,
+                     "invalid native physical key")
+            _require((group, index) not in seen, "duplicate native physical key")
+            seen.add((group, index))
+            axis_id = spec["axis_id"]
+            _require(type(axis_id) is str and axis_id in axis_lengths, "native channel axis is missing")
+            raw = self._readonly_vector(decode(spec["raw"]), spec["dtype"], spec["shape"], "raw")
+            _require(int(raw.shape[0]) == axis_lengths[axis_id], "native raw length does not match its axis")
+            mode = spec["physical_mode"]
+            if mode == "identity":
+                _require(spec["physical"] is None and spec["conversion"] == "identity",
+                         "identity physical must share raw")
+                physical = None
+            elif mode == "shared":
+                _require(
+                    spec["physical"] is None
+                    and spec["conversion"] in {"enum", "unsupported"},
+                    "shared raw physical is only valid for enum or unsupported channels",
+                )
+                physical = None
+            elif mode == "buffer":
+                physical = self._readonly_vector(
+                    decode(spec["physical"]), spec["physical_dtype"], spec["physical_shape"], "physical",
+                )
+                _require(physical is not raw and int(physical.shape[0]) == int(raw.shape[0]),
+                         "native physical buffer is not an independent same-length array")
+            else:
+                raise ImportTransportError("invalid native physical mode")
+            quality = spec["quality_length"]
+            if quality is None:
+                _require(spec["validity"] is None, "native validity was not declared")
+                validity = None
+            else:
+                _require(type(quality) is int and quality == int(raw.shape[0]), "native quality length mismatch")
+                validity = decode(spec["validity"])
+                validity = self._readonly_vector(
+                    validity, validity.dtype.str, [quality], "validity",
+                )
+            parent = spec["parent"]
+            coordinates = spec["coordinates"]
+            _require(type(parent) is list and type(coordinates) is list, "invalid native coordinates")
+            channel_specs.append(ChannelSpec(
+                group=group,
+                index=index,
+                original_name=spec["original_name"],
+                axis_id=axis_id,
+                raw=raw,
+                unit=spec["unit"] if type(spec["unit"]) is str else "",
+                physical=physical,
+                validity=validity,
+                conversion=spec["conversion"],
+                support_status=spec["support_status"],
+                parent=tuple(parent),
+                coordinates=tuple(coordinates),
+            ))
+        metadata = decode(node["metadata"])
+        _require(type(metadata) is dict, "invalid native metadata")
+        store = NativeSignalStore.build(source_id, axis_specs, channel_specs)
+        self._check_native_sharing(store)
+        return FileData.from_native_store(
+            path, store, source_metadata=metadata, channel_metadata=store.channel_metadata(),
+        )
+
+    def _check_native_sharing(self, store):
+        seen = {}
+        for channel in store.channels():
+            axis = store.axis(channel.axis_id)
+            previous = seen.setdefault(channel.axis_id, axis.values)
+            _require(axis.values is previous, "native axis was copied during transport")
+            _require(not axis.values.flags.writeable and not channel.raw.flags.writeable,
+                     "native transport returned a writable array")
+            if channel.conversion == "library":
+                _require(channel.physical is not channel.raw,
+                         "converted physical shares the raw buffer")
+            else:
+                _require(channel.physical is channel.raw,
+                         "raw-backed physical was copied during transport")
+            if channel.validity is not None:
+                _require(int(channel.validity.shape[0]) == channel.sample_count,
+                         "native quality length mismatch")
 
 
 def read_import_result(directory, *, request_id: str, max_bytes: int) -> Any:

@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional, Sequence
 
-from PyQt5.QtCore import QEvent, QRect, QSize, Qt, pyqtSignal
+from PyQt5.QtCore import QEvent, QObject, QRect, QSize, Qt, pyqtSignal, pyqtSlot
 from PyQt5.QtGui import QFontMetrics
 from PyQt5.QtWidgets import (
     QAbstractButton,
@@ -37,6 +37,7 @@ from .dialog_button_defaults import set_unique_default_button
 from .dialog_geometry import (
     COMPACT_WORK_HEIGHT,
     COMPACT_WORK_WIDTH,
+    PURPOSE_CONTENT,
     Size,
     apply_plan,
     as_rect,
@@ -205,6 +206,8 @@ class AppMessageDialog(QDialog):
     ):
         super().__init__(parent)
         self.setObjectName("appMessageDialog")
+        # The title-bar help button has no handler on this prompt.
+        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         self.prompt_id = str(prompt_id)
         if not self.prompt_id:
             raise ValueError("prompt_id is required")
@@ -702,7 +705,10 @@ class AppMessageDialog(QDialog):
                 content_minimum=content_min,
                 host=self._host_rect(),
             )
-            apply_plan(self, plan)
+            # False is "unchanged" or "workspace plan refused". Content
+            # purpose is what makes a short plan eligible; do not treat a
+            # refused apply as a finished layout that may keep the old size.
+            apply_plan(self, plan, purpose=PURPOSE_CONTENT)
             remaining_body = max(
                 one_line,
                 plan.client.height
@@ -851,3 +857,87 @@ def build_last_source_dialog(
         escape_action_id="cancel",
         available_rect=available_rect,
     )
+
+
+_RESOURCE_ACTION_SPEC = {
+    "close": ("关闭", QDialogButtonBox.RejectRole, "neutral", True),
+    "toggle_details": ("查看详情", QDialogButtonBox.ActionRole, "neutral", False),
+    "copy_diagnostics": ("复制诊断", QDialogButtonBox.ActionRole, "neutral", False),
+    "recheck_retry": ("重新检查并重试", QDialogButtonBox.AcceptRole, "primary", True),
+}
+
+
+class _ImportResourceDialogController(QObject):
+    """Window-local detail fold and clipboard copy. Labels are not decisions."""
+
+    def __init__(self, dialog: AppMessageDialog, detail: str):
+        super().__init__(dialog)
+        self._dialog = dialog
+        self._detail = detail
+        self._open = False
+        dialog.action_triggered.connect(self.on_action)
+
+    @pyqtSlot(str)
+    def on_action(self, action_id: str) -> None:
+        if action_id == "copy_diagnostics":
+            from PyQt5.QtWidgets import QApplication
+
+            clipboard = QApplication.clipboard()
+            if clipboard is not None:
+                clipboard.setText(self._detail)
+            return
+        if action_id != "toggle_details":
+            return
+        self._open = not self._open
+        label = self._dialog._detailed_label
+        label.setText(self._detail)
+        label.setVisible(self._open)
+        button = self._dialog.button("toggle_details")
+        shown = "收起详情" if self._open else "查看详情"
+        button.setProperty("appMessageLabel", shown)
+        button.setText(shown)
+        button.setAccessibleName(shown)
+        self._dialog.notify_content_changed()
+
+
+def build_import_resource_dialog(
+    parent=None,
+    *,
+    text: str,
+    detail: str,
+    action_ids: Sequence[str],
+    available_rect=None,
+) -> AppMessageDialog:
+    """Resource refusal. ``action_ids`` are the only business identity."""
+    actions = []
+    for action_id in action_ids:
+        spec = _RESOURCE_ACTION_SPEC.get(str(action_id))
+        if spec is None:
+            raise ValueError(f"unknown resource action {action_id!r}")
+        label, role, style, closes = spec
+        actions.append(MessageAction(
+            action_id=str(action_id),
+            label=label,
+            button_role=role,
+            style=style,
+            closes=closes,
+        ))
+    if "close" not in {action.action_id for action in actions}:
+        raise ValueError("resource dialog requires close")
+    dialog = AppMessageDialog(
+        parent,
+        prompt_id="import_resource_failure",
+        title="导入超出资源预算",
+        text=str(text or ""),
+        detailed_text=str(detail or ""),
+        icon=AppMessageDialog.Warning,
+        actions=tuple(actions),
+        default_action_id="close",
+        escape_action_id="close",
+        rich_text=False,
+        available_rect=available_rect,
+    )
+    dialog._detailed_label.hide()
+    dialog._resource_controller = _ImportResourceDialogController(dialog, str(detail or ""))
+    dialog.notify_content_changed()
+    return dialog

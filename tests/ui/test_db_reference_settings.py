@@ -99,6 +99,7 @@ def test_store_round_trip_override_custom_hidden_and_preference(tmp_path):
     # Untouched builtins remain in system_catalog.
     assert set(system_ids) == {
         "sound_pressure.pa", "velocity.si", "displacement.si", "acceleration.g",
+        "torque.si",
     }
 
     # Round trip: a brand-new store instance reading the SAME settings path.

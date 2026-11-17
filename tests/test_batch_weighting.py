@@ -136,3 +136,8 @@ def test_batch_channel_reference_facts_canonicalizes_toolchain_unit():
     )
     assert BatchRunner._channel_reference_facts(fd, "TQ").unit == "Nm"
     assert BatchRunner._channel_reference_facts(fd, "VIB").unit == "m/s2"
+    from mf4_analyzer.db_reference import resolve_db_reference
+
+    result = resolve_db_reference(facts=BatchRunner._channel_reference_facts(fd, "TQ"))
+    assert result.source == "system"
+    assert result.value == 1e-6

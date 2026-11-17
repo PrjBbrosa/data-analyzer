@@ -141,6 +141,61 @@ def test_load_mf4_time_named_signal_is_selectable(qapp, qtbot, tmp_path):
     assert checked == {(fid, "Time [0:1]"), (fid, "sig")}
 
 
+def test_resource_limited_mf4_stays_closed_and_hides_shared_axis_labels(
+    qapp, qtbot, tmp_path, monkeypatch,
+):
+    from PyQt5.QtWidgets import QMessageBox
+    from mf4_analyzer.io.import_limits import parse_resource_envelope, resource_user_text
+    from mf4_analyzer.io.import_process import ImportProcessError
+    from mf4_analyzer.ui_kit.message_dialog import AppMessageDialog
+
+    label = "MDF shared-axis conversion/alignment/frame"
+    exc = ImportProcessError(
+        "resource_limit",
+        "导入资源超过预算",
+        stage="admission",
+        detail="worker detail",
+        resource=parse_resource_envelope({
+            "schema": 1,
+            "resource_kind": "memory_estimate",
+            "unit": "bytes",
+            "requested": 638_976_000,
+            "limit": 498_988_944,
+            "phase": "admission",
+            "estimate_basis": "test",
+            "label": label,
+            "components": [{"name": label, "amount": 638_976_000, "unit": "bytes"}],
+        }),
+        request_id="req-mf4-1",
+    )
+    path = tmp_path / "rejected.mf4"
+    path.write_bytes(b"not-opened")
+    shown = []
+
+    def drive(self):
+        shown.append(self._text_label.text())
+        self.button("close").click()
+        return 0
+
+    monkeypatch.setattr(AppMessageDialog, "exec_", drive)
+    monkeypatch.setattr(QMessageBox, "critical", lambda *args, **kwargs: shown.append("critical"))
+    window = _window(qtbot)
+    notices = _capture(monkeypatch, window)
+
+    def broker(*args, **kwargs):
+        raise exc
+
+    window._imports.broker = broker
+    before = set(window.files)
+    window._load_one(str(path))
+    qtbot.waitUntil(lambda: not window._imports.busy, timeout=15000)
+    assert shown == [resource_user_text(exc)]
+    assert label not in shown[0]
+    assert "约609 MiB" in shown[0]
+    assert set(window.files) == before
+    assert not any(level == "success" for _message, level in notices)
+
+
 @pytest.fixture(autouse=True)
 def _local_import_broker(monkeypatch):
     """Exercise GUI continuations with existing loader fakes; broker has its own gates."""

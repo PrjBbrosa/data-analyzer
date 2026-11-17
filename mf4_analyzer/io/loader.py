@@ -1012,6 +1012,22 @@ class DataLoader:
             mdf.close()
 
     @staticmethod
+    def load_mf4_native(fp):
+        """Read MF4 samples on their own clocks.
+
+        This is the explicit native entry. It does not call :meth:`load_mf4`
+        and it is not a fallback when native admission or parsing fails.
+        The returned ``FileData`` holds a ``NativeSignalStore`` and has no
+        shared time column.
+        """
+        from .mdf_reader import load_native_mdf
+        from .source_adapters import canonical_source_path, stable_source_id
+
+        canonical = canonical_source_path(fp)
+        source_id = stable_source_id("mdf", canonical, "root")
+        return load_native_mdf(fp, ensure_mdf(), source_id)
+
+    @staticmethod
     def load_blf(fp, dbc_paths=None, progress_callback=None):
         """Load a Vector CAN log (BLF / CANoe ASC) as a ChannelFrame.
 

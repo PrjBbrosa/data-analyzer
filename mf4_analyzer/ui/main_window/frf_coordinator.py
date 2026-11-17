@@ -27,7 +27,11 @@ def frf_compute_cache_params(params: Mapping) -> dict:
     worker dispatch.
     """
 
-    return {field: params.get(field) for field in _COMPUTE_FIELDS}
+    out = {field: params.get(field) for field in _COMPUTE_FIELDS}
+    for name in ("prepare_method", "prepare_policy"):
+        if params.get(name) not in (None, ""):
+            out[name] = params.get(name)
+    return out
 
 
 class FrfCoordinator(QObject):

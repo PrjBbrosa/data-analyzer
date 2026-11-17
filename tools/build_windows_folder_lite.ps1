@@ -216,7 +216,9 @@ if ($env:OS -ne "Windows_NT") {
     Write-Warning "This script is intended to build a Windows .exe from Windows."
 }
 
-$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+# UNC Path includes PowerShell's provider prefix; native Python needs a
+# filesystem path (ProviderPath), whether launched from a drive or a share.
+$RepoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).ProviderPath
 $EntryScript = Join-Path $RepoRoot "MF4 Data Analyzer V1.py"
 $Requirements = Join-Path $RepoRoot "requirements.txt"
 $MdfWheelBuilder = Join-Path $PSScriptRoot "dependency_patches\asammdf\build_wheel.py"
@@ -246,9 +248,12 @@ $script:PyInstallerStarted = $false
 $script:ExeGenerated = $false
 $script:PostCheckResults = New-Object System.Collections.ArrayList
 $BuildSucceeded = $false
+$BuildLocationPushed = $false
 New-Item -ItemType Directory -Force -Path $BuildEvidenceDir | Out-Null
 Start-Transcript -LiteralPath $BuildLog -NoClobber | Out-Host
 try {
+Push-Location -LiteralPath $RepoRoot
+$BuildLocationPushed = $true
 # Keep the build body in this script's scope; finally closes even failed runs.
 Write-Host "Evidence: $BuildEvidenceDir"
 Write-Host "Repo: $RepoRoot"
@@ -544,4 +549,5 @@ $BuildSucceeded = $true
     Write-Host "Build succeeded: $BuildSucceeded; elapsed: $BuildElapsed; last stage: $script:BuildStage"
     Write-Host "Full build log: $BuildLog"
     Stop-Transcript | Out-Host
+    if ($BuildLocationPushed) { Pop-Location }
 }

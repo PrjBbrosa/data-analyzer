@@ -27,8 +27,8 @@ def test_deck_data_valid_and_version_bumped():
     assert d["meta"]["version"] == "v8.4.8"
     assert d["meta"]["updated"] == "2026-11-17"
     assert d["meta"]["docVersion"] == "3.1"
-    assert [c["v"] for c in d["changelog"]][:15] == [
-        "v8.4.8", "v8.4.7", "v8.4.6", "v8.4.4", "v8.4.2", "v8.4.1", "v8.4", "v8.3.2", "v8.3.1", "v8.3.0", "v8.2.5", "v8.2.4", "v8.2.3", "v8.2.2", "v8.2.1",
+    assert [c["v"] for c in d["changelog"]][:17] == [
+        "v8.4.8", "v8.4.7", "v8.4.6", "v8.4.5", "v8.4.4", "v8.4.2", "v8.4.1", "v8.4", "v8.3.2", "v8.3.1", "v8.3.0", "v8.2.5", "v8.2.4", "v8.2.3", "v8.2.2", "v8.2.1", "v8.2.0",
     ]
     current_manual, _changelog = MANUAL.read_text(encoding="utf-8").split(
         '  "changelog": [', 1,
@@ -638,3 +638,31 @@ def test_help_documents_chart_pin_not_heatmap_or_board_pen():
     assert "已固定面板" in published
     assert "P 打开画笔" not in ultraview
     assert "P</b> 打开纵向画笔" in ultraview
+
+
+def test_import_resource_recheck_is_documented_apart_from_timeout():
+    root = Path(__file__).resolve().parents[1]
+    hints = (root / "mf4_analyzer" / "ui" / "hints.py").read_text(encoding="utf-8")
+    quickref = (root / "mf4_analyzer" / "ui" / "quickref.py").read_text(encoding="utf-8")
+    manual = MANUAL.read_text(encoding="utf-8")
+    current_manual, changelog = manual.split('  "changelog": [', 1)
+    guide = PUBLISHED_GUIDE.read_text(encoding="utf-8")
+    phrase = "重新检查后仍可能无法导入"
+    for name, blob in (
+        ("hints", hints),
+        ("quickref", quickref),
+        ("manual", current_manual),
+        ("user-guide", guide),
+    ):
+        assert phrase in blob, name
+        assert "延长并重试" in blob, name
+    for blob in (quickref, current_manual, guide):
+        assert "重新检查并重试" in blob
+    entry = next(item for item in _deck_data()["changelog"] if item["v"] == "v8.4.8")
+    assert entry["items"][0] == (
+        "文件解析改到独立进程。MF4 读坏、超时或超出内存预算时主窗口还在："
+        "可以取消，也可以延长时限后重试；过大的导入会在开始分配前拒绝，并说明原因。"
+    )
+    assert phrase not in entry["items"][0]
+    assert "图1已经" not in current_manual
+    assert "已经可以打开" not in current_manual

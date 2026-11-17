@@ -114,6 +114,8 @@ def _zeit_record_indices(fd) -> tuple[int, ...]:
 
 def grouped_source_raster_label(fd) -> str:
     """Grouped-source raster text. WWT rows include a stable Zeit id."""
+    if getattr(fd, "native_store", None) is not None:
+        return "多种采样率"
     rate = _fmt_rate(getattr(fd, "fs", 0.0) or 0.0)
     smeta = getattr(fd, "source_metadata", None) or {}
     if str(smeta.get("source_kind") or "") != "wwt":
@@ -128,7 +130,25 @@ def grouped_source_raster_label(fd) -> str:
     return f"{rate} · Zeit {zeit[0]}–{zeit[-1]}"
 
 
+def _native_leaf_count(fd, channel) -> str | None:
+    store = getattr(fd, "native_store", None)
+    if store is None:
+        return None
+    return str(int(store.sample_counts().get(channel, 0)))
+
+
+def _native_header_count(fd) -> str | None:
+    if getattr(fd, "native_store", None) is None:
+        return None
+    from mf4_analyzer.ui.time_xaxis import native_catalog_line
+
+    return native_catalog_line(fd)
+
+
 def grouped_source_raster_tooltip(fd) -> str:
+    native = _native_header_count(fd)
+    if native is not None:
+        return native
     data = getattr(fd, "data", None)
     n_rows = 0 if data is None else len(data)
     smeta = getattr(fd, "source_metadata", None) or {}
@@ -1262,8 +1282,13 @@ class MultiFileChannelWidget(QWidget):
                 source_item = self._source_items[fp_str]
 
             # Create raster subgroup node
-            n_rows = len(fd.data)
-            raster_item = QTreeWidgetItem([grouped_source_raster_label(fd), str(n_rows)])
+            native_header = _native_header_count(fd)
+            native_counts = (
+                fd.native_store.sample_counts() if native_header is not None else None
+            )
+            n_rows = None if native_counts is not None else len(fd.data)
+            raster_count = native_header if native_header is not None else str(n_rows)
+            raster_item = QTreeWidgetItem([grouped_source_raster_label(fd), raster_count])
             raster_item.setTextAlignment(1, Qt.AlignRight | Qt.AlignVCenter)
             raster_item.setFlags(raster_item.flags() | Qt.ItemIsUserCheckable)
             raster_item.setCheckState(0, Qt.Unchecked)
@@ -1281,7 +1306,11 @@ class MultiFileChannelWidget(QWidget):
             for i, ch in enumerate(fd.get_signal_channels()):
                 color = palette[i % len(palette)]
                 self._colors[(fid, ch)] = color
-                ci = QTreeWidgetItem([ch, str(n_rows)])
+                leaf_count = (
+                    str(int(native_counts.get(ch, 0)))
+                    if native_counts is not None else str(n_rows)
+                )
+                ci = QTreeWidgetItem([ch, leaf_count])
                 ci.setTextAlignment(1, Qt.AlignRight | Qt.AlignVCenter)
                 ci.setTextAlignment(2, Qt.AlignCenter)
                 ci.setFlags(ci.flags() | Qt.ItemIsUserCheckable)
@@ -1305,7 +1334,12 @@ class MultiFileChannelWidget(QWidget):
             else:
                 file_tip = getattr(fd, "filename", "") or getattr(fd, "short_name", "")
                 file_label = file_tip.rsplit(".", 1)[0] if "." in file_tip else file_tip
-            fi = QTreeWidgetItem([file_label, f"{len(fd.data)}"])
+            native_header = _native_header_count(fd)
+            native_counts = (
+                fd.native_store.sample_counts() if native_header is not None else None
+            )
+            header_count = native_header if native_header is not None else f"{len(fd.data)}"
+            fi = QTreeWidgetItem([file_label, header_count])
             if file_tip:
                 fi.setToolTip(0, file_tip)
             fi.setTextAlignment(1, Qt.AlignRight | Qt.AlignVCenter)
@@ -1321,7 +1355,11 @@ class MultiFileChannelWidget(QWidget):
             for i, ch in enumerate(fd.get_signal_channels()):
                 color = palette[i % len(palette)]
                 self._colors[(fid, ch)] = color
-                ci = QTreeWidgetItem([ch, str(len(fd.data))])
+                leaf_count = (
+                    str(int(native_counts.get(ch, 0)))
+                    if native_counts is not None else str(len(fd.data))
+                )
+                ci = QTreeWidgetItem([ch, leaf_count])
                 ci.setTextAlignment(1, Qt.AlignRight | Qt.AlignVCenter)
                 ci.setTextAlignment(2, Qt.AlignCenter)
                 ci.setFlags(ci.flags() | Qt.ItemIsUserCheckable)
@@ -3604,13 +3642,21 @@ class MultiFileChannelWidget(QWidget):
         parent = self._raster_items.get(fid) or self._file_items.get(fid)
         if parent is None:
             return
+        fd = self._files.get(fid)
+        counts = None
+        store = getattr(fd, "native_store", None) if fd is not None else None
+        if store is not None:
+            counts = store.sample_counts()
         first = None
         for i in range(parent.childCount()):
             child = parent.child(i)
             data = child.data(0, Qt.UserRole)
-            if data and data[0] == "channel":
-                first = child
-                break
+            if not data or data[0] != "channel":
+                continue
+            if counts is not None and int(counts.get(data[2], 0)) == 1:
+                continue
+            first = child
+            break
         if first is None:
             return
         self._updating = True
