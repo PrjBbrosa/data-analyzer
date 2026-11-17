@@ -487,6 +487,97 @@ def _zero_displayed_curve(canvas):
     pytest.fail("没有可显示曲线")
 
 
+def test_native_preview_stats_and_export_use_channel_clocks(native_file, tmp_path, monkeypatch):
+    from PyQt5.QtWidgets import QFileDialog
+    import openpyxl
+
+    from mf4_analyzer.ui.main_window.window import MainWindow
+
+    top = SimpleNamespace(
+        range_enabled=lambda: True,
+        range_values=lambda: (0.0, 0.2),
+    )
+    host = SimpleNamespace(
+        files={"f": native_file},
+        inspector=SimpleNamespace(top=top),
+        navigator=SimpleNamespace(get_checked_channels=lambda: []),
+        view_manager=SimpleNamespace(
+            active=0,
+            get=lambda _idx: SimpleNamespace(attached_file_ids=[]),
+        ),
+        _custom_xaxis_spec=CustomXAxisSpec(),
+    )
+    time, values = MainWindow._fft_trace_for_source(host, "f", "flagged")
+    assert list(time) == pytest.approx([0.0, 0.1, 0.2])
+    assert values[0] == pytest.approx(10.0)
+    assert np.isnan(values[1])
+    assert values[2] == pytest.approx(30.0)
+
+    class _Files:
+        def get_file_data(self, _fid):
+            return native_file
+
+    stats_host = SimpleNamespace(channel_list=_Files())
+    stats_host._native_channel_statistics = (
+        lambda fd, channel, enabled, lo, hi: MainWindow._native_channel_statistics(
+            stats_host, fd, channel, enabled, lo, hi,
+        )
+    )
+    stats = MainWindow._build_time_statistics(
+        stats_host,
+        [("f", "flagged", "#000")],
+        False,
+        0.0,
+        1.0,
+    )
+    row = next(iter(stats.values()))
+    assert row["min"] == pytest.approx(10.0)
+    assert row["max"] == pytest.approx(30.0)
+
+    labels = [text for text, _payload in MainWindow._build_xaxis_candidates(host)]
+    assert any(text.startswith("flagged · ") for text in labels)
+
+    mw = MainWindow()
+    notes = []
+    mw.files["f"] = native_file
+    mw.toast = lambda msg, level="info": notes.append((str(msg), level))
+    try:
+        wide = tmp_path / "wide.xlsx"
+        monkeypatch.setattr(
+            QFileDialog, "getSaveFileName", lambda *args, **kwargs: (str(wide), ""),
+        )
+        mw._do_export_excel("f", ["grid", "fast"], include_time=True, use_range=False)
+        headers = [cell.value for cell in openpyxl.load_workbook(wide).active[1]]
+        assert headers == ["Time", "grid", "fast"]
+
+        flagged = tmp_path / "flagged.xlsx"
+        monkeypatch.setattr(
+            QFileDialog, "getSaveFileName", lambda *args, **kwargs: (str(flagged), ""),
+        )
+        mw._do_export_excel("f", ["flagged"], include_time=True, use_range=False)
+        sheet = openpyxl.load_workbook(flagged).active
+        headers = [cell.value for cell in sheet[1]]
+        assert headers == ["Channel", "Time", "Value", "Invalid"]
+        body = list(sheet.iter_rows(min_row=2, values_only=True))
+        assert any(
+            row[2] == pytest.approx(20.0) and row[3] in (True, 1)
+            for row in body
+        )
+
+        dialogs = []
+        monkeypatch.setattr(
+            QFileDialog,
+            "getSaveFileName",
+            lambda *args, **kwargs: dialogs.append(args) or ("", ""),
+        )
+        mw._do_export_wwt("f", ["fast", "other"], use_range=False)
+        assert dialogs == []
+        assert notes and "共同" in notes[-1][0]
+    finally:
+        mw.files.pop("f", None)
+        mw.close()
+
+
 def _leaf_counts(widget):
     counts = {}
     root = widget.tree.topLevelItem(0)

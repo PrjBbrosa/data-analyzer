@@ -6,6 +6,7 @@ in the parent process. A direct ``DataLoader.load_mf4_native`` call is a failure
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import subprocess
 import sys
@@ -186,6 +187,40 @@ def test_default_method_table_is_still_load_mf4():
     assert adapter.loader_name == "load_mf4"
     assert adapter.explicit_native_method() == "load_mf4_native"
     assert adapter.loader_name == "load_mf4"
+
+
+def test_saved_native_project_reopens_through_the_native_broker(qtbot, monkeypatch, tmp_path):
+    path = _write_pair(tmp_path / "steer.mf4")
+    _silence_dialogs(monkeypatch)
+    _forbid_parent_reader(monkeypatch)
+    first = _window(qtbot, monkeypatch)
+    first.request_explicit_native_import(path, limits=_fixed_limits())
+    qtbot.waitUntil(lambda: not first._imports.busy, timeout=30000)
+    project = tmp_path / "session.tlproj"
+    assert first.save_project(project)
+    raw = json.loads(project.read_text(encoding="utf-8"))
+    assert raw["schema_version"] == 6
+    assert raw["files"][0]["sampling_policy"] == "native"
+
+    second = _window(qtbot, monkeypatch)
+    notes = []
+    second.toast = lambda msg, level="info": notes.append(str(msg))
+    seen = []
+    real_broker = second._imports.broker
+
+    def broker(method, file_path, **kwargs):
+        seen.append(method)
+        return real_broker(method, file_path, **kwargs)
+
+    second._imports.broker = broker
+    second.open_project(project)
+    qtbot.waitUntil(lambda: not second._imports.busy, timeout=30000)
+    assert seen == ["load_mf4_native"]
+    restored = next(iter(second.files.values()))
+    assert restored.is_native is True
+    assert "burst" in restored.get_signal_channels()
+    assert not any("公共轴" in msg for msg in notes)
+    assert "load_mf4_native" not in _method_table_text()
 
 
 def test_anonymous_shared_axis_still_refuses_fixed_budget():

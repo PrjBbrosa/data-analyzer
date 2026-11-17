@@ -223,7 +223,7 @@ class ReplayTab(QWidget):
             dialog.show()
             try:
                 source = yield ImportCall(
-                    "load_mf4", str(path),
+                    "load_mf4_native", str(path),
                     transform=ReplayRecorderBackend.source_from_loaded,
                 )
                 self._adopt_source(source)

@@ -401,6 +401,7 @@ class ReplayRecorderBackend(RecorderBackend):
             raise TypeError("source_from_native 需要 NativeSignalStore")
         events: list[ReplayEvent] = []
         notices: list[str] = []
+        clocks: list[tuple[float, ...]] = []
         order = 0
         selected_names: list[str] = []
         units = store.units()
@@ -411,6 +412,7 @@ class ReplayRecorderBackend(RecorderBackend):
                 continue
             series = read_signal(file_data, name, representation="physical")
             selected_names.append(name)
+            clocks.append(tuple(float(item) for item in series.time))
             if int(series.time.shape[0]) == 1:
                 notices.append(f"通道 {name} 是单点，没有采样率")
             validity = None if series.validity is None else series.validity
@@ -488,8 +490,9 @@ class ReplayRecorderBackend(RecorderBackend):
         ]
         duration = max((event.time_s for event in playable), default=0.0)
         note_list = list(dict.fromkeys(notices))
-        if not any("单点" in text for text in note_list):
-            note_list.append("各通道按自己的事件时间和原记录顺序回放，没有补点。")
+        if len(set(clocks)) > 1:
+            note_list.append("各通道按自己的事件时间回放，没有补点。")
+            note_list.append("不同时钟保持各自的记录，没有收成一条时间轴。")
         if any(not event.valid for event in chosen):
             note_list.append("失效样本不作为采集值。")
         return ReplaySource(
