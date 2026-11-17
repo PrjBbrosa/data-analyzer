@@ -180,6 +180,49 @@ def test_order_rpm_for_equal_length_shifted_time_does_not_reuse_raw(multirate_wi
     assert not np.allclose(aligned, rpm_samples)
 
 
+def test_order_rpm_keeps_neighbors_and_rejects_real_overrun(multirate_win):
+    win = multirate_win
+    df = pd.DataFrame({"time": [0.0, 1.0, 2.0], "n_edge": [100.0, 200.0, 300.0]})
+    _register_file(win, "edge", df)
+    t_sig = np.array([0.2, 1.0, 1.8])
+    params = {"rpm_mode": "channel", "rpm_factor": 1.0}
+    aligned = win._order_rpm_for(
+        ("edge", "n_edge"), len(t_sig), time_range=(0.2, 1.8), t_sig=t_sig, params=params,
+    )
+    np.testing.assert_allclose(aligned, [120.0, 200.0, 280.0])
+    scaled = win._order_rpm_for(
+        ("edge", "n_edge"), len(t_sig), time_range=(0.2, 1.8), t_sig=t_sig,
+        params={"rpm_mode": "channel", "rpm_factor": 2.0},
+    )
+    np.testing.assert_allclose(scaled, [240.0, 400.0, 560.0])
+    manual = win._order_rpm_for(
+        ("edge", "n_edge"), len(t_sig), t_sig=t_sig,
+        params={"rpm_mode": "manual", "manual_rpm": 1500.0},
+    )
+    np.testing.assert_allclose(manual, [1500.0, 1500.0, 1500.0])
+    overrun = win._order_rpm_for(
+        ("edge", "n_edge"), 2, t_sig=np.array([0.2, 2.5]), params=params,
+    )
+    assert overrun is None
+    gap = pd.DataFrame({"time": [0.0, 1.0, 0.5], "n_gap": [100.0, 200.0, 300.0]})
+    _register_file(win, "gap", gap)
+    assert win._order_rpm_for(
+        ("gap", "n_gap"), len(t_sig), t_sig=t_sig, params=params,
+    ) is None
+
+    from mf4_analyzer.io.native_signal_store import AxisSpec, ChannelSpec, NativeSignalStore
+    store = NativeSignalStore.build(
+        "native-rpm",
+        (AxisSpec("t", "clk", "time", "s", np.array([0.0, 1.0, 2.0])),),
+        (ChannelSpec(0, 1, "n_edge", "t", np.array([100.0, 200.0, 300.0]), unit="rpm"),),
+    )
+    win.files["native"] = FileData.from_native_store("native-rpm.mf4", store)
+    native = win._order_rpm_for(
+        ("native", "n_edge"), len(t_sig), time_range=(0.2, 1.8), t_sig=t_sig, params=params,
+    )
+    np.testing.assert_allclose(native, [120.0, 200.0, 280.0])
+
+
 def test_order_rpm_for_nonmonotonic_motor_axis_skips(multirate_win):
     """Boundary: if the motor-speed channel's own time axis is degenerate
     (non strictly increasing), alignment is unsafe — keep the existing

@@ -129,20 +129,25 @@ class OrderMixin:
                 time_range = None
         unit = str((getattr(fd, "channel_units", None) or {}).get(ch, "") or "")
         if getattr(fd, "is_native", False):
-            from ...analysis_signal_prepare import load_native_channel
-            loaded = load_native_channel(fd, ch, time_range)
-            if loaded.status != "ready":
+            from ...io.signal_access import SignalAccessError, TimeSpan, read_signal
+            span = None
+            halo = 0
+            if time_range is not None:
+                span = TimeSpan(float(time_range[0]), float(time_range[1]))
+                halo = 1
+            try:
+                series = read_signal(fd, ch, span=span, neighbor_halo=halo)
+            except (SignalAccessError, TypeError, ValueError):
                 return None
-            rpm = np.asarray(loaded.values, dtype=float)
-            t_rpm = np.asarray(loaded.time, dtype=float)
+            rpm = np.asarray(series.values, dtype=float)
+            t_rpm = np.asarray(series.time, dtype=float)
+            if not unit:
+                unit = str(series.unit or "")
         else:
             if ch not in fd.data.columns:
                 return None
             rpm = np.asarray(fd.data[ch].values, dtype=float)
             t_rpm = fd.time_array
-            if time_range is not None and t_rpm is not None:
-                t_rpm, rpm = self._mask_time_range(
-                    t_rpm, rpm, time_range=time_range)
         if t_sig is None:
             if len(rpm) != n:
                 return None

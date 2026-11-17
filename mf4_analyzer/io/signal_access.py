@@ -62,8 +62,16 @@ class SignalSeries:
         return self.validity
 
 
-def read_signal(source, channel_key, span=None, representation="physical", segment=None):
-    """Return one channel's time, values, validity, and sampling facts."""
+def read_signal(
+    source, channel_key, span=None, representation="physical", segment=None,
+    *, neighbor_halo=0,
+):
+    """Return one channel's time, values, validity, and sampling facts.
+
+    ``neighbor_halo`` keeps that many samples outside a time span so alignment
+    can see the bracketing points. The output of a later resample still has to
+    stay inside the requested coverage; this only widens the read.
+    """
     file_data = source.file_data if isinstance(source, JobSourceHold) else source
     if getattr(file_data, "source_closed", False):
         raise SourceClosedError("来源已关闭")
@@ -71,15 +79,20 @@ def read_signal(source, channel_key, span=None, representation="physical", segme
         raise SignalAccessError(
             f"representation {representation!r} 不可用，只能是 physical 或 raw"
         )
+    if type(neighbor_halo) is not int or isinstance(neighbor_halo, bool) or neighbor_halo < 0:
+        raise SignalAccessError("neighbor_halo 必须是非负 int")
     store = getattr(file_data, "native_store", None)
     if store is not None:
         return _read_native(
             file_data, store, channel_key, span, representation, segment,
+            neighbor_halo,
         )
-    return _read_legacy(file_data, channel_key, span, representation, segment)
+    return _read_legacy(
+        file_data, channel_key, span, representation, segment, neighbor_halo,
+    )
 
 
-def _read_native(file_data, store, channel_key, span, representation, segment):
+def _read_native(file_data, store, channel_key, span, representation, segment, neighbor_halo=0):
     try:
         channel = store.channel(channel_key)
     except NativeContractError as exc:
@@ -110,10 +123,61 @@ def _read_native(file_data, store, channel_key, span, representation, segment):
         public_name=channel.public_name,
         representation=representation,
         source_id=store.source_id,
+        neighbor_halo=neighbor_halo,
     )
 
 
-def _read_legacy(file_data, channel_key, span, representation, segment):
+def known_sampling_hz(file_data, channel):
+    """Known Fs for one channel. Native files have no file-level substitute."""
+    if getattr(file_data, "is_native", False):
+        try:
+            series = read_signal(file_data, channel, representation="raw")
+        except (SignalAccessError, SourceClosedError, TypeError, ValueError):
+            return None
+        sampling = series.sampling
+        if sampling.status != "known" or sampling.fs_hz is None:
+            return None
+        return float(sampling.fs_hz)
+    try:
+        fs = float(file_data.fs)
+    except (TypeError, ValueError, AttributeError):
+        return None
+    if not np.isfinite(fs) or fs <= 0:
+        return None
+    return fs
+
+
+def channel_in_source(file_data, channel) -> bool:
+    """True when ``channel`` is a real column or native public name."""
+    if getattr(file_data, "is_native", False):
+        store = getattr(file_data, "native_store", None)
+        if store is None:
+            return False
+        try:
+            store.channel(channel)
+        except NativeContractError:
+            return False
+        return True
+    data = getattr(file_data, "data", None)
+    return data is not None and channel in getattr(data, "columns", ())
+
+
+def channel_time_values(file_data, channel, *, representation="physical"):
+    """Return ``(time, values, fs_or_none)`` without a legacy axis fallback."""
+    if getattr(file_data, "is_native", False):
+        series = read_signal(file_data, channel, representation=representation)
+        fs = None
+        if series.sampling.status == "known" and series.sampling.fs_hz is not None:
+            fs = float(series.sampling.fs_hz)
+        return series.time, series.values, fs
+    if not channel_in_source(file_data, channel):
+        raise SignalAccessError(f"通道 {channel!r} 不在来源中")
+    values = frame_get_column(file_data.data, channel)
+    axis = getattr(file_data, "time_array", None)
+    return axis, np.asarray(values), known_sampling_hz(file_data, channel)
+
+
+def _read_legacy(file_data, channel_key, span, representation, segment, neighbor_halo=0):
     if representation != "physical" and representation != "raw":
         raise SignalAccessError(
             f"representation {representation!r} 不可用，只能是 physical 或 raw"
@@ -144,6 +208,7 @@ def _read_legacy(file_data, channel_key, span, representation, segment):
         public_name=name,
         representation=representation,
         source_id=str(getattr(file_data, "filepath", "") or ""),
+        neighbor_halo=neighbor_halo,
     )
 
 
@@ -228,9 +293,10 @@ def _legacy_revision(file_data, name, time, values):
 
 
 def _assemble(*, time, values, validity, segments, span, segment, unit, sampling,
-              revision, physical_key, public_name, representation, source_id):
+              revision, physical_key, public_name, representation, source_id,
+              neighbor_halo=0):
     chosen = _choose_segment(segments, segment)
-    index = _select(time, segments, chosen, span)
+    index = _select(time, segments, chosen, span, neighbor_halo)
     part_time = _take(time, index)
     part_values = _take(values, index)
     part_validity = None if validity is None else _take(validity, index)
@@ -277,8 +343,9 @@ def _choose_segment(segments, segment):
     return (segments[segment],)
 
 
-def _select(time, segments, chosen, span):
+def _select(time, segments, chosen, span, neighbor_halo=0):
     n = int(np.asarray(time).shape[0])
+    halo = int(neighbor_halo or 0)
     if span is None:
         if len(chosen) == len(segments):
             return slice(0, n)
@@ -294,6 +361,9 @@ def _select(time, segments, chosen, span):
             raise SignalAccessError("IndexSpan.stop 小于 start")
         start = min(span.start, n)
         stop = min(span.stop, n)
+        if halo:
+            start = max(0, start - halo)
+            stop = min(n, stop + halo)
         if len(chosen) != len(segments):
             bounds = [(item.start, item.stop) for item in chosen]
             return _merge_ranges(_intersect_ranges(bounds, start, stop))
@@ -306,6 +376,9 @@ def _select(time, segments, chosen, span):
         part = time[item.start:item.stop]
         left = int(np.searchsorted(part, start, side="left"))
         right = int(np.searchsorted(part, stop, side="right"))
+        if halo:
+            left = max(0, left - halo)
+            right = min(int(part.shape[0]), right + halo)
         if right > left:
             ranges.append((item.start + left, item.start + right))
     return _merge_ranges(ranges)

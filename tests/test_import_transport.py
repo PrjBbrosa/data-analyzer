@@ -391,6 +391,67 @@ def test_bytes_use_one_sidecar_and_preserve_loaded_cache(tmp_path):
         np.testing.assert_array_equal(frame.get_column(name), out.get_column(name))
 
 
+def test_enum_channels_keep_shared_raw_and_reject_an_identity_lie(tmp_path):
+    from mf4_analyzer.io.file_data import FileData
+    from mf4_analyzer.io.native_signal_store import AxisSpec, ChannelSpec, NativeSignalStore
+
+    time = np.arange(4, dtype=np.float64) / 100.0
+    shared = np.array([0, 1, 0, 1], dtype=np.uint8)
+    physical = np.array([0.0, 2.0, 0.0, 2.0])
+    channels = [
+        ChannelSpec(
+            group=0, index=index, original_name=f"state{index}", axis_id="t",
+            raw=shared, unit="", conversion="enum", support_status="enum",
+        )
+        for index in range(12)
+    ]
+    channels.append(ChannelSpec(
+        group=0, index=20, original_name="scaled", axis_id="t",
+        raw=shared.astype(np.float64), unit="Nm", physical=physical, conversion="library",
+    ))
+    store = NativeSignalStore.build(
+        "enum-source",
+        [AxisSpec("t", "clk", "time", "s", time)],
+        channels,
+    )
+    source = FileData.from_native_store("enum.mf4", store)
+    loaded = roundtrip(source, tmp_path / "enum")
+    restored = loaded.native_store
+    raws = [restored.channel(f"state{index}").raw for index in range(12)]
+    assert all(array is raws[0] for array in raws)
+    for index in range(12):
+        channel = restored.channel(f"state{index}")
+        assert channel.conversion == "enum"
+        assert channel.support_status == "enum"
+        assert channel.physical is channel.raw
+        np.testing.assert_array_equal(channel.raw, shared)
+    scaled = restored.channel("scaled")
+    assert scaled.conversion == "library"
+    assert scaled.physical is not scaled.raw
+    assert restored.axis("t").sampling.status == "known"
+    assert restored.axis("t").sampling.fs_hz == pytest.approx(100.0)
+
+    directory = tmp_path / "tamper"
+    write_import_result(source, directory, request_id="request-中文", max_bytes=BUDGET)
+    manifest_path = directory / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    def _lie(node):
+        if isinstance(node, dict):
+            if node.get("conversion") == "enum" and node.get("physical_mode") == "shared":
+                node["physical_mode"] = "identity"
+                return True
+            return any(_lie(value) for value in node.values())
+        if isinstance(node, list):
+            return any(_lie(value) for value in node)
+        return False
+
+    assert _lie(manifest)
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(ImportTransportError, match="identity physical must share raw"):
+        read_import_result(directory, request_id="request-中文", max_bytes=BUDGET)
+
+
 def test_module_does_not_import_qt_or_native_parsers():
     code = """
 import sys

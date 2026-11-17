@@ -237,6 +237,44 @@ def test_close_drops_access_without_touching_samples():
     store.close()
 
 
+def test_decimal_rates_are_uniform_and_real_jitter_is_not():
+    original = np.arange(100, dtype=np.float64) / 100.0
+    seen = original.copy()
+    for rate in (10.0, 100.0, 1000.0, 1024.0):
+        stamps = np.arange(100, dtype=np.float64) / rate
+        store = _store(
+            (_time_axis("t", "clk", stamps),),
+            (_channel(0, 1, "sig", "t", np.arange(100.0)),),
+        )
+        sampling = store.axis("t").sampling
+        assert sampling.status == "known"
+        assert sampling.basis == "uniform_timestamps"
+        assert sampling.fs_hz == pytest.approx(rate)
+        shifted = 12.5 + stamps
+        shifted_store = _store(
+            (_time_axis("t", "clk", shifted),),
+            (_channel(0, 1, "sig", "t", np.arange(100.0)),),
+        )
+        assert shifted_store.axis("t").sampling.status == "known"
+        assert shifted_store.axis("t").sampling.fs_hz == pytest.approx(rate)
+    jitter = seen.copy()
+    jitter[40] += 1e-6
+    noisy = _store(
+        (_time_axis("t", "clk", jitter),),
+        (_channel(0, 1, "sig", "t", np.arange(100.0)),),
+    )
+    assert noisy.axis("t").sampling.status == "unknown"
+    assert noisy.axis("t").sampling.basis == "not_strictly_uniform"
+    np.testing.assert_array_equal(noisy.axis("t").values, jitter)
+    declared = _store(
+        (_time_axis("t", "clk", np.arange(32) / 1024.0, fs_status="known", fs_hz=100.0),),
+        (_channel(0, 1, "sig", "t", np.arange(32.0)),),
+    )
+    assert declared.axis("t").sampling.status == "unknown"
+    assert declared.axis("t").sampling.basis == "declared_conflict"
+    np.testing.assert_array_equal(original, seen)
+
+
 def test_sampling_status_is_known_estimated_or_unknown():
     uniform = _store(
         (_time_axis("t", "clk", [0.0, 0.1, 0.2]),),

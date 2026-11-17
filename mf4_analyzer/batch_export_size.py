@@ -21,8 +21,15 @@ class TableSize:
     cells: int | None
 
 
-def source_size_facts(fd):
-    """Read scalar facts from an already loaded source without copying data."""
+def source_size_facts(fd, channel=None):
+    """Read scalar facts from an already loaded source without copying data.
+
+    A native source reports one channel when ``channel`` is given. Without a
+    channel it uses the longest channel and a sample rate only when every
+    time axis publishes that same known rate. It does not read ``fd.fs``.
+    """
+    if getattr(fd, "is_native", False):
+        return _native_size_facts(fd, channel)
     from .io.channel_frame import frame_row_count
 
     axis = fd.time_array
@@ -32,6 +39,57 @@ def source_size_facts(fd):
         'time_start': float(axis[0]) if axis is not None and len(axis) else None,
         'time_end': float(axis[-1]) if axis is not None and len(axis) else None,
     }
+
+
+def _native_size_facts(fd, channel):
+    store = fd.native_store
+    counts = store.sample_counts()
+
+    def _axis(name):
+        return store.axis(store.channel(name).axis_id)
+
+    if channel is not None and channel in counts:
+        axis = _axis(channel)
+        count = int(counts[channel])
+        rate = axis.sampling.fs_hz if axis.sampling.status == "known" else None
+        start, end = _axis_ends(axis)
+        return {
+            'sample_count': count,
+            'sample_rate': None if rate is None else float(rate),
+            'time_start': start,
+            'time_end': end,
+        }
+    count = max((int(value) for value in counts.values()), default=0)
+    rates = []
+    starts = []
+    ends = []
+    time_axes = 0
+    for name in counts:
+        axis = _axis(name)
+        if str(axis.kind) != "time":
+            continue
+        time_axes += 1
+        if axis.sampling.status == "known" and axis.sampling.fs_hz is not None:
+            rates.append(float(axis.sampling.fs_hz))
+        start, end = _axis_ends(axis)
+        if start is not None:
+            starts.append(start)
+        if end is not None:
+            ends.append(end)
+    rate = rates[0] if time_axes and len(rates) == time_axes and len(set(rates)) == 1 else None
+    return {
+        'sample_count': count,
+        'sample_rate': rate,
+        'time_start': min(starts) if starts else None,
+        'time_end': max(ends) if ends else None,
+    }
+
+
+def _axis_ends(axis):
+    values = axis.values
+    if values is None or len(values) == 0:
+        return None, None
+    return float(values[0]), float(values[-1])
 
 
 def estimate_table_size(method, params, facts):

@@ -67,6 +67,32 @@ def _oracle(path, group, index):
         )
 
 
+def test_decimal_hertz_reaches_analysis_through_the_broker(tmp_path):
+    from asammdf import MDF, Signal
+
+    from mf4_analyzer.analysis_signal_prepare import load_native_channel
+
+    path = tmp_path / "hundred hz.mf4"
+    time = np.arange(64) / 100.0
+    samples = np.sin(2.0 * np.pi * 5.0 * time)
+    mdf = MDF(version="4.10")
+    mdf.append([Signal(samples, time, name="sine", unit="Nm")])
+    mdf.save(str(path), overwrite=True)
+    mdf.close()
+    digest = _sha256(path)
+    loaded = run_import("load_mf4_native", path)
+    assert _sha256(path) == digest
+    channel = loaded.native_store.channel("sine")
+    sampling = loaded.native_store.axis(channel.axis_id).sampling
+    assert sampling.status == "known"
+    assert sampling.fs_hz == pytest.approx(100.0)
+    prepared = load_native_channel(loaded, "sine", (0.1, 0.4))
+    assert prepared.status == "ready"
+    assert prepared.source_fs == pytest.approx(100.0)
+    assert prepared.time[0] == pytest.approx(0.1)
+    loaded.close_source()
+
+
 def test_real_broker_native_matches_raw_oracle_and_keeps_hash(tmp_path):
     path = _write_pair(tmp_path / "测量 数据" / "扭矩 peak.mf4")
     digest = _sha256(path)

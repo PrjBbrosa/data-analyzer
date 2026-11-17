@@ -1051,7 +1051,19 @@ class CursorController(_CanvasBackref):
         return created
 
     def _sync_native_sample_markers(self, rows):
-        points = []
+        markers = self._ensure_native_sample_markers()
+        if not markers:
+            return
+        handles = [
+            handle for handle in self.axes_list
+            if not getattr(handle, "placeholder", False)
+            and getattr(handle, "view_box", None) is not None
+        ]
+        marker_for_handle = {
+            id(handle): marker for handle, marker in zip(handles, markers)
+        }
+        points = {id(marker): [] for marker in markers}
+        lines = getattr(self, "_channel_lines", None)
         for row in rows or ():
             if getattr(row, "read_mode", "") != "nearest":
                 continue
@@ -1059,20 +1071,29 @@ class CursorController(_CanvasBackref):
             value = getattr(row, "current_value", None)
             if sample_time is None or value is None:
                 continue
-            points.append((float(sample_time), float(value)))
-        markers = self._ensure_native_sample_markers()
-        if not markers:
-            return
-        if not points:
-            self._hide_native_sample_markers()
-            return
-        xs = [point[0] for point in points]
-        ys = [point[1] for point in points]
+            identity = getattr(row, "identity", None)
+            pair = lines.get(identity) if lines is not None and identity is not None else None
+            if pair is None:
+                continue
+            marker = marker_for_handle.get(id(pair[0]))
+            if marker is None:
+                continue
+            points[id(marker)].append((float(sample_time), float(value)))
+        pen = pg.mkPen("#111827", width=1)
+        brush = pg.mkBrush("#1769e0")
         for marker in markers:
+            owned = points[id(marker)]
+            if not owned:
+                marker.setData([], [])
+                marker.setVisible(False)
+                continue
             marker.setData(
-                xs, ys, symbol="o", size=9,
-                pen=pg.mkPen("#111827", width=1),
-                brush=pg.mkBrush("#1769e0"),
+                [point[0] for point in owned],
+                [point[1] for point in owned],
+                symbol="o",
+                size=9,
+                pen=pen,
+                brush=brush,
             )
             marker.setVisible(True)
 

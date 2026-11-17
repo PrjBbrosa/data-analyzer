@@ -1676,6 +1676,17 @@ class UltraViewCaptureCoordinator(QObject):
         fd = files.get(fid) if hasattr(files, "get") else None
         if fd is None:
             return None
+        if getattr(fd, "is_native", False):
+            from ...io.file_data import SourceClosedError
+            from ...io.signal_access import SignalAccessError, read_signal
+
+            try:
+                series = read_signal(fd, channel, representation="raw")
+                return _stable_source_revision(source_revision_for(
+                    series.time, series.values,
+                ))
+            except (SignalAccessError, SourceClosedError, TypeError, ValueError):
+                return None
         data = getattr(fd, "data", None)
         if data is None:
             return None

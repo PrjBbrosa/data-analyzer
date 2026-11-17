@@ -539,6 +539,23 @@ class Renderer(_CanvasBackref):
                 pass
             active_channel_count += 1
             t, sig, color, _unit = entry
+            # channel_data keeps the raw samples. A native query's display
+            # arrays are the only values that may carry NaN breaks; refreshing
+            # from raw would draw an invalid sample back onto the line.
+            explicit_revision = None
+            query = (getattr(self, "_native_queries", None) or {}).get(ck)
+            if query is not None:
+                try:
+                    closed = bool(query.is_closed())
+                except Exception:
+                    closed = True
+                if not closed:
+                    t = np.asarray(query.display_time)
+                    sig = np.asarray(query.display_values)
+                    explicit_revision = getattr(query, "revision", None)
+            source_revision = source_revision_for(
+                t, sig, explicit_revision=explicit_revision,
+            )
 
             if overlay:
                 effective_width = overlay_effective_width
@@ -548,7 +565,6 @@ class Renderer(_CanvasBackref):
                 )
             profiles = self._channel_render_profiles
             profile = profiles.get(ck)
-            source_revision = source_revision_for(t, sig)
             if profile is None or profile.source_revision != source_revision:
                 profile = classify_render_profile(
                     t, sig,

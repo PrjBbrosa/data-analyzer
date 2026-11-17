@@ -5176,17 +5176,16 @@ class BatchRunner:
         warnings: list[str] = list(effective.migration_warnings)
         try:
             self._check_cancel(cancel_token, 'preprocess')
-            signal = fd.data[signal_name].to_numpy(dtype=float, copy=False)
-            time = fd.time_array
-            fs_raw = params.get('fs')
-            fs = float(fd.fs if fs_raw in (None, '') else fs_raw)
+            signal, time, fs = self._task_channel_arrays(fd, signal_name, params.get('fs'))
             x_values = None
             if str(params.get('x_source', 'time') or 'time').lower() == 'channel':
                 x_channel = str(params.get('x_channel', '') or '').strip()
                 x_column = self._bound_signal_name(None, x_channel, fd=fd)
-                if not x_column or x_column not in fd.data.columns:
+                if not x_column or not self._source_has_channel(fd, x_column):
                     raise ValueError(f'missing X channel: {x_channel}')
-                x_values = fd.data[x_column].to_numpy(dtype=float, copy=False)
+                x_values, _x_time, _x_fs = self._task_channel_arrays(
+                    fd, x_column, None, require_fs=False,
+                )
             preprocessed = preprocess_batch_signal(
                 signal, time, fs, params, x_values=x_values,
                 nonfinite_policy="preserve",
@@ -5702,10 +5701,9 @@ class BatchRunner:
 
         try:
             self._check_cancel(cancel_token, "preprocess")
-            sig = fd.data[signal_name].to_numpy(dtype=float, copy=False)
-            time = fd.time_array
-            fs_raw = requested_params.get('fs')
-            fs = float(fd.fs if fs_raw in (None, '') else fs_raw)
+            sig, time, fs = self._task_channel_arrays(
+                fd, signal_name, requested_params.get('fs'),
+            )
 
             warnings_out: list[str] = []
             rpm = None
@@ -5714,6 +5712,7 @@ class BatchRunner:
                     fd,
                     preset,
                     target_source_id=fid,
+                    target_channel=signal_name,
                     warnings_out=warnings_out,
                 )
 
@@ -5725,10 +5724,10 @@ class BatchRunner:
                     requested_params.get('x_channel', '') or ''
                 ).strip()
                 x_column = self._bound_signal_name(None, x_channel, fd=fd)
-                if not x_column or x_column not in fd.data.columns:
+                if not x_column or not self._source_has_channel(fd, x_column):
                     raise ValueError(f"missing X channel: {x_channel}")
-                x_values = fd.data[x_column].to_numpy(
-                    dtype=float, copy=False,
+                x_values, _x_time, _x_fs = self._task_channel_arrays(
+                    fd, x_column, None, require_fs=False,
                 )
 
             preprocessed = preprocess_batch_signal(
@@ -6269,7 +6268,7 @@ class BatchRunner:
         if x_source == 'channel':
             x_channel = str(params.get('x_channel', '') or '').strip()
             x_column = self._bound_signal_name(None, x_channel, fd=fd) or x_channel
-            if x_column not in fd.data.columns:
+            if not self._source_has_channel(fd, x_column):
                 raise ValueError(f"missing X channel: {x_channel}")
             if preprocessed.x_values is None:
                 raise ValueError(f"X channel was not aligned: {x_channel}")
@@ -6575,12 +6574,46 @@ class BatchRunner:
     _compute_fft_time_dataframe = staticmethod(batch_compute.compute_fft_time_dataframe)
     _strict_finite_time_axis = staticmethod(batch_compute.strict_finite_time_axis)
 
+    def _source_has_channel(self, fd, name) -> bool:
+        from .io.signal_access import channel_in_source
+        return channel_in_source(fd, name)
+
+    def _task_channel_arrays(self, fd, name, fs_raw, *, require_fs=True):
+        """Return ``(values, time, fs)`` for one channel.
+
+        Native sources use that channel's clock. A missing known rate is an
+        error when the task did not pass an explicit ``fs`` and ``require_fs``
+        is set; the file-level legacy axis is not invented. RPM and Custom-X
+        reads set ``require_fs`` false because alignment uses the timestamps.
+        """
+        from .io.signal_access import SignalAccessError, channel_time_values
+
+        try:
+            time, values, native_fs = channel_time_values(fd, name)
+        except SignalAccessError as exc:
+            raise ValueError(str(exc)) from exc
+        signal = np.asarray(values, dtype=float)
+        time_axis = None if time is None else np.asarray(time, dtype=float)
+        if fs_raw in (None, ""):
+            if native_fs is None:
+                if require_fs:
+                    raise ValueError(
+                        f"通道 {name!r} 采样率未知，不能用文件级采样率代替"
+                    )
+                fs = None
+            else:
+                fs = float(native_fs)
+        else:
+            fs = float(fs_raw)
+        return signal, time_axis, fs
+
     def _rpm_values(
         self,
         fd,
         preset,
         *,
         target_source_id=None,
+        target_channel=None,
         warnings_out: list[str] | None = None,
     ):
         if preset.rpm_signal is not None:
@@ -6597,7 +6630,7 @@ class BatchRunner:
                 rpm_fd = fd
             else:
                 _rpm_id, rpm_fd = self._resolve_task_file(rpm_source_id)
-            if isinstance(rpm_fd, _LoadFailure) or rpm_ch not in rpm_fd.data.columns:
+            if isinstance(rpm_fd, _LoadFailure) or not self._source_has_channel(rpm_fd, rpm_ch):
                 detail = (
                     rpm_fd.error if isinstance(rpm_fd, _LoadFailure)
                     else f"missing channel {rpm_ch!r}"
@@ -6608,14 +6641,20 @@ class BatchRunner:
                     f"rpm source {rpm_source_id!r}): {detail}"
                 )
             factor = float(preset.params.get('rpm_factor', 1.0))
-            rpm = rpm_fd.data[rpm_ch].to_numpy(dtype=float, copy=False)
-            if rpm_source_id == target_source_id:
+            rpm, rpm_time, _rpm_fs = self._task_channel_arrays(
+                rpm_fd, rpm_ch, None, require_fs=False,
+            )
+            if rpm_source_id == target_source_id and not getattr(fd, "is_native", False):
                 return rpm * factor
 
-            target_time = fd.time_array
-            rpm_time = rpm_fd.time_array
+            if target_channel:
+                target_time, _target_values, _target_fs = self._task_channel_arrays(
+                    fd, target_channel, None, require_fs=False,
+                )
+            else:
+                target_time = fd.time_array
             valid_target = self._strict_finite_time_axis(
-                target_time, len(fd.data),
+                target_time, len(np.asarray(target_time)),
             )
             valid_rpm = self._strict_finite_time_axis(
                 rpm_time, len(rpm),
@@ -6645,10 +6684,13 @@ class BatchRunner:
                 )
         else:
             rpm_channel = self._bound_signal_name(None, rpm_channel, fd=fd) or ""
-        if not rpm_channel or rpm_channel not in fd.data.columns:
+        if not rpm_channel or not self._source_has_channel(fd, rpm_channel):
             raise ValueError("rpm channel is required for order batch analysis")
         factor = float(preset.params.get('rpm_factor', 1.0))
-        return fd.data[rpm_channel].to_numpy(dtype=float, copy=False) * factor
+        rpm, _rpm_time, _rpm_fs = self._task_channel_arrays(
+            fd, rpm_channel, None, require_fs=False,
+        )
+        return np.asarray(rpm, dtype=float) * factor
 
     # ---- batch_output compatibility aliases -------------------------------
     # These three byte-output writers moved to batch_output.py as

@@ -2531,7 +2531,16 @@ class BatchSheet(QDialog):
                 for task in tasks:
                     fd = self._files.get(task.source_key)
                     row = rows.get(task.source_key)
-                    facts = source_size_facts(fd) if fd is not None else (
+                    channel = getattr(task, "channel", None)
+                    if not isinstance(channel, str):
+                        signal = getattr(task, "signal", None)
+                        if isinstance(signal, tuple) and len(signal) == 2:
+                            channel = signal[1]
+                        elif isinstance(signal, str):
+                            channel = signal
+                        else:
+                            channel = None
+                    facts = source_size_facts(fd, channel) if fd is not None else (
                         row.metadata if row is not None else {}
                     )
                     sizes.append(estimate_table_size(preset.method, preset.params, facts))
