@@ -18,6 +18,9 @@ python -m pip install --find-links .state/dependency-wheels -r requirements.txt
 The helper creates its own build venv, verifies the sdist and patch hashes,
 installs hash-locked build dependencies, and writes the platform wheel, build
 manifest (Python/platform, source and wheel SHA-256), and modified source archive.
+Patch hashes are the LF bytes in `source.lock.json`. A Windows checkout may
+rewrite those files to CRLF; the helper normalizes line endings before the
+check and before `git apply`.
 It never installs into the calling interpreter. Use a separate output directory
 for each build target. Windows Full and Lite must use this same requirement and
 wheelhouse; an unpatched public release does not satisfy it.

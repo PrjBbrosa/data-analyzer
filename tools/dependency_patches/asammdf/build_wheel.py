@@ -23,6 +23,11 @@ def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def patch_bytes(path):
+    """LF patch bytes. Windows autocrlf rewrites the working tree to CRLF."""
+    return Path(path).read_bytes().replace(b"\r\n", b"\n")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
@@ -45,13 +50,17 @@ def main():
             if digest(source / name) != expected:
                 raise RuntimeError(f'Unreviewed source: {name}')
         for name, expected in lock['patches'].items():
-            patch = here / name
-            if digest(patch) != expected:
+            payload = patch_bytes(here / name)
+            if hashlib.sha256(payload).hexdigest() != expected:
                 raise RuntimeError(f'Patch hash mismatch: {name}')
+            # Apply the LF form. A CRLF working copy still matches the lock,
+            # and git apply then sees the same bytes the source tree uses.
+            normalized = tmp / name
+            normalized.write_bytes(payload)
             # Zero-context patches avoid whitespace-only context lines in Git.
             # Exact source hashes above prevent applying to a shifted source.
-            subprocess.run(['git', 'apply', '--unidiff-zero', '--check', str(patch)], cwd=source, check=True)
-            subprocess.run(['git', 'apply', '--unidiff-zero', str(patch)], cwd=source, check=True)
+            subprocess.run(['git', 'apply', '--unidiff-zero', '--check', str(normalized)], cwd=source, check=True)
+            subprocess.run(['git', 'apply', '--unidiff-zero', str(normalized)], cwd=source, check=True)
         build_env = tmp / 'venv'
         venv.EnvBuilder(with_pip=True).create(build_env)
         python = build_env / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
