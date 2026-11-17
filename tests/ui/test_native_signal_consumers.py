@@ -347,6 +347,125 @@ def test_time_copy_mentions_native_samples_and_keeps_import_retry_text():
     assert "单点" in (time_row.sub or "")
 
 
+def test_fft_time_request_range_is_resolved_before_quality_rejection():
+    from mf4_analyzer.io.native_signal_store import AxisSpec, ChannelSpec, NativeSignalStore
+    from mf4_analyzer.io.file_data import FileData
+    from mf4_analyzer.ui.main_window._fft_time_mixin import FFTTimeMixin
+
+    time = np.arange(8) / 4.0
+    values = np.arange(8, dtype=float)
+    invalid = np.zeros(8, dtype=bool)
+    invalid[0] = True
+    store = NativeSignalStore.build(
+        "fft-time",
+        (AxisSpec("t", "clk", "time", "s", time),),
+        (ChannelSpec(0, 1, "sig", "t", values, unit="Nm", validity=invalid),),
+    )
+    host = SimpleNamespace(files={"f": FileData.from_native_store("fft.mf4", store)})
+    ready = FFTTimeMixin._fft_time_signal_for(
+        host, ("f", "sig"), time_range=(0.25, 1.5),
+    )
+    assert ready[0] == "f"
+    assert ready[3] is not None and len(ready[3]) >= 2
+    assert float(ready[2][0]) == pytest.approx(0.25)
+    blocked = FFTTimeMixin._fft_time_signal_for(host, ("f", "sig"), time_range=None)
+    assert blocked == (None, None, None, None, None)
+    assert "失效" in str(getattr(host, "_native_prepare_block", ""))
+
+    invalid[2] = True
+    inside = NativeSignalStore.build(
+        "fft-time-inside",
+        (AxisSpec("t", "clk", "time", "s", time),),
+        (ChannelSpec(0, 1, "sig", "t", values, unit="Nm", validity=invalid),),
+    )
+    skipped = []
+    job_host = SimpleNamespace(
+        files={"f": FileData.from_native_store("fft-inside.mf4", inside)},
+        _record_fft_time_skip=lambda reason: skipped.append(reason),
+        _normalize_analysis_time_range=lambda value: value,
+    )
+    job_host._fft_time_signal_for = (
+        lambda source, time_range=None: FFTTimeMixin._fft_time_signal_for(
+            job_host, source, time_range=time_range,
+        )
+    )
+    result = FFTTimeMixin._build_fft_time_job(
+        job_host, 0, "f", "sig", {}, time_range=(0.25, 1.5),
+    )
+    assert result is None
+    assert skipped
+    assert skipped[0] != "源通道缺失"
+    assert "失效" in skipped[0]
+
+
+def test_invalid_sample_stays_broken_after_refresh_and_markers_stay_on_their_axis(qapp):
+    from mf4_analyzer.io.file_data import FileData
+    from mf4_analyzer.io.native_signal_store import AxisSpec, ChannelSpec, NativeSignalStore
+    from mf4_analyzer.ui import time_curve_bindings as bindings
+    from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+    time = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
+    broken = np.array([10.0, 999.0, 30.0, 40.0, 50.0])
+    invalid = np.array([False, True, False, False, False])
+    left = np.array([1.0, 3.0, 5.0])
+    right = np.array([10.0, 30.0, 40.0])
+    store = NativeSignalStore.build(
+        "display",
+        (
+            AxisSpec("a", "clk-a", "time", "s", time),
+            AxisSpec("b", "clk-b", "time", "s", np.array([1.0, 2.0, 4.0])),
+            AxisSpec("c", "clk-c", "time", "s", np.array([1.0, 2.0, 4.0])),
+        ),
+        (
+            ChannelSpec(0, 1, "broken", "a", broken, unit="Nm", validity=invalid),
+            ChannelSpec(1, 1, "left", "b", left, unit="Nm"),
+            ChannelSpec(2, 1, "right", "c", right, unit="Nm"),
+        ),
+    )
+    fd = FileData.from_native_store("display.mf4", store)
+    canvas = TimeDomainCanvasPG()
+    canvas.resize(640, 360)
+    canvas.show()
+    canvas.plot_channels(
+        bindings.native_plot_rows(fd, ["broken"], fid="f0"),
+        mode="single",
+    )
+    QCoreApplication.processEvents()
+    line = next(canvas._channel_lines.composite_items())[2][1].plot_data_item
+
+    def shows_invalid_value(item):
+        y = np.asarray(item.getData()[1], dtype=float)
+        return bool(np.any(np.isfinite(y) & np.isclose(y, 999.0)))
+
+    assert not shows_invalid_value(line)
+    canvas._refresh_visible_data()
+    QCoreApplication.processEvents()
+    assert not shows_invalid_value(line)
+    raw = next(canvas.channel_data.composite_items())[2][1]
+    assert np.any(np.isclose(np.asarray(raw, dtype=float), 999.0))
+    stats = next(canvas.get_statistics().composite_items())[2]
+    assert stats["max"] == pytest.approx(50.0)
+
+    canvas.plot_channels(
+        bindings.native_plot_rows(fd, ["left", "right"], fid="f0"),
+        mode="subplot",
+    )
+    QCoreApplication.processEvents()
+    rows = canvas.evaluate_single_cursor(2.0)
+    canvas._cursor._sync_native_sample_markers(rows)
+    markers = canvas._cursor._native_sample_markers
+    seen = []
+    for marker in markers:
+        _x, y = marker.getData()
+        if y is None:
+            continue
+        values = [float(item) for item in np.asarray(y, dtype=float).reshape(-1) if np.isfinite(item)]
+        if values:
+            seen.append(values)
+    assert sorted(seen) == [[3.0], [30.0]]
+    fd.close_source()
+
+
 def _channel_arrays(canvas):
     for _key, _name, row in canvas.channel_data.composite_items():
         return row[0], row[1]

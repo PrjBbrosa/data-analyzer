@@ -3016,18 +3016,20 @@ class MainWindow(
             self._commit_live_analysis_sources(mode)
         if not data:
             return
-        fid, _ch = data
+        fid, ch = data
         if fid not in self.files:
             return
         fd = self.files[fid]
-        fs = fd.fs
+        from ...io.signal_access import known_sampling_hz
+        fs = known_sampling_hz(fd, ch)
         if mode == 'fft':
-            self.inspector.fft_ctx.set_fs(fs)
+            if fs is not None:
+                self.inspector.fft_ctx.set_fs(fs)
             # FFT source selection changed: keep the computed spectrum but
             # mark it stale (no auto-recompute); the live preview still
             # refreshes to the new source below via plot_time_preview.
             self._refresh_fft_time_preview(clear_spectrum=False)
-        elif mode == 'order':
+        elif mode == 'order' and fs is not None:
             self.inspector.order_ctx.set_fs(fs)
 
     def _on_fft_time_signal_changed(self, data):
@@ -3046,11 +3048,15 @@ class MainWindow(
         self._commit_live_analysis_sources('fft_time')
         if not data:
             return
-        fid, _ch = data
+        fid, ch = data
         if fid not in self.files:
             return
         fd = self.files[fid]
-        self.inspector.fft_time_ctx.set_fs(fd.fs)
+        from ...io.signal_access import known_sampling_hz
+        fs = known_sampling_hz(fd, ch)
+        if fs is None:
+            return
+        self.inspector.fft_time_ctx.set_fs(fs)
 
     def _on_db_reference_value_edited(self, section, _value=None):
         """Repaint a reference edit from cache without submitting analysis.
@@ -3132,22 +3138,36 @@ class MainWindow(
         self._update_info()
         if fid and fid in self.files:
             fd = self.files[fid]
+            from ...io.signal_access import known_sampling_hz
+            from ..time_xaxis import acquisition_span
             # Only push Fs to each contextual if its signal dropdown points at
-            # the active file (or has no selection yet). Per §6.3 Fs rule.
+            # the active file. A native file has no single Fs to invent when
+            # nothing is selected.
             for ctx in (
                 self.inspector.fft_ctx,
                 self.inspector.fft_time_ctx,
                 self.inspector.order_ctx,
             ):
                 sig_data = ctx.current_signal()
-                if sig_data is None or sig_data[0] == fid:
-                    ctx.set_fs(fd.fs)
-            if len(fd.time_array):
-                max_t = max(
-                    (f.time_array[-1] for f in self.files.values() if len(f.time_array)),
-                    default=0,
-                )
-                self.inspector.top.set_range_limits(0, max_t)
+                if sig_data is None or sig_data[0] != fid:
+                    if sig_data is None and not getattr(fd, "is_native", False):
+                        ctx.set_fs(fd.fs)
+                    continue
+                fs = known_sampling_hz(fd, sig_data[1])
+                if fs is not None:
+                    ctx.set_fs(fs)
+            ends = []
+            for source in self.files.values():
+                if getattr(source, "is_native", False):
+                    span = acquisition_span(source)
+                    if span is not None:
+                        ends.append(span[1])
+                    continue
+                axis = source.time_array
+                if axis is not None and len(axis):
+                    ends.append(float(axis[-1]))
+            if ends:
+                self.inspector.top.set_range_limits(0, max(ends))
         self._refresh_project_session_chrome()
 
     def _on_file_order_requested(self, fids, target_fids, placement):

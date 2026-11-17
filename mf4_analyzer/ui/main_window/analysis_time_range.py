@@ -278,6 +278,32 @@ def axis_facts_from_files(files, sources):
         if fd is None:
             facts[key] = None
             continue
+        if getattr(fd, "is_native", False):
+            from ...io.file_data import SourceClosedError
+            from ...io.signal_access import SignalAccessError, read_signal
+
+            try:
+                series = read_signal(fd, key[1], representation="raw")
+            except (SignalAccessError, SourceClosedError, TypeError, ValueError):
+                facts[key] = None
+                continue
+            axis = series.time
+            extent = axis_extent(axis)
+            if extent is None:
+                facts[key] = None
+                continue
+            if hasattr(fd, "source_instance_token"):
+                source_token = fd.source_instance_token
+            else:
+                source_token = id(fd)
+            revision = series.revision
+            physical = getattr(series.physical_key, "token", None)
+            axis_token = (revision, str(physical or series.public_name))
+            facts[key] = (
+                extent[0], extent[1], int(np.asarray(axis).size),
+                source_token, revision, axis_token,
+            )
+            continue
         axis = getattr(fd, "time_array", None)
         extent = axis_extent(axis)
         if extent is None:

@@ -361,3 +361,53 @@ def test_legacy_formats_do_not_gain_a_fake_sampling_rate(tmp_path):
     assert zfd.sampling.fs_hz == pytest.approx(1000.0)
     with pytest.raises(SignalAccessError, match="force"):
         read_signal(estimated, "FORCE")
+
+
+def test_neighbor_halo_keeps_bracketing_samples_outside_the_span():
+    store = NativeSignalStore.build(
+        "rpm",
+        (AxisSpec("t", "clk", "time", "s", np.array([0.0, 1.0, 2.0])),),
+        (ChannelSpec(0, 1, "n_motor", "t", np.array([100.0, 200.0, 300.0]), unit="rpm"),),
+    )
+    fd = FileData.from_native_store("rpm.mf4", store)
+    series = read_signal(
+        fd, "n_motor", span=TimeSpan(0.2, 1.8), neighbor_halo=1,
+    )
+    assert series.time.tolist() == pytest.approx([0.0, 1.0, 2.0])
+    clipped = read_signal(fd, "n_motor", span=TimeSpan(0.2, 1.8))
+    assert clipped.time.tolist() == pytest.approx([1.0])
+
+
+def test_native_facts_do_not_invent_a_file_level_axis():
+    from mf4_analyzer.batch_export_size import source_size_facts
+    from mf4_analyzer.io.signal_access import known_sampling_hz
+    from mf4_analyzer.ui.main_window.analysis_time_range import axis_facts_from_files
+
+    fast = np.arange(5) / 1000.0
+    slow = np.array([0.0, 1.0, 2.0])
+    store = NativeSignalStore.build(
+        "mixed",
+        (
+            AxisSpec("fast", "clk-a", "time", "s", fast),
+            AxisSpec("slow", "clk-b", "time", "s", slow),
+        ),
+        (
+            ChannelSpec(0, 1, "torque", "fast", np.arange(5.0), unit="Nm"),
+            ChannelSpec(1, 1, "n_motor", "slow", np.array([100.0, 200.0, 300.0]), unit="rpm"),
+        ),
+    )
+    fd = FileData.from_native_store("mixed.mf4", store)
+    with pytest.raises(LegacyAxisUnavailable):
+        _ = fd.fs
+    assert known_sampling_hz(fd, "torque") == pytest.approx(1000.0)
+    assert known_sampling_hz(fd, "n_motor") == pytest.approx(1.0)
+    facts = axis_facts_from_files({"f": fd}, [("f", "torque"), ("f", "n_motor")])
+    assert facts[("f", "torque")][2] == 5
+    assert facts[("f", "n_motor")][2] == 3
+    assert facts[("f", "torque")][5] != facts[("f", "n_motor")][5]
+    mixed = source_size_facts(fd)
+    assert mixed["sample_count"] == 5
+    assert mixed["sample_rate"] is None
+    torque = source_size_facts(fd, "torque")
+    assert torque["sample_rate"] == pytest.approx(1000.0)
+    assert torque["sample_count"] == 5

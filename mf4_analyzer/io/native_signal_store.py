@@ -18,6 +18,13 @@ _AXIS_KINDS = frozenset({"time", "angle", "distance", "index"})
 _CONVERSIONS = frozenset({"identity", "library", "enum", "unsupported"})
 _SUPPORT = frozenset({"numeric", "enum", "unsupported"})
 _LEDGER_KINDS = ("raw", "time", "physical", "validity")
+# Float uniform grid: source-dtype quantization plus float64 reconstruction.
+# The bound is a few ULPs, not a fraction of the sample period. If it grows
+# to half a period it can no longer separate quantization from real jitter,
+# and the axis stays unknown instead of inventing an Fs.
+_FLOAT_GRID_ULPS = 8.0
+_FLOAT_RECON_ULPS = 4.0
+_FLOAT_TOL_SAMPLE_FRACTION = 0.5
 
 
 class NativeContractError(ValueError):
@@ -220,44 +227,93 @@ def _positive_fs(value):
     return number
 
 
+def _float_grid_tolerance(values, dt):
+    """ULP bound for a uniform grid stored in ``values.dtype``. Samples stay put."""
+    array = np.asarray(values)
+    n = int(array.shape[0])
+    if array.dtype.kind == "f":
+        source_eps = float(np.finfo(array.dtype).eps)
+    else:
+        source_eps = float(np.finfo(np.float64).eps)
+    magnitude = max(
+        abs(float(array[0])),
+        abs(float(array[-1])),
+        abs(float(dt)),
+        1.0,
+    )
+    return (
+        _FLOAT_GRID_ULPS * source_eps * magnitude
+        + _FLOAT_RECON_ULPS * n * float(np.finfo(np.float64).eps) * magnitude
+    )
+
+
+def _matches_uniform_grid(values, dt):
+    """True when every sample lies on ``t0 + k*dt`` inside the ULP bound."""
+    array = np.asarray(values)
+    n = int(array.shape[0])
+    period = float(dt)
+    if n < 2 or not np.isfinite(period) or period <= 0:
+        return False
+    tolerance = _float_grid_tolerance(array, period)
+    if not np.isfinite(tolerance) or tolerance >= _FLOAT_TOL_SAMPLE_FRACTION * period:
+        return False
+    steps = np.arange(n, dtype=np.float64)
+    expected = float(array[0]) + steps * period
+    return bool(np.max(np.abs(np.asarray(array, dtype=np.float64) - expected)) <= tolerance)
+
+
+def _infer_uniform_period(values):
+    """Return ``(reason, dt)``. ``reason == 'uniform'`` only for a proven grid.
+
+    Integer clocks need an exact positive step. Floating clocks use the
+    endpoint period and the ULP grid test. Empty, single-point, non-finite,
+    duplicate and backward samples stay unknown and are not rewritten.
+    """
+    array = np.asarray(values)
+    n = int(array.shape[0])
+    if n == 0:
+        return "empty", None
+    if n == 1:
+        return "single_point", None
+    if array.dtype.kind in "iu":
+        steps = np.diff(array)
+        if bool(np.any(steps <= 0)) or bool(np.any(steps != steps[0])):
+            return "not_strictly_uniform", None
+        return "uniform", float(steps[0])
+    if array.dtype.kind != "f" or not bool(np.all(np.isfinite(array))):
+        return "nonfinite", None
+    steps = np.diff(np.asarray(array, dtype=np.float64))
+    if not bool(np.all(np.isfinite(steps))) or bool(np.any(steps <= 0)):
+        return "not_strictly_uniform", None
+    period = (float(array[-1]) - float(array[0])) / (n - 1)
+    if not _matches_uniform_grid(array, period):
+        return "not_strictly_uniform", None
+    return "uniform", float(period)
+
+
 def _sampling(kind, unit, values, fs_status, fs_hz):
     if kind != "time":
         if fs_status not in (None, "unknown"):
             raise NativeContractError("非时间轴不能声明采样率")
         return SamplingFacts("unknown", None, kind, unit, "non_time_axis")
-    if fs_status == "estimated":
-        fs = _positive_fs(fs_hz)
-        if fs is None:
-            raise NativeContractError("estimated Fs 必须是有限正数")
-        return SamplingFacts("estimated", fs, "time", unit, "declared_estimate")
-    if fs_status == "known":
-        fs = _positive_fs(fs_hz)
-        if fs is None:
-            raise NativeContractError("known Fs 必须是有限正数")
-        return SamplingFacts("known", fs, "time", unit, "declared")
     if fs_status == "unknown":
         return SamplingFacts("unknown", None, "time", unit, "declared_unknown")
+    if fs_status in ("estimated", "known"):
+        fs = _positive_fs(fs_hz)
+        if fs is None:
+            label = "estimated" if fs_status == "estimated" else "known"
+            raise NativeContractError(f"{label} Fs 必须是有限正数")
+        n = int(np.asarray(values).shape[0])
+        if n >= 2 and not _matches_uniform_grid(values, 1.0 / fs):
+            return SamplingFacts("unknown", None, "time", unit, "declared_conflict")
+        basis = "declared_estimate" if fs_status == "estimated" else "declared"
+        return SamplingFacts(fs_status, fs, "time", unit, basis)
     if fs_status is not None:
         raise NativeContractError(f"fs_status {fs_status!r} 无效")
-    n = int(values.shape[0])
-    if n == 0:
-        return SamplingFacts("unknown", None, "time", unit, "empty")
-    if n == 1:
-        return SamplingFacts("unknown", None, "time", unit, "single_point")
-    dt0 = None
-    for index in range(1, n):
-        prev = values[index - 1]
-        cur = values[index]
-        if not bool(np.isfinite(prev)) or not bool(np.isfinite(cur)):
-            return SamplingFacts("unknown", None, "time", unit, "nonfinite")
-        dt = cur - prev
-        if dt <= 0:
-            return SamplingFacts("unknown", None, "time", unit, "not_strictly_uniform")
-        if dt0 is None:
-            dt0 = dt
-        elif dt != dt0:
-            return SamplingFacts("unknown", None, "time", unit, "not_strictly_uniform")
-    return SamplingFacts("known", float(1.0 / float(dt0)), "time", unit, "uniform_timestamps")
+    reason, period = _infer_uniform_period(values)
+    if reason != "uniform":
+        return SamplingFacts("unknown", None, "time", unit, reason)
+    return SamplingFacts("known", float(1.0 / float(period)), "time", unit, "uniform_timestamps")
 
 
 def _freeze(value, *, name, cache, copy_always=False):

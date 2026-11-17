@@ -160,10 +160,10 @@ class FFTTimeMixin:
 
     def _fft_time_effective_params_for_source(self, p, fid, ch, time_range):
         """Resolve params for cache lookup without starting a worker."""
-        _fid, _ch, t, sig, _fd = self._fft_time_signal_for((fid, ch))
+        rng = self._normalize_analysis_time_range(time_range)
+        _fid, _ch, t, sig, _fd = self._fft_time_signal_for((fid, ch), time_range=rng)
         if sig is None or len(sig) < 2:
             return None
-        rng = self._normalize_analysis_time_range(time_range)
         if rng is not None:
             t, sig = self._mask_time_range(t, sig, time_range=rng)
             if len(sig) < 2:
@@ -222,7 +222,7 @@ class FFTTimeMixin:
             if callable(sync):
                 sync()
 
-    def _get_fft_time_signal(self):
+    def _get_fft_time_signal(self, time_range=None):
         """Resolve the (fid, channel, time, signal, file_data) tuple
         for the currently-selected fft_time signal.
 
@@ -231,11 +231,13 @@ class FFTTimeMixin:
         ``fd.channel_units`` carries unit strings (NOT ``fd.units``).
         Returns ``(None,) * 5`` when no usable selection exists so
         ``do_fft_time`` can surface a single warning and bail.
+        ``time_range`` is applied before native quality checks so an invalid
+        sample outside the selection does not reject a valid segment.
         """
         data = self.inspector.fft_time_ctx.current_signal()
-        return self._fft_time_signal_for(data)
+        return self._fft_time_signal_for(data, time_range=time_range)
 
-    def _fft_time_signal_for(self, source):
+    def _fft_time_signal_for(self, source, time_range=None):
         """Resolve the (fid, channel, time, signal, file_data) tuple for an
         explicit ``(fid, ch)`` source. V7b: the split-heatmap queue needs to
         fetch a NON-focused pane's source directly, not the inspector's
@@ -250,8 +252,10 @@ class FFTTimeMixin:
         fd = self.files[fid]
         if getattr(fd, "is_native", False):
             from ...analysis_signal_prepare import load_native_channel
-            prepared = load_native_channel(fd, ch, None)
+            prepared = load_native_channel(fd, ch, time_range)
+            self._native_prepare_block = None
             if prepared.status != "ready":
+                self._native_prepare_block = prepared.reason or "时间轴无效"
                 return None, None, None, None, None
             return fid, ch, prepared.time, prepared.values, fd
         if not hasattr(fd, 'data') or ch not in fd.data.columns:
@@ -272,7 +276,11 @@ class FFTTimeMixin:
         """
         try:
             source = self.inspector.fft_time_ctx.current_signal()
-            _fid, _ch, t, sig, _fd = self._fft_time_signal_for(source)
+            top = self.inspector.top
+            preview_range = top.range_values() if top.range_enabled() else None
+            _fid, _ch, t, sig, _fd = self._fft_time_signal_for(
+                source, time_range=preview_range,
+            )
             if sig is None or len(sig) < 2:
                 return None
             top = self.inspector.top
@@ -492,9 +500,18 @@ class FFTTimeMixin:
         pane_idx = page.focused_index()
         state = self._analysis_state_for_dispatch('fft_time')
         mark_pending(state.panes[pane_idx])
-        fid, ch, t, sig, fd = self._get_fft_time_signal()
+        compute_time_range = self._pane_time_range_for("fft_time", pane_idx)
+        if compute_time_range is None and self.inspector.top.range_enabled():
+            compute_time_range = self.inspector.top.range_values()
+        rng = self._normalize_analysis_time_range(compute_time_range)
+        try:
+            fid, ch, t, sig, fd = self._get_fft_time_signal(time_range=rng)
+        except TypeError:
+            fid, ch, t, sig, fd = self._get_fft_time_signal()
         if sig is None or len(sig) < 2:
-            self.toast("请选择有效信号", "warning")
+            reason = getattr(self, "_native_prepare_block", None)
+            self._native_prepare_block = None
+            self.toast(reason or "请选择有效信号", "warning")
             return
         ctx = self.inspector.fft_time_ctx
         compute_getter = getattr(ctx, 'compute_params', None)
@@ -505,10 +522,6 @@ class FFTTimeMixin:
         display_p = (
             display_getter() if callable(display_getter) else ctx.get_params()
         )
-        compute_time_range = self._pane_time_range_for("fft_time", pane_idx)
-        if compute_time_range is None and self.inspector.top.range_enabled():
-            compute_time_range = self.inspector.top.range_values()
-        rng = self._normalize_analysis_time_range(compute_time_range)
         if rng is not None:
             t, sig = self._mask_time_range(t, sig, time_range=rng)
         if sig is None or len(sig) < 2:
@@ -606,18 +619,6 @@ class FFTTimeMixin:
     ):
         """Prepare one job and its immutable completion context, or skip it."""
         from ...signal import SpectrogramParams
-        if signal_getter is None:
-            signal_getter = lambda: self._fft_time_signal_for((fid, ch))
-        fid, ch, t, sig, fd = signal_getter()
-        if sig is None:
-            self._record_fft_time_skip("源通道缺失")
-            return None
-        if len(sig) < 2:
-            self._record_fft_time_skip("信号过短")
-            return None
-        if not getattr(fd, "is_native", False) and not self._check_uniform_or_prompt(fd, 'fft_time'):
-            self._record_fft_time_skip("时间轴无效")
-            return None
         if time_range is _INSPECTOR_TIME_RANGE:
             resolver = getattr(self, "_resolve_job_time_range", None)
             if callable(resolver):
@@ -627,6 +628,24 @@ class FFTTimeMixin:
             else:
                 time_range = None
         rng = self._normalize_analysis_time_range(time_range)
+        if signal_getter is None:
+            fid, ch, t, sig, fd = self._fft_time_signal_for((fid, ch), time_range=rng)
+        else:
+            try:
+                fid, ch, t, sig, fd = signal_getter(time_range=rng)
+            except TypeError:
+                fid, ch, t, sig, fd = signal_getter()
+        if sig is None:
+            reason = getattr(self, "_native_prepare_block", None) or "源通道缺失"
+            self._native_prepare_block = None
+            self._record_fft_time_skip(reason)
+            return None
+        if len(sig) < 2:
+            self._record_fft_time_skip("信号过短")
+            return None
+        if not getattr(fd, "is_native", False) and not self._check_uniform_or_prompt(fd, 'fft_time'):
+            self._record_fft_time_skip("时间轴无效")
+            return None
         if rng is not None:
             t, sig = self._mask_time_range(t, sig, time_range=rng)
             if len(sig) < 2:
