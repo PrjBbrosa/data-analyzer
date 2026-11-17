@@ -1,4 +1,5 @@
 """Regressions for comparison state, presentation, and project ownership."""
+from tests._helpers.import_tasks import wait_for_imports
 from types import SimpleNamespace
 import numpy as np
 import pandas as pd
@@ -17,6 +18,7 @@ def win(qapp, qtbot, tmp_path):
         t = np.arange(5000) / 1000
         pd.DataFrame({'time': t, 'speed': np.sin(t * 30), 'torque': np.cos(t * 30)}).to_csv(path, index=False)
         w._load_one(str(path))
+        wait_for_imports(w)
     return w
 
 def prep(w, section):

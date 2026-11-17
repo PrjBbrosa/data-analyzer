@@ -1,5 +1,6 @@
 """WWT import keeps its generated TimeDomain Views out of UltraView."""
 from __future__ import annotations
+from tests._helpers.import_tasks import wait_for_imports
 
 from mf4_analyzer.ultraview_core.board_ops import (
     add_ref,
@@ -43,6 +44,7 @@ def _load_wwt(window, monkeypatch, path, *, accept=True):
     monkeypatch.setattr(window, "plot_time", lambda *args, **kwargs: None)
     monkeypatch.setattr(window, "_apply_active_view", lambda *args, **kwargs: None)
     window._load_one(str(path))
+    wait_for_imports(window)
     return asked
 
 

@@ -4617,7 +4617,7 @@ def test_full_cost_hdf_preview_never_loads_and_run_keeps_unresolved_identity(
     from mf4_analyzer.batch_grouping import RenderTask, group_render_tasks
     from mf4_analyzer.batch_manifest import load_batch_manifest
     from mf4_analyzer.batch_output import build_task_output_identity
-    from mf4_analyzer.io.loader import DataLoader
+    from mf4_analyzer.io import source_adapters
     from mf4_analyzer.io.source_adapters import SourceAdapterRegistry
 
     physical_path = tmp_path / "full-cost-groups.hdf"
@@ -4641,11 +4641,13 @@ def test_full_cost_hdf_preview_never_loads_and_run_keeps_unresolved_identity(
         })
     load_calls = []
 
-    def load_hdf(path):
+    def run_import(method, path, *, kwargs=None):
+        assert method == "load_hdf"
+        assert kwargs in (None, {})
         load_calls.append(str(path))
         return groups
 
-    monkeypatch.setattr(DataLoader, "load_hdf", staticmethod(load_hdf))
+    monkeypatch.setattr(source_adapters, "run_import", run_import)
     registry = SourceAdapterRegistry.default()
     loaded = registry.load_sources(physical_path)
     load_calls.clear()

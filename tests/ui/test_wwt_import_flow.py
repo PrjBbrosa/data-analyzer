@@ -65,6 +65,7 @@ def _load_wwt_accepting_layout(qtbot, qapp, monkeypatch, path):
     qapp.processEvents()
     asked = _stub_layout_prompt_only(mw, monkeypatch, accept=True)
     mw._load_one(str(path))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     qapp.processEvents()
     assert asked
     return mw
@@ -237,7 +238,7 @@ def test_non_empty_view_is_not_reused():
     assert manager.views[1].name == "WinWert 1"
 
 
-def test_accept_creates_views_and_reject_keeps_data_only(qapp, tmp_path, monkeypatch):
+def test_accept_creates_views_and_reject_keeps_data_only(qtbot, qapp, tmp_path, monkeypatch):
     pytest.importorskip("pytestqt")
     from mf4_analyzer.ui.main_window import MainWindow
     from mf4_analyzer.ui.time_xaxis import (
@@ -253,6 +254,7 @@ def test_accept_creates_views_and_reject_keeps_data_only(qapp, tmp_path, monkeyp
     apply_active_view = mw._apply_active_view
     asked = _stub_wwt_ui(mw, monkeypatch, accept=True)
     mw._load_one(str(path))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     qapp.processEvents()
     assert asked
     assert (
@@ -291,6 +293,7 @@ def test_accept_creates_views_and_reject_keeps_data_only(qapp, tmp_path, monkeyp
     _stub_wwt_ui(mw2, monkeypatch, accept=False)
     before_views = len(mw2.view_manager.views)
     mw2._load_one(str(path))
+    qtbot.waitUntil(lambda: not mw2._imports.busy, timeout=15000)
     qapp.processEvents()
     assert len(mw2.view_manager.views) == before_views
     assert mw2.files
@@ -314,6 +317,7 @@ def test_multiple_wwt_windows_create_views_without_native_board_projection(
         window._wwt_import, "_ask_layout", lambda *_args, **_kwargs: True,
     )
     window._load_one(str(path))
+    qtbot.waitUntil(lambda: not window._imports.busy, timeout=15000)
     qapp.processEvents()
 
     assert len(_winwert_views(window)) == 2
@@ -336,6 +340,7 @@ def test_fresh_wwt_view_uses_later_sources_own_same_name_x(
     apply_active_view = window._apply_active_view
     _stub_wwt_ui(window, monkeypatch, accept=True)
     window._load_one(str(source_path))
+    qtbot.waitUntil(lambda: not window._imports.busy, timeout=15000)
     qapp.processEvents()
 
     state = window.view_manager.views[0]
@@ -360,6 +365,7 @@ def test_fresh_wwt_view_uses_later_sources_own_same_name_x(
         }).to_csv(path, index=False)
         expected_for_path[path] = x_values
         window._load_one(str(path))
+        qtbot.waitUntil(lambda: not window._imports.busy, timeout=15000)
 
     added_fids = [
         fid for fid, fd in window.files.items()
@@ -449,7 +455,7 @@ def test_cap_truncates_with_visible_copy(tmp_path):
     assert REJECT_TEXT == "仅加载数据"
 
 
-def test_save_reopen_keeps_record_only_y_bindings(qapp, tmp_path, monkeypatch):
+def test_save_reopen_keeps_record_only_y_bindings(qtbot, qapp, tmp_path, monkeypatch):
     """Restore skips offer_layout and keeps record-only Y bindings."""
     from mf4_analyzer.ui.main_window import MainWindow
     from mf4_analyzer.ui.time_curve_bindings import resolve_time_curve_binding
@@ -460,6 +466,7 @@ def test_save_reopen_keeps_record_only_y_bindings(qapp, tmp_path, monkeypatch):
     qapp.processEvents()
     asked = _stub_wwt_ui(mw, monkeypatch, accept=True)
     mw._load_one(str(path))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     qapp.processEvents()
     assert asked
     bindings = [
@@ -512,6 +519,7 @@ def test_save_reopen_keeps_record_only_y_bindings(qapp, tmp_path, monkeypatch):
         lambda msg, level="info": restore_toasts.append((msg, level)),
     )
     restored.open_project(proj)
+    qtbot.waitUntil(lambda: not restored._imports.busy, timeout=15000)
     qapp.processEvents()
 
     _assert_store_on_every_file(restored)
@@ -536,7 +544,7 @@ def test_save_reopen_keeps_record_only_y_bindings(qapp, tmp_path, monkeypatch):
     assert warn == [], warn
 
 
-def test_reject_and_no_display_still_attach_record_store(
+def test_reject_and_no_display_still_attach_record_store(qtbot,
     qapp, tmp_path, monkeypatch,
 ):
     from mf4_analyzer.ui.main_window import MainWindow
@@ -545,6 +553,7 @@ def test_reject_and_no_display_still_attach_record_store(
     mw = MainWindow()
     _stub_wwt_ui(mw, monkeypatch, accept=False)
     mw._load_one(str(path))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     store = _assert_store_on_every_file(mw)
     names = [getattr(item, "name", None) for item in store]
     assert wwt.TOL_Y in names
@@ -570,10 +579,11 @@ def test_reject_and_no_display_still_attach_record_store(
     monkeypatch.setattr(mw2, "plot_time", lambda *a, **k: None)
     monkeypatch.setattr(mw2, "_apply_active_view", lambda *a, **k: None)
     mw2._load_one(str(bare))
+    qtbot.waitUntil(lambda: not mw2._imports.busy, timeout=15000)
     _assert_store_on_every_file(mw2)
 
 
-def test_window_position_overlap_does_not_block_ordinary_view_creation(
+def test_window_position_overlap_does_not_block_ordinary_view_creation(qtbot,
     qapp, tmp_path, monkeypatch,
 ):
     from mf4_analyzer.ui.main_window import MainWindow
@@ -586,6 +596,7 @@ def test_window_position_overlap_does_not_block_ordinary_view_creation(
     )
     asked = _stub_wwt_ui(mw, monkeypatch, accept=True)
     mw._load_one(str(path))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     assert asked
     assert "重叠" not in asked[0][0]
     assert len(_winwert_views(mw)) == wwt.MULTI_WINDOW_COUNT
@@ -624,7 +635,7 @@ def _sync_record_tree(mw, state=None):
     fn(state)
 
 
-def test_wwt_inspector_lists_record_only_and_hide_does_not_touch_navigator(
+def test_wwt_inspector_lists_record_only_and_hide_does_not_touch_navigator(qtbot,
     qapp, tmp_path, monkeypatch,
 ):
     from mf4_analyzer.ui.inspector_sections.contextual_time import TimeContextual
@@ -639,6 +650,7 @@ def test_wwt_inspector_lists_record_only_and_hide_does_not_touch_navigator(
     mw = MainWindow()
     _stub_wwt_ui(mw, monkeypatch, accept=True)
     mw._load_one(str(path))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     qapp.processEvents()
     assert not hasattr(mw.inspector, "record_curve_visibility_toggled")
     assert hasattr(mw.navigator, "record_curve_visibility_toggled")
@@ -665,7 +677,7 @@ def test_wwt_inspector_lists_record_only_and_hide_does_not_touch_navigator(
     assert hidden_before != list(state.hidden_curve_binding_ids)
 
 
-def test_wwt_record_rows_follow_active_time_view_and_not_sibling_hidden(
+def test_wwt_record_rows_follow_active_time_view_and_not_sibling_hidden(qtbot,
     qapp, tmp_path, monkeypatch,
 ):
     from dataclasses import replace
@@ -676,6 +688,7 @@ def test_wwt_record_rows_follow_active_time_view_and_not_sibling_hidden(
     mw = MainWindow()
     _stub_wwt_ui(mw, monkeypatch, accept=True)
     mw._load_one(str(path))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     qapp.processEvents()
     src = mw.view_manager.get(mw.view_manager.active)
     record = next(
@@ -708,7 +721,7 @@ def test_wwt_record_rows_follow_active_time_view_and_not_sibling_hidden(
     assert roles_b[0][2] != roles_a[0][2]
 
 
-def test_switching_to_analysis_hides_record_rows_and_time_restores_them(
+def test_switching_to_analysis_hides_record_rows_and_time_restores_them(qtbot,
     qapp, tmp_path, monkeypatch,
 ):
     from mf4_analyzer.ui.main_window import MainWindow
@@ -717,6 +730,7 @@ def test_switching_to_analysis_hides_record_rows_and_time_restores_them(
     mw = MainWindow()
     _stub_wwt_ui(mw, monkeypatch, accept=True)
     mw._load_one(str(path))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     qapp.processEvents()
     _sync_record_tree(mw)
     qapp.processEvents()
@@ -729,7 +743,7 @@ def test_switching_to_analysis_hides_record_rows_and_time_restores_them(
     assert record_binding_count(mw.navigator) == 1
 
 
-def test_two_missing_formula_refs_emit_one_grouped_chinese_summary(
+def test_two_missing_formula_refs_emit_one_grouped_chinese_summary(qtbot,
     qapp, tmp_path, monkeypatch,
 ):
     from mf4_analyzer.ui.main_window import MainWindow
@@ -742,13 +756,14 @@ def test_two_missing_formula_refs_emit_one_grouped_chinese_summary(
     )
     _stub_wwt_ui(mw, monkeypatch, accept=True)
     mw._load_one(str(path))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     qapp.processEvents()
     warn = _user_warning_blob(toasts)
     assert warn
     _assert_formula_user_copy(warn)
 
 
-def test_optional_customer_wwt_import_smoke_when_present(qapp, tmp_path, monkeypatch):
+def test_optional_customer_wwt_import_smoke_when_present(qtbot, qapp, tmp_path, monkeypatch):
     pytest.importorskip("pytestqt")
     from mf4_analyzer.ui.main_window import MainWindow
 
@@ -759,6 +774,7 @@ def test_optional_customer_wwt_import_smoke_when_present(qapp, tmp_path, monkeyp
     mw = MainWindow()
     _stub_wwt_ui(mw, monkeypatch, accept=False)
     mw._load_one(str(samples[0]))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     qapp.processEvents()
     assert mw.files
 
@@ -877,7 +893,7 @@ def test_empty_fids_and_restore_do_not_consume_remembered_choice(tmp_path):
     assert coord._batch_active is False
 
 
-def test_open_batch_remember_layout_asks_once_and_creates_each_file(
+def test_open_batch_remember_layout_asks_once_and_creates_each_file(qtbot,
     qapp, tmp_path, monkeypatch,
 ):
     from mf4_analyzer.ui.main_window import MainWindow
@@ -891,6 +907,7 @@ def test_open_batch_remember_layout_asks_once_and_creates_each_file(
         mw, monkeypatch, accept=True, apply_to_remaining=True,
     )
     mw._open_data_paths([str(path) for path in paths])
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     qapp.processEvents()
     assert len(asked) == 1
     views = _winwert_views(mw)
@@ -901,7 +918,7 @@ def test_open_batch_remember_layout_asks_once_and_creates_each_file(
     assert mw._wwt_import._batch_active is False
 
 
-def test_open_batch_remember_data_only_asks_once_and_keeps_records(
+def test_open_batch_remember_data_only_asks_once_and_keeps_records(qtbot,
     qapp, tmp_path, monkeypatch,
 ):
     from mf4_analyzer.ui.main_window import MainWindow
@@ -916,6 +933,7 @@ def test_open_batch_remember_data_only_asks_once_and_keeps_records(
     )
     before = len(mw.view_manager.views)
     mw._open_data_paths([str(path) for path in paths])
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     qapp.processEvents()
     assert len(asked) == 1
     assert _winwert_views(mw) == []
@@ -924,7 +942,7 @@ def test_open_batch_remember_data_only_asks_once_and_keeps_records(
     assert all(_store_of(fd) is not None for fd in mw.files.values())
 
 
-def test_open_batch_second_remember_reused_by_third(qapp, tmp_path, monkeypatch):
+def test_open_batch_second_remember_reused_by_third(qtbot, qapp, tmp_path, monkeypatch):
     from mf4_analyzer.ui.main_window import MainWindow
 
     paths = [
@@ -948,6 +966,7 @@ def test_open_batch_second_remember_reused_by_third(qapp, tmp_path, monkeypatch)
     monkeypatch.setattr(mw, "plot_time", lambda *a, **k: None)
     monkeypatch.setattr(mw, "_apply_active_view", lambda *a, **k: None)
     mw._open_data_paths([str(path) for path in paths])
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     qapp.processEvents()
     assert len(asked) == 2
     assert answers == []
@@ -955,7 +974,7 @@ def test_open_batch_second_remember_reused_by_third(qapp, tmp_path, monkeypatch)
     assert len(_winwert_views(mw)) == 2
 
 
-def test_open_batch_mixed_csv_does_not_consume_wwt_choice(
+def test_open_batch_mixed_csv_does_not_consume_wwt_choice(qtbot,
     qapp, tmp_path, monkeypatch,
 ):
     from mf4_analyzer.ui.main_window import MainWindow
@@ -968,6 +987,7 @@ def test_open_batch_mixed_csv_does_not_consume_wwt_choice(
         mw, monkeypatch, accept=True, apply_to_remaining=True,
     )
     mw._open_data_paths([str(first), str(csv_path), str(second)])
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     qapp.processEvents()
     assert len(asked) == 1
     names = {fd.filename for fd in mw.files.values()}
@@ -977,7 +997,7 @@ def test_open_batch_mixed_csv_does_not_consume_wwt_choice(
     assert len(_winwert_views(mw)) == 4
 
 
-def test_open_batch_no_display_does_not_establish_choice(
+def test_open_batch_no_display_does_not_establish_choice(qtbot,
     qapp, tmp_path, monkeypatch,
 ):
     from mf4_analyzer.ui.main_window import MainWindow
@@ -990,13 +1010,14 @@ def test_open_batch_no_display_does_not_establish_choice(
         mw, monkeypatch, accept=True, apply_to_remaining=True,
     )
     mw._open_data_paths([str(bare), str(first), str(second)])
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     qapp.processEvents()
     assert len(asked) == 1
     assert len(_winwert_views(mw)) == 4
     assert any(fd.filename == "bare.wwt" for fd in mw.files.values())
 
 
-def test_open_batch_middle_failure_keeps_remembered_choice(
+def test_open_batch_middle_failure_keeps_remembered_choice(qtbot,
     qapp, tmp_path, monkeypatch,
 ):
     from mf4_analyzer.ui.main_window import MainWindow
@@ -1020,6 +1041,7 @@ def test_open_batch_middle_failure_keeps_remembered_choice(
         mw, monkeypatch, accept=True, apply_to_remaining=True,
     )
     mw._open_data_paths([str(first), str(bad), str(second)])
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     qapp.processEvents()
     assert len(asked) == 1
     assert errors
@@ -1031,7 +1053,7 @@ def test_open_batch_middle_failure_keeps_remembered_choice(
     assert len(_winwert_views(mw)) == 4
 
 
-def test_open_batch_new_open_asks_again(qapp, tmp_path, monkeypatch):
+def test_open_batch_new_open_asks_again(qtbot, qapp, tmp_path, monkeypatch):
     from mf4_analyzer.ui.main_window import MainWindow
 
     first_batch = [
@@ -1044,14 +1066,16 @@ def test_open_batch_new_open_asks_again(qapp, tmp_path, monkeypatch):
         mw, monkeypatch, accept=True, apply_to_remaining=True,
     )
     mw._open_data_paths([str(path) for path in first_batch])
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     qapp.processEvents()
     assert len(asked) == 1
     mw._open_data_paths([str(later)])
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     qapp.processEvents()
     assert len(asked) == 2
 
 
-def test_open_batch_exception_clears_remembered_choice(qapp, tmp_path, monkeypatch):
+def test_open_batch_exception_clears_remembered_choice(qtbot, qapp, tmp_path, monkeypatch):
     from mf4_analyzer.ui.main_window import MainWindow
 
     path = wwt.two_window_non_overlap(tmp_path / "boom.wwt")
@@ -1062,14 +1086,17 @@ def test_open_batch_exception_clears_remembered_choice(qapp, tmp_path, monkeypat
         mw._wwt_import._batch_choice = WwtBatchChoice.APPLY_LAYOUT
         raise RuntimeError("load failed")
 
-    monkeypatch.setattr(mw, "_load_one", boom)
-    with pytest.raises(RuntimeError, match="load failed"):
-        mw._open_data_paths([str(path)])
+    errors = []
+    monkeypatch.setattr(mw, "_import_one_steps", boom)
+    monkeypatch.setattr(mw, "_show_async_import_error", errors.append)
+    mw._open_data_paths([str(path)])
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
+    assert len(errors) == 1 and str(errors[0]) == "load failed"
     assert mw._wwt_import._batch_choice is WwtBatchChoice.ASK
     assert mw._wwt_import._batch_active is False
 
 
-def test_open_batch_bool_monkeypatch_still_asks_each_file(
+def test_open_batch_bool_monkeypatch_still_asks_each_file(qtbot,
     qapp, tmp_path, monkeypatch,
 ):
     from mf4_analyzer.ui.main_window import MainWindow
@@ -1081,18 +1108,20 @@ def test_open_batch_bool_monkeypatch_still_asks_each_file(
     mw = MainWindow()
     asked = _stub_wwt_ui(mw, monkeypatch, accept=True)
     mw._open_data_paths([str(path) for path in paths])
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     qapp.processEvents()
     assert len(asked) == 3
     assert len(_winwert_views(mw)) == 6
 
 
-def test_open_batch_project_restore_asks_zero_times(qapp, tmp_path, monkeypatch):
+def test_open_batch_project_restore_asks_zero_times(qtbot, qapp, tmp_path, monkeypatch):
     from mf4_analyzer.ui.main_window import MainWindow
 
     path = wwt.two_window_non_overlap(tmp_path / "restore.wwt")
     mw = MainWindow()
     asked = _stub_wwt_ui(mw, monkeypatch, accept=True, apply_to_remaining=True)
     mw._open_data_paths([str(path)])
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     qapp.processEvents()
     assert asked
     proj = tmp_path / "batch.tlproj"
@@ -1107,6 +1136,7 @@ def test_open_batch_project_restore_asks_zero_times(qapp, tmp_path, monkeypatch)
     monkeypatch.setattr(restored, "plot_time", lambda *a, **k: None)
     monkeypatch.setattr(restored, "_apply_active_view", lambda *a, **k: None)
     restored.open_project(proj)
+    qtbot.waitUntil(lambda: not restored._imports.busy, timeout=15000)
     qapp.processEvents()
     assert restored.files
     assert _winwert_views(restored)
@@ -1295,3 +1325,20 @@ def test_wwt_record_only_view_keeps_curve_bound_readonly_controls(
     assert [binding.to_dict() for binding in state.curve_bindings] == (
         bindings_before
     )
+
+
+@pytest.fixture(autouse=True)
+def _local_import_broker(monkeypatch):
+    """Exercise GUI continuations with existing loader fakes; broker has its own gates."""
+    from mf4_analyzer.io import DataLoader
+    from mf4_analyzer.ui.main_window import import_coordinator
+
+    def run(method, path, *, kwargs=None, cancel_check=None, progress_callback=None, limits=None):
+        options = dict(kwargs or {})
+        if method in {"load_blf_frames", "probe_blf_dbc_frames"}:
+            path = options.pop("frames")
+        if progress_callback:
+            progress_callback(-1.0, "读取表格" if method == "load_csv" else "读取数据")
+        return getattr(DataLoader, method)(path, **options)
+
+    monkeypatch.setattr(import_coordinator, "run_import", run)

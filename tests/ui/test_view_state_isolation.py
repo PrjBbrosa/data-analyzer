@@ -5,6 +5,7 @@ They must fail on the current session-shared bugs (V01/V02/V03) before the
 owner changes land.
 """
 from __future__ import annotations
+from tests._helpers.import_tasks import wait_for_imports
 
 import json
 from pathlib import Path
@@ -445,7 +446,9 @@ def test_cross_file_same_channel_names_stay_independent(qtbot, qapp, tmp_path):
     w.show()
     qtbot.waitExposed(w)
     w._load_one(str(csv_a))
+    wait_for_imports(w)
     w._load_one(str(csv_b))
+    wait_for_imports(w)
     qapp.processEvents()
     fid_a, fid_b = list(w.files)
     w._attach_files_to_focused_view([fid_a, fid_b])
@@ -501,6 +504,7 @@ def test_save_reopen_and_schema3_filter_migration(qtbot, qapp, tmp_path):
     w = MainWindow()
     qtbot.addWidget(w)
     w._load_one(str(csv_a))
+    wait_for_imports(w)
     fid = next(iter(w.files))
     w.chart_stack.set_plot_mode("subplot")
     _set_checked(w, "speed", "torque")
@@ -534,6 +538,7 @@ def test_save_reopen_and_schema3_filter_migration(qtbot, qapp, tmp_path):
     restored = MainWindow()
     qtbot.addWidget(restored)
     restored.open_project(proj)
+    wait_for_imports(restored)
     qapp.processEvents()
     restored_fid = next(iter(restored.files))
     restored._switch_view(0)
@@ -764,6 +769,7 @@ def test_schema4_ab_save_reopen_and_dirty_cycle(qtbot, qapp, tmp_path, loaded_cs
     restored = MainWindow()
     qtbot.addWidget(restored)
     restored.open_project(proj)
+    wait_for_imports(restored)
     _flush(qapp)
     restored._switch_view(0)
     _flush(qapp)

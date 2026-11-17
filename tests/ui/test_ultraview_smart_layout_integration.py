@@ -6,6 +6,7 @@ state or calls the retired WWT native-layout projection.  QSettings isolation
 is the directory autouse fixture; policy is frozen explicitly where possible.
 """
 from __future__ import annotations
+from tests._helpers.import_tasks import wait_for_imports
 
 import pytest
 
@@ -29,6 +30,7 @@ def _stub_plot(mw, monkeypatch, *, accept=True):
 def _load_wwt(mw, monkeypatch, path, *, accept=True):
     asked = _stub_plot(mw, monkeypatch, accept=accept)
     mw._load_one(str(path))
+    wait_for_imports(mw)
     return asked
 
 

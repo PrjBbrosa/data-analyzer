@@ -672,6 +672,30 @@ CSV_LIKE_EXTS = {'.asc', '.csv', '.fdc'}
 NO_CAN_FRAMES_MESSAGE = "CAN 日志没有可读的数据帧"
 
 
+def _budgeted_table_lines(handle, budget, *, label):
+    """Bound even a single physical line, including multiline CSV fields.
+
+    Reserve decoded text cumulatively: it may survive as pandas object cells.
+    Numeric-only tables use less; no estimate based solely on disk size is used.
+    """
+    while True:
+        remaining = budget.limits.max_memory_bytes - budget.used_bytes
+        line = handle.readline(max(1, remaining // 4 + 1))
+        if not line:
+            break
+        budget.reserve(len(line) * 4, label=label)
+        yield line
+
+
+def _reserve_table_row(budget, width, *, label):
+    # Input/object columns, numeric conversion and final frame can coexist;
+    # allow a generated time column plus masks/diff/conversion scratch.
+    budget.reserve_array((width + 1,), np.float64, copies=4, label=label)
+    # Python object cells and original source row integers/list references.
+    # Decoded character storage is accounted by _budgeted_table_lines.
+    budget.reserve(width * 64 + 64, label=f"{label} objects and row identity")
+
+
 class DataLoader:
     @staticmethod
     def read_blf_frames(fp, progress_callback=None, *, warning_callback=None):
@@ -687,19 +711,27 @@ class DataLoader:
         have no equivalent fallback concept.
         """
         from .blf_format import _read_blf_frames
+        from .can_frames import CanFrameBatch
+
+        warnings = []
+
+        def collect_warning(message):
+            warnings.append(message)
+            if callable(warning_callback):
+                warning_callback(message)
 
         if Path(fp).suffix.lower() == ".asc":
             from .asc_can_format import _read_asc_frames
             frames = _read_asc_frames(
                 fp,
                 progress_callback=progress_callback,
-                warning_callback=warning_callback,
+                warning_callback=collect_warning,
             )
         else:
             frames = _read_blf_frames(fp, progress_callback=progress_callback)
         if not frames:
             raise ValueError(NO_CAN_FRAMES_MESSAGE)
-        return frames
+        return CanFrameBatch(frames, warnings=warnings)
 
     @staticmethod
     def probe_blf_dbc_frames(frames, dbc_paths, progress_callback=None, cancel_check=None):
@@ -757,6 +789,9 @@ class DataLoader:
                 "nptdms is not installed; install the application's TDMS dependency"
             ) from exc
         from .import_diagnostics import make_import_issue, set_import_diagnostics
+        from .import_limits import get_import_budget
+
+        budget = get_import_budget()
 
         def waveform_time(properties, sample_count):
             try:
@@ -779,6 +814,38 @@ class DataLoader:
                 return None
             return time, rate
 
+        metadata = TdmsFile.read_metadata(str(fp))
+        declared_count = 0
+        largest = 0
+        numeric_count = 0
+        has_strings = False
+        budget.reserve(Path(fp).stat().st_size, label="TDMS input buffers")
+        for group in metadata.groups():
+            for channel in group.channels():
+                declared_count += 1
+                budget.check_channels(declared_count, label="TDMS channels")
+                count, dtype = len(channel), np.dtype(channel.dtype)
+                if dtype.hasobject:
+                    has_strings = True
+                    budget.reserve(count * 72, label="TDMS string objects")
+                else:
+                    budget.reserve_array((count,), dtype, label="TDMS native/scaled channel")
+                if count and dtype.kind in "iuf":
+                    numeric_count += 1
+                    largest = max(largest, count)
+                    copies = 1 if dtype == np.dtype(np.float64) else 2
+                    budget.reserve_array((count,), np.float64, copies=copies,
+                                         label="TDMS numeric conversion and waveform time")
+        if has_strings:
+            # Variable-width strings have no byte extent in channel.dtype.
+            # TDMS stores their UTF-8 bytes in the file; include decoded text.
+            budget.reserve(Path(fp).stat().st_size * 4, label="TDMS decoded string storage")
+        # Shared-grid interpolation can expand shorter channels to the longest
+        # signal; the frame and interpolation results can coexist with raw data.
+        budget.reserve_array((largest, numeric_count + 1), np.float64, copies=2,
+                             label="TDMS shared-grid output and DataFrame")
+        budget.reserve_array((largest,), np.float64, copies=2,
+                             label="TDMS time/interpolation scratch")
         tdms = TdmsFile.read(str(fp))
         raw_channels = []
         skipped = []
@@ -934,7 +1001,8 @@ class DataLoader:
         (exact axis identity) and ``renamed_channels`` when a signal occupied
         that name. Time masters are the X axis and are not signal columns.
         """
-        mdf = ensure_mdf()(fp)
+        from .mdf_reader import open_mdf
+        mdf = open_mdf(fp, ensure_mdf())
         try:
             channel_locations = unique_mdf_channel_locations(mdf)
             if not channel_locations:
@@ -1035,6 +1103,9 @@ class DataLoader:
 
     @staticmethod
     def load_audio_video(fp):
+        from .import_limits import get_import_budget
+
+        budget = get_import_budget()
         try:
             import av
         except ImportError as exc:
@@ -1050,6 +1121,8 @@ class DataLoader:
         codec_name = ''
         fs = None
         chunks = None
+        scratch_bytes = 0
+        decoded_samples = 0
 
         def channel_count_from(*objects):
             for obj in objects:
@@ -1060,7 +1133,7 @@ class DataLoader:
                     return int(channels)
                 try:
                     count = len(channels)
-                except Exception:
+                except TypeError:
                     count = 0
                 if count > 0:
                     return int(count)
@@ -1074,23 +1147,43 @@ class DataLoader:
             return (result,)
 
         def append_frame(frame):
-            nonlocal chunks, fs
-            arr = np.asarray(frame.to_ndarray(), dtype=np.float32)
-            if arr.ndim == 1:
-                arr = arr.reshape(1, -1)
-            if arr.ndim != 2:
-                arr = arr.reshape(1, -1)
+            nonlocal chunks, fs, scratch_bytes, decoded_samples
+            sample_rate = getattr(frame, 'sample_rate', None)
+            if fs is None and sample_rate:
+                fs = float(sample_rate)
+            if fs is None or not np.isfinite(fs) or fs <= 0:
+                raise ValueError("无法确定音频采样率（文件未提供有效的采样率）")
+            if sample_rate and float(sample_rate) != fs:
+                raise ValueError("音频帧采样率发生变化，无法确定统一时间轴")
+            frame_channels = channel_count_from(getattr(frame, 'layout', None))
+            n_ch = len(chunks) if chunks is not None else frame_channels
+            if n_ch <= 0 or (frame_channels and frame_channels != n_ch):
+                raise ValueError("音频帧通道数与音轨声明不一致")
+            samples = getattr(frame, 'samples', None)
+            if not isinstance(samples, int) or samples < 0:
+                raise ValueError("音频帧缺少有效的样本数声明")
+            budget.check_channels(n_ch, label="Audio channels")
+            # The requested fltp output is planar float32: chunks, concat and
+            # pandas copies coexist. Admit before to_ndarray, not afterwards.
+            budget.reserve_array((n_ch, samples), np.float32, copies=3,
+                                 label="Audio decoded chunks, concat and frame")
+            budget.reserve(256 + n_ch * 128, label="Audio chunk/view objects")
+            needed_scratch = n_ch * samples * 4 * 2
+            budget.reserve(max(0, needed_scratch - scratch_bytes),
+                           label="Audio native frame/resampler scratch")
+            scratch_bytes = max(scratch_bytes, needed_scratch)
+            arr = np.asarray(frame.to_ndarray())
+            if arr.ndim != 2 or arr.shape != (n_ch, samples):
+                raise ValueError(
+                    f"音频帧维度/通道/样本数不一致：声明 {(n_ch, samples)}，实际 {arr.shape}"
+                )
+            if arr.dtype != np.dtype(np.float32):
+                raise ValueError("音频重采样输出不是声明的 float32 平面样本")
             if chunks is None:
-                chunks = [[] for _ in range(arr.shape[0])]
-            elif arr.shape[0] != len(chunks) and arr.shape[1] == len(chunks):
-                arr = arr.T
-            take = min(len(chunks), arr.shape[0])
-            for ci in range(take):
-                chunks[ci].append(arr[ci].astype(np.float32, copy=False))
-            if fs is None:
-                sample_rate = getattr(frame, 'sample_rate', None)
-                if sample_rate:
-                    fs = float(sample_rate)
+                chunks = [[] for _ in range(n_ch)]
+            for ci in range(n_ch):
+                chunks[ci].append(arr[ci])
+            decoded_samples += samples
 
         try:
             streams = list(container.streams.audio)
@@ -1105,6 +1198,7 @@ class DataLoader:
             codec_name = str(getattr(codec_context, 'name', '') or '')
             expected_channels = channel_count_from(stream, codec_context, layout)
             if expected_channels > 0:
+                budget.check_channels(expected_channels, label="Audio channels")
                 chunks = [[] for _ in range(expected_channels)]
 
             resampler_kwargs = {'format': 'fltp'}
@@ -1113,6 +1207,23 @@ class DataLoader:
             resampler = av.AudioResampler(**resampler_kwargs)
 
             for frame in container.decode(stream):
+                # Decoding itself is native and supervised by the broker.
+                # Once a frame exposes metadata, bound the next native
+                # resampling allocation before invoking it as well.
+                if fs is None and not getattr(frame, 'sample_rate', None):
+                    raise ValueError("无法确定音频采样率（文件未提供有效的采样率）")
+                input_channels = channel_count_from(getattr(frame, 'layout', None)) or expected_channels
+                if expected_channels and input_channels != expected_channels:
+                    raise ValueError("音频帧通道数与音轨声明不一致")
+                input_samples = getattr(frame, 'samples', None)
+                if not isinstance(input_samples, int) or input_samples < 0:
+                    raise ValueError("音频帧缺少有效的样本数声明")
+                budget.check_channels(input_channels, label="Audio input channels")
+                itemsize = getattr(getattr(frame, 'format', None), 'bytes', 4)
+                needed_scratch = input_channels * input_samples * (max(4, itemsize) + 4)
+                budget.reserve(max(0, needed_scratch - scratch_bytes),
+                               label="Audio native frame/resampler scratch")
+                scratch_bytes = max(scratch_bytes, needed_scratch)
                 for out_frame in resampled_frames(resampler.resample(frame)):
                     append_frame(out_frame)
             for out_frame in resampled_frames(resampler.resample(None)):
@@ -1127,8 +1238,8 @@ class DataLoader:
             if parts else np.zeros(0, dtype=np.float32)
             for parts in chunks
         ]
-        n = min((len(col) for col in cols), default=0)
-        cols = [col[:n].astype(np.float32, copy=False) for col in cols]
+        if any(len(col) != decoded_samples for col in cols):
+            raise ValueError("音频各通道样本数不一致，不能截短数据")
         n_ch = len(cols)
 
         if n_ch == 1:
@@ -1142,7 +1253,7 @@ class DataLoader:
         data = pd.DataFrame({name: col for name, col in zip(names, cols)})
         units = {name: AUDIO_DEFAULT_UNIT for name in names}
         fs = float(fs or 0.0)
-        if fs <= 0.0:
+        if not np.isfinite(fs) or fs <= 0.0:
             # No usable sample rate from the container/codec/frames. Returning
             # fs=0 would make FileData build a time axis as arange(n)/0 -> inf
             # and silently corrupt every downstream analysis. Fail loudly so
@@ -1159,26 +1270,26 @@ class DataLoader:
 
     @staticmethod
     def load_csv(fp, *, sampling_rate=None):
-        from mf4_analyzer.io.csv_format import CsvLayout, sniff_csv_layout
+        import io
+        from mf4_analyzer.io.csv_format import CsvLayout, _read_sniff_lines, sniff_csv_layout
 
-        layout = None
-        try:
-            layout = sniff_csv_layout(fp)
-        except Exception:
-            layout = None
+        layout = sniff_csv_layout(fp)
         if layout is not None:
             return DataLoader._load_csv_with_layout(fp, layout, sampling_rate=sampling_rate)
 
         pd = _pandas()
+        prefix = _read_sniff_lines(Path(fp), 10)
+        if prefix is None:
+            raise ValueError("Cannot parse CSV")
+        lines, enc = prefix
         df = None
-        for enc in ['utf-8', 'gbk', 'latin1']:
-            for sep in [',', ';', '\t']:
-                try:
-                    df = pd.read_csv(fp, encoding=enc, sep=sep)
-                    if len(df.columns) > 1: break
-                except (UnicodeError, pd.errors.ParserError, pd.errors.EmptyDataError):
-                    continue
-            if df is not None and len(df.columns) > 1: break
+        for sep in [',', ';', '\t']:
+            try:
+                df = pd.read_csv(io.StringIO("\n".join(lines)), sep=sep, nrows=10)
+                if len(df.columns) > 1:
+                    break
+            except (UnicodeError, pd.errors.ParserError, pd.errors.EmptyDataError):
+                continue
         if df is None:
             raise ValueError("Cannot parse CSV")
         layout = CsvLayout(0, None, 1, sep, enc, ".", None)
@@ -1188,7 +1299,10 @@ class DataLoader:
     def load_ascii(fp):
         """Load a tabular ASCII file, retaining detector evidence."""
         from mf4_analyzer.io.asc_can_format import sniff_canoe_asc
-        from mf4_analyzer.io.ascii_format import has_time_column, sniff_fixed_width_ascii
+        from mf4_analyzer.io.ascii_format import _decode_lines, has_time_column, sniff_fixed_width_ascii
+        from .import_limits import ImportResourceError, get_import_budget
+
+        budget = get_import_budget()
 
         if sniff_canoe_asc(fp):
             raise ValueError(
@@ -1200,6 +1314,8 @@ class DataLoader:
         if layout is None:
             try:
                 data, channels, units = DataLoader.load_csv(fp)
+            except ImportResourceError:
+                raise
             except ValueError as exc:
                 raise ValueError("Cannot detect a supported ASCII table layout") from exc
             if not has_time_column(channels):
@@ -1210,7 +1326,10 @@ class DataLoader:
             data.attrs["source_metadata"] = metadata
             return data, channels, units, None, metadata
 
-        header_line = Path(fp).read_text(encoding=layout.encoding, errors="replace").splitlines()
+        decoded = _decode_lines(Path(fp))
+        if decoded is None:
+            raise ValueError("Cannot read ASCII table header")
+        header_line, _encoding = decoded
         raw_headers = [header_line[layout.header_row][a:b].strip() for a, b in layout.colspecs]
         channels, seen = [], set()
         for index, raw in enumerate(raw_headers, 1):
@@ -1226,6 +1345,11 @@ class DataLoader:
                 if unit:
                     units[name] = unit
         pd = _pandas()
+        budget.check_channels(len(channels), label="ASCII columns")
+        with open(fp, encoding=layout.encoding, newline="") as handle:
+            for line_number, _line in enumerate(_budgeted_table_lines(handle, budget, label="ASCII text")):
+                if line_number >= layout.data_row:
+                    _reserve_table_row(budget, len(channels), label="ASCII table")
         data = pd.read_fwf(fp, colspecs=list(layout.colspecs), skiprows=layout.data_row,
                            header=None, names=channels, encoding=layout.encoding, skip_blank_lines=False)
         from .tabular_data import prepare_numeric_table
@@ -1248,9 +1372,10 @@ class DataLoader:
     @staticmethod
     def _load_csv_with_layout(fp, layout, *, sampling_rate=None):
         import csv as _csv
-        import io as _io
         from .tabular_data import prepare_numeric_table
+        from .import_limits import get_import_budget
 
+        budget = get_import_budget()
         pd = _pandas()
         skiprows = list(range(layout.header_row))
         if layout.units_row is not None:
@@ -1258,9 +1383,11 @@ class DataLoader:
 
         source_rows = []
         width = None
+        header_cells, unit_cells = [], []
         try:
             with open(fp, encoding=layout.encoding, newline="") as handle:
-                reader = _csv.reader(handle, delimiter=layout.sep, strict=True)
+                reader = _csv.reader(_budgeted_table_lines(handle, budget, label="CSV text"),
+                                     delimiter=layout.sep, strict=True)
                 while True:
                     first_line = reader.line_num
                     try:
@@ -1271,11 +1398,15 @@ class DataLoader:
                         continue
                     if first_line == layout.header_row:
                         width = len(row)
+                        budget.check_channels(width, label="CSV columns")
+                        header_cells = row
                         continue
                     if first_line == layout.units_row:
+                        unit_cells = row
                         continue
                     if row and len(row) != width:
                         raise ValueError(f"Cannot parse CSV: 第 {first_line + 1} 行列数不一致，无法可靠导入")
+                    _reserve_table_row(budget, width or len(row), label="CSV table")
                     source_rows.append(first_line + 1)
         except _csv.Error as exc:
             raise ValueError("Cannot parse CSV: 引号或记录结构无效") from exc
@@ -1293,30 +1424,11 @@ class DataLoader:
         except (UnicodeError, pd.errors.ParserError, pd.errors.EmptyDataError) as exc:
             raise ValueError("Cannot parse CSV") from exc
 
-        units = {}
-        if layout.units_row is not None:
-            try:
-                text = Path(fp).read_text(encoding=layout.encoding, errors="replace")
-                lines = text.splitlines()
-                header_cells = next(
-                    _csv.reader(
-                        _io.StringIO(lines[layout.header_row]),
-                        delimiter=layout.sep,
-                    )
-                )
-                unit_cells = next(
-                    _csv.reader(
-                        _io.StringIO(lines[layout.units_row]),
-                        delimiter=layout.sep,
-                    )
-                )
-                units = {
-                    header.strip(): unit.strip()
-                    for header, unit in zip(header_cells, unit_cells)
-                    if header.strip() and unit.strip()
-                }
-            except Exception:
-                units = {}
+        units = {
+            header.strip(): unit.strip()
+            for header, unit in zip(header_cells, unit_cells)
+            if header.strip() and unit.strip()
+        }
 
         try:
             return prepare_numeric_table(
@@ -1328,6 +1440,9 @@ class DataLoader:
 
     @staticmethod
     def load_excel(fp, *, sampling_rate=None):
+        from .import_limits import get_import_budget
+
+        budget = get_import_budget()
         extension = Path(fp).suffix.lower()
         if extension == '.xlsx':
             if not HAS_OPENPYXL:
@@ -1355,8 +1470,24 @@ class DataLoader:
             engine = 'xlrd'
         else:
             raise ValueError(f"unsupported Excel extension: {extension or '<none>'}")
+        if extension == '.xlsx':
+            from zipfile import ZipFile
+
+            with ZipFile(fp) as archive:
+                # Central-directory sizes precede XML/shared-string decoding.
+                # Allow decoded text and workbook objects, not compressed size
+                # or a compression-ratio cutoff.
+                expanded = sum(info.file_size for info in archive.infolist())
+                budget.reserve(expanded * 4, label="Excel ZIP expanded content")
+        else:
+            budget.reserve(Path(fp).stat().st_size * 4, label="Excel workbook buffers")
         pd = _pandas()
         df = pd.read_excel(fp, engine=engine)
+        budget.check_channels(len(df.columns), label="Excel columns")
+        budget.reserve(int(df.memory_usage(index=True, deep=True).sum()), label="Excel parsed cells")
+        budget.reserve_array((len(df), len(df.columns) + 1), np.float64,
+                             copies=3, label="Excel numeric table and scratch")
+        budget.reserve(len(df) * 64, label="Excel source row identity")
         from .tabular_data import prepare_numeric_table
 
         return prepare_numeric_table(df, source_kind="excel", source_filename=Path(fp).name,
@@ -1393,8 +1524,10 @@ class DataLoader:
             full_channel_name as head_full_channel_name,
             parse_head_hdf,
         )
+        from .import_limits import get_import_budget
 
-        hf = parse_head_hdf(fp)
+        budget = get_import_budget()
+        hf = parse_head_hdf(fp, _budget=budget)
         if hf.n_scans == 0:
             raise ValueError("HEAD .hdf: 0 个 scan，没有可分析的数据")
         max_factor = max((f for _, f in hf.ch_order), default=1)
@@ -1448,6 +1581,7 @@ class DataLoader:
 
         groups = []
         by_factor = {}
+        rpm_time = None
         for idx, c, s in live:
             by_factor.setdefault(c.factor, []).append((idx, c, s))
 
@@ -1509,8 +1643,16 @@ class DataLoader:
                     c for _i, c, s in live
                     if "speed of rotation" in c.quantity.lower() and np.any(s != 0)
                 )
-                rpm_t = axis_for(rpm_channel, rpm.size)
-                inj = np.interp(t, rpm_t, rpm)
+                # Base samples, ordinary group axes and frame copies were
+                # admitted by parse_head_hdf using this same budget. Only the
+                # extra interpolation axis/output and injected column are new.
+                if rpm_time is None:
+                    budget.reserve_array((rpm.size,), np.float64,
+                                         label="HEAD RPM injection axis")
+                    rpm_time = axis_for(rpm_channel, rpm.size)
+                budget.reserve_array((length,), np.float64, copies=2,
+                                     label="HEAD RPM interpolation and frame column")
+                inj = np.interp(t, rpm_time, rpm)
                 data["SP (rpm-injected)"] = inj
                 units["SP (rpm-injected)"] = "deg/s"
                 # 插值到加速度组的时间网格上，不是原始高采样率通道。

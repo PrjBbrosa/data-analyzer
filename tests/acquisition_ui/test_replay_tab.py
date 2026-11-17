@@ -70,11 +70,12 @@ def test_replay_has_no_connection_checklist(qtbot):
     assert frame.findChildren(QLabel, "cockpitChecklistLabel") == []
 
 
-def test_replay_tab_loads_existing_mf4(qapp, tmp_path: Path):
+def test_replay_tab_loads_existing_mf4(qtbot, qapp, tmp_path: Path):
     mf4_path = _write_replay_mf4(tmp_path / "source.mf4")
     tab = ReplayTab()
     try:
         tab.load_file(mf4_path)
+        qtbot.waitUntil(lambda: not tab._imports.busy, timeout=20000)
 
         assert tab.source_path == mf4_path
         assert tab.state == "idle"
@@ -90,7 +91,7 @@ def test_replay_tab_loads_existing_mf4(qapp, tmp_path: Path):
         tab.close()
 
 
-def test_replay_right_panel_survives_capture_refactor(qapp, tmp_path: Path):
+def test_replay_right_panel_survives_capture_refactor(qtbot, qapp, tmp_path: Path):
     """B-4 boundary: dropping the *capture* right pane must NOT touch Replay.
 
     ``ReplayTab`` still owns its own ``RightPanel`` via the public accessor,
@@ -104,6 +105,7 @@ def test_replay_right_panel_survives_capture_refactor(qapp, tmp_path: Path):
         assert tab.right_panel is tab._right_panel
 
         tab.load_file(mf4_path)
+        qtbot.waitUntil(lambda: not tab._imports.busy, timeout=20000)
         qapp.processEvents()
         assert tab.right_panel.isVisible()
 
@@ -117,11 +119,12 @@ def test_replay_right_panel_survives_capture_refactor(qapp, tmp_path: Path):
         tab.close()
 
 
-def test_replay_speed_control_changes_emit_rate(qapp, tmp_path: Path):
+def test_replay_speed_control_changes_emit_rate(qtbot, qapp, tmp_path: Path):
     mf4_path = _write_replay_mf4(tmp_path / "source.mf4")
     tab = ReplayTab()
     try:
         tab.load_file(mf4_path)
+        qtbot.waitUntil(lambda: not tab._imports.busy, timeout=20000)
         tab.set_speed_multiplier(4.0)
 
         tab.play()
@@ -133,12 +136,13 @@ def test_replay_speed_control_changes_emit_rate(qapp, tmp_path: Path):
         tab.close()
 
 
-def test_replay_stop_returns_to_stopped_without_capture_state_change(qapp, tmp_path: Path):
+def test_replay_stop_returns_to_stopped_without_capture_state_change(qtbot, qapp, tmp_path: Path):
     mf4_path = _write_replay_mf4(tmp_path / "source.mf4")
     capture_state = {"value": "ConnectedIdle"}
     tab = ReplayTab()
     try:
         tab.load_file(mf4_path)
+        qtbot.waitUntil(lambda: not tab._imports.busy, timeout=20000)
         tab.play()
         tab.drain_once()
 
@@ -162,7 +166,7 @@ def _late_replay_mf4(tmp_path: Path) -> Path:
     ])
 
 
-def test_replay_warning_is_visible_before_play_and_follows_the_source(
+def test_replay_warning_is_visible_before_play_and_follows_the_source(monkeypatch,
     qapp, qtbot, tmp_path: Path,
 ):
     warning_path = _late_replay_mf4(tmp_path)
@@ -183,6 +187,7 @@ def test_replay_warning_is_visible_before_play_and_follows_the_source(
     tab._set_transport_enabled = _record_enable
     try:
         tab.load_file(warning_path)
+        qtbot.waitUntil(lambda: not tab._imports.busy, timeout=20000)
         qapp.processEvents()
         warning = tab._alignment_warning
         assert warning.isVisible()
@@ -203,6 +208,7 @@ def test_replay_warning_is_visible_before_play_and_follows_the_source(
         assert tab.state == "stopped"
 
         tab.load_file(clean_path)
+        qtbot.waitUntil(lambda: not tab._imports.busy, timeout=20000)
         qapp.processEvents()
         assert not warning.isVisible()
         assert warning.text() == ""
@@ -210,9 +216,16 @@ def test_replay_warning_is_visible_before_play_and_follows_the_source(
         assert tab.state == "idle"
 
         tab.load_file(warning_path)
+        qtbot.waitUntil(lambda: not tab._imports.busy, timeout=20000)
         old_text = warning.text()
-        with pytest.raises(Exception):
-            tab.load_file(tmp_path / "missing.mf4")
+        errors = []
+        monkeypatch.setattr(
+            "mf4_analyzer.acquisition_ui.replay_tab.QMessageBox.critical",
+            lambda *args: errors.append(args),
+        )
+        tab.load_file(tmp_path / "missing.mf4")
+        qtbot.waitUntil(lambda: not tab._imports.busy, timeout=20000)
+        assert len(errors) == 1
         assert tab._source is not None
         assert tab._source.path == warning_path
         assert warning.text() == old_text
@@ -220,3 +233,40 @@ def test_replay_warning_is_visible_before_play_and_follows_the_source(
         assert tab._play_btn.isEnabled()
     finally:
         tab.close()
+
+
+def test_replay_import_keeps_gui_live_and_parent_close_cancels(qtbot, monkeypatch):
+    from threading import Event
+    from PyQt5.QtCore import QTimer
+    from PyQt5.QtWidgets import QWidget
+    from mf4_analyzer.ui.main_window import import_coordinator
+
+    entered, release = Event(), Event()
+
+    def broker(*args, cancel_check, **kwargs):
+        entered.set()
+        assert release.wait(2)
+        assert cancel_check()
+        return None  # cancellation discards it before ReplaySource conversion
+
+    monkeypatch.setattr(import_coordinator, 'run_import', broker)
+    parent = QWidget()
+    qtbot.addWidget(parent)
+    tab = ReplayTab(parent=parent)
+    parent.show()
+    ticks = []
+    timer = QTimer(parent)
+    timer.setInterval(20)
+    timer.timeout.connect(lambda: ticks.append(True))
+    timer.start()
+    tab.load_file('slow.mf4')
+    assert tab.source_path is None
+    qtbot.waitUntil(entered.is_set)
+    qtbot.waitUntil(lambda: len(ticks) >= 4)
+    parent.close()
+    assert tab._imports.closing and tab._imports.busy
+    release.set()
+    qtbot.waitUntil(lambda: not tab._imports.busy)
+    qtbot.waitUntil(lambda: not parent.isVisible())
+    assert tab.source_path is None
+    assert tab.state == 'idle'

@@ -9,6 +9,7 @@ silently reverted to the first checked channel by the next 加入文件 /
 应用通道配置 / 打开项目 / View 切换 — and was never persisted into a project.
 """
 from __future__ import annotations
+from tests._helpers.import_tasks import wait_for_imports
 
 from unittest.mock import patch
 
@@ -39,6 +40,7 @@ def _load_files(w, qapp, paths):
     with patch('mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames',
                return_value=([str(p) for p in paths], "")):
         w.load_files()
+        wait_for_imports(w)
     qapp.processEvents()
 
 
@@ -201,5 +203,6 @@ def test_fft_mode_overlay_primary_survives_reproject_and_save(qapp, qtbot, tmp_p
     w2 = MainWindow()
     qtbot.addWidget(w2)
     w2.open_project(proj)
+    wait_for_imports(w2)
     fid2 = next(iter(w2.files))
     assert w2.view_manager.get(0).overlay_primary == (fid2, "pressure")

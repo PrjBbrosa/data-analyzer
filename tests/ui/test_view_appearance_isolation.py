@@ -1,5 +1,6 @@
 """Round-2 View isolation: chart-options appearance on the production path."""
 from __future__ import annotations
+from tests._helpers.import_tasks import wait_for_imports
 
 from pathlib import Path
 
@@ -283,6 +284,7 @@ def test_duplicate_and_save_reopen_keep_chart_appearance(
     restored = MainWindow()
     qtbot.addWidget(restored)
     restored.open_project(proj)
+    wait_for_imports(restored)
     qapp.processEvents()
     restored._switch_view(0)
     _wait_time_view_idle(qtbot, restored)

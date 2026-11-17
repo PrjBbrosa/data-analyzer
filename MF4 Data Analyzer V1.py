@@ -116,6 +116,9 @@ def _probe_app_root(staging: Path | None) -> Path | None:
 
 
 if __name__ == "__main__":
+    for _token in sys.argv[1:]:
+        if _token.startswith("--import-worker") and _token.split("=", 1)[0] != "--import-worker-request":
+            raise SystemExit(2)
     _reject_abbreviated_probe_flags(sys.argv[1:])
     _reject_abbreviated_splash_flags(sys.argv[1:])
     parser = _WindowedArgumentParser(add_help=False, allow_abbrev=False)
@@ -127,6 +130,7 @@ if __name__ == "__main__":
     parser.add_argument("--a2l-path", type=Path)
     parser.add_argument("--a2l-limit", type=int)
     hidden_mode.add_argument("--importer-runtime-smoke", action="store_true")
+    hidden_mode.add_argument("--import-worker-request", type=Path)
     parser.add_argument("--import-path", type=Path, action="append", default=[])
     hidden_mode.add_argument("--batch-render-runtime-smoke", action="store_true")
     hidden_mode.add_argument("--frozen-batch-acceptance", action="store_true")
@@ -168,6 +172,10 @@ if __name__ == "__main__":
     )
     if splash_payload_present and not args.startup_splash_child:
         raise SystemExit(2)
+    if args.import_worker_request is not None:
+        from mf4_analyzer.io.import_worker import main as import_worker_main
+
+        raise SystemExit(import_worker_main(args.import_worker_request))
     if args.startup_splash_child:
         if (
             args.startup_splash_session is None

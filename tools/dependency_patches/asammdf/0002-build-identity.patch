@@ -1,0 +1,15 @@
+--- a/src/asammdf/version.py
++++ b/src/asammdf/version.py
+@@ -3 +3 @@
+-__version__ = "8.8.32"
++__version__ = "8.8.32+tracelab.1"
+--- a/src/asammdf/blocks/cutils.c
++++ b/src/asammdf/blocks/cutils.c
+@@ -3193,0 +3194,5 @@
++static int tracelab_safety_exec(PyObject *module)
++{
++  return PyModule_AddIntConstant(module, "TRACELAB_MDF_SAFETY", 1);
++}
++
+@@ -3194,0 +3200 @@
++  {Py_mod_exec, tracelab_safety_exec},

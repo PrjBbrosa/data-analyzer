@@ -1,4 +1,5 @@
 """Project restoration restores intent, never grants a compute request."""
+from tests._helpers.import_tasks import wait_for_imports
 
 import json
 
@@ -33,6 +34,7 @@ def test_project_reopen_requires_explicit_compute(
     window = MainWindow()
     qtbot.addWidget(window)
     window._load_one(str(source_path))
+    wait_for_imports(window)
     fid = next(iter(window.files))
     window.toolbar._set_mode(section)
     window._attach_files_to_active_context([fid])
@@ -100,6 +102,7 @@ def test_project_reopen_requires_explicit_compute(
     monkeypatch.setattr(restored, "_recompute_restored_analysis_view", restore)
     monkeypatch.setattr(FFTAnalyzer, "compute_fft", fft)
     restored.open_project(path)
+    wait_for_imports(restored)
     # Drain queued callbacks, including mode-entry and deferred restore timers.
     qtbot.wait(100)
     restored.toolbar._set_mode("time")

@@ -18,6 +18,8 @@ from pathlib import Path
 
 from ..diagnostics import throttled
 from .blf_format import _emit_progress, _sample_reader_byte_progress
+from .can_frames import _CanFrameBudget
+from .import_limits import ImportResourceError
 
 _LOG = logging.getLogger(__name__)
 
@@ -461,7 +463,7 @@ def _outcome(
     )
 
 
-def _read_asc_frames_fast(fp, progress_callback=None, *, cancel_check=None):
+def _read_asc_frames_fast(fp, progress_callback=None, *, cancel_check=None, _frame_budget=None):
     """Parse classic / CAN FD data lines without constructing python-can Messages.
 
     Returns a :class:`_FastScanResult`. ``frames is None`` means the caller
@@ -474,6 +476,8 @@ def _read_asc_frames_fast(fp, progress_callback=None, *, cancel_check=None):
         _emit_progress(progress_callback, 0, total_bytes)
 
     base = 16
+    frame_budget = _frame_budget if _frame_budget is not None else _CanFrameBudget()
+    retained_bytes = 0
     frames = []
     bytes_seen = 0
     last_reported = 0
@@ -501,6 +505,8 @@ def _read_asc_frames_fast(fp, progress_callback=None, *, cancel_check=None):
                             AscFallbackReason.UNSUPPORTED_SYNTAX,
                         )
                     continue
+                retained_bytes += 192 + len(parsed[2])
+                frame_budget.admit(retained_bytes)
                 frames.append(parsed)
                 if report_progress and (
                     len(frames) == 1 or len(frames) % 512 == 0
@@ -509,7 +515,7 @@ def _read_asc_frames_fast(fp, progress_callback=None, *, cancel_check=None):
                     if pos > last_reported:
                         _emit_progress(progress_callback, pos, total_bytes)
                         last_reported = pos
-    except AscParseCancelled:
+    except (AscParseCancelled, ImportResourceError):
         raise
     except (OSError, TypeError, ValueError):
         return _FastScanResult(
@@ -519,7 +525,7 @@ def _read_asc_frames_fast(fp, progress_callback=None, *, cancel_check=None):
 
 
 def _read_asc_frames_python_can(
-    fp, progress_callback=None, *, cancel_check=None,
+    fp, progress_callback=None, *, cancel_check=None, _frame_budget=None,
 ):
     try:
         from can.io import ASCReader
@@ -528,6 +534,8 @@ def _read_asc_frames_python_can(
             "python-can 未安装，无法读取 CANoe ASC 文件。请先 pip install python-can"
         ) from exc
 
+    frame_budget = _frame_budget if _frame_budget is not None else _CanFrameBudget()
+    retained_bytes = 0
     frames = []
     reader = ASCReader(str(fp))
     report_progress = callable(progress_callback)
@@ -555,6 +563,8 @@ def _read_asc_frames_python_can(
                 )
             if msg.is_error_frame or msg.is_remote_frame:
                 continue
+            retained_bytes += 192 + len(msg.data)
+            frame_budget.admit(retained_bytes)
             frames.append(
                 (float(msg.timestamp), int(msg.arbitration_id), bytes(msg.data))
             )
@@ -579,6 +589,7 @@ def read_asc_outcome(fp, progress_callback=None, *, cancel_check=None):
     100 only after the final frames are in hand. Format-incompatible input
     may fall back to python-can; programming errors still propagate.
     """
+    frame_budget = _CanFrameBudget()
     coordinator = _AscProgressCoordinator(
         progress_callback, cancel_check=cancel_check,
     )
@@ -594,6 +605,7 @@ def read_asc_outcome(fp, progress_callback=None, *, cancel_check=None):
             fp,
             progress_callback=coordinator.as_callback(),
             cancel_check=cancel_check,
+            _frame_budget=frame_budget,
         )
         outcome = _outcome(
             frames,
@@ -608,6 +620,7 @@ def read_asc_outcome(fp, progress_callback=None, *, cancel_check=None):
         fp,
         progress_callback=coordinator.as_callback(),
         cancel_check=cancel_check,
+        _frame_budget=frame_budget,
     )
     if fast.frames is not None:
         outcome = _outcome(fast.frames, backend=ASC_BACKEND_FAST)
@@ -620,6 +633,7 @@ def read_asc_outcome(fp, progress_callback=None, *, cancel_check=None):
         fp,
         progress_callback=coordinator.as_callback(),
         cancel_check=cancel_check,
+        _frame_budget=frame_budget,
     )
     outcome = _outcome(
         frames,

@@ -349,6 +349,9 @@ class MainWindow(
         self._ultraview = UltraViewCoordinator(self, parent=self)
         from .wwt_import_coordinator import WwtImportCoordinator
         self._wwt_import = WwtImportCoordinator(self)
+        from .import_coordinator import ImportCoordinator
+        self._imports = ImportCoordinator(self)
+        self._imports.drained.connect(self._resume_close_after_imports)
         from .command_coordinator import CommandCoordinator
         self._command_coordinator = CommandCoordinator(self)
         self._command_coordinator.publish_quit(self._on_quit)
@@ -5999,6 +6002,10 @@ class MainWindow(
 
         QTimer.singleShot(0, coord.start)
 
+    def _resume_close_after_imports(self):
+        if self._imports.closing and not self._imports.busy:
+            self.close()
+
     def closeEvent(self, event):
         """Dirty guard first; only then drain jobs and destroy tool windows."""
         from PyQt5 import sip
@@ -6010,9 +6017,34 @@ class MainWindow(
         # Hidden construction/teardown widgets have no interactive leave
         # decision. Every visible window follows the same production guard;
         # tests control the prompt owner instead of changing this code path.
-        if self.isVisible():
+        if self.isVisible() and not self._imports.closing:
             result = self.confirm_leave_unsaved_project()
             if result is DirtyGuardResult.CANCELLED:
+                event.ignore()
+                return
+        batch = getattr(self, "_batch_sheet", None)
+        if batch is not None:
+            try:
+                gone = sip.isdeleted(batch)
+            except (RuntimeError, TypeError):
+                gone = True
+            if not gone:
+                is_running = getattr(batch, "is_running", None)
+                if callable(is_running) and is_running():
+                    confirm = getattr(batch, "confirm_stop_and_wait", None)
+                    if not callable(confirm) or not confirm(parent=self):
+                        if holder is not None:
+                            holder.close_teardown_started = False
+                        event.ignore()
+                        return
+        if not self._imports.shutdown():
+            event.ignore()
+            return
+        if batch is not None and not gone:
+            prepare = getattr(batch, "prepare_parent_close", None)
+            if callable(prepare) and not prepare():
+                # Sheet owns the pending parent-close continuation. Keep the
+                # main event loop alive until its DBC supervisor has reaped.
                 event.ignore()
                 return
         if holder is not None:
@@ -6030,21 +6062,6 @@ class MainWindow(
         if callable(teardown_comparison):
             teardown_comparison()
 
-        batch = getattr(self, "_batch_sheet", None)
-        if batch is not None:
-            try:
-                gone = sip.isdeleted(batch)
-            except (RuntimeError, TypeError):
-                gone = True
-            if not gone:
-                is_running = getattr(batch, "is_running", None)
-                if callable(is_running) and is_running():
-                    confirm = getattr(batch, "confirm_stop_and_wait", None)
-                    if not callable(confirm) or not confirm(parent=self):
-                        if holder is not None:
-                            holder.close_teardown_started = False
-                        event.ignore()
-                        return
         for attr in ("_ultraview_sheet", "_batch_sheet"):
             dlg = getattr(self, attr, None)
             if dlg is not None:

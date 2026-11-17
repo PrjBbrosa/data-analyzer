@@ -12,6 +12,7 @@ callback. That probe must not be able to draw a visible empty-axis frame.
 """
 
 from __future__ import annotations
+from tests._helpers.import_tasks import wait_for_imports
 
 import numpy as np
 import pandas as pd
@@ -44,6 +45,7 @@ def _make_window(qtbot, qapp, csv_path):
     window.show()
     qtbot.waitExposed(window)
     window.load_file(csv_path)
+    wait_for_imports(window)
     qapp.processEvents()
     fid = next(iter(window.files))
     window.navigator.set_checked_channels(

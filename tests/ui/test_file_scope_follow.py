@@ -1,5 +1,6 @@
 """Pure prefs + decision helpers + Stage 1.1 follow wiring (items 1–3)."""
 from __future__ import annotations
+from tests._helpers.import_tasks import wait_for_imports
 
 from mf4_analyzer.ui.main_window import MainWindow
 from mf4_analyzer.ui.main_window.file_scope_follow import (
@@ -94,6 +95,7 @@ def test_item1_load_attaches_active_fft_view_not_time(
 ):
     window = _window(qtbot, qapp)
     window.load_file(loaded_csv)
+    wait_for_imports(window)
     qapp.processEvents()
     fid = _fid(window)
     time_before = list(window.view_manager.get(0).attached_file_ids)
@@ -116,6 +118,7 @@ def test_item1_load_attaches_active_fft_view_not_time(
         lambda message, level="info": messages.append((message, level)),
     )
     window.load_file(loaded_csv)
+    wait_for_imports(window)
     qapp.processEvents()
     new_fid = [f for f in window.files if f not in {fid}][-1]
 
@@ -131,6 +134,7 @@ def test_item1_off_on_analysis_page_skips_attach(qtbot, qapp, loaded_csv):
     window._on_mode_changed("fft")
     qapp.processEvents()
     window.load_file(loaded_csv)
+    wait_for_imports(window)
     qapp.processEvents()
     fid = _fid(window)
     assert window.view_manager.get(0).attached_file_ids == []
@@ -144,6 +148,7 @@ def test_file_card_attach_targets_active_analysis_view_without_compute(
     window = _window(qtbot, qapp)
     window.navigator.set_follow_prefs(FollowPrefs(False, False, False))
     window.load_file(loaded_csv)
+    wait_for_imports(window)
     qapp.processEvents()
     fid = _fid(window)
 
@@ -170,6 +175,7 @@ def test_file_card_attach_targets_active_analysis_view_without_compute(
 def test_item2_time_and_analysis_new_inherit(qtbot, qapp, loaded_csv, monkeypatch):
     window = _window(qtbot, qapp)
     window.load_file(loaded_csv)
+    wait_for_imports(window)
     qapp.processEvents()
     fid = _fid(window)
     window.navigator.set_follow_prefs(FollowPrefs(False, True, False))
@@ -209,6 +215,7 @@ def test_item2_time_and_analysis_new_inherit(qtbot, qapp, loaded_csv, monkeypatc
 def test_item2_full_manager_is_noop(qtbot, qapp, loaded_csv):
     window = _window(qtbot, qapp)
     window.load_file(loaded_csv)
+    wait_for_imports(window)
     qapp.processEvents()
     window.navigator.set_follow_prefs(FollowPrefs(False, True, False))
     mgr = window.view_manager
@@ -224,6 +231,7 @@ def test_item3_fills_empty_on_mode_entry_only(
 ):
     window = _window(qtbot, qapp)
     window.load_file(loaded_csv)
+    wait_for_imports(window)
     qapp.processEvents()
     fid = _fid(window)
     window.navigator.set_follow_prefs(FollowPrefs(False, False, True))
@@ -274,6 +282,7 @@ def test_item3_fills_empty_on_mode_entry_only(
 def test_item3_skips_while_opening_project(qtbot, qapp, loaded_csv):
     window = _window(qtbot, qapp)
     window.load_file(loaded_csv)
+    wait_for_imports(window)
     qapp.processEvents()
     window.navigator.set_follow_prefs(FollowPrefs(False, False, True))
     window._opening_project = True
@@ -313,6 +322,7 @@ def test_multi_file_load_aggregates_analysis_attach_toast(
     monkeypatch.setattr(window, "_should_confirm_heavy_load", lambda *_a, **_k: False)
 
     window._open_data_paths([a, b])
+    wait_for_imports(window)
     qapp.processEvents()
 
     attach_toasts = [msg for msg, _ in messages if "已加入" in msg]
@@ -346,6 +356,7 @@ def test_single_file_load_still_toasts_analysis_attach(
         lambda message, level="info": messages.append((message, level)),
     )
     window._open_data_paths([str(path)])
+    wait_for_imports(window)
     qapp.processEvents()
 
     attach_toasts = [msg for msg, _ in messages if "已加入" in msg]
@@ -381,6 +392,7 @@ def test_multi_file_load_aggregates_success_toast_in_time_mode(
     monkeypatch.setattr(window, "_should_confirm_heavy_load", lambda *_a, **_k: False)
 
     window._open_data_paths([a, b, c])
+    wait_for_imports(window)
     qapp.processEvents()
 
     success_toasts = [msg for msg, _ in messages if msg.startswith("已加载")]
@@ -403,7 +415,7 @@ def test_format_load_import_error_names_python_can():
 def test_asc_sniff_importerror_shows_python_can_dialog(
     qtbot, qapp, tmp_path, monkeypatch,
 ):
-    """Task5 sniff ImportError must surface as QMessageBox, not a traceback."""
+    """An ASC dependency failure from the broker surfaces as a dialog."""
     from PyQt5.QtWidgets import QMessageBox
 
     path = tmp_path / "maybe_canoe.asc"
@@ -422,15 +434,18 @@ def test_asc_sniff_importerror_shows_python_can_dialog(
         "mf4_analyzer.ui.main_window._project_io_mixin.QMessageBox.critical",
         _critical,
     )
+    def unavailable_broker(method, source_path, **kwargs):
+        assert str(source_path) == str(path)
+        raise ImportError("No module named 'can'", name="can")
+
     monkeypatch.setattr(
-        "mf4_analyzer.io.asc_can_format.sniff_canoe_asc",
-        lambda _path: (_ for _ in ()).throw(
-            ImportError("No module named 'can'", name="can")
-        ),
+        "mf4_analyzer.ui.main_window.import_coordinator.run_import",
+        unavailable_broker,
     )
 
     window = _window(qtbot, qapp)
     window._load_one(str(path))
+    wait_for_imports(window)
     qapp.processEvents()
 
     assert boxes, "ImportError must open a dialog, not escape as a traceback"

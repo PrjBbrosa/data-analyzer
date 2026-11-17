@@ -5,6 +5,7 @@ ravel 成 1 维的数值变量当候选序列，按名字挑时间轴、按长�
 文件 ``scipy.io.loadmat`` 会抛 ``NotImplementedError``，回退用 h5py 读。
 """
 from __future__ import annotations
+import math
 import re
 from collections import OrderedDict
 from pathlib import Path
@@ -12,9 +13,63 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from .import_limits import ImportResourceError, get_import_budget
+
 # 时间变量名（去掉矩阵列后缀后按小写匹配）
 _TIME_NAMES = {"t", "time", "zeit", "timestamp", "time_s", "time(s)", "t(s)"}
 _MIN_LEN = 2
+_NUMERIC_CLASSES = {
+    "double": "f8", "single": "f4", "logical": "?",
+    **{f"{kind}int{bits}": f"{code}{bits // 8}"
+       for kind, code in (("", "i"), ("u", "u")) for bits in (8, 16, 32, 64)},
+}
+
+
+def _candidate_columns(shape):
+    """Metadata equivalent of the vector/matrix selection below."""
+    if len(shape) == 1:
+        return 1 if shape[0] >= _MIN_LEN else 0
+    if len(shape) == 2:
+        rows, cols = shape
+        if min(rows, cols) == 1 and max(rows, cols) >= _MIN_LEN:
+            return 1
+        if rows >= _MIN_LEN and cols > 1:
+            return cols
+    return 0
+
+
+def _reserve_variable(budget, name, shape, dtype):
+    # Raw native data, float64 conversion and pandas output can coexist.
+    # Float64 source vectors are shared, not charged as another conversion.
+    budget.reserve_array(shape, dtype, label=f"MAT {name} native array")
+    copies = 1 if np.dtype(dtype) == np.dtype(np.float64) else 2
+    budget.reserve_array(shape, np.float64, copies=copies,
+                         label=f"MAT {name} conversion and frame")
+    return math.prod(shape) * 8 * 2
+
+
+def _scipy_variables(fp, budget):
+    from scipy.io import whosmat
+
+    names, skipped, order = [], [], []
+    channels = 0
+    scratch_bytes = 0
+    for name, shape, kind in whosmat(fp):
+        if name.startswith("__") and name.endswith("__"):
+            continue
+        order.append(name)
+        # loadmat(squeeze_me=True) removes every singleton dimension.
+        columns = _candidate_columns(tuple(size for size in shape if size != 1))
+        if kind not in _NUMERIC_CLASSES or not columns:
+            skipped.append(name)
+            continue
+        channels += columns
+        budget.check_channels(channels, label="MAT candidate channels")
+        needed_scratch = _reserve_variable(budget, name, shape, _NUMERIC_CLASSES[kind])
+        budget.reserve(max(0, needed_scratch - scratch_bytes), label="MAT time scratch")
+        scratch_bytes = max(scratch_bytes, needed_scratch)
+        names.append(name)
+    return names, skipped, order
 
 
 def _detect_version(fp) -> str:
@@ -74,7 +129,7 @@ def _collect_scipy(raw):
     return series, skipped, lone_matrix
 
 
-def _collect_h5py(fp):
+def _collect_h5py(fp, *, budget=None):
     """v7.3（HDF5）回退。遍历数据集，转置 MATLAB 的列主序。"""
     try:
         import h5py
@@ -85,21 +140,40 @@ def _collect_h5py(fp):
             optional_native_import_message("h5py", adapter_key="mat")
         ) from exc
 
+    if budget is None:
+        budget = get_import_budget()
     series = []
     skipped = []
     matrix_vars = 0
     vector_vars = 0
     with h5py.File(fp, "r") as hf:
+        candidates = []
+        channels = 0
+        scratch_bytes = 0
         for name, obj in hf.items():
             if name.startswith("#"):
                 continue
             if not isinstance(obj, h5py.Dataset):
                 skipped.append(name)
                 continue
-            data = np.asarray(obj)
-            if data.dtype.kind not in "iufb":     # 非数值（含 HDF5 对象引用）
+            shape = obj.shape
+            if shape is None:
                 skipped.append(name)
                 continue
+            if len(shape) == 2:
+                shape = shape[::-1]
+            columns = _candidate_columns(shape)
+            if obj.dtype.kind not in "iufb" or not columns:
+                skipped.append(name)
+                continue
+            channels += columns
+            budget.check_channels(channels, label="MAT candidate channels")
+            needed_scratch = _reserve_variable(budget, name, shape, obj.dtype)
+            budget.reserve(max(0, needed_scratch - scratch_bytes), label="MAT time scratch")
+            scratch_bytes = max(scratch_bytes, needed_scratch)
+            candidates.append((name, obj))
+        for name, obj in candidates:
+            data = np.asarray(obj)
             # h5py 读出的是 MATLAB 列主序的转置：(M, N) 对应 MATLAB 的 (N, M)
             if data.ndim == 2:
                 data = data.T
@@ -123,6 +197,7 @@ def _is_monotonic(arr):
 def load_mat_groups(fp):
     """解析 .mat，返回与 ``DataLoader.load_hdf`` 同形状的 groups 列表。"""
     name = Path(fp).name
+    budget = get_import_budget()
     try:
         from scipy.io import loadmat
     except ImportError as exc:
@@ -134,15 +209,21 @@ def load_mat_groups(fp):
 
     mat_version = _detect_version(fp)
     try:
-        raw = loadmat(fp, squeeze_me=True, struct_as_record=False)
-        series, skipped, lone_matrix = _collect_scipy(raw)
+        names, skipped_metadata, variable_order = _scipy_variables(fp, budget)
+        raw = loadmat(fp, squeeze_me=True, struct_as_record=False,
+                      variable_names=names)
+        series, skipped_values, lone_matrix = _collect_scipy(raw)
+        skipped_set = set(skipped_metadata + skipped_values)
+        skipped = [name for name in variable_order if name in skipped_set]
     except NotImplementedError:
         # v7.3 HDF5：loadmat 拒读，回退 h5py（h5py 缺失时的 ImportError 直接透传）
-        series, skipped, lone_matrix = _collect_h5py(fp)
+        series, skipped, lone_matrix = _collect_h5py(fp, budget=budget)
         mat_version = mat_version or "v7.3"
+    except ImportResourceError:
+        raise
     except Exception as exc:
         # scipy 对非 .mat 内容会抛各种内部错（ValueError/IndexError 等）→
-        # 归一为中文提示（本 try 内不产出自定义异常，广捕安全）
+        # 归一为中文提示；预算拒绝已在上方单独透传，不能伪装为损坏文件。
         raise ValueError(
             f"无法读取 .mat 文件（可能不是有效的 MATLAB 文件）: {name}") from exc
 

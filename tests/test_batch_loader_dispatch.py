@@ -3,8 +3,17 @@ import pandas as pd
 import pytest
 
 from mf4_analyzer.batch import _default_loader
-from mf4_analyzer.io.loader import DataLoader
+from mf4_analyzer.io import source_adapters
 from mf4_analyzer.io.source_adapters import UnsupportedSourceFormatError
+
+
+def _stub_import(monkeypatch, method, loader):
+    def run_import(operation, path, *, kwargs=None):
+        assert operation == method
+        assert kwargs in (None, {})
+        return loader(path)
+
+    monkeypatch.setattr(source_adapters, "run_import", run_import)
 
 
 def test_default_loader_dispatches_audio_video(monkeypatch, tmp_path):
@@ -23,7 +32,7 @@ def test_default_loader_dispatches_audio_video(monkeypatch, tmp_path):
             {"source_kind": "audio", "fs": 48_000.0, "channels": 1},
         )
 
-    monkeypatch.setattr(DataLoader, "load_audio_video", staticmethod(fake_load_audio_video))
+    _stub_import(monkeypatch, "load_audio_video", fake_load_audio_video)
 
     fd = _default_loader(str(path))
 
@@ -53,11 +62,7 @@ def test_default_loader_dispatches_fdc_as_csv(monkeypatch, tmp_path):
         called["path"] = fp
         return pd.DataFrame({"Time": [0.0, 0.1], "sig": [1.0, 2.0]}), ["Time", "sig"], {}
 
-    def fail_load_mf4(fp):
-        raise AssertionError(f".fdc should be loaded as CSV, not MF4: {fp}")
-
-    monkeypatch.setattr(DataLoader, "load_csv", staticmethod(fake_load_csv))
-    monkeypatch.setattr(DataLoader, "load_mf4", staticmethod(fail_load_mf4))
+    _stub_import(monkeypatch, "load_csv", fake_load_csv)
 
     fd = _default_loader(str(path))
 
@@ -79,11 +84,7 @@ def test_default_loader_dispatches_asc_as_csv(monkeypatch, tmp_path):
             {"source_kind": "ascii", "ascii_kind": "delimited"},
         )
 
-    def fail_load_mf4(fp):
-        raise AssertionError(f".asc should be loaded as CSV, not MF4: {fp}")
-
-    monkeypatch.setattr(DataLoader, "load_ascii", staticmethod(fake_load_ascii))
-    monkeypatch.setattr(DataLoader, "load_mf4", staticmethod(fail_load_mf4))
+    _stub_import(monkeypatch, "load_ascii", fake_load_ascii)
 
     fd = _default_loader(str(path))
 
@@ -106,11 +107,7 @@ def test_default_loader_dispatches_tdms(monkeypatch, tmp_path):
             {"source_kind": "tdms"},
         )
 
-    def fail_load_mf4(fp):
-        raise AssertionError(f".tdms should not be loaded as MF4: {fp}")
-
-    monkeypatch.setattr(DataLoader, "load_tdms", staticmethod(fake_load_tdms), raising=False)
-    monkeypatch.setattr(DataLoader, "load_mf4", staticmethod(fail_load_mf4))
+    _stub_import(monkeypatch, "load_tdms", fake_load_tdms)
 
     fd = _default_loader(str(path))
 

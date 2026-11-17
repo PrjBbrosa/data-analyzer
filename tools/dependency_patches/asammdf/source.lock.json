@@ -1,0 +1,24 @@
+{
+  "version": "8.8.32+tracelab.1",
+  "source": {
+    "url": "https://files.pythonhosted.org/packages/59/d6/a8069b80d66a09e782c50b660d659f18bd8b23c68aff751711846e8aacb1/asammdf-8.8.32.tar.gz",
+    "sha256": "b6c06b667bb3c7c2c139922f5a5b0c4f2182ca1ac387ca5de568557179a70d90",
+    "git_tag": "8.8.32",
+    "git_commit": "b6caaafbd0c100a138fc756e253086b40b91cc8e"
+  },
+  "upstream_commits": [
+    "e79453d6650c9f5d716447bdeac363fe3bb9e9a0",
+    "1d6e3cb6a9a1db2548420018725be1841857926d"
+  ],
+  "note": "Official 8.8.32 sdist contains both C fixes but retains incorrect Python factors. Backport missing Python hunk; retain and hash C source including complete reader.",
+  "source_files": {
+    "src/asammdf/blocks/cutils.c": "c8a17dcc34750c5ab128c021207af944a26f04b74fa12cbd66cbeb1f6277806f",
+    "src/asammdf/blocks/v4_blocks.py": "bc9063593e077a2a9b4566a10b1d83ccb4eadd6fa4b353823e072310e01d10c7",
+    "src/asammdf/blocks/mdf_v4.py": "c74ee3680085ccc2e76e6b88b0c602175f1a5222dcad7a537b909ca16840455b",
+    "CMakeLists.txt": "be8ca3f8dd487f930cec6ee994d8b6bef8d7f59ec4bf21698fc34021a9f4c51f"
+  },
+  "patches": {
+    "0001-array-strides.patch": "e5f906900d4dc2ec4fec3938463c725594297a1d77e91e4a024d50e692d7f85a",
+    "0002-build-identity.patch": "411493a7f6f5de341ca9a2ab33d2cd0e42c801f6241ac94b472290e938c3a88a"
+  }
+}

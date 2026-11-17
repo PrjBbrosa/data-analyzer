@@ -319,6 +319,12 @@ _HINTS = (
         priority=43,
     ),
     Hint(
+        id="file.import_cancel",
+        text="读取可取消；超时可选择「延长并重试」",
+        surface="discovery",
+        priority=43,
+    ),
+    Hint(
         id="file.zfd_timebase",
         text="ZFD 时基无效则拒绝导入",
         surface="discovery",

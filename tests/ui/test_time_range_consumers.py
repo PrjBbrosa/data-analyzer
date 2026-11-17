@@ -5,6 +5,7 @@ dialogs pass their own ``use_range``. These spies freeze that wiring without
 running a large real export.
 """
 from __future__ import annotations
+from tests._helpers.import_tasks import wait_for_imports
 
 import csv
 from types import SimpleNamespace
@@ -46,6 +47,7 @@ def test_excel_use_range_true_exports_display_span_even_in_full_mode(
     mw = MainWindow()
     qtbot.addWidget(mw)
     mw._load_one(str(src))
+    wait_for_imports(mw)
     fid = next(iter(mw.files))
     top = _full_window_with_display_span(mw)
 
@@ -90,6 +92,7 @@ def test_excel_use_range_false_exports_full_even_when_display_is_local(
     mw = MainWindow()
     qtbot.addWidget(mw)
     mw._load_one(str(src))
+    wait_for_imports(mw)
     fid = next(iter(mw.files))
     top = _full_window_with_display_span(mw)
 
@@ -134,6 +137,7 @@ def test_wwt_use_range_respects_dialog_flag_not_full_mode(
     mw = MainWindow()
     qtbot.addWidget(mw)
     mw._load_one(str(src))
+    wait_for_imports(mw)
     fid = next(iter(mw.files))
     top = _full_window_with_display_span(mw, lo=0.10, hi=0.20)
 

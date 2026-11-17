@@ -1,4 +1,5 @@
 from __future__ import annotations
+from tests._helpers.import_tasks import wait_for_imports
 
 from types import SimpleNamespace
 
@@ -314,8 +315,11 @@ def test_register_file_data_uses_signature_not_typeerror_text():
     import inspect
     from mf4_analyzer.ui.main_window import _project_io_mixin as mod
 
-    src = inspect.getsource(mod.ProjectIOMixin._register_file_data)
-    assert "inspect.signature" in src
+    prepare_src = inspect.getsource(mod.ProjectIOMixin._prepare_file_data)
+    register_src = inspect.getsource(mod.ProjectIOMixin._register_file_data)
+    assert "inspect.signature" in prepare_src
+    assert "self._prepare_file_data(" in register_src
+    src = prepare_src + register_src
     assert '"fs" not in str' not in src
     assert "'fs' not in str" not in src
     assert "fs" in inspect.signature(mod.FileData).parameters
@@ -368,6 +372,7 @@ def test_main_window_loaded_source_ids_are_canonical_strings(qtbot, tmp_path):
     win = MainWindow()
     qtbot.addWidget(win)
     win._load_one(str(path))
+    wait_for_imports(win)
 
     assert win.files
     assert all(isinstance(fid, str) for fid in win.files)
@@ -698,6 +703,7 @@ def test_project_restore_preserves_directional_frf_pair_without_compute(
     source = MainWindow()
     qtbot.addWidget(source)
     source._load_one(str(csv_path))
+    wait_for_imports(source)
     old_fid = next(iter(source.files))
     frf_state = source.analysis_managers["frf"].get(0)
     frf_state.attached_file_ids = [old_fid]
@@ -720,6 +726,7 @@ def test_project_restore_preserves_directional_frf_pair_without_compute(
         lambda view_id: recomputed.append(view_id),
     )
     restored.open_project(project)
+    wait_for_imports(restored)
     qapp.processEvents()
 
     new_fid = next(iter(restored.files))
@@ -747,6 +754,7 @@ def test_project_restore_preserves_complete_frf_panes_until_compute(
     source = MainWindow()
     qtbot.addWidget(source)
     source._load_one(str(csv_path))
+    wait_for_imports(source)
     old_fid = next(iter(source.files))
     state = source.analysis_managers["frf"].get(0)
     state.attached_file_ids = [old_fid]
@@ -766,6 +774,7 @@ def test_project_restore_preserves_complete_frf_panes_until_compute(
         lambda candidate: requested.append(candidate) or True,
     )
     restored.open_project(project)
+    wait_for_imports(restored)
     qapp.processEvents()
 
     restored_state = restored.analysis_managers["frf"].get(0)
@@ -819,6 +828,7 @@ def test_project_restore_does_not_relabel_generated_axis_as_real(
         good_path, index=False,
     )
     source._load_one(str(good_path))
+    wait_for_imports(source)
     assert source.save_project(project)
 
     restored = MainWindow()
@@ -837,6 +847,7 @@ def test_project_restore_does_not_relabel_generated_axis_as_real(
         lambda _section, _view_id: None,
     )
     restored.open_project(project)
+    wait_for_imports(restored)
     qapp.processEvents()
 
     assert any("无法确定时间轴" in message for _title, message in diagnostics)
@@ -880,6 +891,7 @@ def test_project_restore_preserves_explicit_manual_time_axis(
         lambda _section, _view_id: None,
     )
     restored.open_project(project)
+    wait_for_imports(restored)
     qapp.processEvents()
 
     new_fid = next(iter(restored.files))

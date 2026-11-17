@@ -7,6 +7,7 @@ optimizations must make repeated/no-op invocations free without changing
 any rendered output (rendered-output parity is covered by the existing
 test_pg_timedomain_canvas.py suite).
 """
+from tests._helpers.import_tasks import wait_for_imports
 import numpy as np
 import pandas as pd
 import pytest
@@ -471,6 +472,7 @@ def test_mainwindow_crc_uncheck_recheck_and_eye_toggle_use_selection_delta(
         return_value=([str(path)], ""),
     ):
         window.load_files()
+        wait_for_imports(window)
     qapp.processEvents()
 
     window.chart_stack.set_plot_mode_for_canvas(window.canvas_time, "overlay")

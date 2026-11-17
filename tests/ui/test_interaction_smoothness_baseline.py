@@ -5,6 +5,7 @@ offscreen Qt cannot establish Cocoa paint latency.  It proves that the user
 click paths used by the motion probe still reach the existing View and Section
 owners before T1--T3 change their projection costs.
 """
+from tests._helpers.import_tasks import wait_for_imports
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtTest import QTest
@@ -30,6 +31,7 @@ def test_qtest_view_tab_and_section_toolbar_keep_the_real_target(
     window.show()
     qtbot.waitExposed(window)
     window.load_file(loaded_csv)
+    wait_for_imports(window)
     _drain(qapp)
     fid = next(iter(window.files))
 

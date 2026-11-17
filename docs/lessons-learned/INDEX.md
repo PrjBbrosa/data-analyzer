@@ -309,6 +309,8 @@ lesson by default.
 | [Unowned Test Canvases Can Steal Later Mouse Events](unowned-test-canvases-can-steal-later-mouse-events.md) | Hover or pin tests pass alone but fail in a shared QApplication although widgetAt, active window, style, and mouse buttons look correct. | See lesson |
 | [Project Restore Matches Split Sources By Group Identity](project-restore-matches-split-sources-by-group-identity.md) | Changing project save or open for a file that expands into multiple | See lesson |
 | [Project Replay Validates Evidence And Recovers Generations](project-replay-validates-evidence-and-recovers-generations.md) | Changing recipe replay, source-matching evidence, or cleanup of failed channel references. | See lesson |
+| [Import safety needs numeric oracles and allocation admission](import-native-safety-needs-numeric-oracles-and-admission.md) | Changing binary readers, array expansion, native dependencies, import isolation or resource limits. | See lesson |
+| [Application-owned supervisors need weak host references](application-owned-supervisors-need-weak-host-references.md) | A Qt task supervisor outlives its window or tab so a running QThread can finish safely. | See lesson |
 
 ## Selection Rules
 

@@ -98,7 +98,7 @@ def test_format_byte_size_and_estimate_helpers():
     assert host._estimate_heavy_load_seconds(10 * 400 * 1024 * 1024) >= 150
 
 
-def test_open_data_paths_cancels_when_heavy_load_declined(qapp, tmp_path, monkeypatch):
+def test_open_data_paths_cancels_when_heavy_load_declined(qtbot, qapp, tmp_path, monkeypatch):
     from mf4_analyzer.ui.main_window import MainWindow
 
     huge = tmp_path / "huge.csv"
@@ -113,11 +113,12 @@ def test_open_data_paths_cancels_when_heavy_load_declined(qapp, tmp_path, monkey
         lambda *a, **k: called.append(True),
     )
     mw._open_data_paths([str(huge)])
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     assert called == []
     assert len(mw.files) == 0
 
 
-def test_open_data_paths_marks_indeterminate_for_csv(qapp, tmp_path, monkeypatch):
+def test_open_data_paths_marks_indeterminate_for_csv(qtbot, qapp, tmp_path, monkeypatch):
     from mf4_analyzer.ui.main_window import MainWindow
 
     path = tmp_path / "small.csv"
@@ -132,7 +133,25 @@ def test_open_data_paths_marks_indeterminate_for_csv(qapp, tmp_path, monkeypatch
     monkeypatch.setattr(mw, "_update_compute_progress", capture)
     monkeypatch.setattr(mw, "_should_confirm_heavy_load", lambda *_a, **_k: False)
     mw._open_data_paths([str(path)])
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
 
     busy = [u for u in updates if u[1] == 0 and u[2] and "读取表格" in u[2]]
     assert busy, updates
-    assert any(u[3] is True for u in updates)
+    assert all(u[3] is False for u in updates)
+
+
+@pytest.fixture(autouse=True)
+def _local_import_broker(monkeypatch):
+    """Exercise GUI continuations with existing loader fakes; broker has its own gates."""
+    from mf4_analyzer.io import DataLoader
+    from mf4_analyzer.ui.main_window import import_coordinator
+
+    def run(method, path, *, kwargs=None, cancel_check=None, progress_callback=None, limits=None):
+        options = dict(kwargs or {})
+        if method in {"load_blf_frames", "probe_blf_dbc_frames"}:
+            path = options.pop("frames")
+        if progress_callback:
+            progress_callback(-1.0, "读取表格" if method == "load_csv" else "读取数据")
+        return getattr(DataLoader, method)(path, **options)
+
+    monkeypatch.setattr(import_coordinator, "run_import", run)

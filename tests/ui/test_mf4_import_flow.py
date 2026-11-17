@@ -32,6 +32,7 @@ def test_load_mf4_warns_on_alignment(qapp, qtbot, tmp_path, monkeypatch):
     window = _window(qtbot)
     notices = _capture(monkeypatch, window)
     window._load_one(str(path))
+    qtbot.waitUntil(lambda: not window._imports.busy, timeout=15000)
     assert any(
         level == "warning" and "时间范围" in message
         for message, level in notices
@@ -48,6 +49,7 @@ def test_load_mf4_warns_when_duplicate_times_are_collapsed(
     window = _window(qtbot)
     notices = _capture(monkeypatch, window)
     window._load_one(str(path))
+    qtbot.waitUntil(lambda: not window._imports.busy, timeout=15000)
     assert any(
         level == "warning" and "最后值" in message
         for message, level in notices
@@ -65,6 +67,7 @@ def test_load_mf4_warns_when_a_clock_regresses(
     window = _window(qtbot)
     notices = _capture(monkeypatch, window)
     window._load_one(str(path))
+    qtbot.waitUntil(lambda: not window._imports.busy, timeout=15000)
     assert any(
         level == "warning" and "时间回退" in message
         for message, level in notices
@@ -88,6 +91,7 @@ def test_load_mf4_disagreed_single_points_do_not_open_a_file(
     )
     before = set(window.files)
     window._load_one(str(path))
+    qtbot.waitUntil(lambda: not window._imports.busy, timeout=15000)
     assert errors
     assert "单点" in str(errors[-1])
     assert set(window.files) == before
@@ -106,6 +110,7 @@ def test_load_mf4_alignment_warnings_stay_bounded(
     window = _window(qtbot)
     notices = _capture(monkeypatch, window)
     window._load_one(str(path))
+    qtbot.waitUntil(lambda: not window._imports.busy, timeout=15000)
     warnings = [message for message, level in notices if level == "warning"]
     alignment = [
         message for message in warnings
@@ -124,6 +129,7 @@ def test_load_mf4_time_named_signal_is_selectable(qapp, qtbot, tmp_path):
     ]])
     window = _window(qtbot)
     window._load_one(str(path))
+    qtbot.waitUntil(lambda: not window._imports.busy, timeout=15000)
     fid, fd = next(iter(window.files.items()))
     assert fd.time_array.tolist() == [0.0, 0.1, 0.2, 0.3]
     assert fd.fs == pytest.approx(10.0)
@@ -133,3 +139,20 @@ def test_load_mf4_time_named_signal_is_selectable(qapp, qtbot, tmp_path):
         (item[0], item[1]) for item in window.navigator.get_checked_channels()
     }
     assert checked == {(fid, "Time [0:1]"), (fid, "sig")}
+
+
+@pytest.fixture(autouse=True)
+def _local_import_broker(monkeypatch):
+    """Exercise GUI continuations with existing loader fakes; broker has its own gates."""
+    from mf4_analyzer.io import DataLoader
+    from mf4_analyzer.ui.main_window import import_coordinator
+
+    def run(method, path, *, kwargs=None, cancel_check=None, progress_callback=None, limits=None):
+        options = dict(kwargs or {})
+        if method in {"load_blf_frames", "probe_blf_dbc_frames"}:
+            path = options.pop("frames")
+        if progress_callback:
+            progress_callback(-1.0, "读取表格" if method == "load_csv" else "读取数据")
+        return getattr(DataLoader, method)(path, **options)
+
+    monkeypatch.setattr(import_coordinator, "run_import", run)

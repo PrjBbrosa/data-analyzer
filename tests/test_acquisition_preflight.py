@@ -10,9 +10,16 @@ def _write_mf4(path, name="sig", unit="V"):
     write_single_channel_mf4(path, name=name, unit=unit)
 
 
-def test_analyze_mf4_reports_ok_for_valid_file(tmp_path):
+def test_analyze_mf4_reports_ok_for_valid_file(tmp_path, monkeypatch):
     mf4 = tmp_path / "sample.mf4"
     _write_mf4(mf4, name="vehicle_speed", unit="km/h")
+
+    from mf4_analyzer.io.loader import DataLoader
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("preflight parsed MF4 in parent")
+
+    monkeypatch.setattr(DataLoader, "load_mf4", forbidden)
 
     result = analyze_mf4(mf4, expected_channels=("vehicle_speed",))
 

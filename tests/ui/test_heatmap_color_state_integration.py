@@ -1,4 +1,5 @@
 """Owning color requests survive real MainWindow render/capture transactions."""
+from tests._helpers.import_tasks import wait_for_imports
 import copy
 import uuid
 
@@ -23,6 +24,7 @@ def color_win(qapp, qtbot, tmp_path, monkeypatch):
                                 3 + np.cos(times * (30 + index))))
         np.savetxt(path, data, delimiter=",", header="time,speed,torque", comments="")
         win._load_one(str(path))
+        wait_for_imports(win)
     assert len(win.files) == 2
 
     def unexpected_submit(*args, **kwargs):
@@ -311,6 +313,7 @@ def test_project_roundtrip_keeps_request_and_reference_basis(
 
     monkeypatch.setattr(reopened_win._analysis_jobs, "submit_batch", unexpected_submit)
     reopened_win.open_project(project)
+    wait_for_imports(reopened_win)
     qapp.processEvents()
     manager = reopened_win.analysis_managers[section]
     restored = next(view for view in manager.views if view.view_id == state.view_id)

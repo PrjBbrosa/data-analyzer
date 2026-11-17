@@ -10,6 +10,7 @@ Analysis pickers follow each analysis section's active View attachments
   recording the stale window survived anyway — 49.5 s of data framed by a 185 s
   window left over from another file, i.e. a mostly blank chart.
 """
+from tests._helpers.import_tasks import wait_for_imports
 import numpy as np
 import pandas as pd
 import pytest
@@ -38,7 +39,9 @@ def win_two_files(qapp, qtbot, tmp_path):
     win = MainWindow()
     qtbot.addWidget(win)
     win._load_one(long_p)
+    wait_for_imports(win)
     win._load_one(short_p)
+    wait_for_imports(win)
     assert len(win.files) == 2
     long_fid, short_fid = list(win.files)
     return win, long_fid, short_fid

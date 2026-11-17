@@ -14,7 +14,7 @@ from tests._helpers.blf_factory import (
 from tests.test_asc_can_loader import _write_early_unsupported_asc
 
 
-def test_load_one_routes_canoe_asc_with_dbc(qapp, tmp_path, monkeypatch):
+def test_load_one_routes_canoe_asc_with_dbc(qtbot, qapp, tmp_path, monkeypatch):
     from mf4_analyzer.ui.main_window import MainWindow
 
     dbc_dir = tmp_path / "dbc"
@@ -30,6 +30,7 @@ def test_load_one_routes_canoe_asc_with_dbc(qapp, tmp_path, monkeypatch):
     )
     monkeypatch.setattr(mw, "_prompt_blf_dbc", lambda path: [str(dbc)])
     mw._load_one(str(asc))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
 
     assert len(mw.files) == 1
     fd = next(iter(mw.files.values()))
@@ -38,7 +39,7 @@ def test_load_one_routes_canoe_asc_with_dbc(qapp, tmp_path, monkeypatch):
     assert fd.source_metadata["dbc_paths"]
 
 
-def test_load_one_cancelled_dbc_leaves_canoe_asc_unopened(qapp, tmp_path, monkeypatch):
+def test_load_one_cancelled_dbc_leaves_canoe_asc_unopened(qtbot, qapp, tmp_path, monkeypatch):
     from mf4_analyzer.ui.main_window import MainWindow
 
     asc = write_sample_asc(tmp_path / "log.asc", n=3)
@@ -50,11 +51,12 @@ def test_load_one_cancelled_dbc_leaves_canoe_asc_unopened(qapp, tmp_path, monkey
     )
     monkeypatch.setattr(mw, "_prompt_blf_dbc", lambda path: [])
     mw._load_one(str(asc))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
 
     assert len(mw.files) == 0
 
 
-def test_tabular_asc_does_not_enter_can_log_dbc_path(qapp, tmp_path, monkeypatch):
+def test_tabular_asc_does_not_enter_can_log_dbc_path(qtbot, qapp, tmp_path, monkeypatch):
     from mf4_analyzer.ui.main_window import MainWindow
 
     table = tmp_path / "table.asc"
@@ -69,6 +71,7 @@ def test_tabular_asc_does_not_enter_can_log_dbc_path(qapp, tmp_path, monkeypatch
 
     monkeypatch.setattr(mw, "_resolve_blf_dbc_paths", fail_resolve)
     mw._load_one(str(table))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
 
     assert called == []
     assert len(mw.files) == 1
@@ -76,7 +79,7 @@ def test_tabular_asc_does_not_enter_can_log_dbc_path(qapp, tmp_path, monkeypatch
     assert fd.source_metadata.get("source_kind") == "ascii"
 
 
-def test_open_data_paths_mixed_blf_and_canoe_asc_batch(qapp, tmp_path, monkeypatch):
+def test_open_data_paths_mixed_blf_and_canoe_asc_batch(qtbot, qapp, tmp_path, monkeypatch):
     from mf4_analyzer.ui.main_window import MainWindow
 
     dbc = write_two_message_dbc(tmp_path / "bus.dbc")
@@ -87,13 +90,14 @@ def test_open_data_paths_mixed_blf_and_canoe_asc_batch(qapp, tmp_path, monkeypat
     monkeypatch.setattr(mw, "_ask_blf_batch_dbc_action", lambda paths: "batch")
     monkeypatch.setattr(mw, "_prompt_blf_dbc", lambda path: [str(dbc)])
     mw._open_data_paths([str(blf), str(asc)])
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
 
     assert len(mw.files) == 2
     kinds = {fd.source_metadata["source_kind"] for fd in mw.files.values()}
     assert kinds == {"blf", "canoe_asc"}
 
 
-def test_project_roundtrip_restores_canoe_asc_dbc_without_picker(
+def test_project_roundtrip_restores_canoe_asc_dbc_without_picker(qtbot,
     qapp, tmp_path, monkeypatch,
 ):
     from PyQt5.QtCore import QSettings
@@ -124,6 +128,7 @@ def test_project_roundtrip_restores_canoe_asc_dbc_without_picker(
     )
     monkeypatch.setattr(mw, "_prompt_blf_dbc", lambda path: [str(dbc)])
     mw._load_one(str(asc))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     mw.save_project(proj)
 
     doc = pio.load_project_from_json(proj)
@@ -145,6 +150,7 @@ def test_project_roundtrip_restores_canoe_asc_dbc_without_picker(
 
     monkeypatch.setattr(mw2, "_prompt_blf_dbc", fail_if_picker_opens)
     mw2.open_project(proj)
+    qtbot.waitUntil(lambda: not mw2._imports.busy, timeout=15000)
 
     assert len(mw2.files) == 1
     fd = next(iter(mw2.files.values()))
@@ -153,7 +159,7 @@ def test_project_roundtrip_restores_canoe_asc_dbc_without_picker(
     assert fd.source_metadata["dbc_paths"] == [str(dbc.resolve())]
 
 
-def test_ui_fallback_reason_is_visible_when_opening_canoe_asc(
+def test_ui_fallback_reason_is_visible_when_opening_canoe_asc(qtbot,
     qapp, tmp_path, monkeypatch,
 ):
     """P1-2: the ASC fallback reason must reach a real, user-visible UI
@@ -177,7 +183,25 @@ def test_ui_fallback_reason_is_visible_when_opening_canoe_asc(
     )
     monkeypatch.setattr(mw, "_prompt_blf_dbc", lambda path: [str(dbc)])
     mw._load_one(str(asc))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
 
     assert len(mw.files) == 1
     assert mw._toast.property("level") == "warning"
     assert "兼容解析重试" in mw._toast._msg.text()
+
+
+@pytest.fixture(autouse=True)
+def _local_import_broker(monkeypatch):
+    """Exercise GUI continuations with existing loader fakes; broker has its own gates."""
+    from mf4_analyzer.io import DataLoader
+    from mf4_analyzer.ui.main_window import import_coordinator
+
+    def run(method, path, *, kwargs=None, cancel_check=None, progress_callback=None, limits=None):
+        options = dict(kwargs or {})
+        if method in {"load_blf_frames", "probe_blf_dbc_frames"}:
+            path = options.pop("frames")
+        if progress_callback:
+            progress_callback(-1.0, "读取表格" if method == "load_csv" else "读取数据")
+        return getattr(DataLoader, method)(path, **options)
+
+    monkeypatch.setattr(import_coordinator, "run_import", run)

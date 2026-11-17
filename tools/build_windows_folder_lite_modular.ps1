@@ -290,6 +290,9 @@ if ($env:OS -ne "Windows_NT") {
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).ProviderPath
 $EntryScript = Join-Path $RepoRoot "MF4 Data Analyzer V1.py"
 $Requirements = Join-Path $RepoRoot "requirements.txt"
+$MdfWheelBuilder = Join-Path $PSScriptRoot "dependency_patches\asammdf\build_wheel.py"
+$MdfWheelDir = Join-Path $RepoRoot ".state\dependency-wheels\windows"
+$MdfSourceArchive = Join-Path $MdfWheelDir "asammdf-8.8.32+tracelab.1-source.tar.gz"
 $StyleQss = Join-Path $RepoRoot "mf4_analyzer\ui_kit\style.qss"
 $QssIconFallbackDir = Join-Path $RepoRoot "mf4_analyzer\ui_kit\resources"
 $IconsDir = Join-Path $RepoRoot "assets\icons"
@@ -370,11 +373,19 @@ if (-not $SkipInstall) {
     Write-Step "Installing build dependencies"
     Invoke-LoggedNative -Executable $VenvPython -Arguments @("-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel")
     # Analyzer-only: base requirements only (no acquisition extras installed).
-    Invoke-LoggedNative -Executable $VenvPython -Arguments @("-m", "pip", "install", "-r", $Requirements)
+    Invoke-LoggedNative -Executable $VenvPython -Arguments @($MdfWheelBuilder, "--output", $MdfWheelDir)
+    Invoke-LoggedNative -Executable $VenvPython -Arguments @("-m", "pip", "install", "--find-links", $MdfWheelDir, "-r", $Requirements)
     Invoke-LoggedNative -Executable $VenvPython -Arguments @("-m", "pip", "install", "--upgrade", "pyinstaller", "qtawesome")
 }
 
 Write-Step "Recording Python and installed package versions"
+Push-Location -LiteralPath $RepoRoot
+try {
+    Invoke-LoggedNative -Executable $VenvPython -Arguments @("-c", "from mf4_analyzer.io.mdf_reader import _require_fixed_arrays; _require_fixed_arrays()")
+} finally { Pop-Location }
+if (-not (Test-Path $MdfSourceArchive)) { throw "Modified MDF source archive is required for distribution" }
+Copy-Item -Path (Join-Path $MdfWheelDir "*.whl.json") -Destination $BuildEvidenceDir -Force
+Copy-Item -LiteralPath (Split-Path $MdfWheelBuilder -Parent) -Destination (Join-Path $BuildEvidenceDir "asammdf-recipe") -Recurse -Force
 Invoke-LoggedNative -Executable $VenvPython -Arguments @("-c", "import sys, platform; print(sys.executable); print(sys.version); print(platform.platform()); print(platform.machine())")
 Invoke-LoggedNative -Executable $VenvPython -Arguments @("-m", "pip", "freeze", "--all")
 
@@ -422,6 +433,10 @@ $ColormapValidator = Join-Path $PSScriptRoot "validate_heatmap_colormaps.py"
 Invoke-LoggedNative -Executable $VenvPython -Arguments @($ColormapValidator)
 
 $HiddenImports = @(
+    "mf4_analyzer.io.import_worker",
+    "mf4_analyzer.io.import_transport",
+    "mf4_analyzer.io.import_process",
+    "mf4_analyzer.ui.main_window.import_coordinator",
     "mf4_analyzer.ui_kit",
     "mf4_analyzer.ui_kit.fonts",
     "mf4_analyzer.ui_kit.icons",
@@ -512,6 +527,7 @@ $PyInstallerArgs += @(
     "--add-data", $AddDataWwt,
     "--add-data", $AddDataHelp,
     "--add-data", $AddDataColormaps,
+    "--add-data", "$MdfSourceArchive;licenses",
     "--add-data", "$(Join-Path $RepoRoot 'assets\extension-probe');assets/extension-probe",
     # Belt-and-suspenders: keep the acquisition packages and their native-only
     # deps out even if some indirect reference appears. The Analyzer never needs

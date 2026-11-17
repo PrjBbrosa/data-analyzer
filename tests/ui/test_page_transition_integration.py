@@ -7,6 +7,7 @@ natural paint, and only then may ChartStack queue a target snapshot for the
 fade. It never captures the incoming endpoint inside its paint callback.
 """
 from __future__ import annotations
+from tests._helpers.import_tasks import wait_for_imports
 
 import pytest
 
@@ -536,6 +537,7 @@ def test_time_tab_switch_completes_natural_fade(qtbot, qapp, loaded_csv):
     window.show()
     qtbot.waitExposed(window)
     window.load_file(loaded_csv)
+    wait_for_imports(window)
     qapp.processEvents()
     window._on_view_new()
     qapp.processEvents()

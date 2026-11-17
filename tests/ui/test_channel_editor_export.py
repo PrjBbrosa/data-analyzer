@@ -1,3 +1,4 @@
+from tests._helpers.import_tasks import wait_for_imports
 # tests/ui/test_channel_editor_export.py
 import csv
 import openpyxl
@@ -16,7 +17,7 @@ def test_do_export_excel_writes_selected(qapp, tmp_path, monkeypatch):
     from mf4_analyzer.ui.main_window import MainWindow
     a = tmp_path / "a.csv"; _csv(a)
     out = tmp_path / "out.xlsx"
-    mw = MainWindow(); mw._load_one(str(a))
+    mw = MainWindow(); mw._load_one(str(a)); wait_for_imports(mw)
     fid = next(iter(mw.files))
     monkeypatch.setattr(QFileDialog, "getSaveFileName",
                         lambda *a_, **k: (str(out), ""))
@@ -34,7 +35,7 @@ def test_do_export_excel_filters_missing_channels_preserving_valid_request_order
 
     a = tmp_path / "a.csv"; _csv(a)
     out = tmp_path / "filtered.xlsx"
-    mw = MainWindow(); mw._load_one(str(a))
+    mw = MainWindow(); mw._load_one(str(a)); wait_for_imports(mw)
     fid = next(iter(mw.files))
     monkeypatch.setattr(QFileDialog, "getSaveFileName",
                         lambda *a_, **k: (str(out), ""))
@@ -63,7 +64,7 @@ def test_do_export_excel_export_no_data_toasts_warning_without_save_dialog(
     from mf4_analyzer.ui.main_window import MainWindow
 
     a = tmp_path / "a.csv"; _csv(a)
-    mw = MainWindow(); mw._load_one(str(a))
+    mw = MainWindow(); mw._load_one(str(a)); wait_for_imports(mw)
     loaded_fid = next(iter(mw.files))
     fid = loaded_fid if fid_kind == "loaded" else "missing-fid"
 
@@ -86,7 +87,7 @@ def test_do_export_wwt_writes_roundtrippable_file(qapp, tmp_path, monkeypatch):
 
     a = tmp_path / "a.csv"; _csv(a, n=128)
     out = tmp_path / "out.wwt"
-    mw = MainWindow(); mw._load_one(str(a))
+    mw = MainWindow(); mw._load_one(str(a)); wait_for_imports(mw)
     fid = next(iter(mw.files))
     monkeypatch.setattr(QFileDialog, "getSaveFileName",
                         lambda *a_, **k: (str(out), ""))
@@ -111,7 +112,7 @@ def test_do_export_wwt_keeps_native_sample_values(qapp, tmp_path, monkeypatch):
 
     a = tmp_path / "a.csv"; _csv(a, n=512)
     out = tmp_path / "exact.wwt"
-    mw = MainWindow(); mw._load_one(str(a))
+    mw = MainWindow(); mw._load_one(str(a)); wait_for_imports(mw)
     fid = next(iter(mw.files))
     monkeypatch.setattr(QFileDialog, "getSaveFileName",
                         lambda *a_, **k: (str(out), ""))
@@ -128,7 +129,7 @@ def test_do_export_wwt_refuses_too_short_source(qapp, tmp_path, monkeypatch):
 
     a = tmp_path / "a.csv"; _csv(a, n=50)
     out = tmp_path / "short.wwt"
-    mw = MainWindow(); mw._load_one(str(a))
+    mw = MainWindow(); mw._load_one(str(a)); wait_for_imports(mw)
     fid = next(iter(mw.files))
     monkeypatch.setattr(QFileDialog, "getSaveFileName",
                         lambda *a_, **k: (str(out), ""))
@@ -146,7 +147,7 @@ def test_do_export_wwt_export_no_data_toasts_warning_without_save_dialog(
     from mf4_analyzer.ui.main_window import MainWindow
 
     a = tmp_path / "a.csv"; _csv(a)
-    mw = MainWindow(); mw._load_one(str(a))
+    mw = MainWindow(); mw._load_one(str(a)); wait_for_imports(mw)
     fid = next(iter(mw.files))
     toasts = []
     monkeypatch.setattr(mw, "toast", lambda msg, level="info": toasts.append((msg, level)))
@@ -396,7 +397,7 @@ def test_do_export_wwt_compact_writes_int16(qapp, tmp_path, monkeypatch):
 
     a = tmp_path / "a.csv"; _csv(a, n=256)
     out = tmp_path / "compact.wwt"
-    mw = MainWindow(); mw._load_one(str(a))
+    mw = MainWindow(); mw._load_one(str(a)); wait_for_imports(mw)
     fid = next(iter(mw.files))
     monkeypatch.setattr(QFileDialog, "getSaveFileName",
                         lambda *a_, **k: (str(out), ""))
@@ -488,6 +489,7 @@ def test_main_window_routes_toast_and_status_to_open_channel_editor(
     mw = MainWindow()
     qtbot.addWidget(mw)
     mw._load_one(str(a))
+    wait_for_imports(mw)
     fid = next(iter(mw.files))
 
     drawer = ChannelEditorDrawer(mw, mw.files, fid)
@@ -530,6 +532,7 @@ def test_channel_editor_apply_feedback_lands_on_main_window_after_close(
     mw = MainWindow()
     qtbot.addWidget(mw)
     mw._load_one(str(a))
+    wait_for_imports(mw)
     fid = next(iter(mw.files))
 
     drawer = ChannelEditorDrawer(mw, mw.files, fid)
@@ -582,6 +585,7 @@ def test_channel_editor_toast_own_failure_falls_back_once_without_recursion(
     mw = MainWindow()
     qtbot.addWidget(mw)
     mw._load_one(str(a))
+    wait_for_imports(mw)
     fid = next(iter(mw.files))
 
     drawer = ChannelEditorDrawer(mw, mw.files, fid)

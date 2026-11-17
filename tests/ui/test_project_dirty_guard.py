@@ -7,6 +7,7 @@ semantic source.
 """
 
 from __future__ import annotations
+from tests._helpers.import_tasks import wait_for_imports
 
 import json
 
@@ -474,8 +475,10 @@ def test_open_replacement_uses_same_save_discard_cancel_guard():
     host.prompt_choice = "cancel"
     opened = []
 
-    def _open_project(path):
+    def _open_project(path, *, on_restored=None):
         opened.append(path)
+        if on_restored is not None:
+            on_restored()
 
     host.open_project = _open_project
     host.files = {"f0": object()}
@@ -675,6 +678,7 @@ def test_close_project_cancel_keeps_sources_board_and_both_paths(
     window = MainWindow()
     qtbot.addWidget(window)
     window._load_one(str(csv_path))
+    wait_for_imports(window)
     assert window.save_project(project) is True
     uv = window._ultraview
     view_id = str(window.view_manager.get(0).view_id)
@@ -708,6 +712,7 @@ def test_close_project_save_as_cancel_keeps_binding(
     window = MainWindow()
     qtbot.addWidget(window)
     window._load_one(str(csv_path))
+    wait_for_imports(window)
     assert window.save_project(project) is True
     window._project_path = None
     window._project_dirty.path = None
@@ -738,6 +743,7 @@ def test_close_project_write_failure_keeps_dirty_binding(
     window = MainWindow()
     qtbot.addWidget(window)
     window._load_one(str(csv_path))
+    wait_for_imports(window)
     assert window.save_project(project) is True
     window.view_manager.rename(0, "写入失败")
     before = _binding_snapshot(window)
@@ -769,6 +775,7 @@ def test_close_project_degraded_save_cancel_blocks_close(
     window = MainWindow()
     qtbot.addWidget(window)
     window._load_one(str(csv_path))
+    wait_for_imports(window)
     assert window.save_project(project) is True
     window.view_manager.rename(0, "恢复不完整")
     health = window._project_restore_health
@@ -795,6 +802,7 @@ def test_successful_save_sets_clean_save_point_on_window(qapp, tmp_path):
     proj = tmp_path / "s.tlproj"
     mw = MainWindow()
     mw._load_one(str(csv_path))
+    wait_for_imports(mw)
     assert mw._project_dirty.is_dirty
     assert mw.save_project(proj) is True
     assert not mw._project_dirty.is_dirty
@@ -822,6 +830,7 @@ def test_user_mutation_projects_dirty_star_without_serializing(
     window = MainWindow()
     qtbot.addWidget(window)
     window._load_one(str(csv_path))
+    wait_for_imports(window)
     assert window.save_project(project) is True
     label = window.toolbar.lbl_project_session
     assert "A.tlproj" in label.text()
@@ -902,6 +911,7 @@ def test_remark_after_save_marks_dirty(qapp, qtbot, tmp_path, loaded_csv, monkey
     window.show()
     qtbot.waitExposed(window)
     window._load_one(loaded_csv)
+    wait_for_imports(window)
     fid = next(iter(window.files))
     window.navigator.set_checked_channels([(fid, "speed")])
     window.plot_time()
@@ -935,6 +945,7 @@ def test_camera_change_after_save_is_caught_by_guard_digest(
     window.show()
     qtbot.waitExposed(window)
     window._load_one(loaded_csv)
+    wait_for_imports(window)
     fid = next(iter(window.files))
     window.navigator.set_checked_channels([(fid, "speed")])
     window.plot_time()
@@ -1012,6 +1023,7 @@ def test_save_a_then_open_b_replaces_digest_and_project_session(
     assert digest_a != digest_b_on_source
 
     target.open_project(project_b)
+    wait_for_imports(target)
 
     assert target._project_dirty.path == str(project_b)
     assert target._project_dirty.saved_digest != digest_a
@@ -1039,6 +1051,7 @@ def test_fresh_open_seeds_canonical_baseline_and_leave_is_clean(
     assert source.save_project(project) is True
 
     restored.open_project(project)
+    wait_for_imports(restored)
 
     holder = restored._project_dirty
     assert holder.saved_digest is not None
@@ -1170,12 +1183,15 @@ def test_open_replacement_guard_on_real_window(qapp, tmp_path, monkeypatch):
     proj = tmp_path / "s.tlproj"
     mw = MainWindow()
     mw._load_one(str(a))
+    wait_for_imports(mw)
     mw.save_project(proj)
     mw._load_one(str(b))
+    wait_for_imports(mw)
     assert mw._project_dirty.is_dirty
     monkeypatch.setattr(mw, "_prompt_unsaved_project", lambda: "cancel")
     before = list(mw.files)
     mw._open_paths([str(proj)])
+    wait_for_imports(mw)
     assert list(mw.files) == before
     assert mw._project_dirty.is_dirty
 
@@ -1195,6 +1211,7 @@ def _fft_preset_window(qtbot, monkeypatch, tmp_path):
     win = MainWindow()
     qtbot.addWidget(win)
     win._load_one(str(csv_path))
+    wait_for_imports(win)
     fid = next(iter(win.files))
     channel = next(iter(win.files[fid].channels))
     _enter_fft(win, [fid])
@@ -1330,6 +1347,7 @@ def test_baseline_change_close_cancel_save_and_discard(
     restored = MainWindow()
     qtbot.addWidget(restored)
     restored.open_project(project)
+    wait_for_imports(restored)
     qapp.processEvents()
     assert restored.inspector.fft_ctx.preset_bar.baseline()["slot"] == 4
     assert not restored._project_session_is_dirty()
@@ -1337,6 +1355,7 @@ def test_baseline_change_close_cancel_save_and_discard(
     discarded = MainWindow()
     qtbot.addWidget(discarded)
     discarded.open_project(project)
+    wait_for_imports(discarded)
     qapp.processEvents()
     dbar = discarded.inspector.fft_ctx.preset_bar
     monkeypatch.setattr(dbar, "_confirm_axis_preservation", lambda *a, **kw: "preset")
@@ -1349,6 +1368,7 @@ def test_baseline_change_close_cancel_save_and_discard(
         is DirtyGuardResult.PROCEED_DISCARDED
     )
     discarded.open_project(project)
+    wait_for_imports(discarded)
     qapp.processEvents()
     assert discarded.inspector.fft_ctx.preset_bar.baseline()["slot"] == 4
     assert not discarded._project_session_is_dirty()
@@ -1375,6 +1395,7 @@ def test_programmatic_preset_restore_is_clean_and_submits_no_jobs(
 
     monkeypatch.setattr(restored._analysis_jobs, "submit_batch", _submit)
     restored.open_project(project)
+    wait_for_imports(restored)
     qapp.processEvents()
     assert restored.inspector.fft_ctx.preset_bar.baseline()["slot"] == 1
     assert restored.inspector.fft_ctx.preset_bar.baseline()["version"] == 2
@@ -1403,6 +1424,7 @@ def test_channel_edit_marks_dirty_and_reopen_without_skips_is_clean(
     window = MainWindow()
     qtbot.addWidget(window)
     window._load_one(loaded_csv)
+    wait_for_imports(window)
     fid = next(iter(window.files))
     assert window.save_project(project) is True
     assert not window._project_session_is_dirty()
@@ -1424,6 +1446,7 @@ def test_channel_edit_marks_dirty_and_reopen_without_skips_is_clean(
     restored = MainWindow()
     qtbot.addWidget(restored)
     restored.open_project(project)
+    wait_for_imports(restored)
     disk = pio.canonical_project_digest(pio.load_project_from_json(project))
     live = pio.canonical_project_digest(restored._assemble_project_document(project))
     assert disk == live

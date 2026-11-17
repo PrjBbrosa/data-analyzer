@@ -5,6 +5,7 @@ leave an alternate Canvas Home policy behind. Home therefore returns to the
 raw plotted data union just like every other TimeDomain View.
 """
 from __future__ import annotations
+from tests._helpers.import_tasks import wait_for_imports
 
 import pytest
 
@@ -51,6 +52,7 @@ def _load_sfns_view(qapp, qtbot, tmp_path, monkeypatch):
         window._wwt_import, "_ask_layout", lambda *_args, **_kwargs: True,
     )
     window._load_one(str(path))
+    wait_for_imports(window)
     qapp.processEvents()
     window._apply_active_view(window.view_manager.active)
     qapp.processEvents()

@@ -1,5 +1,6 @@
 """First-frame contracts for the simplified WWT TimeDomain import path."""
 from __future__ import annotations
+from tests._helpers.import_tasks import wait_for_imports
 
 from types import SimpleNamespace
 
@@ -34,6 +35,7 @@ def _load_rack_initial_view(qapp, qtbot, tmp_path, monkeypatch):
         window._wwt_import, "_ask_layout", lambda *_args, **_kwargs: True,
     )
     window._load_one(str(path))
+    wait_for_imports(window)
     qapp.processEvents()
     window._apply_active_view(window.view_manager.active)
     qapp.processEvents()
@@ -81,6 +83,7 @@ def test_record_only_wwt_first_frame_may_intentionally_clip_data_union(
     )
 
     window._load_one(str(path))
+    wait_for_imports(window)
     qapp.processEvents()
 
     state = window.view_manager.get(window.view_manager.active)
@@ -162,6 +165,7 @@ def test_mixed_initial_axis_groups_do_not_overwrite_wwt_custom_x_on_open(
     )
 
     window._load_one(str(path))
+    wait_for_imports(window)
     qapp.processEvents()
 
     state = window.view_manager.get(window.view_manager.active)

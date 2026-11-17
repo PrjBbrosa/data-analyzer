@@ -25,6 +25,8 @@ from pathlib import Path
 
 import numpy as np
 
+from .import_limits import get_import_budget
+
 logger = logging.getLogger(__name__)
 
 _SIG = b"HEAD acoustics datafile format"
@@ -593,8 +595,9 @@ def _decode_header(header: bytes, warnings: list[str]) -> str:
     return header.decode(encoding, errors="replace")
 
 
-def parse_head_hdf(path) -> HeadHdfFile:
+def parse_head_hdf(path, *, _budget=None) -> HeadHdfFile:
     path = Path(path)
+    budget = get_import_budget() if _budget is None else _budget
     header, start, file_size = _read_bounded_header(path)
     warnings: list[str] = []
     text = _decode_header(header, warnings)
@@ -840,6 +843,22 @@ def parse_head_hdf(path) -> HeadHdfFile:
                 "HEAD .hdf 数据块之后有无法解释的额外数据，不能忽略"
             )
 
+    # Keep the existing structural/time checks ahead of resource admission.
+    # Payload plus supported float64 samples and their eventual pandas copies;
+    # each factor group owns one axis, not one per channel. UINT32 slots are
+    # byte-backed only and must never be cast as floats.
+    budget.check_channels(len(channels), label="HEAD channels")
+    budget.reserve(len(header) + trailer_size + nbytes, label="HEAD input buffers")
+    supported = [ch for ch in channels if ch.impl_type == "FLOAT32"]
+    budget.reserve_array((sum(ch.n_samples for ch in supported),), np.float64,
+                         copies=2, label="HEAD values and DataFrame")
+    axis_sizes = {ch.factor: ch.n_samples for ch in supported}
+    budget.reserve_array((sum(axis_sizes.values()),), np.float64, copies=2,
+                         label="HEAD group axes and DataFrame")
+    # build_time_axis validates with diff/finite masks. Reserve its largest
+    # scratch once, rather than charging every sequential group's scratch.
+    budget.reserve_array((max(axis_sizes.values(), default=0),), np.float64,
+                         copies=2, label="HEAD time-axis scratch")
     _demux(path, start, nbytes, channels, ch_order, n_scans, slot_count, warnings)
 
     return HeadHdfFile(

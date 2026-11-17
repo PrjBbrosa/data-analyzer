@@ -7,7 +7,8 @@ h5py
 # Base NI TDMS reader; optional HDF/pandas extras are intentionally excluded.
 nptdms==1.11.0
 PyQt5
-asammdf
+# Build/install the reviewed native wheel first; see tools/dependency_patches/asammdf/README.md.
+asammdf==8.8.32+tracelab.1
 av
 pyqtgraph>=0.13.3
 openpyxl

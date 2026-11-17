@@ -1,5 +1,6 @@
 """Empty-workspace session reset when the last logical source is closed (R6)."""
 from __future__ import annotations
+from tests._helpers.import_tasks import wait_for_imports
 
 import json
 
@@ -36,7 +37,9 @@ def _load_two(qtbot, tmp_path):
     win = MainWindow()
     qtbot.addWidget(win)
     win._load_one(a)
+    wait_for_imports(win)
     win._load_one(b)
+    wait_for_imports(win)
     fid_a, fid_b = list(win.files)
     return win, fid_a, fid_b
 
@@ -121,6 +124,7 @@ def test_close_all_resets_session_and_reopen_uses_time_axis(qapp, qtbot, tmp_pat
     assert win.chart_stack.cursor_display_options() == before_options
 
     win._load_one(_csv(tmp_path / "c.csv"))
+    wait_for_imports(win)
     win.plot_time()
     assert win.inspector.top.xaxis_mode() == TIME_MODE
     assert win._custom_xaxis.spec.mode == TIME_MODE
@@ -244,7 +248,9 @@ def test_close_one_wwt_file_resets_only_its_now_empty_view(
     first_path = wwt.rack_travel_force_initial_view(tmp_path / "first.wwt")
     second_path = wwt.rack_travel_force_initial_view(tmp_path / "second.wwt")
     win._load_one(str(first_path))
+    wait_for_imports(win)
     win._load_one(str(second_path))
+    wait_for_imports(win)
     qapp.processEvents()
 
     assert len(win.view_manager.views) == 2
@@ -286,6 +292,7 @@ def test_merged_imported_axis_group_survives_project_reload(
     qtbot.addWidget(win)
     monkeypatch.setattr(win._wwt_import, "_ask_layout", lambda *_args, **_kwargs: True)
     win._load_one(str(wwt.speed_unit_alias_shared_axis(tmp_path / "axis.wwt")))
+    wait_for_imports(win)
     qapp.processEvents()
 
     state = win.view_manager.get(win.view_manager.active)
@@ -301,6 +308,7 @@ def test_merged_imported_axis_group_survives_project_reload(
     restored = MainWindow()
     qtbot.addWidget(restored)
     restored.open_project(project)
+    wait_for_imports(restored)
 
     reloaded = restored.view_manager.get(restored.view_manager.active)
     groups = reloaded.axis_opts["channel_axis_groups"]
@@ -341,6 +349,7 @@ def test_open_project_does_not_collapse_views_or_custom_x(qapp, qtbot, tmp_path)
     restored = MainWindow()
     qtbot.addWidget(restored)
     restored.open_project(project)
+    wait_for_imports(restored)
 
     assert len(restored.files) == 2
     assert len(restored.view_manager.views) == 2

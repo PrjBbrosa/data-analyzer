@@ -312,7 +312,7 @@ def test_replay_backend_speed_multiplier_changes_release_rate(monkeypatch):
     ]
 
 
-def test_replay_backend_loads_mf4_source_samples(tmp_path: Path):
+def test_replay_backend_loads_mf4_source_samples(tmp_path: Path, monkeypatch):
     selected = (
         SelectedMeasurement(name="A", unit="rpm"),
         SelectedMeasurement(name="B", unit="Nm"),
@@ -325,6 +325,13 @@ def test_replay_backend_loads_mf4_source_samples(tmp_path: Path):
     writer.append("B", 0.1, 2.5)
     writer.finalize()
 
+    from mf4_analyzer.io.loader import DataLoader
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Replay parsed MF4 in parent")
+
+    monkeypatch.setattr(DataLoader, "load_mf4", forbidden)
+
     replay_source = ReplayRecorderBackend.source_from_mf4(mf4_path)
 
     assert [m.name for m in replay_source.selected] == ["A", "B"]
@@ -334,6 +341,32 @@ def test_replay_backend_loads_mf4_source_samples(tmp_path: Path):
         sample[1] for sample in replay_source.source_samples
     )
     assert {sample[0] for sample in replay_source.source_samples} == {"A", "B"}
+
+
+def test_replay_converts_isolated_result_without_file_io(tmp_path, monkeypatch):
+    import copy
+    import pandas as pd
+
+    frame = pd.DataFrame({"Master": [.2, .1], "Time": [20., 10.], "sig": [float("nan"), 3.]})
+    frame.attrs["source_metadata"] = {
+        "time_column": "Master", "warnings": ["unaligned source"],
+        "mf4_alignment": {"mode": "shared", "channel": {"physical_occurrence": (0, 2)}},
+    }
+    original = copy.deepcopy(frame.attrs)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("pure Replay conversion attempted another import")
+
+    monkeypatch.setattr(backends_module, "run_import", forbidden)
+    source = ReplayRecorderBackend.source_from_loaded(
+        tmp_path / "already-detached.mf4", (frame, ["Master", "Time", "sig"], {"Time": "Nm", "sig": "V"}),
+    )
+    assert [item.name for item in source.selected] == ["Time", "sig"]
+    assert source.source_samples == [("Time", .1, 10.), ("sig", .1, 3.), ("Time", .2, 20.)]
+    assert source.warnings == ("unaligned source",)
+    assert source.source_metadata["time_column"] == "Master"
+    source.source_metadata["mf4_alignment"]["channel"]["physical_occurrence"][0] = 99
+    assert frame.attrs == original
 
 
 def test_replay_backend_deduplicates_source_path_aliases(tmp_path: Path):

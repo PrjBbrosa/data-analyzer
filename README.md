@@ -2,6 +2,8 @@
 
 TraceLab 是用于工程测量数据浏览、时域/频域/阶次分析、批处理和采集回放的 PyQt5 桌面工具。
 
+源码环境安装依赖前，先按 [MDF 原生读取器构建说明](tools/dependency_patches/asammdf/README.md) 构建固定版本的修补 wheel，再以 `--find-links` 安装 `requirements.txt`。Windows Full/Lite/Modular 构建脚本已接入该流程；普通公开版 asammdf 不能替代此依赖。
+
 ## 8.4.7 当前版本
 
 - 通道编辑里的派生通道和删除写入项目。重新打开时按保存的运算配方，用当前源数据重算；源文件变了，结果跟着变。某条配方算不出来时会提示，不会改名或补数。

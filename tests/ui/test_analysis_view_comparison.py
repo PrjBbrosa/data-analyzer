@@ -5,6 +5,7 @@ compute dispatch use ``(section, view_id, pane_index)`` rather than whichever
 view happens to be the active tab.
 """
 from __future__ import annotations
+from tests._helpers.import_tasks import wait_for_imports
 
 from types import SimpleNamespace
 
@@ -39,7 +40,9 @@ def two_file_win(qapp, loaded_csv, tmp_path, qtbot):
     win = MainWindow()
     qtbot.addWidget(win)
     win._load_one(loaded_csv)
+    wait_for_imports(win)
     win._load_one(str(path))
+    wait_for_imports(win)
     assert len(win.files) == 2
     return win
 

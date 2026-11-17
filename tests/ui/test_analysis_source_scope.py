@@ -4,6 +4,7 @@ Pure helpers live in ``analysis_source_scope``; projection/close contracts
 exercise MainWindow only where live projection must be asserted.
 """
 from __future__ import annotations
+from tests._helpers.import_tasks import wait_for_imports
 
 import copy
 
@@ -256,7 +257,9 @@ def win_two(qapp, qtbot, tmp_path):
     win = MainWindow()
     qtbot.addWidget(win)
     win._load_one(a)
+    wait_for_imports(win)
     win._load_one(b)
+    wait_for_imports(win)
     fid_a, fid_b = list(win.files)
     return win, fid_a, fid_b
 
@@ -788,6 +791,7 @@ def test_wwt_group_close_is_atomic_and_clears_record_rows_once(
     monkeypatch.setattr(win, "plot_time", lambda *_a, **_k: None)
     path = wwt.two_zeit_cohorts_record_only_on_owner_a(tmp_path / "split.wwt")
     win._load_one(str(path))
+    wait_for_imports(win)
     qapp.processEvents()
     fids = list(win.files)
     assert len(fids) == 2
@@ -852,6 +856,7 @@ def test_detach_wwt_source_from_focused_view_keeps_sibling_view_records(
     monkeypatch.setattr(win, "_confirm_detach_files", lambda *_a, **_k: True)
     path = wwt.measurement_plus_record_only_tolerance(path=tmp_path / "tol.wwt")
     win._load_one(str(path))
+    wait_for_imports(win)
     qapp.processEvents()
     fid = next(iter(win.files))
     src_idx = win.view_manager.active

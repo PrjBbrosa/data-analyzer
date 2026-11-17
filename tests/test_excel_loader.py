@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 import pytest
+import zipfile
 
 from mf4_analyzer.io import loader
 from mf4_analyzer.io.loader import DataLoader
@@ -15,7 +16,7 @@ from mf4_analyzer.io.loader import DataLoader
     ],
 )
 def test_excel_loader_selects_engine_from_extension(
-    monkeypatch, filename, engine, available_flag,
+    monkeypatch, tmp_path, filename, engine, available_flag,
 ):
     monkeypatch.setattr(loader, available_flag, True)
     calls = []
@@ -26,9 +27,15 @@ def test_excel_loader_selects_engine_from_extension(
 
     monkeypatch.setattr(pd, "read_excel", fake_read_excel)
 
-    DataLoader.load_excel(filename)
+    path = tmp_path / filename
+    if path.suffix == ".xlsx":
+        with zipfile.ZipFile(path, "w") as archive:
+            archive.writestr("xl/worksheets/sheet1.xml", "<worksheet/>")
+    else:
+        path.write_bytes(b"test workbook")
+    DataLoader.load_excel(path)
 
-    assert calls == [(filename, {"engine": engine})]
+    assert calls == [(path, {"engine": engine})]
 
 
 def test_excel_loader_rejects_unknown_excel_extension():

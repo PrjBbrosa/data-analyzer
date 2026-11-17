@@ -4,6 +4,7 @@ Constructs a real MainWindow (offscreen), loads two CSV files, and exercises
 the FFT section's whole-view compute, overlay rendering, empty-state on a fresh
 view, and cache-hit rendering on view switch-back (no recompute).
 """
+from tests._helpers.import_tasks import wait_for_imports
 from mf4_analyzer.ui.analysis_result_state import bind_result, snapshot_request
 
 import numpy as np
@@ -30,7 +31,9 @@ def two_file_win(qapp, loaded_csv, tmp_path, qtbot):
     win = MainWindow()
     qtbot.addWidget(win)
     win._load_one(loaded_csv)
+    wait_for_imports(win)
     win._load_one(str(p2))
+    wait_for_imports(win)
     assert len(win.files) == 2
     return win
 
@@ -1765,6 +1768,7 @@ def test_analysis_views_survive_project_save_reopen(two_file_win, tmp_path, qtbo
     win2 = MainWindow()
     qtbot.addWidget(win2)
     win2.open_project(proj)
+    wait_for_imports(win2)
 
     # Files were re-loaded; the new fids may differ, but the channel names and
     # ordering are preserved, so remap reproduces the same (fid, ch) pairs
@@ -1857,6 +1861,7 @@ def test_project_reopen_preserves_auto_manual_per_section_and_pane_sources(
     win2 = MainWindow()
     qtbot.addWidget(win2)
     win2.open_project(proj)
+    wait_for_imports(win2)
 
     fids2 = list(win2.files.keys())
     fid_remap = {fids[i]: fids2[i] for i in range(2)}
@@ -1972,6 +1977,7 @@ def test_project_reopen_in_time_mode_does_not_replace_inactive_analysis_sources(
     win2 = MainWindow()
     qtbot.addWidget(win2)
     win2.open_project(proj)
+    wait_for_imports(win2)
 
     fids2 = list(win2.files.keys())
     fid_remap = {fids[i]: fids2[i] for i in range(2)}
@@ -2035,6 +2041,7 @@ def test_open_project_render_failure_toasts_warning(
     monkeypatch.setattr(win2, "toast", lambda msg, level: calls.append((level, msg)))
 
     win2.open_project(proj)
+    wait_for_imports(win2)
 
     assert ("warning", "恢复渲染失败，请手动点计算") in calls
 
@@ -2057,6 +2064,7 @@ def test_old_project_without_analysis_views_loads_with_defaults(
     win2 = MainWindow()
     qtbot.addWidget(win2)
     win2.open_project(proj)  # must not raise
+    wait_for_imports(win2)
 
     for sec in ("fft", "order", "fft_time"):
         mgr = win2.analysis_managers[sec]
@@ -3491,6 +3499,7 @@ def test_heatmap_cmap_stays_on_its_view_and_survives_project_reopen(
     win2 = MainWindow()
     qtbot.addWidget(win2)
     win2.open_project(proj)
+    wait_for_imports(win2)
     cmaps = [
         (pane.chart_appearances.get("heatmap") or {}).get("cmap")
         for view in win2.analysis_managers["fft_time"].views

@@ -14,9 +14,16 @@ def _write_mf4(path, offset=0.0):
     write_single_channel_mf4(path, name="sig", samples=samples)
 
 
-def test_build_snapshot_contains_stable_metrics(tmp_path):
+def test_build_snapshot_contains_stable_metrics(tmp_path, monkeypatch):
     mf4 = tmp_path / "sample.mf4"
     _write_mf4(mf4)
+
+    from mf4_analyzer.io.loader import DataLoader
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("regression snapshot parsed MF4 in parent")
+
+    monkeypatch.setattr(DataLoader, "load_mf4", forbidden)
 
     snapshot = build_snapshot(mf4, channels=("sig",))
 

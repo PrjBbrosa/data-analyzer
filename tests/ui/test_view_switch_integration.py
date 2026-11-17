@@ -1,3 +1,4 @@
+from tests._helpers.import_tasks import wait_for_imports
 import pytest
 from PyQt5.QtCore import QObject, pyqtSignal
 
@@ -49,6 +50,7 @@ def _make_loaded_window(qtbot, qapp, loaded_csv):
     w.show()
     qtbot.waitExposed(w)
     w.load_file(loaded_csv)
+    wait_for_imports(w)
     qapp.processEvents()
     return w
 

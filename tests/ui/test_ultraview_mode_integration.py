@@ -1,5 +1,6 @@
 """UltraView independent panel: ChartStack host, Toolbar, Inspector, MainWindow routing."""
 from __future__ import annotations
+from tests._helpers.import_tasks import wait_for_imports
 
 import logging
 from pathlib import Path
@@ -52,6 +53,7 @@ def test_deferred_fft_preview_survives_section_hide(
     win.show()
     win.chart_stack.set_page_transition_motion_policy(POLICY_OFF)
     win.load_file(loaded_csv)
+    wait_for_imports(win)
     fid = next(iter(win.files))
     win.toolbar._set_mode("fft")
     win._attach_files_to_active_context([fid])
@@ -854,6 +856,7 @@ def test_open_ultraview_captures_plotted_time_view(qapp, qtbot, loaded_csv):
     win.show()
     qtbot.waitExposed(win)
     win._load_one(loaded_csv)
+    wait_for_imports(win)
     fid = next(iter(win.files))
     win.channel_list.check_first_channel(fid)
 
@@ -898,6 +901,7 @@ def test_idle_pan_and_markup_recaptures_time_preview(qapp, qtbot, loaded_csv):
     win.show()
     qtbot.waitExposed(win)
     win._load_one(loaded_csv)
+    wait_for_imports(win)
     fid = next(iter(win.files))
     win.channel_list.check_first_channel(fid)
 
@@ -1139,6 +1143,7 @@ def test_closing_wwt_source_invalidates_ultraview_preview_keeps_view_id(
     monkeypatch.setattr(win, "plot_time", lambda *_a, **_k: None)
     path = wwt.measurement_plus_record_only_tolerance(path=tmp_path / "tol.wwt")
     win._load_one(str(path))
+    wait_for_imports(win)
     qapp.processEvents()
     fid = next(iter(win.files))
     view_id = str(win.view_manager.get(win.view_manager.active).view_id)

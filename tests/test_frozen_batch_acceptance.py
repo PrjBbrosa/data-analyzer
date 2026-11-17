@@ -79,6 +79,16 @@ def _write_acceptance_sources(directory: Path) -> list[Path]:
 
 
 def _simulate_frozen_runtime(tmp_path: Path, monkeypatch) -> tuple[Path, Path, str]:
+    from mf4_analyzer.io import import_process
+
+    python_executable = sys.executable
+
+    def worker_command(request):
+        # The fake EXE binds acceptance evidence only. Keep the real broker,
+        # parser child and renderer running in this source test's interpreter.
+        return [python_executable, "-m", "mf4_analyzer.io.import_worker", str(request)]
+
+    monkeypatch.setattr(import_process, "_worker_command", worker_command)
     executable = tmp_path / "TraceLabAcceptance.exe"
     executable.write_bytes(b"fake frozen executable for acceptance binding")
     executable_sha256 = hashlib.sha256(executable.read_bytes()).hexdigest()

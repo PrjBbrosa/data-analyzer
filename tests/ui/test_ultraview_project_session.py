@@ -1,5 +1,6 @@
 """UltraView Board persistence through MainWindow save/open."""
 from __future__ import annotations
+from tests._helpers.import_tasks import wait_for_imports
 
 import csv
 import json
@@ -48,6 +49,7 @@ def test_card_lock_survives_save_reload(qapp, qtbot, tmp_path):
     window = MainWindow()
     qtbot.addWidget(window)
     window._load_one(str(csv_a))
+    wait_for_imports(window)
     ref = UltraViewRef("time", str(window.view_manager.get(0).view_id))
     uv = window._ultraview
     uv._apply_add_ref(ref)
@@ -63,6 +65,7 @@ def test_card_lock_survives_save_reload(qapp, qtbot, tmp_path):
     restored = MainWindow()
     qtbot.addWidget(restored)
     restored.open_project(project)
+    wait_for_imports(restored)
     QCoreApplication.processEvents()
     assert restored._ultraview._free_grid_card_locked(ref.section, ref.view_id)
 
@@ -89,6 +92,7 @@ def test_save_from_ultraview_writes_last_source_mode_and_board(qapp, qtbot, tmp_
     win = MainWindow()
     qtbot.addWidget(win)
     win._load_one(str(csv_a))
+    wait_for_imports(win)
     time_id = str(win.view_manager.get(0).view_id)
     fft_id = str(win.analysis_managers["fft"].get(0).view_id)
     uv = win._ultraview
@@ -141,6 +145,7 @@ def test_reopen_restores_board_without_entering_ultraview(qapp, qtbot, tmp_path)
     win = MainWindow()
     qtbot.addWidget(win)
     win._load_one(str(csv_a))
+    wait_for_imports(win)
     time_id = str(win.view_manager.get(0).view_id)
     fft_id = str(win.analysis_managers["fft"].get(0).view_id)
     uv = win._ultraview
@@ -158,6 +163,7 @@ def test_reopen_restores_board_without_entering_ultraview(qapp, qtbot, tmp_path)
     restored = MainWindow()
     qtbot.addWidget(restored)
     restored.open_project(proj)
+    wait_for_imports(restored)
     QCoreApplication.processEvents()
 
     assert restored.chart_stack.current_mode() == "fft"
@@ -186,6 +192,7 @@ def test_save_reopen_restores_workspace_card_action_preference(qapp, qtbot, tmp_
     win = MainWindow()
     qtbot.addWidget(win)
     win._load_one(str(csv_a))
+    wait_for_imports(win)
     uv = win._ultraview
 
     assert uv.workspace.show_card_actions is False
@@ -203,6 +210,7 @@ def test_save_reopen_restores_workspace_card_action_preference(qapp, qtbot, tmp_
     restored = MainWindow()
     qtbot.addWidget(restored)
     restored.open_project(proj)
+    wait_for_imports(restored)
     QCoreApplication.processEvents()
     page = restored.chart_stack.page_ultraview
     assert restored._ultraview.workspace.show_card_actions is True
@@ -241,6 +249,7 @@ def test_project_sidecar_restores_shared_preview_without_compute(qapp, qtbot, tm
     win = MainWindow()
     qtbot.addWidget(win)
     win._load_one(str(csv_a))
+    wait_for_imports(win)
     uv = win._ultraview
     ref = UltraViewRef("time", str(win.view_manager.get(0).view_id))
     add_ref(uv.board, ref)
@@ -256,6 +265,7 @@ def test_project_sidecar_restores_shared_preview_without_compute(qapp, qtbot, tm
     probe = ComputeProbe().install(restored)
     try:
         restored.open_project(proj)
+        wait_for_imports(restored)
         QCoreApplication.processEvents()
         new_ref = UltraViewRef("time", str(restored.view_manager.get(0).view_id))
         assert restored._ultraview.store.get(new_ref) is not None
@@ -271,6 +281,7 @@ def test_sidecar_lazy_load_decodes_after_restore_returns(qapp, qtbot, tmp_path):
     win = MainWindow()
     qtbot.addWidget(win)
     win._load_one(str(csv_a))
+    wait_for_imports(win)
     uv = win._ultraview
     ref = UltraViewRef("time", str(win.view_manager.get(0).view_id))
     add_ref(uv.board, ref)
@@ -300,6 +311,7 @@ def test_failed_sidecar_save_as_drops_old_project_relative_descriptor(qapp, qtbo
     win = MainWindow()
     qtbot.addWidget(win)
     win._load_one(str(csv_a))
+    wait_for_imports(win)
     uv = win._ultraview
     ref = UltraViewRef("time", str(win.view_manager.get(0).view_id))
     add_ref(uv.board, ref)
@@ -328,6 +340,7 @@ def test_open_project_parse_failure_keeps_board(qapp, qtbot, tmp_path):
     bad.write_text("{not-json", encoding="utf-8")
     try:
         win.open_project(bad)
+        wait_for_imports(win)
         raise AssertionError("open_project should reject invalid JSON")
     except ValueError:
         pass
@@ -343,6 +356,7 @@ def test_open_project_cancel_keeps_board(qapp, qtbot, tmp_path, monkeypatch):
     win = MainWindow()
     qtbot.addWidget(win)
     win._load_one(str(csv_a))
+    wait_for_imports(win)
     uv = win._ultraview
     view_id = str(win.view_manager.get(0).view_id)
     add_ref(uv.board, UltraViewRef("time", view_id))
@@ -369,6 +383,7 @@ def test_open_project_keeps_page_hooks_and_toasts_ultraview_warnings(
     win = MainWindow()
     qtbot.addWidget(win)
     win._load_one(str(csv_a))
+    wait_for_imports(win)
     win.save_project(proj)
     raw = json.loads(proj.read_text(encoding="utf-8"))
     raw["ultraview"] = {
@@ -400,6 +415,7 @@ def test_open_project_keeps_page_hooks_and_toasts_ultraview_warnings(
     monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: QMessageBox.Ok)
 
     restored.open_project(proj)
+    wait_for_imports(restored)
     QCoreApplication.processEvents()
 
     assert restored._ultraview.board.layout_id == "hero_left_4"
@@ -419,6 +435,7 @@ def test_free_grid_project_roundtrip_keeps_layout_id_and_placements(qapp, qtbot,
     win = MainWindow()
     qtbot.addWidget(win)
     win._load_one(str(csv_a))
+    wait_for_imports(win)
     time_id = str(win.view_manager.get(0).view_id)
     fft_id = str(win.analysis_managers["fft"].get(0).view_id)
     uv = win._ultraview
@@ -443,6 +460,7 @@ def test_free_grid_project_roundtrip_keeps_layout_id_and_placements(qapp, qtbot,
     restored = MainWindow()
     qtbot.addWidget(restored)
     restored.open_project(proj)
+    wait_for_imports(restored)
     QCoreApplication.processEvents()
     board = restored._ultraview.board
     assert board.layout_id == "grid_3x3"
@@ -460,6 +478,7 @@ def test_viewport_is_not_written_into_saved_project(qapp, qtbot, tmp_path):
     win = MainWindow()
     qtbot.addWidget(win)
     win._load_one(str(csv_a))
+    wait_for_imports(win)
     win.open_ultraview()
     QCoreApplication.processEvents()
     page = win.chart_stack.page_ultraview
@@ -474,6 +493,7 @@ def test_viewport_is_not_written_into_saved_project(qapp, qtbot, tmp_path):
     restored = MainWindow()
     qtbot.addWidget(restored)
     restored.open_project(proj)
+    wait_for_imports(restored)
     QCoreApplication.processEvents()
     restored.open_ultraview()
     QCoreApplication.processEvents()
@@ -489,6 +509,7 @@ def test_switching_boards_restores_session_camera(qapp, qtbot, tmp_path):
     win = MainWindow()
     qtbot.addWidget(win)
     win._load_one(str(csv_a))
+    wait_for_imports(win)
     win.open_ultraview()
     QCoreApplication.processEvents()
     coordinator = win._ultraview
@@ -531,6 +552,7 @@ def test_extent_rebase_drops_session_camera_back_to_fit(qapp, qtbot, tmp_path):
     win = MainWindow()
     qtbot.addWidget(win)
     win._load_one(str(csv_a))
+    wait_for_imports(win)
     win.open_ultraview()
     QCoreApplication.processEvents()
     coordinator = win._ultraview
@@ -555,6 +577,7 @@ def test_reset_sheet_session_forgets_session_camera(qapp, qtbot, tmp_path):
     win = MainWindow()
     qtbot.addWidget(win)
     win._load_one(str(csv_a))
+    wait_for_imports(win)
     win.open_ultraview()
     QCoreApplication.processEvents()
     page = win.chart_stack.page_ultraview
@@ -575,6 +598,7 @@ def test_legacy_viewport_payload_does_not_warn_on_restore(qapp, qtbot, tmp_path)
     win = MainWindow()
     qtbot.addWidget(win)
     win._load_one(str(csv_a))
+    wait_for_imports(win)
     win.open_ultraview()
     QCoreApplication.processEvents()
     assert win.save_project(proj) is True
@@ -589,6 +613,7 @@ def test_legacy_viewport_payload_does_not_warn_on_restore(qapp, qtbot, tmp_path)
     restored = MainWindow()
     qtbot.addWidget(restored)
     restored.open_project(proj)
+    wait_for_imports(restored)
     QCoreApplication.processEvents()
     warnings = restored._ultraview.restore_project_state(raw["ultraview"])
     assert warnings == []
@@ -602,6 +627,7 @@ def test_reopened_placed_card_does_not_auto_aspect(qapp, qtbot, tmp_path):
     win = MainWindow()
     qtbot.addWidget(win)
     win._load_one(str(csv_a))
+    wait_for_imports(win)
     uv = win._ultraview
     ref = UltraViewRef("time", str(win.view_manager.get(0).view_id))
     uv._apply_add_ref(ref)
@@ -613,6 +639,7 @@ def test_reopened_placed_card_does_not_auto_aspect(qapp, qtbot, tmp_path):
     restored = MainWindow()
     qtbot.addWidget(restored)
     restored.open_project(proj)
+    wait_for_imports(restored)
     QCoreApplication.processEvents()
     ruv = restored._ultraview
     assert ruv._pending_auto_aspect == {}
@@ -635,6 +662,7 @@ def test_reopen_keeps_exact_grid_rects_without_smart_layout(
     win = MainWindow()
     qtbot.addWidget(win)
     win._load_one(str(csv_a))
+    wait_for_imports(win)
     uv = win._ultraview
     first = UltraViewRef("time", str(win.view_manager.get(0).view_id))
     second = UltraViewRef("fft", str(win.analysis_managers["fft"].get(0).view_id))
@@ -684,6 +712,7 @@ def test_reopen_keeps_exact_grid_rects_without_smart_layout(
     restored = MainWindow()
     qtbot.addWidget(restored)
     restored.open_project(proj)
+    wait_for_imports(restored)
     QCoreApplication.processEvents()
     ruv = restored._ultraview
     assert {item.ref: item.rect for item in ruv.board.free_grid} == original

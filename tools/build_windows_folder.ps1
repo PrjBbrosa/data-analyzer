@@ -40,6 +40,9 @@ if ($env:OS -ne "Windows_NT") {
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $EntryScript = Join-Path $RepoRoot "MF4 Data Analyzer V1.py"
 $Requirements = Join-Path $RepoRoot "requirements.txt"
+$MdfWheelBuilder = Join-Path $PSScriptRoot "dependency_patches\asammdf\build_wheel.py"
+$MdfWheelDir = Join-Path $RepoRoot ".state\dependency-wheels\windows"
+$MdfSourceArchive = Join-Path $MdfWheelDir "asammdf-8.8.32+tracelab.1-source.tar.gz"
 $AcquisitionRequirements = Join-Path $RepoRoot "requirements-windows-acquisition.txt"
 $RuntimeVerifier = Join-Path $RepoRoot "scripts\verify_windows_acquisition_runtime.py"
 $StyleQss = Join-Path $RepoRoot "mf4_analyzer\ui_kit\style.qss"
@@ -76,12 +79,19 @@ if (-not (Test-Path $VenvPython)) {
 
 if (-not $SkipInstall) {
     & $VenvPython -m pip install --upgrade pip setuptools wheel
-    & $VenvPython -m pip install -r $Requirements
+    & $VenvPython $MdfWheelBuilder @("--output", $MdfWheelDir)
+    if ($LASTEXITCODE -ne 0) { throw "Verified MDF wheel build failed" }
+    & $VenvPython -m pip install @("--find-links", $MdfWheelDir, "-r", $Requirements)
+    if ($LASTEXITCODE -ne 0) { throw "Verified import dependencies could not be installed" }
     & $VenvPython -m pip install -r $AcquisitionRequirements
     & $VenvPython -m pip install --upgrade pyinstaller qtawesome
 }
 
 New-Item -ItemType Directory -Force -Path $EvidenceDir, $BuildEvidenceDir | Out-Null
+& $VenvPython -c "import sys; sys.path.insert(0, sys.argv[1]); from mf4_analyzer.io.mdf_reader import _require_fixed_arrays; _require_fixed_arrays()" $RepoRoot
+if ($LASTEXITCODE -ne 0) { throw "Unverified MDF native reader; rebuild dependencies" }
+if (-not (Test-Path $MdfSourceArchive)) { throw "Modified MDF source archive is required for distribution" }
+Copy-Item -Path (Join-Path $MdfWheelDir "*.whl.json") -Destination $BuildEvidenceDir -Force
 & $VenvPython $RuntimeVerifier --json (Join-Path $EvidenceDir "build-api-contract.json")
 if ($LASTEXITCODE -ne 0) { throw "Pinned Vector/XCP runtime contract failed before packaging" }
 
@@ -192,6 +202,10 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $HiddenImports = @(
+    "mf4_analyzer.io.import_worker",
+    "mf4_analyzer.io.import_transport",
+    "mf4_analyzer.io.import_process",
+    "mf4_analyzer.ui.main_window.import_coordinator",
     # pyxcp/pya2l are --exclude-module (vendored), so PyInstaller cannot see
     # their import closure and does not auto-collect stdlib modules that ONLY
     # that closure imports. Verified against PYZ-00.toc + base_library.zip that
@@ -320,6 +334,7 @@ $PyInstallerArgs += @(
     # from reintroducing Matplotlib through PyInstaller's analysis graph.
     "--exclude-module", "matplotlib",
     "--collect-submodules", "mf4_analyzer.acquisition_ui.widgets",
+    "--add-data", "$MdfSourceArchive;licenses",
     "--hidden-import", "pyqtgraph",
     "--hidden-import", "qtawesome"
 )

@@ -56,13 +56,14 @@ def test_open_files_or_project_no_selection_skips_dispatch(qapp, qtbot, monkeypa
     assert captured == []
 
 
-def test_open_paths_dispatches_data_files_to_load_one(qapp, qtbot, monkeypatch):
+def test_open_paths_dispatches_data_files_to_async_batch(qapp, qtbot, monkeypatch):
     w = MainWindow()
     qtbot.addWidget(w)
     loaded = []
-    monkeypatch.setattr(w, "_load_one", lambda fp, **k: loaded.append(fp))
+    monkeypatch.setattr(w, "_start_import_paths", lambda paths, **k: loaded.extend(paths))
 
     w._open_paths(["/x/a.csv", "/x/b.mf4"])
+    qtbot.waitUntil(lambda: not w._imports.busy, timeout=15000)
 
     assert loaded == ["/x/a.csv", "/x/b.mf4"]
 
@@ -220,3 +221,22 @@ def test_overlay_transparent_to_mouse(qapp, qtbot, tmp_path):
     w.dragEnterEvent(_enter(_mime([f])))
 
     assert w._drop_overlay.testAttribute(Qt.WA_TransparentForMouseEvents)
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _local_import_broker(monkeypatch):
+    """Exercise GUI continuations with existing loader fakes; broker has its own gates."""
+    from mf4_analyzer.io import DataLoader
+    from mf4_analyzer.ui.main_window import import_coordinator
+
+    def run(method, path, *, kwargs=None, cancel_check=None, progress_callback=None, limits=None):
+        options = dict(kwargs or {})
+        if method in {"load_blf_frames", "probe_blf_dbc_frames"}:
+            path = options.pop("frames")
+        if progress_callback:
+            progress_callback(-1.0, "读取表格" if method == "load_csv" else "读取数据")
+        return getattr(DataLoader, method)(path, **options)
+
+    monkeypatch.setattr(import_coordinator, "run_import", run)

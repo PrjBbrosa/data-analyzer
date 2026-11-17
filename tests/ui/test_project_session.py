@@ -12,7 +12,7 @@ def test_app_meta_constants():
     assert app_meta.RELEASE_URL.startswith("https://")
 
 
-def test_project_restores_analysis_comparison_by_view_id(qapp, tmp_path):
+def test_project_restores_analysis_comparison_by_view_id(qtbot, qapp, tmp_path):
     from mf4_analyzer.ui.main_window import MainWindow
 
     window = MainWindow()
@@ -39,6 +39,7 @@ def test_project_restores_analysis_comparison_by_view_id(qapp, tmp_path):
 
     restored = MainWindow()
     restored.open_project(project)
+    qtbot.waitUntil(lambda: not restored._imports.busy, timeout=15000)
     relation = restored._comparison().relations_payload("fft")[host.view_id]
     assert relation["peer"] == peer.view_id
     assert relation["axis_linked"] is True
@@ -50,6 +51,7 @@ def test_project_restores_analysis_comparison_by_view_id(qapp, tmp_path):
     bare.write_text(json.dumps(raw), encoding="utf-8")
     bare_window = MainWindow()
     bare_window.open_project(bare)
+    qtbot.waitUntil(lambda: not bare_window._imports.busy, timeout=15000)
     assert bare_window._comparison().peer_of("fft", host.view_id) is None
     assert not bare_window._comparison().is_open("fft")
 
@@ -67,12 +69,13 @@ def test_project_restores_analysis_comparison_by_view_id(qapp, tmp_path):
     notes = []
     missing_window.toast = lambda msg, level="info": notes.append((msg, level))
     missing_window.open_project(missing)
+    qtbot.waitUntil(lambda: not missing_window._imports.busy, timeout=15000)
     assert missing_window._comparison().peer_of("fft", host.view_id) is None
     assert missing_window._comparison().peer_of("fft", "missing-view") is None
     assert any("目标 View 不在此项目中" in msg for msg, _level in notes)
 
 
-def test_save_payload_drops_dangling_comparison_hosts(qapp, tmp_path, caplog):
+def test_save_payload_drops_dangling_comparison_hosts(qtbot, qapp, tmp_path, caplog):
     import logging
     from mf4_analyzer.ui.main_window import MainWindow
 
@@ -123,6 +126,7 @@ def test_save_payload_drops_dangling_comparison_hosts(qapp, tmp_path, caplog):
     restored = MainWindow()
     restored.toast = lambda msg, level="info": notes.append(msg)
     restored.open_project(project)
+    qtbot.waitUntil(lambda: not restored._imports.busy, timeout=15000)
     assert not any("目标 View 不在此项目中" in msg for msg in notes)
 
 
@@ -133,7 +137,7 @@ def test_window_title_uses_app_meta(qapp):
     assert "未命名项目" not in mw.windowTitle()
 
 
-def test_open_project_unsupported_schema_prompts_chinese_upgrade(
+def test_open_project_unsupported_schema_prompts_chinese_upgrade(qtbot,
     qapp, tmp_path, monkeypatch,
 ):
     """F-P2-18: unknown schema_version shows an actionable Chinese dialog."""
@@ -149,6 +153,7 @@ def test_open_project_unsupported_schema_prompts_chinese_upgrade(
     )
     mw = MainWindow()
     mw.open_project(path)
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     assert warns
     assert warns[0][1] == "无法打开"
     assert warns[0][2] == (
@@ -235,6 +240,7 @@ def test_project_roundtrip_preserves_original_time_after_analysis(qapp, qtbot, t
     mw = MainWindow()
     qtbot.addWidget(mw)
     mw._load_one(str(csv_path))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     fd = next(iter(mw.files.values()))
     original = fd.time_array.copy()
     assert not fd.is_time_axis_uniform()
@@ -253,6 +259,7 @@ def test_project_roundtrip_preserves_original_time_after_analysis(qapp, qtbot, t
     mw2 = MainWindow()
     qtbot.addWidget(mw2)
     mw2.open_project(proj)
+    qtbot.waitUntil(lambda: not mw2._imports.busy, timeout=15000)
     restored = next(iter(mw2.files.values()))
     np.testing.assert_array_equal(restored.time_array, original)
     assert restored._time_source == "column"
@@ -260,7 +267,7 @@ def test_project_roundtrip_preserves_original_time_after_analysis(qapp, qtbot, t
     assert mw2.chart_stack._time_card._time_axis_chip.isHidden()
 
 
-def test_old_v3_project_without_time_axis_provenance_still_loads(qapp, tmp_path):
+def test_old_v3_project_without_time_axis_provenance_still_loads(qtbot, qapp, tmp_path):
     from mf4_analyzer.ui.main_window import MainWindow
     from mf4_analyzer.ui import project_io as pio
 
@@ -290,17 +297,19 @@ def test_old_v3_project_without_time_axis_provenance_still_loads(qapp, tmp_path)
 
     mw = MainWindow()
     mw.open_project(proj)
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     fd = next(iter(mw.files.values()))
     assert fd.time_axis_provenance is None
     assert mw.chart_stack._time_card._time_axis_chip.isHidden()
 
 
-def test_save_project_writes_file(qapp, tmp_path):
+def test_save_project_writes_file(qtbot, qapp, tmp_path):
     from mf4_analyzer.ui.main_window import MainWindow
     from mf4_analyzer.ui import project_io as pio
     csv_a = tmp_path / "a.csv"; _write_csv(csv_a)
     mw = MainWindow()
     mw._load_one(str(csv_a))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     mw.view_manager.rename(0, "主视图")
     proj = tmp_path / "s.tlproj"
     mw.save_project(proj)
@@ -312,7 +321,7 @@ def test_save_project_writes_file(qapp, tmp_path):
     assert doc.current_mode == "time"
 
 
-def test_save_project_writes_live_remarks_when_intent_empty(qapp, tmp_path):
+def test_save_project_writes_live_remarks_when_intent_empty(qtbot, qapp, tmp_path):
     from mf4_analyzer.ui.main_window import MainWindow
 
     csv_a = tmp_path / "a.csv"
@@ -324,6 +333,7 @@ def test_save_project_writes_live_remarks_when_intent_empty(qapp, tmp_path):
     mw.show()
     qapp.processEvents()
     mw._load_one(str(csv_a))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     fid = next(iter(mw.files))
     mw.navigator.set_checked_channels([(fid, "rpm")])
     mw.plot_time()
@@ -342,7 +352,7 @@ def test_save_project_writes_live_remarks_when_intent_empty(qapp, tmp_path):
     assert isinstance(remarks[0]["y"], (int, float))
 
 
-def test_open_project_roundtrip(qapp, tmp_path):
+def test_open_project_roundtrip(qtbot, qapp, tmp_path):
     from mf4_analyzer.ui.main_window import MainWindow
     csv_a = tmp_path / "a.csv"; _write_csv(csv_a)
     csv_b = tmp_path / "b.csv"; _write_csv(csv_b)
@@ -350,18 +360,21 @@ def test_open_project_roundtrip(qapp, tmp_path):
 
     mw = MainWindow()
     mw._load_one(str(csv_a))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     mw._load_one(str(csv_b))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     mw.view_manager.rename(0, "主视图")
     mw.save_project(proj)
 
     mw2 = MainWindow()
     mw2.open_project(proj)
+    qtbot.waitUntil(lambda: not mw2._imports.busy, timeout=15000)
     assert [fd.filename for fd in mw2.files.values()] == ["a.csv", "b.csv"]
     assert mw2.view_manager.views[0].name == "主视图"
     assert mw2.chart_stack.current_mode() == "time"
 
 
-def test_project_roundtrip_preserves_twenty_four_time_domain_views(qapp, tmp_path):
+def test_project_roundtrip_preserves_twenty_four_time_domain_views(qtbot, qapp, tmp_path):
     from mf4_analyzer.ui.main_window import MainWindow
     from mf4_analyzer.ui.view_state import (
         MAX_VIEWS,
@@ -376,6 +389,7 @@ def test_project_roundtrip_preserves_twenty_four_time_domain_views(qapp, tmp_pat
     mw = MainWindow()
     assert mw.view_manager.max_views == TIME_DOMAIN_MAX_VIEWS
     mw._load_one(str(csv_a))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     while mw.view_manager.new_view() != -1:
         pass
     assert len(mw.view_manager.views) == TIME_DOMAIN_MAX_VIEWS
@@ -392,6 +406,7 @@ def test_project_roundtrip_preserves_twenty_four_time_domain_views(qapp, tmp_pat
 
     mw2 = MainWindow()
     mw2.open_project(proj)
+    qtbot.waitUntil(lambda: not mw2._imports.busy, timeout=15000)
     assert mw2.view_manager.max_views == TIME_DOMAIN_MAX_VIEWS
     assert [view.name for view in mw2.view_manager.views] == names
     assert [view.tab_color for view in mw2.view_manager.views] == colors
@@ -401,7 +416,7 @@ def test_project_roundtrip_preserves_twenty_four_time_domain_views(qapp, tmp_pat
         assert manager.max_views == MAX_VIEWS, section
 
 
-def test_project_roundtrip_preserves_navigator_file_and_channel_order(qapp, tmp_path):
+def test_project_roundtrip_preserves_navigator_file_and_channel_order(qtbot, qapp, tmp_path):
     from mf4_analyzer.ui.main_window import MainWindow
 
     def _write(path, channels):
@@ -421,7 +436,9 @@ def test_project_roundtrip_preserves_navigator_file_and_channel_order(qapp, tmp_
 
     mw = MainWindow()
     mw._load_one(str(csv_a))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     mw._load_one(str(csv_b))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     fids = list(mw.navigator_order.file_fids())
     assert len(fids) == 2
     assert mw.navigator_order.move_file_block([fids[0]], fids[1], "after")
@@ -439,13 +456,14 @@ def test_project_roundtrip_preserves_navigator_file_and_channel_order(qapp, tmp_
 
     mw2 = MainWindow()
     mw2.open_project(proj)
+    qtbot.waitUntil(lambda: not mw2._imports.busy, timeout=15000)
     restored = list(mw2.navigator_order.file_fids())
     assert [mw2.files[fid].filename for fid in restored] == ["b.csv", "a.csv"]
     assert mw2.navigator.ordered_file_fids() == restored
     assert mw2.navigator_order.channel_order(restored[1])[0] == "speed"
 
 
-def test_open_project_migrates_legacy_frf_range_to_explicit_seconds(qapp, tmp_path):
+def test_open_project_migrates_legacy_frf_range_to_explicit_seconds(qtbot, qapp, tmp_path):
     from mf4_analyzer.ui.main_window import MainWindow
 
     csv_a = tmp_path / "frf.csv"
@@ -453,6 +471,7 @@ def test_open_project_migrates_legacy_frf_range_to_explicit_seconds(qapp, tmp_pa
     _write_frf_csv(csv_a)
     window = MainWindow()
     window._load_one(str(csv_a))
+    qtbot.waitUntil(lambda: not window._imports.busy, timeout=15000)
     fid = next(iter(window.files))
     pane = window.analysis_managers["frf"].get(0).panes[0]
     pane.input_source = (fid, "input")
@@ -473,6 +492,7 @@ def test_open_project_migrates_legacy_frf_range_to_explicit_seconds(qapp, tmp_pa
 
     restored = MainWindow()
     restored.open_project(project)
+    qtbot.waitUntil(lambda: not restored._imports.busy, timeout=15000)
 
     assert restored.inspector.top.range_enabled()
     assert restored.inspector.top.range_values() == (0.25, 0.75)
@@ -489,7 +509,7 @@ def test_open_project_migrates_legacy_frf_range_to_explicit_seconds(qapp, tmp_pa
     assert "source_time_view_id" not in rewritten_frf["panes"][0]
 
 
-def test_project_roundtrip_preserves_per_source_name_xaxis(qapp, tmp_path):
+def test_project_roundtrip_preserves_per_source_name_xaxis(qtbot, qapp, tmp_path):
     from mf4_analyzer.ui import project_io as pio
     from mf4_analyzer.ui.main_window import MainWindow
     from mf4_analyzer.ui.time_xaxis import CustomXAxisSpec
@@ -498,6 +518,7 @@ def test_project_roundtrip_preserves_per_source_name_xaxis(qapp, tmp_path):
     project = tmp_path / "logical-x.tlproj"
     window = MainWindow()
     window._load_one(str(csv_a))
+    qtbot.waitUntil(lambda: not window._imports.busy, timeout=15000)
     window._custom_xaxis_spec = CustomXAxisSpec(
         mode="channel",
         resolver="per_source_name",
@@ -524,6 +545,7 @@ def test_project_roundtrip_preserves_per_source_name_xaxis(qapp, tmp_path):
 
     restored = MainWindow()
     restored.open_project(project)
+    qtbot.waitUntil(lambda: not restored._imports.busy, timeout=15000)
 
     assert restored._custom_xaxis_spec == CustomXAxisSpec(
         mode="channel",
@@ -534,7 +556,7 @@ def test_project_roundtrip_preserves_per_source_name_xaxis(qapp, tmp_path):
     )
 
 
-def test_project_roundtrip_keeps_same_text_user_xaxis_label_origin(qapp, tmp_path):
+def test_project_roundtrip_keeps_same_text_user_xaxis_label_origin(qtbot, qapp, tmp_path):
     from mf4_analyzer.ui import project_io as pio
     from mf4_analyzer.ui.main_window import MainWindow
     from mf4_analyzer.ui.time_xaxis import CustomXAxisSpec
@@ -543,6 +565,7 @@ def test_project_roundtrip_keeps_same_text_user_xaxis_label_origin(qapp, tmp_pat
     project = tmp_path / "same-label-origin.tlproj"
     window = MainWindow()
     window._load_one(str(csv_a))
+    qtbot.waitUntil(lambda: not window._imports.busy, timeout=15000)
     window._custom_xaxis_spec = CustomXAxisSpec(
         mode="channel",
         resolver="per_source_name",
@@ -559,12 +582,13 @@ def test_project_roundtrip_keeps_same_text_user_xaxis_label_origin(qapp, tmp_pat
 
     restored = MainWindow()
     restored.open_project(project)
+    qtbot.waitUntil(lambda: not restored._imports.busy, timeout=15000)
     assert restored._custom_xaxis_spec.label_origin == "user"
     restored.inspector.top.set_xaxis_mode("time")
     assert restored.inspector.top.xaxis_label() == "rpm"
 
 
-def test_open_project_migrates_legacy_xaxis_to_remapped_exact_source(
+def test_open_project_migrates_legacy_xaxis_to_remapped_exact_source(qtbot,
     qapp, tmp_path,
 ):
     from mf4_analyzer.ui.main_window import MainWindow
@@ -574,6 +598,7 @@ def test_open_project_migrates_legacy_xaxis_to_remapped_exact_source(
     project = tmp_path / "legacy-x.tlproj"
     window = MainWindow()
     window._load_one(str(csv_a))
+    qtbot.waitUntil(lambda: not window._imports.busy, timeout=15000)
     old_fid = next(iter(window.files))
     window.save_project(project)
     payload = json.loads(project.read_text(encoding="utf-8"))
@@ -589,6 +614,7 @@ def test_open_project_migrates_legacy_xaxis_to_remapped_exact_source(
 
     restored = MainWindow()
     restored.open_project(project)
+    qtbot.waitUntil(lambda: not restored._imports.busy, timeout=15000)
     new_fid = next(iter(restored.files))
 
     assert restored._custom_xaxis_spec == CustomXAxisSpec(
@@ -600,7 +626,7 @@ def test_open_project_migrates_legacy_xaxis_to_remapped_exact_source(
     )
 
 
-def test_project_roundtrip_restores_timedomain_attached_file_subset(
+def test_project_roundtrip_restores_timedomain_attached_file_subset(qtbot,
     qapp, tmp_path
 ):
     from mf4_analyzer.ui.main_window import MainWindow
@@ -610,7 +636,9 @@ def test_project_roundtrip_restores_timedomain_attached_file_subset(
     project = tmp_path / "subset.tlproj"
     window = MainWindow()
     window._load_one(str(csv_a))
+    qtbot.waitUntil(lambda: not window._imports.busy, timeout=15000)
     window._load_one(str(csv_b))
+    qtbot.waitUntil(lambda: not window._imports.busy, timeout=15000)
     _fid_a, fid_b = list(window.files)
     window.view_manager.get(0).attached_file_ids = [fid_b]
     window._project_view_controls(0)
@@ -618,6 +646,7 @@ def test_project_roundtrip_restores_timedomain_attached_file_subset(
     window.save_project(project)
     restored = MainWindow()
     restored.open_project(project)
+    qtbot.waitUntil(lambda: not restored._imports.busy, timeout=15000)
     qapp.processEvents()
 
     restored_b = next(
@@ -632,19 +661,21 @@ def test_project_roundtrip_restores_timedomain_attached_file_subset(
     assert not restored.channel_list._file_items[restored_b].isHidden()
 
 
-def test_project_roundtrip_preserves_explicit_empty_view(qapp, tmp_path):
+def test_project_roundtrip_preserves_explicit_empty_view(qtbot, qapp, tmp_path):
     from mf4_analyzer.ui.main_window import MainWindow
 
     csv_a = tmp_path / "a.csv"; _write_csv(csv_a)
     project = tmp_path / "empty.tlproj"
     window = MainWindow()
     window._load_one(str(csv_a))
+    qtbot.waitUntil(lambda: not window._imports.busy, timeout=15000)
     window.view_manager.get(0).attached_file_ids = []
     window._project_view_controls(0)
     window.save_project(project)
 
     restored = MainWindow()
     restored.open_project(project)
+    qtbot.waitUntil(lambda: not restored._imports.busy, timeout=15000)
     restored.show()
     qapp.processEvents()
 
@@ -653,7 +684,7 @@ def test_project_roundtrip_preserves_explicit_empty_view(qapp, tmp_path):
     assert restored.channel_list.empty_state.isVisible()
 
 
-def test_legacy_project_without_attachment_field_attaches_restored_files(
+def test_legacy_project_without_attachment_field_attaches_restored_files(qtbot,
     qapp, tmp_path
 ):
     from mf4_analyzer.ui.main_window import MainWindow
@@ -663,7 +694,9 @@ def test_legacy_project_without_attachment_field_attaches_restored_files(
     project = tmp_path / "legacy.tlproj"
     window = MainWindow()
     window._load_one(str(csv_a))
+    qtbot.waitUntil(lambda: not window._imports.busy, timeout=15000)
     window._load_one(str(csv_b))
+    qtbot.waitUntil(lambda: not window._imports.busy, timeout=15000)
     window.save_project(project)
     payload = json.loads(project.read_text(encoding="utf-8"))
     for view in payload["views"]:
@@ -674,12 +707,13 @@ def test_legacy_project_without_attachment_field_attaches_restored_files(
 
     restored = MainWindow()
     restored.open_project(project)
+    qtbot.waitUntil(lambda: not restored._imports.busy, timeout=15000)
 
     assert restored.view_manager.get(0).attached_file_ids == list(restored.files)
     assert restored.navigator.get_attached_file_ids() == list(restored.files)
 
 
-def test_project_roundtrip_restores_timedomain_hidden_channels(qapp, tmp_path):
+def test_project_roundtrip_restores_timedomain_hidden_channels(qtbot, qapp, tmp_path):
     from mf4_analyzer.ui.main_window import MainWindow
 
     csv_a = tmp_path / "a.csv"
@@ -688,6 +722,7 @@ def test_project_roundtrip_restores_timedomain_hidden_channels(qapp, tmp_path):
 
     mw = MainWindow()
     mw._load_one(str(csv_a))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     fid = next(iter(mw.files))
     mw.navigator.set_checked_channels([(fid, "rpm")])
     mw.navigator.set_hidden_channels([(fid, "rpm")])
@@ -696,6 +731,7 @@ def test_project_roundtrip_restores_timedomain_hidden_channels(qapp, tmp_path):
 
     restored = MainWindow()
     restored.open_project(proj)
+    qtbot.waitUntil(lambda: not restored._imports.busy, timeout=15000)
     qapp.processEvents()
 
     restored_fid = next(iter(restored.files))
@@ -709,7 +745,7 @@ def test_project_roundtrip_restores_timedomain_hidden_channels(qapp, tmp_path):
     )
 
 
-def test_project_roundtrip_restores_time_filter_state(qapp, tmp_path):
+def test_project_roundtrip_restores_time_filter_state(qtbot, qapp, tmp_path):
     from mf4_analyzer.signal.filters import FilterSpec
     from mf4_analyzer.ui.main_window import MainWindow
     from mf4_analyzer.ui import project_io as pio
@@ -719,6 +755,7 @@ def test_project_roundtrip_restores_time_filter_state(qapp, tmp_path):
 
     mw = MainWindow()
     mw._load_one(str(csv_a))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     panel = mw.inspector.filter_panel
     panel.set_enabled(True)
     panel.set_kind("带通")
@@ -741,6 +778,7 @@ def test_project_roundtrip_restores_time_filter_state(qapp, tmp_path):
 
     mw2 = MainWindow()
     mw2.open_project(proj)
+    qtbot.waitUntil(lambda: not mw2._imports.busy, timeout=15000)
     restored = mw2.inspector.filter_panel
     assert restored.is_enabled() is True
     assert restored.filter_spec() == FilterSpec(
@@ -750,7 +788,7 @@ def test_project_roundtrip_restores_time_filter_state(qapp, tmp_path):
     assert restored.show_filtered() is True
 
 
-def test_save_project_in_fft_mode_preserves_time_view_scope(qapp, tmp_path):
+def test_save_project_in_fft_mode_preserves_time_view_scope(qtbot, qapp, tmp_path):
     """A1: saving while FFT is active must not overwrite Time View 1.
 
     ``_capture_focused_view`` used to read the analysis-projected navigator and
@@ -765,7 +803,9 @@ def test_save_project_in_fft_mode_preserves_time_view_scope(qapp, tmp_path):
 
     mw = MainWindow()
     mw._load_one(str(csv_a))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     mw._load_one(str(csv_b))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     fid_a, fid_b = list(mw.files)
 
     tv = mw.view_manager.get(0)
@@ -797,7 +837,7 @@ def test_save_project_in_fft_mode_preserves_time_view_scope(qapp, tmp_path):
     assert [tuple(row) for row in saved_view["checked"]] == expected_checked
 
 
-def test_open_project_restores_non_time_mode_consistently(qapp, tmp_path):
+def test_open_project_restores_non_time_mode_consistently(qtbot, qapp, tmp_path):
     # Reopening a project saved in a non-time mode must leave the chart,
     # the toolbar segment, and the inspector all agreeing on that mode —
     # not just the chart canvas (regression guard for the open_project
@@ -808,17 +848,19 @@ def test_open_project_restores_non_time_mode_consistently(qapp, tmp_path):
 
     mw = MainWindow()
     mw._load_one(str(csv_a))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     mw.chart_stack.set_mode("fft")
     mw.save_project(proj)
 
     mw2 = MainWindow()
     mw2.open_project(proj)
+    qtbot.waitUntil(lambda: not mw2._imports.busy, timeout=15000)
     assert mw2.chart_stack.current_mode() == "fft"
     assert mw2.toolbar.current_mode() == "fft"
     assert "频谱 · View 1" in mw2.navigator.channel_list.empty_state.text()
 
 
-def test_open_project_keeps_analysis_empty_owner_after_time_view_restore(
+def test_open_project_keeps_analysis_empty_owner_after_time_view_restore(qtbot,
         qapp, tmp_path):
     """The final Time-view restore must not overwrite a visible analysis owner."""
     from mf4_analyzer.ui.main_window import MainWindow
@@ -827,6 +869,7 @@ def test_open_project_keeps_analysis_empty_owner_after_time_view_restore(
 
     mw = MainWindow()
     mw._load_one(str(csv_a))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     assert mw.view_manager.new_view() == 1
     mw.toolbar._set_mode("frf")
     assert mw.analysis_managers["frf"].new_view() == 1
@@ -834,6 +877,7 @@ def test_open_project_keeps_analysis_empty_owner_after_time_view_restore(
 
     mw2 = MainWindow()
     mw2.open_project(proj)
+    qtbot.waitUntil(lambda: not mw2._imports.busy, timeout=15000)
 
     assert mw2.chart_stack.current_mode() == "frf"
     assert mw2.view_manager.active == 1
@@ -841,7 +885,7 @@ def test_open_project_keeps_analysis_empty_owner_after_time_view_restore(
     assert "FRF · View 2" in mw2.navigator.channel_list.empty_state.text()
 
 
-def test_open_project_preserves_source_bearing_views_without_computing(
+def test_open_project_preserves_source_bearing_views_without_computing(qtbot,
         qapp, tmp_path, monkeypatch):
     """All source-bearing Views restore intent, including inactive drafts."""
     from mf4_analyzer.ui.analysis_view_state import AnalysisViewState, PaneState
@@ -851,6 +895,7 @@ def test_open_project_preserves_source_bearing_views_without_computing(
 
     mw = MainWindow()
     mw._load_one(str(csv_a))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     fid = next(iter(mw.files))
     # Give the Order view a source while the app is in 'time' mode — save then
     # preserves these sources (capture_sources only re-reads the navigator for
@@ -875,6 +920,7 @@ def test_open_project_preserves_source_bearing_views_without_computing(
         lambda self, section, view_id: recomputed.append((section, view_id)),
     )
     mw2.open_project(proj)
+    qtbot.waitUntil(lambda: not mw2._imports.busy, timeout=15000)
     assert recomputed == []
     _drain_analysis_restore(qapp, mw2)
     assert recomputed == []
@@ -898,6 +944,7 @@ def test_open_project_keeps_inactive_fft_empty_until_clicking_compute(
     mw = MainWindow()
     qtbot.addWidget(mw)
     mw._load_one(str(csv_a))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     fid = next(iter(mw.files))
     fft_mgr = mw.analysis_managers["fft"]
     fft_mgr.get(0).panes[0].sources = [(fid, "rpm")]
@@ -913,6 +960,7 @@ def test_open_project_keeps_inactive_fft_empty_until_clicking_compute(
     mw2 = MainWindow()
     qtbot.addWidget(mw2)
     mw2.open_project(proj)
+    qtbot.waitUntil(lambda: not mw2._imports.busy, timeout=15000)
     _drain_analysis_restore(qapp, mw2)
 
     fft_mgr2 = mw2.analysis_managers["fft"]
@@ -941,6 +989,7 @@ def test_fft_inspector_signal_is_saved_and_waits_for_compute_on_open(
     mw = MainWindow()
     qtbot.addWidget(mw)
     mw._load_one(str(csv_a))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     fid = next(iter(mw.files))
     mw.toolbar._set_mode("fft")
     mw._attach_files_to_active_context([fid])
@@ -954,6 +1003,7 @@ def test_fft_inspector_signal_is_saved_and_waits_for_compute_on_open(
     mw2 = MainWindow()
     qtbot.addWidget(mw2)
     mw2.open_project(proj)
+    qtbot.waitUntil(lambda: not mw2._imports.busy, timeout=15000)
     _drain_analysis_restore(qapp, mw2)
     restored = mw2.analysis_managers["fft"].get(0).panes[0].sources
     assert restored and restored[0][1] == "rpm"
@@ -965,7 +1015,7 @@ def test_fft_inspector_signal_is_saved_and_waits_for_compute_on_open(
     assert len(canvas._amp_curves) >= 1
 
 
-def test_open_project_multi_group_hdf_no_duplication(qapp, tmp_path):
+def test_open_project_multi_group_hdf_no_duplication(qtbot, qapp, tmp_path):
     """Regression: a 2-group .hdf must reload as 2 groups (not 4) on open_project.
 
     Bug: open_project called _load_one once per ProjectFileRef, so a 2-group
@@ -993,6 +1043,7 @@ def test_open_project_multi_group_hdf_no_duplication(qapp, tmp_path):
 
     mw = MainWindow()
     mw._load_one(str(hdf))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     assert len(mw.files) == 2, "sanity: _load_one of a 2-group .hdf must yield 2 FileData"
     assert mw.view_manager.get(0).attached_file_ids == list(mw.files)
 
@@ -1001,6 +1052,7 @@ def test_open_project_multi_group_hdf_no_duplication(qapp, tmp_path):
 
     mw2 = MainWindow()
     mw2.open_project(proj)
+    qtbot.waitUntil(lambda: not mw2._imports.busy, timeout=15000)
 
     # THE regression: buggy code gives 4 (two _load_one calls × 2 groups each)
     assert len(mw2.files) == 2, (
@@ -1014,7 +1066,7 @@ def test_open_project_multi_group_hdf_no_duplication(qapp, tmp_path):
         assert fd.fs > 0, f"fid {fid} has non-positive fs={fd.fs}"
 
 
-def test_open_project_keeps_simultaneous_file_time_and_does_not_rescale(
+def test_open_project_keeps_simultaneous_file_time_and_does_not_rescale(qtbot,
         qapp, tmp_path, monkeypatch):
     """A saved simultaneous rate from the old channel-count formula is not reapplied.
 
@@ -1048,6 +1100,7 @@ def test_open_project_keeps_simultaneous_file_time_and_does_not_rescale(
     proj = tmp_path / "sim.tlproj"
     mw = MainWindow()
     mw._load_one(str(hdf))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     assert len(mw.files) == 1
     assert next(iter(mw.files.values())).fs == pytest.approx(24000.0)
     mw.save_project(proj)
@@ -1061,6 +1114,7 @@ def test_open_project_keeps_simultaneous_file_time_and_does_not_rescale(
     mw2 = MainWindow()
     monkeypatch.setattr(mw2, "toast", lambda *args, **kwargs: None)
     mw2.open_project(proj)
+    qtbot.waitUntil(lambda: not mw2._imports.busy, timeout=15000)
     restored = next(iter(mw2.files.values()))
     assert len(mw2.files) == 1
     assert restored.fs == pytest.approx(24000.0)
@@ -1077,6 +1131,7 @@ def test_open_project_keeps_simultaneous_file_time_and_does_not_rescale(
     mw3 = MainWindow()
     monkeypatch.setattr(mw3, "toast", lambda *args, **kwargs: None)
     mw3.open_project(proj)
+    qtbot.waitUntil(lambda: not mw3._imports.busy, timeout=15000)
     manual = next(iter(mw3.files.values()))
     assert manual.fs == pytest.approx(800.0)
     assert manual.time_array[0] == pytest.approx(0.0)
@@ -1085,7 +1140,7 @@ def test_open_project_keeps_simultaneous_file_time_and_does_not_rescale(
     assert any("手动采样率" in notice for notice in mw3._project_restore_health.timebase_notices)
 
 
-def test_project_roundtrip_restores_blf_dbc_binding_without_picker(
+def test_project_roundtrip_restores_blf_dbc_binding_without_picker(qtbot,
         qapp, tmp_path, monkeypatch):
     pytest.importorskip("can", reason="python-can not installed (win32-gated)")
     pytest.importorskip("cantools", reason="cantools not installed")
@@ -1119,6 +1174,7 @@ def test_project_roundtrip_restores_blf_dbc_binding_without_picker(
     )
     monkeypatch.setattr(mw, "_prompt_blf_dbc", lambda path: [str(dbc)])
     mw._load_one(str(blf))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     mw.save_project(proj)
 
     doc = pio.load_project_from_json(proj)
@@ -1140,6 +1196,7 @@ def test_project_roundtrip_restores_blf_dbc_binding_without_picker(
 
     monkeypatch.setattr(mw2, "_prompt_blf_dbc", fail_if_picker_opens)
     mw2.open_project(proj)
+    qtbot.waitUntil(lambda: not mw2._imports.busy, timeout=15000)
 
     assert len(mw2.files) == 1
     fd = next(iter(mw2.files.values()))
@@ -1147,7 +1204,7 @@ def test_project_roundtrip_restores_blf_dbc_binding_without_picker(
     assert fd.source_metadata["dbc_paths"] == [str(dbc.resolve())]
 
 
-def test_open_project_skips_missing(qapp, tmp_path, monkeypatch):
+def test_open_project_skips_missing(qtbot, qapp, tmp_path, monkeypatch):
     from mf4_analyzer.ui.main_window import MainWindow
     from PyQt5.QtWidgets import QMessageBox
     csv_a = tmp_path / "a.csv"; _write_csv(csv_a)
@@ -1156,7 +1213,9 @@ def test_open_project_skips_missing(qapp, tmp_path, monkeypatch):
 
     mw = MainWindow()
     mw._load_one(str(csv_a))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     mw._load_one(str(csv_b))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     mw.save_project(proj)
     csv_b.unlink()  # make one file missing
 
@@ -1165,6 +1224,7 @@ def test_open_project_skips_missing(qapp, tmp_path, monkeypatch):
                         lambda *a, **k: warned.setdefault("hit", True))
     mw2 = MainWindow()
     mw2.open_project(proj)
+    qtbot.waitUntil(lambda: not mw2._imports.busy, timeout=15000)
     assert [fd.filename for fd in mw2.files.values()] == ["a.csv"]
     assert warned.get("hit") is True
     health = mw2._project_restore_health
@@ -1173,7 +1233,7 @@ def test_open_project_skips_missing(qapp, tmp_path, monkeypatch):
     assert health.missing_old_fids
 
 
-def test_degraded_project_save_clears_health_after_confirm(qapp, tmp_path, monkeypatch):
+def test_degraded_project_save_clears_health_after_confirm(qtbot, qapp, tmp_path, monkeypatch):
     from mf4_analyzer.ui.main_window import MainWindow
     from PyQt5.QtWidgets import QMessageBox
 
@@ -1183,13 +1243,16 @@ def test_degraded_project_save_clears_health_after_confirm(qapp, tmp_path, monke
 
     mw = MainWindow()
     mw._load_one(str(csv_a))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     mw._load_one(str(csv_b))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     mw.save_project(proj)
     csv_b.unlink()
 
     monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: None)
     restored = MainWindow()
     restored.open_project(proj)
+    qtbot.waitUntil(lambda: not restored._imports.busy, timeout=15000)
     assert restored._project_restore_health.degraded is True
 
     confirmed = []
@@ -1205,7 +1268,7 @@ def test_degraded_project_save_clears_health_after_confirm(qapp, tmp_path, monke
     assert out.is_file()
 
 
-def test_project_roundtrip_preserves_per_channel_ylims(qapp, tmp_path):
+def test_project_roundtrip_preserves_per_channel_ylims(qtbot, qapp, tmp_path):
     """A3: ylims keys embed fid; remap_view_fids must rewrite them on reopen.
 
     Same-window reopen advances ``_fc`` so the remapped fid differs from the
@@ -1223,6 +1286,7 @@ def test_project_roundtrip_preserves_per_channel_ylims(qapp, tmp_path):
     mw.show()
     qapp.processEvents()
     mw._load_one(str(csv_a))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     old_fid = next(iter(mw.files))
     mw.navigator.set_checked_channels([(old_fid, "rpm")])
     mw.plot_time()
@@ -1249,6 +1313,7 @@ def test_project_roundtrip_preserves_per_channel_ylims(qapp, tmp_path):
     assert payload["views"][0]["ylims"][old_key] == pytest.approx(list(saved_ylim))
 
     mw.open_project(proj)
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     qapp.processEvents()
 
     new_fid = next(iter(mw.files))
@@ -1344,7 +1409,7 @@ def test_file_and_channel_removal_prune_persisted_channel_axis_groups():
     assert "channel_axis_groups" not in state.axis_opts
 
 
-def test_load_wwt_toasts_skipped_channels(qapp, tmp_path, monkeypatch):
+def test_load_wwt_toasts_skipped_channels(qtbot, qapp, tmp_path, monkeypatch):
     """Real degraded skip (unknown tag) still surfaces as one 未导入 summary."""
     import numpy as np
 
@@ -1364,6 +1429,7 @@ def test_load_wwt_toasts_skipped_channels(qapp, tmp_path, monkeypatch):
     monkeypatch.setattr(mw, "toast", lambda msg, level="info": toasts.append((msg, level)))
     monkeypatch.setattr(mw._wwt_import, "_ask_layout", lambda *a, **k: True)
     mw._load_one(str(p))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
 
     fd = next(iter(mw.files.values()))
     skipped = fd.source_metadata.get("skipped_channels") or []
@@ -1382,7 +1448,7 @@ def test_load_wwt_toasts_skipped_channels(qapp, tmp_path, monkeypatch):
     assert len(mystery) == 1, toasts
 
 
-def test_retained_auxiliary_does_not_toast_skipped(qapp, tmp_path, monkeypatch):
+def test_retained_auxiliary_does_not_toast_skipped(qtbot, qapp, tmp_path, monkeypatch):
     """RED: limit/line records stay in the store and must not yellow-toast 未导入."""
     from mf4_analyzer.ui.main_window import MainWindow
     from tests._helpers import wwt_factory as wwt
@@ -1395,6 +1461,7 @@ def test_retained_auxiliary_does_not_toast_skipped(qapp, tmp_path, monkeypatch):
     monkeypatch.setattr(mw, "plot_time", lambda *a, **k: None)
     monkeypatch.setattr(mw, "_apply_active_view", lambda *a, **k: None)
     mw._load_one(str(path))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
 
     fd = next(iter(mw.files.values()))
     skipped = fd.source_metadata.get("skipped_channels") or []
@@ -1426,7 +1493,7 @@ def test_retained_auxiliary_does_not_toast_skipped(qapp, tmp_path, monkeypatch):
     assert leaked == [], warn
 
 
-def test_load_zfd_illegal_dt_rejects_and_does_not_register(qapp, tmp_path, monkeypatch):
+def test_load_zfd_illegal_dt_rejects_and_does_not_register(qtbot, qapp, tmp_path, monkeypatch):
     """Illegal ZFD timebase fails closed: no source, no success toast."""
     from PyQt5.QtWidgets import QMessageBox
 
@@ -1440,6 +1507,7 @@ def test_load_zfd_illegal_dt_rejects_and_does_not_register(qapp, tmp_path, monke
     monkeypatch.setattr(mw, "toast", lambda msg, level="info": toasts.append((msg, level)))
     monkeypatch.setattr(QMessageBox, "critical", lambda *a, **k: crits.append(a))
     mw._load_one(str(p))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
 
     assert mw.files == {}
     assert not any(lv == "success" for _m, lv in toasts)
@@ -1448,7 +1516,7 @@ def test_load_zfd_illegal_dt_rejects_and_does_not_register(qapp, tmp_path, monke
     assert any("时间轴无效" in str(item) for item in crits)
 
 
-def test_load_zfd_slow_dt_loads_without_estimate_toast(qapp, tmp_path, monkeypatch):
+def test_load_zfd_slow_dt_loads_without_estimate_toast(qtbot, qapp, tmp_path, monkeypatch):
     """Legal slow ZFD keeps declared dt and must not toast 估算."""
     from mf4_analyzer.ui.main_window import MainWindow
     from tests.zfd_fixtures import write_minimal_zfd
@@ -1458,6 +1526,7 @@ def test_load_zfd_slow_dt_loads_without_estimate_toast(qapp, tmp_path, monkeypat
     toasts = []
     monkeypatch.setattr(mw, "toast", lambda msg, level="info": toasts.append((msg, level)))
     mw._load_one(str(p))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
 
     assert len(mw.files) == 1
     fd = next(iter(mw.files.values()))
@@ -1469,7 +1538,7 @@ def test_load_zfd_slow_dt_loads_without_estimate_toast(qapp, tmp_path, monkeypat
     assert any(lv == "success" and "已加载" in m for m, lv in toasts)
 
 
-def test_load_zfd_truncated_keeps_existing_source(qapp, tmp_path, monkeypatch):
+def test_load_zfd_truncated_keeps_existing_source(qtbot, qapp, tmp_path, monkeypatch):
     from PyQt5.QtWidgets import QMessageBox
 
     from mf4_analyzer.ui.main_window import MainWindow
@@ -1483,10 +1552,12 @@ def test_load_zfd_truncated_keeps_existing_source(qapp, tmp_path, monkeypatch):
     monkeypatch.setattr(mw, "toast", lambda msg, level="info": toasts.append((msg, level)))
     monkeypatch.setattr(QMessageBox, "critical", lambda *a, **k: crits.append(a))
     mw._load_one(str(good))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     existing = dict(mw.files)
 
     toasts.clear()
     mw._load_one(str(bad))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
 
     assert list(mw.files) == list(existing)
     assert next(iter(mw.files.values())).filename == "good.zfd"
@@ -1495,7 +1566,7 @@ def test_load_zfd_truncated_keeps_existing_source(qapp, tmp_path, monkeypatch):
     assert any("不完整" in str(item) for item in crits)
 
 
-def test_open_project_zfd_truncated_file_is_visible_and_unregistered(
+def test_open_project_zfd_truncated_file_is_visible_and_unregistered(qtbot,
     qapp, tmp_path, monkeypatch,
 ):
     from PyQt5.QtWidgets import QMessageBox
@@ -1509,6 +1580,7 @@ def test_open_project_zfd_truncated_file_is_visible_and_unregistered(
 
     mw = MainWindow()
     mw._load_one(str(src))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     mw.save_project(proj)
     write_truncated_last_channel(src, count=8, drop_bytes=20)
 
@@ -1520,6 +1592,7 @@ def test_open_project_zfd_truncated_file_is_visible_and_unregistered(
     mw2 = MainWindow()
     monkeypatch.setattr(mw2, "toast", lambda msg, level="info": toasts.append((msg, level)))
     mw2.open_project(proj)
+    qtbot.waitUntil(lambda: not mw2._imports.busy, timeout=15000)
 
     assert list(mw2.files) == []
     health = mw2._project_restore_health
@@ -1528,7 +1601,7 @@ def test_open_project_zfd_truncated_file_is_visible_and_unregistered(
     assert not any("已加载" in m and lv == "success" for m, lv in toasts)
 
 
-def test_load_hdf_toasts_renamed_channels_summary(qapp, tmp_path, monkeypatch):
+def test_load_hdf_toasts_renamed_channels_summary(qtbot, qapp, tmp_path, monkeypatch):
     """D4: silent [idx] renames must toast a single summary after load."""
     import numpy as np
 
@@ -1548,12 +1621,13 @@ def test_load_hdf_toasts_renamed_channels_summary(qapp, tmp_path, monkeypatch):
     toasts = []
     monkeypatch.setattr(mw, "toast", lambda msg, level="info": toasts.append((msg, level)))
     mw._load_one(str(hdf))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
 
     warn = [(m, lv) for m, lv in toasts if lv == "warning"]
     assert any(m == "1 个通道重名，已加序号区分" for m, _ in warn), toasts
 
 
-def test_load_mat_toasts_skipped_vars(qapp, tmp_path, monkeypatch):
+def test_load_mat_toasts_skipped_vars(qtbot, qapp, tmp_path, monkeypatch):
     """D3: MAT skipped_vars must toast like HDF dropped_channels."""
     import numpy as np
     from scipy.io import savemat
@@ -1570,6 +1644,7 @@ def test_load_mat_toasts_skipped_vars(qapp, tmp_path, monkeypatch):
     toasts = []
     monkeypatch.setattr(mw, "toast", lambda msg, level="info": toasts.append((msg, level)))
     mw._load_one(str(p))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
 
     warn = [(m, lv) for m, lv in toasts if lv == "warning"]
     assert any("变量未导入" in m and "notes" in m for m, _ in warn), toasts
@@ -1626,7 +1701,7 @@ def test_toast_io_load_diagnostics_surfaces_and_dedupes_source_warnings(
     assert warn.count(warning) == 1, toasts
 
 
-def test_load_hdf_rejects_incomplete_ch_order(qapp, tmp_path, monkeypatch):
+def test_load_hdf_rejects_incomplete_ch_order(qtbot, qapp, tmp_path, monkeypatch):
     """A missing ch-order entry is a load error, not an estimated factor."""
     from PyQt5.QtWidgets import QMessageBox
 
@@ -1640,13 +1715,14 @@ def test_load_hdf_rejects_incomplete_ch_order(qapp, tmp_path, monkeypatch):
         QMessageBox, "critical", lambda *args, **kwargs: crits.append(args),
     )
     mw._load_one(str(hdf))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
 
     assert list(mw.files) == []
     assert crits
     assert any("不再按 1 估算" in str(args) for args in crits)
 
 
-def test_load_zfd_toasts_renamed_channels_summary(qapp, tmp_path, monkeypatch):
+def test_load_zfd_toasts_renamed_channels_summary(qtbot, qapp, tmp_path, monkeypatch):
     """F5: ZFD in-group [marker_id] renames must toast like HDF/WWT/TDMS."""
     from mf4_analyzer.ui.main_window import MainWindow
     from tests.test_zfd_format import _write_zfd_duplicate_names
@@ -1658,6 +1734,7 @@ def test_load_zfd_toasts_renamed_channels_summary(qapp, tmp_path, monkeypatch):
         mw, "toast", lambda msg, level="info": toasts.append((msg, level)),
     )
     mw._load_one(str(zfd))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
 
     warn = [m for m, lv in toasts if lv == "warning"]
     assert any(m == "1 个通道重名，已加序号区分" for m in warn), toasts
@@ -1685,7 +1762,7 @@ def test_close_all_cancel_keeps_ultraview_board(qapp, qtbot, monkeypatch):
     assert UltraViewRef("time", view_id) in membership_set(uv.board)
 
 
-def test_project_roundtrip_restores_remarks_and_dual_cursor(qapp, tmp_path):
+def test_project_roundtrip_restores_remarks_and_dual_cursor(qtbot, qapp, tmp_path):
     from mf4_analyzer.ui.main_window import MainWindow
 
     csv_a = tmp_path / "a.csv"
@@ -1697,6 +1774,7 @@ def test_project_roundtrip_restores_remarks_and_dual_cursor(qapp, tmp_path):
     mw.show()
     qapp.processEvents()
     mw._load_one(str(csv_a))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     fid = next(iter(mw.files))
     mw.navigator.set_checked_channels([(fid, "rpm")])
     mw.plot_time()
@@ -1730,6 +1808,7 @@ def test_project_roundtrip_restores_remarks_and_dual_cursor(qapp, tmp_path):
     mw2.canvas_time.dual_cursor_info.connect(last_info.append)
     mw2.canvas_time.dual_cursor_rows.connect(last_rows.append)
     mw2.open_project(proj)
+    qtbot.waitUntil(lambda: not mw2._imports.busy, timeout=15000)
     qapp.processEvents()
 
     restored_fid = next(iter(mw2.files))
@@ -1764,7 +1843,7 @@ def test_project_roundtrip_restores_remarks_and_dual_cursor(qapp, tmp_path):
         assert name in blob
 
 
-def test_project_roundtrip_restores_pinned_cursors(qapp, tmp_path):
+def test_project_roundtrip_restores_pinned_cursors(qtbot, qapp, tmp_path):
     from mf4_analyzer.ui.main_window import MainWindow
     from mf4_analyzer.ui.pinned_cursor_state import (
         collection_to_dict,
@@ -1781,6 +1860,7 @@ def test_project_roundtrip_restores_pinned_cursors(qapp, tmp_path):
     mw.show()
     qapp.processEvents()
     mw._load_one(str(csv_a))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     fid = next(iter(mw.files))
     mw.navigator.set_checked_channels([(fid, "rpm")])
     mw.plot_time()
@@ -1807,6 +1887,7 @@ def test_project_roundtrip_restores_pinned_cursors(qapp, tmp_path):
     mw2.resize(1200, 800)
     mw2.show()
     mw2.open_project(proj)
+    qtbot.waitUntil(lambda: not mw2._imports.busy, timeout=15000)
     qapp.processEvents()
 
     restored_fid = next(iter(mw2.files))
@@ -1823,7 +1904,7 @@ def test_project_roundtrip_restores_pinned_cursors(qapp, tmp_path):
     assert pin.bindings[0].channel == "rpm"
 
 
-def test_open_project_does_not_write_old_fft_pins_into_new_project(
+def test_open_project_does_not_write_old_fft_pins_into_new_project(qtbot,
     qapp, tmp_path,
 ):
     """F-P0-2: opening a new project must not save the previous FFT pin set."""
@@ -1839,6 +1920,7 @@ def test_open_project_does_not_write_old_fft_pins_into_new_project(
 
     mw_old = MainWindow()
     mw_old._load_one(str(csv_old))
+    qtbot.waitUntil(lambda: not mw_old._imports.busy, timeout=15000)
     old_fid = next(iter(mw_old.files))
     page = mw_old.chart_stack.ensure_analysis_page_ready("fft")
     canvas = page.pane_canvas(0)
@@ -1861,12 +1943,15 @@ def test_open_project_does_not_write_old_fft_pins_into_new_project(
 
     mw_seed = MainWindow()
     mw_seed._load_one(str(csv_new))
+    qtbot.waitUntil(lambda: not mw_seed._imports.busy, timeout=15000)
     mw_seed.save_project(new_proj)
 
     mw = MainWindow()
     mw.open_project(old_proj)
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     qapp.processEvents()
     mw.open_project(new_proj)
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     qapp.processEvents()
     mw.save_project(new_proj)
 
@@ -1879,7 +1964,7 @@ def test_open_project_does_not_write_old_fft_pins_into_new_project(
     assert records == []
 
 
-def test_open_project_restores_fft_pin_records_without_qt_loop_error(
+def test_open_project_restores_fft_pin_records_without_qt_loop_error(qtbot,
     qapp, tmp_path,
 ):
     """Restoring an FFT pin must finish in the Qt loop and keep the source records."""
@@ -1892,6 +1977,7 @@ def test_open_project_restores_fft_pin_records_without_qt_loop_error(
 
     mw_old = MainWindow()
     mw_old._load_one(str(csv_old))
+    qtbot.waitUntil(lambda: not mw_old._imports.busy, timeout=15000)
     old_fid = next(iter(mw_old.files))
     page = mw_old.chart_stack.ensure_analysis_page_ready("fft")
     canvas = page.pane_canvas(0)
@@ -1910,6 +1996,7 @@ def test_open_project_restores_fft_pin_records_without_qt_loop_error(
 
     mw = MainWindow()
     mw.open_project(old_proj)
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     qapp.processEvents()
     restored_page = mw.chart_stack.page_fft
     restored_canvas = restored_page.pane_canvas(0)
@@ -1921,7 +2008,7 @@ def test_open_project_restores_fft_pin_records_without_qt_loop_error(
     assert live.records[0].mode == "single"
 
 
-def test_open_project_restores_fft_dual_pin_then_new_project_stays_empty(
+def test_open_project_restores_fft_dual_pin_then_new_project_stays_empty(qtbot,
     qapp, tmp_path,
 ):
     """Dual-cursor FFT pin restore must not leak into a subsequently opened project."""
@@ -1937,6 +2024,7 @@ def test_open_project_restores_fft_dual_pin_then_new_project_stays_empty(
 
     mw_old = MainWindow()
     mw_old._load_one(str(csv_old))
+    qtbot.waitUntil(lambda: not mw_old._imports.busy, timeout=15000)
     old_fid = next(iter(mw_old.files))
     page = mw_old.chart_stack.ensure_analysis_page_ready("fft")
     canvas = page.pane_canvas(0)
@@ -1956,10 +2044,12 @@ def test_open_project_restores_fft_dual_pin_then_new_project_stays_empty(
 
     mw_seed = MainWindow()
     mw_seed._load_one(str(csv_new))
+    qtbot.waitUntil(lambda: not mw_seed._imports.busy, timeout=15000)
     mw_seed.save_project(new_proj)
 
     mw = MainWindow()
     mw.open_project(old_proj)
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     qapp.processEvents()
     live = mw.chart_stack.pinned_cursors_for_canvas(
         mw.chart_stack.page_fft.pane_canvas(0),
@@ -1971,6 +2061,7 @@ def test_open_project_restores_fft_dual_pin_then_new_project_stays_empty(
     assert live.records[0].bx == pytest.approx(40.0)
 
     mw.open_project(new_proj)
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     qapp.processEvents()
     mw.save_project(new_proj)
 
@@ -1997,6 +2088,7 @@ def test_reopen_with_frf_view_keeps_time_dual_cursor_pill(qapp, tmp_path, qtbot)
     mw.show()
     qapp.processEvents()
     mw._load_one(str(csv_a))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     fid = next(iter(mw.files))
     mw.navigator.set_checked_channels([(fid, "input")])
     mw.plot_time()
@@ -2021,6 +2113,7 @@ def test_reopen_with_frf_view_keeps_time_dual_cursor_pill(qapp, tmp_path, qtbot)
     last_rows = []
     mw2.canvas_time.dual_cursor_rows.connect(last_rows.append)
     mw2.open_project(proj)
+    qtbot.waitUntil(lambda: not mw2._imports.busy, timeout=15000)
     qapp.processEvents()
     _drain_analysis_restore(qapp, mw2)
 
@@ -2049,6 +2142,7 @@ def test_switch_to_frf_and_back_keeps_time_pill(qapp, tmp_path, qtbot):
     mw.show()
     qapp.processEvents()
     mw._load_one(str(csv_a))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     fid = next(iter(mw.files))
     mw.navigator.set_checked_channels([(fid, "input")])
     mw.plot_time()
@@ -2073,7 +2167,7 @@ def test_switch_to_frf_and_back_keeps_time_pill(qapp, tmp_path, qtbot):
     assert all(item.isVisible() for item in cursor._cursor_b_items)
 
 
-def test_view_switch_does_not_leak_remarks_across_time_views(qapp, tmp_path):
+def test_view_switch_does_not_leak_remarks_across_time_views(qtbot, qapp, tmp_path):
     from mf4_analyzer.ui.main_window import MainWindow
 
     csv_a = tmp_path / "a.csv"
@@ -2084,6 +2178,7 @@ def test_view_switch_does_not_leak_remarks_across_time_views(qapp, tmp_path):
     mw.show()
     qapp.processEvents()
     mw._load_one(str(csv_a))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     fid = next(iter(mw.files))
     mw.navigator.set_checked_channels([(fid, "rpm")])
     mw.plot_time()
@@ -2137,6 +2232,7 @@ def test_project_roundtrip_restores_fft_remarks_and_frequency_cursor(
     mw.show()
     qapp.processEvents()
     mw._load_one(str(csv_a))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     fid = next(iter(mw.files))
     mw.toolbar._set_mode("fft")
     qapp.processEvents()
@@ -2169,6 +2265,7 @@ def test_project_roundtrip_restores_fft_remarks_and_frequency_cursor(
     mw2.resize(1200, 800)
     mw2.show()
     mw2.open_project(proj)
+    qtbot.waitUntil(lambda: not mw2._imports.busy, timeout=15000)
     _drain_analysis_restore(qapp, mw2)
     mw2.toolbar._set_mode("fft")
     qapp.processEvents()
@@ -2187,7 +2284,7 @@ def test_project_roundtrip_restores_fft_remarks_and_frequency_cursor(
     assert all(line.isVisible() for line in canvas2._cursor_a_lines)
 
 
-def test_project_restore_rebuilds_wwt_record_rows_and_hidden_ids(
+def test_project_restore_rebuilds_wwt_record_rows_and_hidden_ids(qtbot,
     qapp, tmp_path, monkeypatch,
 ):
     from mf4_analyzer.ui.main_window import MainWindow
@@ -2200,6 +2297,7 @@ def test_project_restore_rebuilds_wwt_record_rows_and_hidden_ids(
     monkeypatch.setattr(mw._wwt_import, "_ask_layout", lambda *_a, **_k: True)
     monkeypatch.setattr(mw, "plot_time", lambda *_a, **_k: None)
     mw._load_one(str(path))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     qapp.processEvents()
     state = mw.view_manager.get(mw.view_manager.active)
     record = next(
@@ -2213,6 +2311,7 @@ def test_project_restore_rebuilds_wwt_record_rows_and_hidden_ids(
     monkeypatch.setattr(restored._wwt_import, "_ask_layout", lambda *_a, **_k: True)
     monkeypatch.setattr(restored, "plot_time", lambda *_a, **_k: None)
     restored.open_project(proj)
+    qtbot.waitUntil(lambda: not restored._imports.busy, timeout=15000)
     qapp.processEvents()
     sync = getattr(restored, "_sync_record_curve_tree", None)
     if callable(sync):
@@ -2225,7 +2324,7 @@ def test_project_restore_rebuilds_wwt_record_rows_and_hidden_ids(
     assert roles[0][2] == record.binding_id
 
 
-def test_project_restore_migrates_live_proven_legacy_wwt_channel_binding(
+def test_project_restore_migrates_live_proven_legacy_wwt_channel_binding(qtbot,
     qapp, tmp_path, monkeypatch,
 ):
     """Live-proven legacy conversion drops a singleton axis group on reload."""
@@ -2237,6 +2336,7 @@ def test_project_restore_migrates_live_proven_legacy_wwt_channel_binding(
     source = MainWindow()
     monkeypatch.setattr(source._wwt_import, "_ask_layout", lambda *_a, **_k: True)
     source._load_one(str(path))
+    qtbot.waitUntil(lambda: not source._imports.busy, timeout=15000)
     qapp.processEvents()
     old_fid = next(iter(source.files))
     source.save_project(project)
@@ -2272,6 +2372,7 @@ def test_project_restore_migrates_live_proven_legacy_wwt_channel_binding(
     restored = MainWindow()
     monkeypatch.setattr(restored._wwt_import, "_ask_layout", lambda *_a, **_k: True)
     restored.open_project(project)
+    qtbot.waitUntil(lambda: not restored._imports.busy, timeout=15000)
     qapp.processEvents()
 
     state = restored.view_manager.get(restored.view_manager.active)
@@ -2295,7 +2396,7 @@ def test_project_restore_migrates_live_proven_legacy_wwt_channel_binding(
     assert saved["curve_bindings"] == []
 
 
-def test_project_restore_unremapable_record_has_no_ghost_row(
+def test_project_restore_unremapable_record_has_no_ghost_row(qtbot,
     qapp, tmp_path, monkeypatch,
 ):
     from PyQt5.QtWidgets import QMessageBox
@@ -2310,6 +2411,7 @@ def test_project_restore_unremapable_record_has_no_ghost_row(
     monkeypatch.setattr(mw._wwt_import, "_ask_layout", lambda *_a, **_k: True)
     monkeypatch.setattr(mw, "plot_time", lambda *_a, **_k: None)
     mw._load_one(str(path))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     qapp.processEvents()
     mw.save_project(proj)
     payload = json.loads(proj.read_text(encoding="utf-8"))
@@ -2329,6 +2431,7 @@ def test_project_restore_unremapable_record_has_no_ghost_row(
     monkeypatch.setattr(restored._wwt_import, "_ask_layout", lambda *_a, **_k: True)
     monkeypatch.setattr(restored, "plot_time", lambda *_a, **_k: None)
     restored.open_project(proj)
+    qtbot.waitUntil(lambda: not restored._imports.busy, timeout=15000)
     qapp.processEvents()
     sync = getattr(restored, "_sync_record_curve_tree", None)
     if callable(sync):
@@ -2379,6 +2482,7 @@ def test_project_roundtrip_keeps_wwt_auto_xaxis_label_origin(
         lambda *_a, **_k: pytest.fail("layout dialog must not run"),
     )
     restored.open_project(project)
+    qtbot.waitUntil(lambda: not restored._imports.busy, timeout=15000)
     qapp.processEvents()
     assert restored._custom_xaxis_spec.label_origin == LABEL_ORIGIN_AUTO
     assert restored._custom_xaxis_spec.label == layout_label
@@ -2422,6 +2526,7 @@ def test_project_roundtrip_keeps_wwt_user_xaxis_label_origin(
         lambda *_a, **_k: pytest.fail("layout dialog must not run"),
     )
     restored.open_project(project)
+    qtbot.waitUntil(lambda: not restored._imports.busy, timeout=15000)
     qapp.processEvents()
     assert restored._custom_xaxis_spec.label_origin == LABEL_ORIGIN_USER
     assert restored._custom_xaxis_spec.label == wwt.CHAN_X
@@ -2468,6 +2573,7 @@ def test_close_project_then_import_b_save_goes_to_save_as(
     mw = MainWindow()
     qtbot.addWidget(mw)
     mw._load_one(str(csv_a))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     assert mw.save_project(project_a) is True
     digest_a = _sha256(project_a)
 
@@ -2481,6 +2587,7 @@ def test_close_project_then_import_b_save_goes_to_save_as(
     assert not mw.files
 
     mw._load_one(str(csv_b))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     starts = []
 
     def _save_as(*args, **kwargs):
@@ -2509,6 +2616,7 @@ def test_close_project_save_writes_pre_clean_session(
     mw = MainWindow()
     qtbot.addWidget(mw)
     mw._load_one(str(csv_a))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     assert mw.save_project(project_a) is True
     mw.view_manager.rename(0, "工况A")
     assert mw._project_session_is_dirty()
@@ -2525,6 +2633,7 @@ def test_close_project_save_writes_pre_clean_session(
     restored = MainWindow()
     qtbot.addWidget(restored)
     restored.open_project(project_a)
+    qtbot.waitUntil(lambda: not restored._imports.busy, timeout=15000)
     assert restored.view_manager.views[0].name == "工况A"
     assert restored.files
 
@@ -2541,6 +2650,7 @@ def test_close_project_discard_leaves_disk_bytes(
     mw = MainWindow()
     qtbot.addWidget(mw)
     mw._load_one(str(csv_a))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     assert mw.save_project(project_a) is True
     digest_a = _sha256(project_a)
     mw.view_manager.rename(0, "丢弃")
@@ -2564,6 +2674,7 @@ def test_late_analysis_restore_after_close_does_not_rebuild(
     mw = MainWindow()
     qtbot.addWidget(mw)
     mw._load_one(str(csv_a))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     assert mw.save_project(project_a) is True
     fft_id = str(mw.analysis_managers["fft"].get(0).view_id)
     mw._analysis_restore_pending.add(("fft", fft_id))
@@ -2592,6 +2703,7 @@ def test_bound_empty_close_project_clears_board_and_binding(
     mw = MainWindow()
     qtbot.addWidget(mw)
     mw._load_one(str(csv_a))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     assert mw.save_project(project_a) is True
     mw.close_all(force=True)
     assert not mw.files
@@ -2632,6 +2744,7 @@ def test_mf4_time_signal_reopen_keeps_axis_names_and_manual_fs(
     window = MainWindow()
     qtbot.addWidget(window)
     window._load_one(str(path))
+    qtbot.waitUntil(lambda: not window._imports.busy, timeout=15000)
     fid, fd = next(iter(window.files.items()))
     assert fd.get_signal_channels() == ["Time [0:1]", "sig"]
     assert fd.fs == pytest.approx(10.0)
@@ -2643,6 +2756,7 @@ def test_mf4_time_signal_reopen_keeps_axis_names_and_manual_fs(
     restored = MainWindow()
     qtbot.addWidget(restored)
     restored.open_project(project)
+    qtbot.waitUntil(lambda: not restored._imports.busy, timeout=15000)
     restored_fd = next(iter(restored.files.values()))
     assert restored_fd.time_array.tolist() == pytest.approx(axis)
     assert restored_fd.fs == pytest.approx(10.0)
@@ -2655,6 +2769,7 @@ def test_mf4_time_signal_reopen_keeps_axis_names_and_manual_fs(
     manual = MainWindow()
     qtbot.addWidget(manual)
     manual.open_project(project)
+    qtbot.waitUntil(lambda: not manual._imports.busy, timeout=15000)
     manual_fd = next(iter(manual.files.values()))
     assert manual_fd._time_source == "manual"
     assert manual_fd.fs == pytest.approx(50.0)
@@ -2738,6 +2853,7 @@ def test_derived_channel_roundtrip_keeps_values_view_and_analysis_sources(
     mw = MainWindow()
     qtbot.addWidget(mw)
     mw._load_one(str(csv_path))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     fid = next(iter(mw.files))
     fd = mw.files[fid]
     fd.channel_units["rpm"] = "rpm"
@@ -2776,6 +2892,7 @@ def test_derived_channel_roundtrip_keeps_values_view_and_analysis_sources(
     mw2 = MainWindow()
     qtbot.addWidget(mw2)
     mw2.open_project(proj)
+    qtbot.waitUntil(lambda: not mw2._imports.busy, timeout=15000)
     _drain_analysis_restore(qapp, mw2)
     fid2 = next(iter(mw2.files))
     restored = mw2.files[fid2]
@@ -2817,6 +2934,7 @@ def test_chain_delete_and_loader_delete_replay(qapp, qtbot, tmp_path, monkeypatc
     mw = MainWindow()
     qtbot.addWidget(mw)
     mw._load_one(str(csv_path))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     fid = next(iter(mw.files))
     dlg = _editor(mw, fid)
     dlg.combo_op2.setCurrentIndex(0)
@@ -2838,6 +2956,7 @@ def test_chain_delete_and_loader_delete_replay(qapp, qtbot, tmp_path, monkeypatc
     mw2 = MainWindow()
     qtbot.addWidget(mw2)
     mw2.open_project(proj)
+    qtbot.waitUntil(lambda: not mw2._imports.busy, timeout=15000)
     fd = next(iter(mw2.files.values()))
     assert "sum_tq" not in fd.channels
     np.testing.assert_array_equal(fd.data["abs_sum_tq"].to_numpy(dtype=float), expected)
@@ -2848,6 +2967,7 @@ def test_chain_delete_and_loader_delete_replay(qapp, qtbot, tmp_path, monkeypatc
     mw3 = MainWindow()
     qtbot.addWidget(mw3)
     mw3._load_one(str(gone))
+    qtbot.waitUntil(lambda: not mw3._imports.busy, timeout=15000)
     fid3 = next(iter(mw3.files))
     dlg3 = _editor(mw3, fid3)
     _check_only(dlg3, {"torque"})
@@ -2857,6 +2977,7 @@ def test_chain_delete_and_loader_delete_replay(qapp, qtbot, tmp_path, monkeypatc
     mw4 = MainWindow()
     qtbot.addWidget(mw4)
     mw4.open_project(gone_proj)
+    qtbot.waitUntil(lambda: not mw4._imports.busy, timeout=15000)
     assert "torque" not in next(iter(mw4.files.values())).channels
 
 
@@ -2873,6 +2994,7 @@ def test_delete_then_same_name_derive_replays_the_derived_values(
     mw = MainWindow()
     qtbot.addWidget(mw)
     mw._load_one(str(csv_path))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     fid = next(iter(mw.files))
     rpm = mw.files[fid].data["rpm"].to_numpy(dtype=float)
     dlg = _editor(mw, fid)
@@ -2891,6 +3013,7 @@ def test_delete_then_same_name_derive_replays_the_derived_values(
     mw2 = MainWindow()
     qtbot.addWidget(mw2)
     mw2.open_project(proj)
+    qtbot.waitUntil(lambda: not mw2._imports.busy, timeout=15000)
     got = next(iter(mw2.files.values())).data["torque"].to_numpy(dtype=float)
     np.testing.assert_array_equal(got, rpm * rpm)
 
@@ -2905,6 +3028,7 @@ def test_create_then_delete_does_not_write_schema_5(qapp, qtbot, tmp_path, monke
     mw = MainWindow()
     qtbot.addWidget(mw)
     mw._load_one(str(csv_path))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     fid = next(iter(mw.files))
     dlg = _editor(mw, fid)
     dlg.combo_src.setCurrentText("rpm")
@@ -2944,6 +3068,7 @@ def test_hdf_edit_is_stored_on_only_the_edited_group(qapp, qtbot, tmp_path, monk
     mw = MainWindow()
     qtbot.addWidget(mw)
     mw._load_one(str(hdf))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     fid = next(fid for fid, fd in mw.files.items() if "Accel" in fd.channels)
     dlg = _editor(mw, fid)
     dlg.combo_src.setCurrentText("Accel")
@@ -2962,6 +3087,7 @@ def test_hdf_edit_is_stored_on_only_the_edited_group(qapp, qtbot, tmp_path, monk
     mw2 = MainWindow()
     qtbot.addWidget(mw2)
     mw2.open_project(proj)
+    qtbot.waitUntil(lambda: not mw2._imports.busy, timeout=15000)
     assert len(mw2.files) == 2
     owners = [
         fd.label_suffix for fd in mw2.files.values() if "offset_Accel" in fd.channels
@@ -2982,6 +3108,7 @@ def test_skipped_recipe_is_visible_and_drops_view_refs(
     mw = MainWindow()
     qtbot.addWidget(mw)
     mw._load_one(str(csv_path))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     fid = next(iter(mw.files))
     dlg = _editor(mw, fid)
     dlg.combo_src.setCurrentText("torque")
@@ -3005,6 +3132,7 @@ def test_skipped_recipe_is_visible_and_drops_view_refs(
     mw2 = MainWindow()
     qtbot.addWidget(mw2)
     mw2.open_project(proj)
+    qtbot.waitUntil(lambda: not mw2._imports.busy, timeout=15000)
     health = mw2._project_restore_health
     assert health.degraded
     reasons = [item[2] for item in health.skipped_channel_edits]
@@ -3056,6 +3184,7 @@ def test_loader_column_with_the_derived_name_is_not_overwritten(
     mw = MainWindow()
     qtbot.addWidget(mw)
     mw._load_one(str(csv_path))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     fid = next(iter(mw.files))
     dlg = _editor(mw, fid)
     dlg.combo_src.setCurrentText("rpm")
@@ -3072,6 +3201,7 @@ def test_loader_column_with_the_derived_name_is_not_overwritten(
     mw2 = MainWindow()
     qtbot.addWidget(mw2)
     mw2.open_project(proj)
+    qtbot.waitUntil(lambda: not mw2._imports.busy, timeout=15000)
     fd = next(iter(mw2.files.values()))
     np.testing.assert_array_equal(
         fd.data["abs_rpm"].to_numpy(dtype=float),
@@ -3093,6 +3223,7 @@ def test_expression_that_becomes_all_invalid_is_skipped(
     mw = MainWindow()
     qtbot.addWidget(mw)
     mw._load_one(str(csv_path))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     fid = next(iter(mw.files))
     dlg = _editor(mw, fid)
     dlg.combo_op2.setCurrentIndex(dlg.CUSTOM_OP_INDEX)
@@ -3113,6 +3244,7 @@ def test_expression_that_becomes_all_invalid_is_skipped(
     mw2 = MainWindow()
     qtbot.addWidget(mw2)
     mw2.open_project(proj)
+    qtbot.waitUntil(lambda: not mw2._imports.busy, timeout=15000)
     fd = next(iter(mw2.files.values()))
     assert "expr_shift" not in fd.channels
     assert mw2._project_restore_health.skipped_channel_edits[0][2] == "表达式结果全部无效"
@@ -3131,6 +3263,7 @@ def test_unlogged_channel_edit_warns_and_is_absent_after_reopen(
     mw = MainWindow()
     qtbot.addWidget(mw)
     mw._load_one(str(csv_path))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     fid = next(iter(mw.files))
     n = len(mw.files[fid].data)
     toasts = []
@@ -3151,6 +3284,7 @@ def test_unlogged_channel_edit_warns_and_is_absent_after_reopen(
     mw2 = MainWindow()
     qtbot.addWidget(mw2)
     mw2.open_project(proj)
+    qtbot.waitUntil(lambda: not mw2._imports.busy, timeout=15000)
     assert "ghost" not in next(iter(mw2.files.values())).channels
 
 
@@ -3165,6 +3299,7 @@ def test_save_without_session_channels_toasts_saved_only(
     mw = MainWindow()
     qtbot.addWidget(mw)
     mw._load_one(str(csv_path))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     toasts = []
     monkeypatch.setattr(mw, "toast", lambda text, kind="info": toasts.append((text, kind)))
     assert mw.save_project(proj) is True
@@ -3184,6 +3319,7 @@ def test_skipped_recipe_warns_with_real_counts_and_stays_clean(
     mw = MainWindow()
     qtbot.addWidget(mw)
     mw._load_one(str(csv_path))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     fid = next(iter(mw.files))
     n = len(mw.files[fid].data)
     skipped = make_single("ghost_d", "", "abs", "no_such", None)
@@ -3243,6 +3379,7 @@ def test_applied_recipe_keeps_the_success_counts(qapp, qtbot, tmp_path, monkeypa
     mw = MainWindow()
     qtbot.addWidget(mw)
     mw._load_one(str(csv_path))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     fid = next(iter(mw.files))
     dlg = _editor(mw, fid)
     dlg.combo_src.setCurrentText("rpm")
@@ -3315,6 +3452,7 @@ def test_gui_load_stamps_the_batch_group_identity(qapp, qtbot, tmp_path):
     window = MainWindow()
     qtbot.addWidget(window)
     window._load_one(str(hdf))
+    qtbot.waitUntil(lambda: not window._imports.busy, timeout=15000)
     loaded = SourceAdapterRegistry.default().adapter_for(hdf).load_sources(str(hdf))
     gui = sorted(fd.source_metadata["group_id"] for fd in window.files.values())
     batch = sorted(item.group_id for item in loaded)
@@ -3335,6 +3473,7 @@ def test_reexported_mat_keeps_recipe_rate_and_view_with_its_source(
     window = MainWindow()
     qtbot.addWidget(window)
     window._load_one(str(mat))
+    qtbot.waitUntil(lambda: not window._imports.busy, timeout=15000)
     assert len(window.files) == 2
     slow = _fid_with(window, "rack")
     fast = _fid_with(window, "torque")
@@ -3356,6 +3495,7 @@ def test_reexported_mat_keeps_recipe_rate_and_view_with_its_source(
     restored = MainWindow()
     qtbot.addWidget(restored)
     restored.open_project(proj)
+    qtbot.waitUntil(lambda: not restored._imports.busy, timeout=15000)
     assert warnings == []
     assert not restored._project_restore_health.degraded
     assert len(restored.files) == 2
@@ -3383,6 +3523,7 @@ def test_fewer_mat_groups_do_not_load_the_file_twice(
     window = MainWindow()
     qtbot.addWidget(window)
     window._load_one(str(mat))
+    qtbot.waitUntil(lambda: not window._imports.busy, timeout=15000)
     slow = _fid_with(window, "rack")
     fast = _fid_with(window, "torque")
     window._apply_channel_edits(
@@ -3396,6 +3537,7 @@ def test_fewer_mat_groups_do_not_load_the_file_twice(
     restored = MainWindow()
     qtbot.addWidget(restored)
     restored.open_project(proj)
+    qtbot.waitUntil(lambda: not restored._imports.busy, timeout=15000)
     assert len(restored.files) == 1
     only = next(iter(restored.files.values()))
     assert "torque" in only.channels
@@ -3423,7 +3565,9 @@ def test_block_reorder_roundtrip_keeps_the_split_source_recipe(
     window = MainWindow()
     qtbot.addWidget(window)
     window._load_one(str(mat))
+    qtbot.waitUntil(lambda: not window._imports.busy, timeout=15000)
     window._load_one(str(csv_path))
+    qtbot.waitUntil(lambda: not window._imports.busy, timeout=15000)
     slow = _fid_with(window, "rack")
     window._apply_channel_edits(
         slow, {}, set(), [make_single("scaled", "Nm", "scale", "rack", 2.0)],
@@ -3442,6 +3586,7 @@ def test_block_reorder_roundtrip_keeps_the_split_source_recipe(
     restored = MainWindow()
     qtbot.addWidget(restored)
     restored.open_project(proj)
+    qtbot.waitUntil(lambda: not restored._imports.busy, timeout=15000)
     assert warnings == []
     order = [
         restored.files[fid].filepath.suffix
@@ -3492,6 +3637,7 @@ def test_legacy_same_name_groups_do_not_replay_onto_a_guess(
     window = MainWindow()
     qtbot.addWidget(window)
     window._load_one(str(dummy))
+    qtbot.waitUntil(lambda: not window._imports.busy, timeout=15000)
     second = next(fid for fid, fd in window.files.items() if fd.label_suffix == "B")
     window._apply_channel_edits(
         second, {}, set(), [make_single("scaled", "Nm", "scale", "torque", 2.0)],
@@ -3508,6 +3654,7 @@ def test_legacy_same_name_groups_do_not_replay_onto_a_guess(
     restored = MainWindow()
     qtbot.addWidget(restored)
     restored.open_project(proj)
+    qtbot.waitUntil(lambda: not restored._imports.busy, timeout=15000)
     assert calls["n"] == before + 1
     assert len(restored.files) == 2
     assert all("scaled" not in fd.channels for fd in restored.files.values())
@@ -3534,6 +3681,7 @@ def test_recreated_channel_keeps_views_after_old_generation_fails(qapp, qtbot, t
     window = MainWindow()
     qtbot.addWidget(window)
     window._load_one(str(csv))
+    qtbot.waitUntil(lambda: not window._imports.busy, timeout=15000)
     fid = next(iter(window.files))
     window._apply_channel_edits(fid, {}, [], edits=[
         make_single('X', '', 'abs', 'torque', None),
@@ -3549,6 +3697,7 @@ def test_recreated_channel_keeps_views_after_old_generation_fails(qapp, qtbot, t
     restored = MainWindow()
     qtbot.addWidget(restored)
     restored.open_project(project)
+    qtbot.waitUntil(lambda: not restored._imports.busy, timeout=15000)
     fid2 = next(iter(restored.files))
     fd = restored.files[fid2]
     assert {'X', 'Y'} <= set(fd.channels)
@@ -3567,11 +3716,13 @@ def test_malformed_remove_is_reported_without_aborting_project_restore(qapp, qtb
     window = MainWindow()
     qtbot.addWidget(window)
     window._load_one(str(csv))
+    qtbot.waitUntil(lambda: not window._imports.busy, timeout=15000)
     assert window.save_project(project)
     raw = json.loads(project.read_text())
     raw['files'][0]['channel_edits'] = [{'op': 'remove', 'names': 123}]
     project.write_text(json.dumps(raw))
     window.open_project(project)
+    qtbot.waitUntil(lambda: not window._imports.busy, timeout=15000)
     assert len(window.files) == 1
     assert 'torque' in next(iter(window.files.values())).channels
     assert window._project_restore_health.degraded
@@ -3583,3 +3734,20 @@ def test_unverified_source_reports_malformed_remove():
     from mf4_analyzer.ui.main_window._project_io_mixin import _unverified_channel_edit_skips
     ref = SimpleNamespace(channel_edits=[{'op': 'remove', 'names': 123}])
     assert _unverified_channel_edit_skips(ref, 'f') == [('f', '', '条目无法识别')]
+
+
+@pytest.fixture(autouse=True)
+def _local_import_broker(monkeypatch):
+    """Exercise GUI continuations with existing loader fakes; broker has its own gates."""
+    from mf4_analyzer.io import DataLoader
+    from mf4_analyzer.ui.main_window import import_coordinator
+
+    def run(method, path, *, kwargs=None, cancel_check=None, progress_callback=None, limits=None):
+        options = dict(kwargs or {})
+        if method in {"load_blf_frames", "probe_blf_dbc_frames"}:
+            path = options.pop("frames")
+        if progress_callback:
+            progress_callback(-1.0, "读取表格" if method == "load_csv" else "读取数据")
+        return getattr(DataLoader, method)(path, **options)
+
+    monkeypatch.setattr(import_coordinator, "run_import", run)

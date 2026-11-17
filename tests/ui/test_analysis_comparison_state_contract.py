@@ -1,5 +1,6 @@
 """Real input-event coverage for independent analysis comparison targets."""
 from __future__ import annotations
+from tests._helpers.import_tasks import wait_for_imports
 
 import pytest
 import numpy as np
@@ -77,6 +78,7 @@ def test_save_reopen_commits_focused_peer_pending_reference(win, section, qtbot,
     assert b.params["db_reference"] == 4.5
     assert a.params["db_reference"] == 1.0
     win.open_project(path)
+    wait_for_imports(win)
     restored = win.analysis_managers[section].views
     assert restored[0].params["db_reference"] == 1.0
     assert restored[1].params["db_reference"] == 4.5

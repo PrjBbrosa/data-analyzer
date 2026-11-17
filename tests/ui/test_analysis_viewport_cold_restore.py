@@ -1,4 +1,5 @@
 """Real worker and project-open coverage for persisted heatmap browsing intent."""
+from tests._helpers.import_tasks import wait_for_imports
 import numpy as np
 import pandas as pd
 import pytest
@@ -18,6 +19,7 @@ def viewport_win(qapp, qtbot, tmp_path):
     win = MainWindow()
     qtbot.addWidget(win)
     win._load_one(str(path))
+    wait_for_imports(win)
     return win
 
 
@@ -90,6 +92,7 @@ def test_project_open_waits_for_compute_and_preserves_axis_origins(viewport_win,
     assert not restored.analysis_caches['fft_time']._store
     submissions = _watch_worker_submission(restored, monkeypatch)
     restored.open_project(path)
+    wait_for_imports(restored)
     canvas = restored._analysis_page('fft_time').pane_canvas(0)
     qtbot.wait(100)
     assert submissions == []

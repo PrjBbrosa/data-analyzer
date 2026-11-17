@@ -49,6 +49,7 @@ from ...drop_paths import (
     iter_local_paths,
 )
 from ...widgets.toast import Toast
+from ...main_window.import_coordinator import ImportCoordinator
 from ._geometry import (
     arm_post_show_geometry_check,
     bind_screen_overflow_nudge,
@@ -217,6 +218,9 @@ class BatchSheet(QDialog):
         dialog's open/close cycle cannot read or write the real user config.
         """
         super().__init__(parent)
+        self._dbc_imports = ImportCoordinator(self)
+        self._dbc_close_intent: tuple[str, int | None] | None = None
+        self._dbc_imports.drained.connect(self._resume_close_after_dbc_import)
         self._recompute_timer = QTimer(self)
         self._recompute_timer.setSingleShot(True)
         self._recompute_timer.setInterval(_PIPELINE_RECOMPUTE_DEBOUNCE_MS)
@@ -847,59 +851,40 @@ class BatchSheet(QDialog):
                 continue
         return selected
 
-    def _ensure_blf_dbc_context(self, paths) -> bool:
-        """Resolve DBC via MainWindow's shared dialog path when needed.
+    def _with_blf_dbc_context(self, paths, continuation) -> None:
+        """Resume intake after DBC resolution; no parser runs on the GUI thread."""
+        selected = [str(path) for path in (paths or ()) if path]
+        blf_paths = self._blf_paths_among(selected)
+        if not blf_paths or self._source_context.get("dbc_paths"):
+            continuation(selected)
+            return
+        others = [path for path in selected if path not in set(blf_paths)]
 
-        Returns False when BLF intake must abort (cancel / no resolver).
-        Non-BLF paths never fail this gate.
-        """
-        blf_paths = self._blf_paths_among(paths)
-        if not blf_paths:
-            return True
-        existing = [
-            str(item)
-            for item in (self._source_context.get("dbc_paths") or ())
-            if item
-        ]
-        if existing:
-            return True
+        def resolved(dbc_paths):
+            if dbc_paths:
+                context = dict(self._source_context)
+                context["dbc_paths"] = list(dbc_paths)
+                self._set_source_context(context)
+                continuation(selected)
+            else:
+                self._toast("已取消 CAN 日志的 DBC 选择", kind="info")
+                continuation(others)
 
-        parent = self.parent()
-        resolver = getattr(self, "_blf_dbc_resolver", None)
+        # Explicit legacy injection seam. The real MainWindow path below is
+        # always asynchronous and never falls back to its synchronous facade.
+        injected = getattr(self, "_blf_dbc_resolver", None)
+        if callable(injected):
+            resolved(injected(blf_paths))
+            return
+        resolver = getattr(self.parent(), "resolve_blf_dbc_paths_for_batch_async", None)
         if not callable(resolver):
-            resolver = getattr(parent, "resolve_blf_dbc_paths_for_batch", None)
-        if not callable(resolver):
-            self._toast(
-                "无法为 CAN 日志选择 DBC（批处理未连接到主窗口）",
-                kind="warning",
-            )
-            return False
-
-        resolved = resolver(blf_paths)
-        if not resolved:
-            self._toast("已取消 CAN 日志的 DBC 选择", kind="info")
-            return False
-
-        context = dict(self._source_context)
-        context["dbc_paths"] = list(resolved)
-        self._set_source_context(context)
-        return True
+            self._toast("无法为 CAN 日志选择 DBC（批处理未连接到主窗口）", kind="warning")
+            continuation(others)
+            return
+        resolver(blf_paths, coordinator=self._dbc_imports, on_resolved=resolved)
 
     def _add_disk_paths_with_blf_context(self, paths) -> None:
-        """Disk/drop intake: ensure BLF DBC context, then add paths.
-
-        On DBC cancel, non-BLF files in the same selection are still added.
-        """
-        selected = [str(path) for path in (paths or ()) if path]
-        if not selected:
-            return
-        blf_paths = self._blf_paths_among(selected)
-        others = [path for path in selected if path not in set(blf_paths)]
-        if blf_paths and not self._ensure_blf_dbc_context(blf_paths):
-            if others:
-                self._input_panel.add_disk_paths_resolved(others)
-            return
-        self._input_panel.add_disk_paths_resolved(selected)
+        self._with_blf_dbc_context(paths, self._input_panel.add_disk_paths_resolved)
 
     def _present_footer(
         self, state: str, *, done: int = 0, total: int = 1,
@@ -1826,30 +1811,21 @@ class BatchSheet(QDialog):
         self._output_panel.apply_outputs(out)
 
     def apply_files(self, file_ids: tuple, file_paths: tuple[str, ...]) -> None:
-        paths = tuple(str(path) for path in (file_paths or ()) if path)
-        if self._blf_paths_among(paths):
-            if not self._ensure_blf_dbc_context(paths):
-                paths = tuple(
-                    path for path in paths
-                    if Path(path).suffix.lower() != ".blf"
-                )
-                if not paths and not file_ids:
-                    return
-        with self._suspend_user_configuration():
-            self._input_panel.apply_files(file_ids, paths)
+        def apply(paths):
+            with self._suspend_user_configuration():
+                self._input_panel.apply_files(file_ids, tuple(paths))
+
+        self._with_blf_dbc_context(file_paths, apply)
 
     def apply_sources(self, source_ids: tuple, source_paths: tuple[str, ...]) -> None:
-        paths = tuple(str(path) for path in (source_paths or ()) if path)
-        if not source_ids and self._blf_paths_among(paths):
-            if not self._ensure_blf_dbc_context(paths):
-                paths = tuple(
-                    path for path in paths
-                    if Path(path).suffix.lower() != ".blf"
-                )
-                if not paths:
-                    return
-        with self._suspend_user_configuration():
-            self._input_panel.apply_sources(source_ids, paths)
+        def apply(paths):
+            with self._suspend_user_configuration():
+                self._input_panel.apply_sources(source_ids, tuple(paths))
+
+        if source_ids:
+            apply(source_paths)
+        else:
+            self._with_blf_dbc_context(source_paths, apply)
 
     def _on_builtin_analysis_preset(self, _key: str, patch: dict) -> None:
         # AnalysisPanel already applied its owned fields.  OUTPUT owns display
@@ -3123,6 +3099,40 @@ class BatchSheet(QDialog):
             deadline.deleteLater()
             loop.deleteLater()
 
+    def prepare_parent_close(self) -> bool:
+        """Cancel DBC intake and keep the last window alive until its child exits.
+
+        MainWindow calls this only after its dirty and runner leave decisions.
+        The pending intent stores no host reference; QObject parenting supplies
+        the live parent when the coordinator eventually emits drained.
+        """
+        return not self._defer_close_for_dbc("parent")
+
+    def _defer_close_for_dbc(self, kind: str, result: int | None = None) -> bool:
+        if not self._dbc_imports.busy:
+            self._dbc_close_intent = None
+            return False
+        # A later Sheet close/reject must not replace an accepted parent exit.
+        if self._dbc_close_intent is None or self._dbc_close_intent[0] != "parent":
+            self._dbc_close_intent = (kind, result)
+        self._dbc_imports.invalidate_session()
+        return True
+
+    def _resume_close_after_dbc_import(self) -> None:
+        intent = self._dbc_close_intent
+        self._dbc_close_intent = None
+        if intent is None:
+            return
+        kind, result = intent
+        if kind == "parent":
+            parent = self.parentWidget()
+            if parent is not None and not sip.isdeleted(parent):
+                parent.close()
+        elif kind == "done":
+            self.done(result)
+        else:
+            self.close()
+
     def closeEvent(self, event):  # noqa: N802 (Qt API)
         """If a run is in progress, prompt for confirmation and route to
         the cancel path; the actual close happens once
@@ -3145,6 +3155,10 @@ class BatchSheet(QDialog):
                         )
             event.ignore()
             return
+        if self._defer_close_for_dbc("close"):
+            event.ignore()
+            return
+        self._dbc_imports.invalidate_session()
         # Normal-close branch only; the run-in-progress branch above ignores
         # the event and comes back through here once the runner has stopped.
         self._teardown_result_details()
@@ -3166,6 +3180,9 @@ class BatchSheet(QDialog):
         conversely a visible close runs both, writing the same snapshot twice,
         which is harmless.
         """
+        if self._defer_close_for_dbc("done", result):
+            return
+        self._dbc_imports.invalidate_session()
         self._teardown_result_details()
         self._persist_panel_prefs()
         unbind_screen_overflow_nudge(self)

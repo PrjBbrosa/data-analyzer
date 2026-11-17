@@ -9,6 +9,8 @@ import pytest
 
 from mf4_analyzer.io.file_data import FileData
 from mf4_analyzer.io.loader import AUDIO_VIDEO_EXTS, DataLoader
+from mf4_analyzer.io import source_adapters as adapters_module
+from mf4_analyzer.io.import_process import ImportProcessError
 from mf4_analyzer.io.source_adapters import (
     LoadedSource,
     SourceAdapterRegistry,
@@ -68,6 +70,50 @@ def _group(*, t0: float, label: str = "1000Hz·2"):
     }
 
 
+def _stub_import(monkeypatch, method, result):
+    """Unit normalization tests explicitly replace the process boundary."""
+    def run_import(operation, path, *, kwargs=None):
+        assert operation == method
+        assert kwargs in (None, {})
+        return result
+
+    monkeypatch.setattr(adapters_module, "run_import", run_import)
+
+
+@pytest.mark.parametrize("kind", ["csv", "mdf"])
+def test_real_import_isolated_from_parent_parser(tmp_path, monkeypatch, kind):
+    from mf4_analyzer.io import import_process
+
+    if kind == "mdf":
+        path = write_single_channel_mf4(tmp_path / "isolated.mf4")
+    else:
+        path = tmp_path / "isolated.csv"
+        path.write_text("Time,sig\n0,1\n0.01,2\n0.02,3\n0.03,4\n")
+    adapter = SourceAdapterRegistry.default().adapter_for(path)
+    processes = []
+    real_popen = import_process.subprocess.Popen
+
+    def track_popen(command, *args, **kwargs):
+        process = real_popen(command, *args, **kwargs)
+        if "mf4_analyzer.io.import_worker" in command:
+            processes.append(process)
+        return process
+
+    def parent_parse_forbidden(*args, **kwargs):
+        pytest.fail("source adapter parsed inside the parent")
+
+    monkeypatch.setattr(import_process.subprocess, "Popen", track_popen)
+    monkeypatch.setattr(DataLoader, adapter.loader_name, parent_parse_forbidden)
+    monkeypatch.setattr(adapters_module, "_probe_mdf", parent_parse_forbidden)
+    descriptor = adapter.probe_sources(path)[0]
+    source = adapter.load_sources(path)[0]
+    assert len(processes) == 2
+    assert all(process.poll() == 0 for process in processes)
+    assert descriptor.source_id == source.source_id
+    assert descriptor.group_id == source.group_id == "root"
+    np.testing.assert_array_equal(source.file_data.data["sig"].to_numpy(), [1, 2, 3, 4])
+
+
 def test_default_registry_declares_every_product_extension_and_media_extension():
     registry = SourceAdapterRegistry.default()
 
@@ -104,7 +150,7 @@ def test_single3_and_single5_adapters_normalize_to_loaded_source(
     monkeypatch.setattr(
         "mf4_analyzer.io.source_adapters._package_available", lambda _name: True
     )
-    monkeypatch.setattr(DataLoader, loader_name, staticmethod(lambda _path: result))
+    _stub_import(monkeypatch, loader_name, result)
     adapter = SourceAdapterRegistry.default().adapter_for(path)
 
     loaded = adapter.load_sources(path)
@@ -138,7 +184,7 @@ def test_group_adapters_keep_multiple_logical_sources_and_stable_ids(
         "mf4_analyzer.io.source_adapters._package_available", lambda _name: True
     )
     groups = [_group(t0=0.0), _group(t0=10.0)]
-    monkeypatch.setattr(DataLoader, loader_name, staticmethod(lambda _path: groups))
+    _stub_import(monkeypatch, loader_name, groups)
     adapter = SourceAdapterRegistry.default().adapter_for(path)
 
     descriptors = adapter.probe_sources(path)
@@ -158,10 +204,10 @@ def test_group_adapters_keep_multiple_logical_sources_and_stable_ids(
 
 
 def test_wwt_identity_includes_exact_n_dt_t0_even_when_labels_collide(monkeypatch):
-    monkeypatch.setattr(DataLoader, "load_wwt", staticmethod(lambda _path: [
+    _stub_import(monkeypatch, "load_wwt", [
         _group(t0=0.0, label="1000Hz·2"),
         _group(t0=1.0, label="1000Hz·2"),
-    ]))
+    ])
     adapter = SourceAdapterRegistry.default().adapter_for("run.wwt")
 
     sources = adapter.load_sources("run.wwt")
@@ -208,7 +254,7 @@ def test_mdf_probe_does_not_translate_programming_value_error(
     adapter = SourceAdapterRegistry.default().adapter_for("broken.mf4")
 
     with pytest.raises(ValueError, match="metadata implementation bug"):
-        adapter.probe_sources("broken.mf4")
+        adapters_module._probe_mdf("broken.mf4", adapter)
 
 
 def test_registry_reports_current_mdf_and_tdms_capability_boundaries():
@@ -259,21 +305,16 @@ def test_blf_probe_uses_decoder_context_and_keeps_load_identity(monkeypatch):
     monkeypatch.setattr(
         "mf4_analyzer.io.source_adapters._package_available", lambda _name: True
     )
-    monkeypatch.setattr(
-        DataLoader,
-        "probe_blf_dbc",
-        staticmethod(lambda _path, dbc_paths: SimpleNamespace(
-            is_match=True,
-            signal_names=("EngineSpeed", "Torque"),
-            strength="strong",
-            decoded_signal_count=2,
-        )),
-    )
-    monkeypatch.setattr(
-        DataLoader,
-        "load_blf",
-        staticmethod(lambda _path, dbc_paths=None: _single3()),
-    )
+    def broker(operation, path, *, kwargs):
+        assert path == "capture.blf"
+        assert kwargs == {"dbc_paths": ["powertrain.dbc"]}
+        if operation == "probe_blf_dbc":
+            return SimpleNamespace(is_match=True, signal_names=("EngineSpeed", "Torque"),
+                                   strength="strong", decoded_signal_count=2)
+        assert operation == "load_blf"
+        return _single3()
+
+    monkeypatch.setattr(adapters_module, "run_import", broker)
     adapter = SourceAdapterRegistry.default().adapter_for("capture.blf")
     context = {"dbc_paths": ("powertrain.dbc",)}
 
@@ -389,10 +430,12 @@ def test_zfd_adapter_probe_and_load_reject_truncated_file(tmp_path):
 
     path = write_truncated_last_channel(tmp_path / "cut.zfd", count=16, drop_bytes=24)
     adapter = SourceAdapterRegistry.default().adapter_for(path)
-    with pytest.raises(ValueError, match="不完整"):
+    with pytest.raises(ImportProcessError, match="不完整") as probe_error:
         adapter.probe_sources(path)
-    with pytest.raises(ValueError, match="不完整"):
+    assert probe_error.value.code == "data_error"
+    with pytest.raises(ImportProcessError, match="不完整") as load_error:
         adapter.load_sources(path)
+    assert load_error.value.code == "data_error"
 
 
 def test_zfd_adapter_and_filedata_share_verified_axis(tmp_path):
@@ -622,7 +665,7 @@ def test_mdf_probe_does_not_read_samples(tmp_path, monkeypatch):
         loader_mod, "MDF", lambda source: _Spy(real(source)),
     )
     adapter = SourceAdapterRegistry.default().adapter_for(str(path))
-    descriptor = adapter.probe_sources(str(path))[0]
+    descriptor = adapters_module._probe_mdf(str(path), adapter)[0]
     assert "sig" in descriptor.channel_names
 
 
@@ -671,9 +714,32 @@ def test_duplicate_group_identity_is_rejected_and_not_stamped():
 
 
 def test_batch_duplicate_group_identity_still_names_the_file(monkeypatch):
-    monkeypatch.setattr(DataLoader, "load_wwt", staticmethod(lambda _path: [
+    _stub_import(monkeypatch, "load_wwt", [
         _group(t0=0.0), _group(t0=0.0),
-    ]))
+    ])
     adapter = SourceAdapterRegistry.default().adapter_for("run.wwt")
     with pytest.raises(SourceIdentityError, match=r"run\.wwt returned duplicate group identity"):
         adapter.load_sources("run.wwt")
+
+
+@pytest.mark.parametrize("operation", ["probe_sources", "load_sources"])
+@pytest.mark.parametrize("code", ["native_crash", "resource_limit", "cancelled", "internal_error"])
+def test_broker_failure_preserves_status_and_never_retries_locally(monkeypatch, operation, code):
+    error = ImportProcessError(code, "worker failed", detail="child evidence")
+    calls = []
+
+    def broker(method, path, **kwargs):
+        calls.append(method)
+        raise error
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("failure retried in parent")
+
+    monkeypatch.setattr(adapters_module, "run_import", broker)
+    monkeypatch.setattr(adapters_module, "_probe_mdf", forbidden)
+    monkeypatch.setattr(DataLoader, "load_mf4", forbidden)
+    adapter = SourceAdapterRegistry.default().adapter_for("failed.mf4")
+    with pytest.raises(ImportProcessError) as caught:
+        getattr(adapter, operation)("failed.mf4")
+    assert caught.value is error
+    assert calls == ["probe_mdf" if operation == "probe_sources" else "load_mf4"]

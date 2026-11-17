@@ -134,6 +134,7 @@ def test_csv_gui_consumes_attrs_and_does_not_announce_partial_success(qapp, qtbo
     calls = []
     monkeypatch.setattr(mw, "toast", lambda text, level="info": calls.append((text, level)))
     mw._load_one("/tmp/sample.csv")
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     assert len(mw.files) == 1
     fd = next(iter(mw.files.values()))
     assert fd.source_metadata["import_diagnostics"]["state"] == "partial"
@@ -174,6 +175,7 @@ def test_real_wwt_empty_axis_keeps_good_curves_and_warns_once(
     monkeypatch.setattr(mw._wwt_import, "_ask_layout", lambda *args, **kwargs: accept)
     monkeypatch.setattr(QMessageBox, "critical", lambda *args: errors.append(args))
     mw._load_one(str(path))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     qapp.processEvents()
     assert not errors
     assert len(mw.files) == 1
@@ -199,6 +201,7 @@ def test_saved_explicit_sampling_rate_reaches_untimed_csv_loader(qapp, qtbot, tm
     project = tmp_path / "manual.tlproj"
     assert mw.save_project(project)
     mw.open_project(project)
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     assert len(mw.files) == 1
     loaded = next(iter(mw.files.values()))
     assert loaded._time_source == "manual"
@@ -219,6 +222,7 @@ def test_multi_file_partial_import_has_no_unconditional_success(qapp, qtbot, tmp
     calls = []
     monkeypatch.setattr(mw, "toast", lambda text, level="info": calls.append((text, level)))
     mw._open_data_paths(paths)
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     assert len(mw.files) == 2
     assert not any("已加载 2 个文件" in text and level == "success" for text, level in calls)
     assert any("1 个文件" in text and level == "warning" for text, level in calls)
@@ -235,12 +239,14 @@ def test_project_reopen_recomputes_diagnostics_and_keeps_details(qapp, qtbot, tm
     mw = MainWindow()
     qtbot.addWidget(mw)
     mw._load_one(str(path))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     assert mw.save_project(project)
     assert "import_diagnostics" not in json.dumps(json.loads(project.read_text()))
     path.write_text("Time,Signal\n0,1\n.01,broken\n.02,3\n.03,4\n")
     calls = []
     monkeypatch.setattr(mw, "toast", lambda text, level="info": calls.append((text, level)))
     mw.open_project(project)
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     assert len(mw.files) == 1
     fd = next(iter(mw.files.values()))
     assert fd.source_metadata["import_diagnostics"]["state"] == "partial"
@@ -249,3 +255,20 @@ def test_project_reopen_recomputes_diagnostics_and_keeps_details(qapp, qtbot, tm
     dialog = row.findChild(ImportDiagnosticsDialog)
     assert "部分导入" in dialog._details.toPlainText()
     assert not any("缺口" in text and level == "warning" for text, level in calls)
+
+
+@pytest.fixture(autouse=True)
+def _local_import_broker(monkeypatch):
+    """Exercise GUI continuations with existing loader fakes; broker has its own gates."""
+    from mf4_analyzer.io import DataLoader
+    from mf4_analyzer.ui.main_window import import_coordinator
+
+    def run(method, path, *, kwargs=None, cancel_check=None, progress_callback=None, limits=None):
+        options = dict(kwargs or {})
+        if method in {"load_blf_frames", "probe_blf_dbc_frames"}:
+            path = options.pop("frames")
+        if progress_callback:
+            progress_callback(-1.0, "读取表格" if method == "load_csv" else "读取数据")
+        return getattr(DataLoader, method)(path, **options)
+
+    monkeypatch.setattr(import_coordinator, "run_import", run)

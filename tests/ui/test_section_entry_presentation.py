@@ -7,6 +7,7 @@ implement retained-canvas reveal, progress-pump narrowing, or prepared-input
 reuse.
 """
 from __future__ import annotations
+from tests._helpers.import_tasks import wait_for_imports
 
 import json
 
@@ -45,7 +46,9 @@ def two_file_win(qapp, loaded_csv, tmp_path, qtbot):
     win = MainWindow()
     qtbot.addWidget(win)
     win._load_one(loaded_csv)
+    wait_for_imports(win)
     win._load_one(str(p2))
+    wait_for_imports(win)
     assert len(win.files) == 2
     return win
 

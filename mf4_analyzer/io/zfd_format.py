@@ -22,6 +22,7 @@ import numpy as np
 import pandas as pd
 
 from .import_diagnostics import make_import_issue, set_import_diagnostics
+from .import_limits import get_import_budget
 
 _MAGIC = b"ZFGE2"
 _HEADER_LINES = 11
@@ -317,10 +318,12 @@ def _read_record(cur: _Cursor, record_index: int):
             available=available,
         )
     values = np.frombuffer(
-        cur.read(expected, record_index=record_index, what="测量数据"),
+        cur.data,
         dtype="<f4",
         count=int(count),
-    ).astype(np.float64, copy=False)
+        offset=cur.pos,
+    )
+    cur.pos += expected
     if values.size != int(count):
         raise _incomplete_payload(
             cur,
@@ -371,6 +374,13 @@ def _build_time_axis(time_rec, filename):
             offset=time_rec["offset"],
             reason="间隔非法",
         )
+    if not math.isfinite(t0 + (count - 1) * dt):
+        raise _time_invalid(
+            filename,
+            record_index=time_rec["index"],
+            offset=time_rec["offset"],
+            reason="时间溢出",
+        )
     with np.errstate(over="ignore", invalid="ignore"):
         time = t0 + np.arange(count, dtype=np.float64) * dt
     if not np.isfinite(time).all():
@@ -393,6 +403,8 @@ def _build_time_axis(time_rec, filename):
 def load_zfd_groups(fp):
     """Parse .zfd and return the same groups shape as ``DataLoader.load_hdf``."""
     name = Path(fp).name
+    budget = get_import_budget()
+    budget.reserve(Path(fp).stat().st_size, label="ZFD file bytes")
     data = Path(fp).read_bytes()
     if not data.startswith(_MAGIC):
         raise ValueError(f"不是有效的 ZFD 文件（缺少 ZFGE2 魔数）: {name}")
@@ -420,6 +432,7 @@ def load_zfd_groups(fp):
             reason="通道数为负",
             declared_count=declared_records,
         )
+    budget.check_channels(declared_records, label="ZFD records")
 
     records = []
     for index in range(declared_records):
@@ -451,7 +464,6 @@ def load_zfd_groups(fp):
     sample_count = time_rec["count"]
     # Structure is fully parsed before any local recovery or DataFrame is
     # published. A damaged later record must still reject the whole file.
-    time = _build_time_axis(time_rec, name)
     issues = []
     skipped = []
     usable = []
@@ -483,6 +495,14 @@ def load_zfd_groups(fp):
             filename=name, record_index=first["index"], offset=first["offset"],
             reason="没有可导入的测量通道", declared_count=first["count"],
         )
+    # Float32 payloads above are views of the one file buffer. Only admitted
+    # measurements become float64; include the final DataFrame and the largest
+    # axis arithmetic/validation scratch before allocating either.
+    budget.reserve_array((sample_count, len(usable) + 1), np.float64,
+                         copies=2, label="ZFD values and DataFrame")
+    budget.reserve_array((sample_count,), np.float64, copies=2,
+                         label="ZFD time-axis scratch")
+    time = _build_time_axis(time_rec, name)
     frame = {"Time": time}
     units = {}
     cmeta = {}
@@ -491,7 +511,7 @@ def load_zfd_groups(fp):
         marker_id, display = _split_display_name(rec["name"])
         preferred = display or marker_id or f"record_{rec['index']}"
         col = _unique_column(frame, preferred, marker_id, rec["index"], renamed)
-        frame[col] = rec["values"]
+        frame[col] = rec["values"].astype(np.float64)
         units[col] = rec["unit"].strip()
         cmeta[col] = {
             "marker_id": marker_id,

@@ -1,4 +1,5 @@
 """Freeze the channel editor's six single ops, six dual ops, and expressions."""
+from tests._helpers.import_tasks import wait_for_imports
 import numpy as np
 import pytest
 from PyQt5.QtCore import Qt
@@ -260,6 +261,7 @@ def test_derive_then_delete_source_survives_apply(qapp, qtbot, tmp_path, monkeyp
     mw = MainWindow()
     qtbot.addWidget(mw)
     mw._load_one(str(csv_path))
+    wait_for_imports(mw)
     fid = next(iter(mw.files))
     dlg = ChannelEditorDialog(None, mw.files, fid)
     dlg.combo_src.setCurrentText("rpm")

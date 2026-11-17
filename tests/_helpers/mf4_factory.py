@@ -131,3 +131,24 @@ def write_signal_groups_mf4(path: Path, groups: Sequence[Sequence]) -> Path:
     mdf.save(str(path), overwrite=True)
     mdf.close()
     return path
+
+
+def write_array_mf4(path, shape, *, dtype="<f4", cycles=3, inverse=False,
+                    compression=0, fragment_size=None):
+    """Array values follow an independent coordinate oracle, including F layout."""
+    from asammdf.blocks import v4_constants as c
+
+    size = int(np.prod(shape))
+    expected = np.arange(cycles * size, dtype=dtype).reshape((cycles, *shape))
+    samples = np.zeros(cycles, dtype=[("matrix", dtype, shape)])
+    for i in range(cycles):
+        samples["matrix"][i] = expected[i].ravel(order="F" if inverse else "C").reshape(shape)
+    with MDF(version="4.10") as mdf:
+        mdf.append([Signal(samples, timestamps=np.arange(cycles, dtype=float),
+                           name="matrix", unit="V")])
+        if inverse:
+            mdf.groups[0].channel_dependencies[1][0].flags |= c.FLAG_CA_INVERSE_LAYOUT
+        if fragment_size is not None:
+            mdf.configure(write_fragment_size=fragment_size)
+        mdf.save(path, overwrite=True, compression=compression)
+    return Path(path), expected

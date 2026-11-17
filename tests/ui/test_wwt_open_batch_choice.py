@@ -9,6 +9,7 @@ Drive ``MainWindow._open_data_paths()`` so the batch scope is the production
 open/drop call, not a single ``_load_one``.
 """
 from __future__ import annotations
+from tests._helpers.import_tasks import wait_for_imports
 
 from pathlib import Path
 
@@ -115,6 +116,7 @@ def test_remember_layout_asks_once_for_three_display_wwts(
         qapp, qtbot, monkeypatch, accepted=True, apply_to_remaining=True,
     )
     mw._open_data_paths([str(path) for path in batch.ordered_paths])
+    wait_for_imports(mw)
     qapp.processEvents()
 
     assert len(asked) == 1, (
@@ -141,6 +143,7 @@ def test_remember_data_only_asks_once_and_creates_no_winwert_views(
     )
     before_views = len(mw.view_manager.views)
     mw._open_data_paths([str(path) for path in batch.ordered_paths])
+    wait_for_imports(mw)
     qapp.processEvents()
 
     assert len(asked) == 1, (
@@ -166,6 +169,7 @@ def test_new_open_data_paths_asks_again_after_remembered_batch(
         qapp, qtbot, monkeypatch, accepted=True, apply_to_remaining=True,
     )
     mw._open_data_paths([str(path) for path in first.ordered_paths])
+    wait_for_imports(mw)
     qapp.processEvents()
     first_asks = len(asked)
 
@@ -174,6 +178,7 @@ def test_new_open_data_paths_asks_again_after_remembered_batch(
     )
     asked.clear()
     mw._open_data_paths([str(path) for path in second.ordered_paths])
+    wait_for_imports(mw)
     qapp.processEvents()
 
     assert (first_asks, len(asked)) == (1, 1), (
@@ -199,6 +204,7 @@ def test_no_display_wwt_does_not_count_as_first_ask_source(
         qapp, qtbot, monkeypatch, accepted=True, apply_to_remaining=True,
     )
     mw._open_data_paths([str(path) for path in batch.ordered_paths])
+    wait_for_imports(mw)
     qapp.processEvents()
 
     assert len(asked) == 1, (
@@ -221,6 +227,7 @@ def test_raw_bool_true_does_not_remember_for_remaining(
         qapp, qtbot, monkeypatch, accepted=True, raw_bool=True,
     )
     mw._open_data_paths([str(path) for path in batch.ordered_paths])
+    wait_for_imports(mw)
     qapp.processEvents()
 
     assert len(asked) == 3
@@ -232,8 +239,8 @@ def test_project_restore_asks_zero_times_via_restoring_project_seam(
 ):
     """Restore is not a user open batch; dialog must stay at 0.
 
-    Hits the production ``_restoring_project`` / ``offer_layout`` skip in
-    ``_load_one``, not a local fake of that flag alone.
+    Observe the real broker reads while ``_restoring_project`` is active;
+    ``offer_layout`` / ``_ask_layout`` must stay skipped throughout restore.
     """
     batch = wwt.batch_choice_set(
         tmp_path / "src", n_display=1, include_no_display=False,
@@ -242,6 +249,7 @@ def test_project_restore_asks_zero_times_via_restoring_project_seam(
         qapp, qtbot, monkeypatch, accepted=True, apply_to_remaining=False,
     )
     mw._open_data_paths([str(path) for path in batch.ordered_paths])
+    wait_for_imports(mw)
     qapp.processEvents()
     assert asked, "precondition: first open must offer layout"
     proj = tmp_path / "wwt-batch.tlproj"
@@ -261,17 +269,19 @@ def test_project_restore_asks_zero_times_via_restoring_project_seam(
         restore_asks.append(True)
         pytest.fail("layout dialog must not run during project restore")
 
-    real_load = restored._load_one
+    real_broker = restored._imports.broker
 
-    def _load_one_recording(fp, **kwargs):
-        restoring_flags.append(bool(getattr(restored, "_restoring_project", False)))
-        return real_load(fp, **kwargs)
+    def recording_broker(method, fp, **kwargs):
+        if method == "load_wwt_document":
+            restoring_flags.append(restored._restoring_project)
+        return real_broker(method, fp, **kwargs)
 
     monkeypatch.setattr(restored._wwt_import, "_ask_layout", fail_if_asked)
-    monkeypatch.setattr(restored, "_load_one", _load_one_recording)
+    monkeypatch.setattr(restored._imports, "broker", recording_broker)
     monkeypatch.setattr(restored, "plot_time", lambda *a, **k: None)
     monkeypatch.setattr(restored, "_apply_active_view", lambda *a, **k: None)
     restored.open_project(proj)
+    wait_for_imports(restored)
     qapp.processEvents()
 
     assert restore_asks == []

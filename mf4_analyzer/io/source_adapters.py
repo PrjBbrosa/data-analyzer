@@ -25,7 +25,7 @@ import math
 import os
 from pathlib import Path
 import sys
-from typing import Callable, Mapping
+from typing import Mapping
 
 import numpy as np
 
@@ -36,6 +36,7 @@ from .channel_frame import (
     is_tabular_frame,
 )
 from .file_data import FileData, _TIME_NAMES
+from .import_process import ImportProcessError, run_import
 from . import loader as _loader
 from .loader import (
     AUDIO_VIDEO_EXTS,
@@ -534,7 +535,8 @@ def _probe_mdf(path: str, adapter: "SourceAdapter") -> tuple[SourceDescriptor, .
     mdf = None
     io_errors = _mdf_probe_io_errors()
     try:
-        mdf = MDF(path)
+        from .mdf_reader import open_mdf
+        mdf = open_mdf(path, MDF, metadata_only=True)
         channels, units, channel_metadata, renamed = _mdf_channel_facts(mdf)
     except io_errors as exc:
         raise SourceUnavailableError(
@@ -574,7 +576,7 @@ def _probe_blf(
     context: Mapping[str, object],
 ) -> tuple[SourceDescriptor, ...]:
     dbc_paths = tuple(str(item) for item in context.get("dbc_paths", ()) if item)
-    result = DataLoader.probe_blf_dbc(path, list(dbc_paths))
+    result = run_import("probe_blf_dbc", path, kwargs={"dbc_paths": list(dbc_paths)})
     if not result.is_match:
         raise ValueError("CAN 日志与所选 DBC 不匹配，无法生成信号级来源")
     canonical = canonical_source_path(path)
@@ -711,7 +713,17 @@ class SourceAdapter:
         normalized = self._require_ready(context)
         text_path = os.fspath(path)
         if self.key == "mdf":
-            return _probe_mdf(text_path, self)
+            try:
+                return run_import("probe_mdf", text_path)
+            except ImportProcessError as exc:
+                # Retain Batch's missing-file/dependency planning contract.
+                # Corruption, native crashes and programming failures retain
+                # the broker's distinct status; never retry in this process.
+                if exc.code == "dependency_error" or (
+                    exc.code == "data_error" and isinstance(exc.__cause__, OSError)
+                ):
+                    raise SourceUnavailableError(str(exc)) from exc
+                raise
         if self.key == "blf":
             return _probe_blf(text_path, self, normalized)
         return tuple(
@@ -731,14 +743,10 @@ class SourceAdapter:
     ) -> tuple[LoadedSource, ...]:
         normalized = self._require_ready(context)
         text_path = os.fspath(path)
-        loader: Callable = getattr(DataLoader, self.loader_name)
-        if self.key == "blf":
-            result = loader(
-                text_path,
-                dbc_paths=list(normalized.get("dbc_paths", ())),
-            )
-        else:
-            result = loader(text_path)
+        # Explicit module-level broker seam for callers/tests. Production
+        # always isolates parsing; no patched-loader detection or fallback.
+        kwargs = {"dbc_paths": list(normalized.get("dbc_paths", ()))} if self.key == "blf" else {}
+        result = run_import(self.loader_name, text_path, kwargs=kwargs)
         if self.return_shape == "groups":
             return self._loaded_groups(text_path, result)
         return (self._loaded_single(text_path, result),)

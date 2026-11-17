@@ -1,5 +1,6 @@
 """File lifecycle must leave discarded Python cycles collectable."""
 from __future__ import annotations
+from tests._helpers.import_tasks import wait_for_imports
 
 import gc
 import weakref
@@ -23,6 +24,7 @@ def test_load_and_close_leave_cycles_collectable(qapp, qtbot, tmp_path):
     qtbot.addWidget(win)
     keeper = _write_csv(tmp_path / "keeper.csv")
     win.load_file(keeper)
+    wait_for_imports(win)
     keeper_id = next(iter(win.files))
     try:
         # Keep another file open: closing one source must not retain every
@@ -31,6 +33,7 @@ def test_load_and_close_leave_cycles_collectable(qapp, qtbot, tmp_path):
             payload = _CyclicPayload()
             ref = weakref.ref(payload)
             win.load_file(_write_csv(tmp_path / f"cycle-{index}.csv"))
+            wait_for_imports(win)
             fid = next(fid for fid in win.files if fid != keeper_id)
             del payload
             win._close(fid, force=True)
@@ -41,6 +44,7 @@ def test_load_and_close_leave_cycles_collectable(qapp, qtbot, tmp_path):
         payload = _CyclicPayload()
         ref = weakref.ref(payload)
         win.load_file(_write_csv(tmp_path / "last.csv"))
+        wait_for_imports(win)
         del payload
         win.close_all(force=True)
         gc.collect()

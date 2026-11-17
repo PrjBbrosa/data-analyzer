@@ -1,6 +1,7 @@
 """Dual-cursor data-space placement snapshot/restore (spec D3/D4)."""
 
 from __future__ import annotations
+from tests._helpers.import_tasks import wait_for_imports
 
 import numpy as np
 import pytest
@@ -231,6 +232,7 @@ def test_new_view_does_not_inherit_previous_dual_placement(qapp, tmp_path, qtbot
     mw.show()
     qapp.processEvents()
     mw._load_one(str(csv_a))
+    wait_for_imports(mw)
     fid = next(iter(mw.files))
     mw.navigator.set_checked_channels([(fid, "rpm")])
     mw.plot_time()
@@ -276,6 +278,7 @@ def test_off_save_reopen_restores_placement_when_dual_turns_on(
     mw.show()
     qapp.processEvents()
     mw._load_one(str(csv_a))
+    wait_for_imports(mw)
     fid = next(iter(mw.files))
     mw.navigator.set_checked_channels([(fid, "rpm")])
     mw.plot_time()
@@ -295,6 +298,7 @@ def test_off_save_reopen_restores_placement_when_dual_turns_on(
     last_rows = []
     mw2.canvas_time.dual_cursor_rows.connect(last_rows.append)
     mw2.open_project(proj)
+    wait_for_imports(mw2)
     qapp.processEvents()
     restored = mw2.view_manager.get(0)
     assert restored.cursor_mode == "off"

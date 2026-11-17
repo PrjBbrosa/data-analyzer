@@ -10,6 +10,7 @@ Offscreen Qt delivers ``QEvent.Enter`` / ``QEvent.Leave`` through
 production defaults. Popups and dialogs are shown with ``popup()`` / ``show()``
 / ``done()``; ``exec_()`` is stubbed to fail in this suite.
 """
+from tests._helpers.import_tasks import wait_for_imports
 import pytest
 from PyQt5 import sip
 from PyQt5.QtCore import QEvent, QObject, QPoint, Qt
@@ -690,6 +691,7 @@ def _boot_main(qtbot, tmp_path):
     win.show()
     qtbot.waitExposed(win)
     win._load_one(str(path))
+    wait_for_imports(win)
     assert len(win.files) == 1
     fd = next(iter(win.files.values()))
     assert len(fd.time_array) == len(time_s)

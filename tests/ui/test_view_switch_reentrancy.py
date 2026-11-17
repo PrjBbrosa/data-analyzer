@@ -21,6 +21,7 @@ data is reframed rather than rendered empty.
 """
 
 from __future__ import annotations
+from tests._helpers.import_tasks import wait_for_imports
 
 import numpy as np
 import pandas as pd
@@ -102,6 +103,7 @@ def three_view_window(qtbot, qapp, tmp_path):
     )
     window = _window(qtbot, qapp)
     window.load_file(path)
+    wait_for_imports(window)
     qapp.processEvents()
     fid = next(iter(window.files))
 
@@ -354,7 +356,9 @@ def test_view_window_outside_its_data_is_reframed_not_blanked(
     )
     window = _window(qtbot, qapp)
     window.load_file(long_path)
+    wait_for_imports(window)
     window.load_file(short_path)
+    wait_for_imports(window)
     qapp.processEvents()
     long_fid, short_fid = list(window.files)
 

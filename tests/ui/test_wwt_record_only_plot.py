@@ -1,5 +1,6 @@
 """Record-only TimeDomain Views must plot when Navigator checked is empty."""
 from __future__ import annotations
+from tests._helpers.import_tasks import wait_for_imports
 
 from dataclasses import replace
 import pyqtgraph as pg
@@ -19,6 +20,7 @@ def _load_wwt_and_plot(mw, monkeypatch, path, *, plot=True):
         monkeypatch.setattr(mw, "plot_time", lambda *a, **k: None)
         monkeypatch.setattr(mw, "_apply_active_view", lambda *a, **k: None)
     mw._load_one(str(path))
+    wait_for_imports(mw)
 
 
 def _window(qapp, qtbot):

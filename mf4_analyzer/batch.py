@@ -1523,6 +1523,22 @@ class BatchRunner:
             cancel_token: threading.Event | None = None,
             resume_manifest=None,
             retry_failed_manifest=None) -> BatchRunResult:
+        """Run with import cancellation scoped to this invocation/thread."""
+        from .io.import_process import import_context
+        with import_context(cancel_check=cancel_token.is_set if cancel_token is not None else None):
+            return self._run_impl(
+                preset, output_dir, progress_callback, on_event=on_event,
+                cancel_token=cancel_token, resume_manifest=resume_manifest,
+                retry_failed_manifest=retry_failed_manifest,
+            )
+
+    def _run_impl(self, preset, output_dir,
+            progress_callback: Callable[[int, int], None] | None = None,
+            *,
+            on_event: Callable[[BatchProgressEvent], None] | None = None,
+            cancel_token: threading.Event | None = None,
+            resume_manifest=None,
+            retry_failed_manifest=None) -> BatchRunResult:
         """Execute ``preset`` over the runner's sources and write ``output_dir``.
 
         This is a dispatch skeleton, not a worker.  It initializes the run
@@ -1543,6 +1559,8 @@ class BatchRunner:
         Every early exit goes through ``_finish_result`` so a blocked run still
         finalizes the manifest and emits its ``run_finished`` event.
         """
+
+        from .io.import_process import ImportProcessError
 
         output_dir = Path(output_dir)
         # One reporter per run: every progress event, every legacy progress
@@ -1798,7 +1816,8 @@ class BatchRunner:
             for physical_key in tuple(self._disk_cache):
                 self._evict_physical(physical_key)
             return finish_result(
-                'blocked', blocked=[str(exc)],
+                'cancelled' if isinstance(exc, ImportProcessError) and exc.code == 'cancelled' else 'blocked',
+                blocked=[] if isinstance(exc, ImportProcessError) and exc.code == 'cancelled' else [str(exc)],
                 run_migration_warnings=run_migration_warnings,
             )
         recovery_scope_manifest = retry_data
@@ -1920,7 +1939,8 @@ class BatchRunner:
                 for physical_key in tuple(self._disk_cache):
                     self._evict_physical(physical_key)
                 return finish_result(
-                    'blocked', blocked=[str(exc)],
+                    'cancelled' if cancel_token is not None and cancel_token.is_set() else 'blocked',
+                    blocked=[] if cancel_token is not None and cancel_token.is_set() else [str(exc)],
                     run_migration_warnings=run_migration_warnings,
                 )
             if not tasks:
@@ -2310,6 +2330,10 @@ class BatchRunner:
                 continue
 
             fid, fd_or_fail = self._resolve_task_file(source_key)
+            if cancel_token is not None and cancel_token.is_set():
+                cancelled = True
+                reporter.emit_cancelled_range(index)
+                break
             physical_key = self._physical_for_source(source_key)
             if physical_key is not None:
                 prev_physical_key = physical_key
@@ -2763,11 +2787,14 @@ class BatchRunner:
         stay local to this invocation and are never written back to ``preset``.
         """
 
+        from .io.import_process import ImportProcessError
+
         try:
             plan = self._frf_execution_plan(preset)
-        except (TypeError, ValueError, OSError) as exc:
+        except (TypeError, ValueError, OSError, ImportProcessError) as exc:
             return finish_result(
-                'blocked', blocked=[str(exc)],
+                'cancelled' if isinstance(exc, ImportProcessError) and exc.code == 'cancelled' else 'blocked',
+                blocked=[] if isinstance(exc, ImportProcessError) and exc.code == 'cancelled' else [str(exc)],
                 run_migration_warnings=run_migration_warnings,
             )
         blocking_issues = [
@@ -3800,6 +3827,10 @@ class BatchRunner:
 
             # Resolve the file (lazy load if disk path, live lookup if registered fid)
             fid, fd_or_fail = self._resolve_task_file(source_key)
+            if cancel_token is not None and cancel_token.is_set():
+                cancelled = True
+                reporter.emit_cancelled_range(index)
+                break
 
             physical_key = self._physical_for_source(source_key)
             if physical_key is not None:
@@ -4711,6 +4742,10 @@ class BatchRunner:
         except ImportError:
             raise
         except Exception as exc:
+            from .io.import_process import ImportProcessError
+            if isinstance(exc, ImportProcessError) and exc.code == 'cancelled':
+                # A task cancellation is transient, never a cached corrupt source.
+                raise
             failure = _LoadFailure(str(raw_path), str(exc))
             self._disk_cache[physical_key] = failure
             raise

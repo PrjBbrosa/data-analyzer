@@ -9,6 +9,7 @@ legacy pandas path when the sniff is inconclusive or trivial.
 
 from __future__ import annotations
 
+import codecs
 import csv
 import io
 import re
@@ -16,7 +17,7 @@ from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
-_ENCODINGS = ("utf-8-sig", "utf-8", "gbk", "latin1")
+_ENCODINGS = ("utf-16", "utf-8-sig", "utf-8", "gbk", "latin1")
 _SEPARATORS = (",", ";", "\t")
 _NUMERIC_DOT = re.compile(r"^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$")
 _NUMERIC_COMMA = re.compile(r"^[+-]?\d+,\d*$")
@@ -50,14 +51,21 @@ _KNOWN_FORMAT_RULES = (
 
 
 def _read_sniff_lines(path: Path, max_lines: int) -> tuple[list[str], str] | None:
-    raw = path.read_bytes()[:65536]
+    with path.open("rb") as stream:
+        raw = stream.read(65536)
     if not raw.strip():
         return None
     for enc in _ENCODINGS:
+        if enc == "utf-16" and not raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+            continue
         if enc == "utf-8-sig" and not raw.startswith(b"\xef\xbb\xbf"):
             continue
         try:
-            text = raw.decode(enc)
+            # Only an incomplete final character at the bounded edge may wait
+            # for more bytes; malformed bytes inside the prefix still reject.
+            text = codecs.getincrementaldecoder(enc)().decode(
+                raw, final=len(raw) < 65536,
+            )
         except UnicodeDecodeError:
             continue
         lines = text.splitlines()[:max_lines]

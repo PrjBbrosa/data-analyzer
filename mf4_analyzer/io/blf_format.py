@@ -215,6 +215,10 @@ def _read_blf_frames(fp, progress_callback=None):
         raise ImportError(
             "python-can 未安装，无法读取 BLF 文件。请先 pip install python-can"
         ) from exc
+    from .can_frames import _CanFrameBudget
+
+    frame_budget = _CanFrameBudget()
+    retained_bytes = 0
     frames = []
     reader = BLFReader(str(fp))
     report_progress = callable(progress_callback)
@@ -248,6 +252,10 @@ def _read_blf_frames(fp, progress_callback=None):
                 )
             if msg.is_error_frame or msg.is_remote_frame:
                 continue
+            # Tuple, timestamp/int/bytes objects and frame-list references,
+            # including the compatibility result list copy.
+            retained_bytes += 192 + len(msg.data)
+            frame_budget.admit(retained_bytes)
             frames.append(
                 (float(msg.timestamp), int(msg.arbitration_id), bytes(msg.data))
             )

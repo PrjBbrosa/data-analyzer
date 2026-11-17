@@ -1,4 +1,5 @@
 """Frozen-Windows View creation must leave the pointer event before rendering."""
+from tests._helpers.import_tasks import wait_for_imports
 
 from mf4_analyzer.ui.main_window import MainWindow
 from mf4_analyzer.ui.main_window import view_activation
@@ -38,6 +39,7 @@ def test_deferred_time_view_inherits_files_only_after_it_becomes_active(
 ):
     window = _window(qtbot)
     window._load_one(loaded_csv)
+    wait_for_imports(window)
     qapp.processEvents()
     fid = next(iter(window.files))
     window.navigator.set_follow_prefs(FollowPrefs(True, True, False))
@@ -87,6 +89,7 @@ def test_deferred_analysis_view_inherits_files_only_after_it_becomes_active(
 ):
     window = _window(qtbot)
     window._load_one(loaded_csv)
+    wait_for_imports(window)
     qapp.processEvents()
     fid = next(iter(window.files))
     window.navigator.set_follow_prefs(FollowPrefs(True, True, False))

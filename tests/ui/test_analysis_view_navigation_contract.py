@@ -1,4 +1,5 @@
 """Page navigation and remembered pair chrome use the production wiring."""
+from tests._helpers.import_tasks import wait_for_imports
 import pytest
 from PyQt5.QtCore import Qt
 from PyQt5.QtTest import QTest
@@ -120,6 +121,7 @@ def test_inactive_relations_survive_module_and_project_reopen(win, section, qtbo
     project = tmp_path / "inactive-pair.tlproj"
     assert win.save_project(project)
     win.open_project(project)
+    wait_for_imports(win)
     win.toolbar._set_mode(section)
     page = win._analysis_page(section)
     manager = win.analysis_managers[section]

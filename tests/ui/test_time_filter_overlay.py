@@ -7,6 +7,7 @@ is ``low + high`` (10 Hz + 400 Hz at fs=2000), ticks the channel, and exercises
 checked channel gains a filtered trace, the original trace's ``visible`` flag
 follows "显示原始", the filtered trace's follows "显示滤波后".
 """
+from tests._helpers.import_tasks import wait_for_imports
 import numpy as np
 import pytest
 
@@ -29,6 +30,7 @@ def time_window_with_two_high_low_channels(qapp, tmp_path, qtbot):
     win = MainWindow()
     qtbot.addWidget(win)
     win._load_one(str(p))
+    wait_for_imports(win)
     assert len(win.files) == 1
     fid = next(iter(win.files))
     win.navigator.set_checked_channels([(fid, "sig")])

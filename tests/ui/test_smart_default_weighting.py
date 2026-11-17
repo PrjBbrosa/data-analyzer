@@ -1,3 +1,4 @@
+from tests._helpers.import_tasks import wait_for_imports
 import inspect
 import wave
 from types import SimpleNamespace
@@ -155,6 +156,7 @@ def test_load_one_registers_wav_as_audio_source_with_fs(qapp, qtbot, tmp_path):
     win = MainWindow()
     qtbot.addWidget(win)
     win._load_one(str(path))
+    wait_for_imports(win)
 
     assert len(win.files) == 1
     fd = next(iter(win.files.values()))

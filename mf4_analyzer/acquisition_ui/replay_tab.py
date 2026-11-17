@@ -10,13 +10,15 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal
+from PyQt5.QtCore import QEvent, Qt, QTimer, pyqtSignal
 from PyQt5.QtWidgets import (
     QButtonGroup,
     QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
+    QProgressDialog,
     QPushButton,
     QSlider,
     QSplitter,
@@ -68,6 +70,11 @@ class ReplayTab(QWidget):
         self._timer.timeout.connect(self.drain_once)
 
         self._build_ui()
+        from mf4_analyzer.ui.main_window.import_coordinator import ImportCoordinator
+        self._imports = ImportCoordinator(self)
+        self._imports.drained.connect(self._resume_close_after_import)
+        if parent is not None:
+            parent.window().installEventFilter(self)
         self._live_cards.set_placeholder_copy(
             title="未加载 MF4",
             body="回放会在这里显示信号趋势与当前值。",
@@ -186,8 +193,65 @@ class ReplayTab(QWidget):
         self._alignment_warning.setVisible(True)
 
     def load_file(self, path: str | Path) -> None:
-        source = ReplayRecorderBackend.source_from_mf4(path)
+        """Schedule a supervised parse and background ReplaySource conversion."""
+        from mf4_analyzer.ui.main_window.import_coordinator import ImportCall
+        self._imports.invalidate_session()
         self.stop()
+        self._set_transport_enabled(False)
+
+        def workflow(request):
+            dialog = QProgressDialog("读取回放文件", "取消导入", 0, 0, self)
+            dialog.setWindowModality(Qt.NonModal)
+            dialog.canceled.connect(self._imports.cancel)
+            self._imports.progress_dialog = dialog
+            dialog.show()
+            try:
+                source = yield ImportCall(
+                    "load_mf4", str(path),
+                    transform=ReplayRecorderBackend.source_from_loaded,
+                )
+                self._adopt_source(source)
+                request.loaded_files += 1
+            finally:
+                from PyQt5 import sip
+                if not sip.isdeleted(self):
+                    # Programmatic close also emits QProgressDialog.canceled.
+                    # Cleanup must not cancel this completed or the next task.
+                    dialog.blockSignals(True)
+                    dialog.close()
+                    dialog.deleteLater()
+                    if not self._imports.closing:
+                        self._set_transport_enabled(self._source is not None)
+                self._imports.progress_dialog = None
+
+        self._imports.submit(workflow, on_done=self._on_import_done)
+
+    def _on_import_done(self, status, value):
+        if status == "failed":
+            QMessageBox.critical(self, "无法加载回放文件", str(value))
+
+    def eventFilter(self, watched, event):
+        # Parent close does not deliver closeEvent to every child. Hold its
+        # teardown until our supervised process has been cancelled and reaped.
+        if event.type() == QEvent.Close and watched is self.window():
+            if not self._imports.shutdown():
+                event.ignore()
+                return True
+            self.stop()
+        return super().eventFilter(watched, event)
+
+    def closeEvent(self, event):
+        if not self._imports.shutdown():
+            event.ignore()
+            return
+        self.stop()
+        super().closeEvent(event)
+
+    def _resume_close_after_import(self):
+        if self._imports.closing and not self._imports.busy:
+            self.window().close()
+
+    def _adopt_source(self, source: ReplaySource) -> None:
         self._source = source
         self._apply_source_warning(source)
         self._right_panel.setVisible(True)

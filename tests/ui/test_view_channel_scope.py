@@ -1,3 +1,4 @@
+from tests._helpers.import_tasks import wait_for_imports
 from mf4_analyzer.ui.main_window import MainWindow
 from mf4_analyzer.ui.plot_risk import PlotRisk, PlotRiskLevel
 
@@ -14,6 +15,7 @@ def _window(qtbot, qapp):
 def _loaded_window(qtbot, qapp, loaded_csv):
     window = _window(qtbot, qapp)
     window.load_file(loaded_csv)
+    wait_for_imports(window)
     qapp.processEvents()
     return window
 
@@ -52,6 +54,7 @@ def test_auto_attach_off_affects_only_future_loads(qtbot, qapp, loaded_csv):
     window.navigator.set_follow_prefs(FollowPrefs(False, False, False))
 
     window.load_file(loaded_csv)
+    wait_for_imports(window)
     qapp.processEvents()
 
     assert window.navigator.auto_attach_enabled() is False
@@ -123,6 +126,7 @@ def test_attach_targets_secondary_focused_view(qtbot, qapp, loaded_csv):
     window.view_manager.set_split(0)
     window.navigator.set_follow_prefs(FollowPrefs(False, False, False))
     window.load_file(loaded_csv)
+    wait_for_imports(window)
     fid = _fid(window)
     window._on_chart_focus_changed(True)
 
@@ -140,6 +144,7 @@ def test_file_card_attach_uses_the_focused_time_view(qtbot, qapp, loaded_csv):
     window.view_manager.set_split(0)
     window.navigator.set_follow_prefs(FollowPrefs(False, False, False))
     window.load_file(loaded_csv)
+    wait_for_imports(window)
     fid = _fid(window)
     window._on_chart_focus_changed(True)
     row = window.navigator._rows[window.navigator._fid_to_key[fid]]
@@ -371,6 +376,7 @@ def test_wwt_view_color_seed_does_not_pollute_other_views(
     monkeypatch.setattr(window, "_plot_time_on_canvas", lambda *_a, **_k: None)
 
     window._load_one(str(wwt.channel_xy_with_auxiliaries(tmp_path / "xy.wwt")))
+    wait_for_imports(window)
     qapp.processEvents()
 
     wwt_idx, wwt_state = next(
@@ -574,6 +580,7 @@ def test_apply_config_completely_replaces_focused_selection(
 ):
     window = _loaded_window(qtbot, qapp, loaded_csv)
     window.load_file(loaded_csv)
+    wait_for_imports(window)
     f0, f1 = list(window.files)
     window.navigator.set_checked_channels([(f0, "torque")])
     config = window.channel_config_store.create("转速", ["speed"])
@@ -593,6 +600,7 @@ def test_apply_preserves_only_hidden_channels_that_remain_selected(
 ):
     window = _loaded_window(qtbot, qapp, loaded_csv)
     window.load_file(loaded_csv)
+    wait_for_imports(window)
     f0, f1 = list(window.files)
     window.navigator.set_checked_channels([(f0, "speed"), (f0, "torque")])
     window.navigator.set_hidden_channels([(f0, "speed"), (f0, "torque")])
@@ -724,6 +732,7 @@ def test_eye_writes_only_target_view_hidden_curve_binding_ids(
     window._load_one(
         str(wwt.measurement_plus_record_only_tolerance(path=tmp_path / "tol.wwt"))
     )
+    wait_for_imports(window)
     qapp.processEvents()
     src = window.view_manager.get(window.view_manager.active)
     record = next(
@@ -770,6 +779,7 @@ def test_split_secondary_record_eye_writes_only_secondary_state(
     window._load_one(
         str(wwt.measurement_plus_record_only_tolerance(path=tmp_path / "tol.wwt"))
     )
+    wait_for_imports(window)
     qapp.processEvents()
 
     primary_idx = window.view_manager.active
@@ -839,6 +849,7 @@ def test_stale_secondary_record_eye_event_is_zero_mutation(
     window._load_one(
         str(wwt.measurement_plus_record_only_tolerance(path=tmp_path / "tol.wwt"))
     )
+    wait_for_imports(window)
     qapp.processEvents()
 
     primary_idx = window.view_manager.active

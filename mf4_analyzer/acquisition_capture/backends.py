@@ -40,6 +40,7 @@ from typing import TYPE_CHECKING, Any
 
 from mf4_analyzer.acquisition_capture.session import SelectedMeasurement
 from mf4_analyzer.acquisition_capture.transport_config import TransportConfig
+from mf4_analyzer.io.import_process import run_import
 
 if TYPE_CHECKING:
     from can_logger.p0.a2l_probe import MeasurementSummary
@@ -359,14 +360,23 @@ class ReplayRecorderBackend(RecorderBackend):
     def source_from_mf4(cls, path: str | Path) -> ReplaySource:
         """Load an existing MF4 into sorted replay samples.
 
-        This intentionally reuses :meth:`DataLoader.load_mf4` so replay
-        follows the same asammdf-backed path as Analyzer file loading.
+        The broker runs DataLoader.load_mf4 only in its disposable child, so
+        replay retains the normal loader semantics and crash isolation.
+        This API is synchronous; GUI callers must schedule it off-thread.
         Master time columns are excluded from emitted signal samples.
         """
-        from mf4_analyzer.io.loader import DataLoader
+        return cls.source_from_loaded(path, run_import("load_mf4", str(path)))
 
+    @classmethod
+    def source_from_loaded(cls, path: str | Path, loaded_result) -> ReplaySource:
+        """Convert an already isolated loader result; perform no file I/O.
+
+        Building/sorting replay samples can be expensive too. GUI supervisors
+        call this off-thread, then adopt the resulting ReplaySource on the GUI
+        thread. The original result and its metadata are not mutated.
+        """
         source_path = Path(path)
-        df, channels, units = DataLoader.load_mf4(str(source_path))
+        df, channels, units = loaded_result
         attrs = getattr(df, "attrs", None)
         extra = attrs.get("source_metadata") if isinstance(attrs, Mapping) else None
         metadata = dict(extra) if isinstance(extra, Mapping) else {}

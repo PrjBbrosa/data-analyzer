@@ -1,6 +1,7 @@
 """WinWert mixed-X Inspector and render ownership regression tests."""
 
 from __future__ import annotations
+from tests._helpers.import_tasks import wait_for_imports
 
 import numpy as np
 
@@ -45,6 +46,7 @@ def test_mixed_channel_x_keeps_header_x_editable_and_exact_arrays(
     )
 
     window._load_one(str(path))
+    wait_for_imports(window)
     qapp.processEvents()
 
     top = window.inspector.top

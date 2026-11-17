@@ -1,12 +1,13 @@
 """Evidence-based detection for tabular ASCII files."""
 from __future__ import annotations
 
+import codecs
 import re
 from dataclasses import dataclass
 from pathlib import Path
 
 
-_ENCODINGS = ("utf-8-sig", "utf-8", "gb18030", "gbk", "latin1")
+_ENCODINGS = ("utf-16", "utf-8-sig", "utf-8", "gb18030", "gbk", "latin1")
 _NUMBER = re.compile(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?")
 _TIME_NAMES = {"time", "t", "zeit", "timestamp", "time_s", "time(s)", "t(s)"}
 
@@ -23,14 +24,20 @@ class FixedWidthLayout:
 
 
 def _decode_lines(path: Path, limit: int = 262_144) -> tuple[list[str], str] | None:
-    raw = path.read_bytes()[:limit]
+    with path.open("rb") as stream:
+        raw = stream.read(limit)
     if not raw.strip():
         return None
     for encoding in _ENCODINGS:
+        if encoding == "utf-16" and not raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+            continue
         if encoding == "utf-8-sig" and not raw.startswith(b"\xef\xbb\xbf"):
             continue
         try:
-            return raw.decode(encoding).splitlines()[:300], encoding
+            text = codecs.getincrementaldecoder(encoding)().decode(
+                raw, final=len(raw) < limit,
+            )
+            return text.splitlines()[:300], encoding
         except UnicodeDecodeError:
             pass
     return None

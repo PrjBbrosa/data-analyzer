@@ -469,7 +469,7 @@ def test_lite_build_records_each_attempt_and_checks_environment_exit_codes():
     assert not re.search(r"^\s*& \$(VenvPython|pyLauncher|python)\b", text, re.MULTILINE)
     for arguments in (
         '@("-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel")',
-        '@("-m", "pip", "install", "-r", $Requirements)',
+        '@("-m", "pip", "install", "--find-links", $MdfWheelDir, "-r", $Requirements)',
         '@("-m", "pip", "install", "--upgrade", "pyinstaller", "qtawesome")',
     ):
         assert "Invoke-LoggedNative -Executable $VenvPython -Arguments " + arguments in text

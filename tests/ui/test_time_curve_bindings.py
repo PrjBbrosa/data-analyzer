@@ -1,5 +1,6 @@
 """Per-curve XY binding JSON, remap, resolution, and shape errors."""
 from __future__ import annotations
+from tests._helpers.import_tasks import wait_for_imports
 
 from types import SimpleNamespace
 
@@ -394,6 +395,7 @@ def _stub_wwt_ui(mw, monkeypatch, accept=True):
 def _load_synthetic_wwt(mw, monkeypatch, path):
     _stub_wwt_ui(mw, monkeypatch, accept=True)
     mw._load_one(str(path))
+    wait_for_imports(mw)
 
 
 def test_missing_record_x_does_not_fallback_to_time_y(qapp, tmp_path, monkeypatch):

@@ -8,7 +8,7 @@ from typing import Mapping
 
 import numpy as np
 
-from mf4_analyzer.io.loader import DataLoader
+from mf4_analyzer.io.import_process import run_import
 
 from .manifest import sha256_file
 
@@ -96,7 +96,7 @@ def analyze_mf4(
         problems.append("sha256 mismatch")
 
     try:
-        df, channels, units = DataLoader.load_mf4(str(p))
+        df, channels, units = run_import("load_mf4", str(p))
     except Exception as exc:
         return PreflightResult(
             path=str(p),

@@ -219,6 +219,7 @@ def test_every_lazy_io_import_is_declared_in_the_frozen_contract():
     ownership = component_ownership()
 
     assert roots == {
+        "numpy",
         "asammdf",
         "av",
         "can",

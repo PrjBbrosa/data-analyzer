@@ -1,4 +1,5 @@
 """Section entry keeps time plotting but does not pump a global event queue."""
+from tests._helpers.import_tasks import wait_for_imports
 import numpy as np
 import pandas as pd
 import pytest
@@ -14,6 +15,7 @@ def window(qtbot, qapp, tmp_path):
     win = MainWindow()
     qtbot.addWidget(win)
     win.load_file(str(path))
+    wait_for_imports(win)
     fid = next(iter(win.files))
     win.navigator.set_checked_channels([(fid, 'torque')])
     win.plot_time()

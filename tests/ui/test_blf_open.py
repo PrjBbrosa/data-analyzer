@@ -16,7 +16,7 @@ from tests._helpers.blf_factory import (  # noqa: E402
 )
 
 
-def test_load_one_routes_blf_with_dbc(qapp, tmp_path, monkeypatch):
+def test_load_one_routes_blf_with_dbc(qtbot, qapp, tmp_path, monkeypatch):
     from mf4_analyzer.ui.main_window import MainWindow
 
     dbc_dir = tmp_path / "dbc"
@@ -33,6 +33,7 @@ def test_load_one_routes_blf_with_dbc(qapp, tmp_path, monkeypatch):
     )
     monkeypatch.setattr(mw, "_prompt_blf_dbc", lambda path: [str(dbc)])
     mw._load_one(str(blf))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
 
     assert len(mw.files) == 1
     fd = next(iter(mw.files.values()))
@@ -40,7 +41,7 @@ def test_load_one_routes_blf_with_dbc(qapp, tmp_path, monkeypatch):
     assert "Speed" in fd.channels
 
 
-def test_load_one_cancelled_dbc_selection_leaves_blf_unopened(qapp, tmp_path, monkeypatch):
+def test_load_one_cancelled_dbc_selection_leaves_blf_unopened(qtbot, qapp, tmp_path, monkeypatch):
     from mf4_analyzer.ui.main_window import MainWindow
 
     blf = write_raw_blf(tmp_path / "raw.blf")
@@ -53,6 +54,7 @@ def test_load_one_cancelled_dbc_selection_leaves_blf_unopened(qapp, tmp_path, mo
     )
     monkeypatch.setattr(mw, "_prompt_blf_dbc", lambda path: [])
     mw._load_one(str(blf))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
 
     assert len(mw.files) == 0
 
@@ -77,7 +79,7 @@ def test_dbc_picker_title_says_cancel_does_not_open_file(qapp, tmp_path, monkeyp
     assert "原始字节" not in captured["title"]
 
 
-def test_load_one_reuses_matching_session_dbc_after_confirmation(qapp, tmp_path, monkeypatch):
+def test_load_one_reuses_matching_session_dbc_after_confirmation(qtbot, qapp, tmp_path, monkeypatch):
     from mf4_analyzer.ui.main_window import MainWindow
 
     dbc_dir = tmp_path / "dbc"
@@ -94,6 +96,7 @@ def test_load_one_reuses_matching_session_dbc_after_confirmation(qapp, tmp_path,
     )
     monkeypatch.setattr(mw, "_prompt_blf_dbc", lambda path: [str(dbc)])
     mw._load_one(str(blf1))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     assert len(mw.files) == 1
 
     monkeypatch.setattr(
@@ -108,12 +111,13 @@ def test_load_one_reuses_matching_session_dbc_after_confirmation(qapp, tmp_path,
 
     monkeypatch.setattr(mw, "_prompt_blf_dbc", fail_if_picker_opens)
     mw._load_one(str(blf2))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
 
     assert len(mw.files) == 2
     assert all("EngineSpeed" in fd.channels for fd in mw.files.values())
 
 
-def test_load_one_reuses_persisted_recent_dbc_after_restart(qapp, tmp_path, monkeypatch):
+def test_load_one_reuses_persisted_recent_dbc_after_restart(qtbot, qapp, tmp_path, monkeypatch):
     from PyQt5.QtCore import QSettings
     from mf4_analyzer.ui.main_window import MainWindow
 
@@ -141,6 +145,7 @@ def test_load_one_reuses_persisted_recent_dbc_after_restart(qapp, tmp_path, monk
     )
     monkeypatch.setattr(mw, "_prompt_blf_dbc", lambda path: [str(dbc)])
     mw._load_one(str(blf1))
+    qtbot.waitUntil(lambda: not mw._imports.busy, timeout=15000)
     assert len(mw.files) == 1
 
     mw2 = MainWindow()
@@ -162,6 +167,7 @@ def test_load_one_reuses_persisted_recent_dbc_after_restart(qapp, tmp_path, monk
 
     monkeypatch.setattr(mw2, "_prompt_blf_dbc", fail_if_picker_opens)
     mw2._load_one(str(blf2))
+    qtbot.waitUntil(lambda: not mw2._imports.busy, timeout=15000)
 
     assert len(mw2.files) == 1
     fd = next(iter(mw2.files.values()))
@@ -390,3 +396,20 @@ def test_top3_probes_all_candidates_and_selects_better_second(
     assert "ID 命中 950/1000" in text
     assert "完整解码" not in text
     assert re.search(r"帧\s+\d+/\d+", text) is None
+
+
+@pytest.fixture(autouse=True)
+def _local_import_broker(monkeypatch):
+    """Exercise GUI continuations with existing loader fakes; broker has its own gates."""
+    from mf4_analyzer.io import DataLoader
+    from mf4_analyzer.ui.main_window import import_coordinator
+
+    def run(method, path, *, kwargs=None, cancel_check=None, progress_callback=None, limits=None):
+        options = dict(kwargs or {})
+        if method in {"load_blf_frames", "probe_blf_dbc_frames"}:
+            path = options.pop("frames")
+        if progress_callback:
+            progress_callback(-1.0, "读取表格" if method == "load_csv" else "读取数据")
+        return getattr(DataLoader, method)(path, **options)
+
+    monkeypatch.setattr(import_coordinator, "run_import", run)

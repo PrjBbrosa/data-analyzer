@@ -6,6 +6,7 @@ direct-terminal.  E1–E5 cover protocol, internals, and the 20 directed
 cross-section edges.
 """
 from __future__ import annotations
+from tests._helpers.import_tasks import wait_for_imports
 
 from pathlib import Path
 
@@ -276,6 +277,7 @@ def test_programmatic_paths_do_not_begin_page_transition(
     window.show()
     qtbot.waitExposed(window)
     window.load_file(loaded_csv)
+    wait_for_imports(window)
     qapp.processEvents()
     assert begins == [], "initialization / file load must not capture a leave frame"
 
@@ -308,6 +310,7 @@ def test_programmatic_paths_do_not_begin_page_transition(
     restored.show()
     qtbot.waitExposed(restored)
     restored.open_project(project)
+    wait_for_imports(restored)
     qapp.processEvents()
     assert begins == [], "open_project must not begin_page_transition"
 
@@ -2438,6 +2441,7 @@ def test_e5_close_and_open_project_leave_no_residue(
         timeout=2500,
     )
     restored.open_project(project)
+    wait_for_imports(restored)
     restored.chart_stack.request_page_transition_target_for = orig_ready
     qapp.processEvents()
     _wait_idle(qtbot, restored)

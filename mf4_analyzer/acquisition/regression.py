@@ -7,7 +7,7 @@ from pathlib import Path
 
 import numpy as np
 
-from mf4_analyzer.io.loader import DataLoader
+from mf4_analyzer.io.import_process import run_import
 
 
 def _samples_sha256(values: np.ndarray) -> str:
@@ -43,7 +43,7 @@ def _metric_dict(values) -> dict[str, float | int | str]:
 
 
 def build_snapshot(path: str | Path, *, channels: tuple[str, ...] = ()) -> dict:
-    df, loaded_channels, _units = DataLoader.load_mf4(str(path))
+    df, loaded_channels, _units = run_import("load_mf4", str(path))
     if channels:
         missing = [ch for ch in channels if ch != "Time" and ch not in df.columns]
         if missing:

@@ -16,6 +16,7 @@ the raw ``(fid, ch)`` and calls ``navigator.set_channel_colors`` so the swatch,
 time replot, and FFT all share one color truth.
 """
 from __future__ import annotations
+from tests._helpers.import_tasks import wait_for_imports
 
 import numpy as np
 import pandas as pd
@@ -88,6 +89,7 @@ def test_recolor_updates_navigator_swatch_and_color_source(qapp, loaded_csv, qtb
     win = MainWindow()
     qtbot.addWidget(win)
     win._load_one(loaded_csv)
+    wait_for_imports(win)
     fid = next(iter(win.files))
 
     win.toolbar._set_mode("time")
@@ -153,6 +155,7 @@ def test_recolor_does_not_trigger_a_replot(qapp, loaded_csv, qtbot):
     win = MainWindow()
     qtbot.addWidget(win)
     win._load_one(loaded_csv)
+    wait_for_imports(win)
     fid = next(iter(win.files))
 
     win.toolbar._set_mode("time")

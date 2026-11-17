@@ -1,3 +1,4 @@
+from tests._helpers.import_tasks import wait_for_imports
 import pytest
 
 from mf4_analyzer.ui_kit import load_stylesheet
@@ -1077,6 +1078,7 @@ def test_load_csv_flows_through_navigator(qapp, qtbot, loaded_csv):
     with patch('mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames',
                return_value=([loaded_csv], "")):
         w.load_files()
+        wait_for_imports(w)
     assert len(w.files) == 1
     assert w.navigator.channel_list.tree.topLevelItemCount() == 1
 
@@ -1172,6 +1174,7 @@ def test_custom_xaxis_time_range_filters_by_file_time_axis(qapp, qtbot, tmp_path
         return_value=([str(p)], ""),
     ):
         w.load_files()
+        wait_for_imports(w)
     qapp.processEvents()
 
     fid = next(iter(w.files))
@@ -1230,6 +1233,7 @@ def test_custom_xaxis_source_change_autoscales_new_x_extent(qapp, qtbot, tmp_pat
         return_value=([str(p)], ""),
     ):
         w.load_files()
+        wait_for_imports(w)
     qapp.processEvents()
 
     fid = next(iter(w.files))
@@ -1290,6 +1294,7 @@ def test_custom_xaxis_axis_title_includes_source_unit(qapp, qtbot, tmp_path):
         return_value=([str(p)], ""),
     ):
         w.load_files()
+        wait_for_imports(w)
     qapp.processEvents()
 
     fid = next(iter(w.files))
@@ -1362,6 +1367,7 @@ def test_custom_xaxis_uses_each_sources_unequal_length_x(qapp, qtbot, tmp_path):
     with patch('mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames',
                return_value=([str(p1), str(p2)], "")):
         w.load_files()
+        wait_for_imports(w)
     fids = list(w.files)
     w.navigator.set_checked_channels([(fid, "force") for fid in fids])
     qapp.processEvents()
@@ -1448,6 +1454,7 @@ def test_custom_xaxis_filters_each_source_by_its_acquisition_time(
     w = MainWindow(); qtbot.addWidget(w)
     for path in paths:
         w._load_one(str(path))
+        wait_for_imports(w)
     fids = list(w.files)
     w.navigator.set_checked_channels([(fid, "force") for fid in fids])
     w._custom_xaxis_spec = CustomXAxisSpec(
@@ -1482,7 +1489,7 @@ def test_custom_xaxis_finite_mask_is_applied_after_time_filter_and_filtering(
         "angle": [0.0, np.nan, 2.0, np.inf, 4.0, 5.0],
         "force": np.arange(10.0, 16.0),
     }).to_csv(path, index=False)
-    w = MainWindow(); qtbot.addWidget(w); w._load_one(str(path))
+    w = MainWindow(); qtbot.addWidget(w); w._load_one(str(path)); wait_for_imports(w)
     fid = next(iter(w.files))
     # CSV import interpolates NaNs by design; inject raw display-X edge values
     # after load so this regression exercises the TimeDomain finite-X mask.
@@ -1522,6 +1529,7 @@ def test_custom_xaxis_uses_largest_normalized_unit_cohort(qapp, qtbot, tmp_path)
     w = MainWindow(); qtbot.addWidget(w)
     for path in paths:
         w._load_one(str(path))
+        wait_for_imports(w)
     fids = list(w.files)
     for fid, unit in zip(fids, ("m/s²", "m/s^2", "g")):
         w.files[fid].channel_units["angle"] = unit
@@ -1588,7 +1596,9 @@ def test_custom_xaxis_slots_keep_workspace_order_and_overlay_skips_placeholders(
 
     w = MainWindow(); qtbot.addWidget(w)
     w._load_one(str(with_x))
+    wait_for_imports(w)
     w._load_one(str(missing_x))
+    wait_for_imports(w)
     fids = list(w.files)
     ok_fid, miss_fid = fids
     w.navigator.set_checked_channels([(ok_fid, "force"), (miss_fid, "force")])
@@ -1646,6 +1656,7 @@ def test_custom_xaxis_unit_cohort_uses_only_range_finite_sources(
     w = MainWindow(); qtbot.addWidget(w)
     for path in paths:
         w._load_one(str(path))
+        wait_for_imports(w)
     fids = list(w.files)
     for fid, unit in zip(fids, ("rpm", "rpm", "deg")):
         w.files[fid].channel_units["angle"] = unit
@@ -1692,6 +1703,7 @@ def test_custom_xaxis_empty_unit_cohort_does_not_fall_back_to_first_provider(
     w = MainWindow(); qtbot.addWidget(w)
     for path in paths:
         w._load_one(str(path))
+        wait_for_imports(w)
     fids = list(w.files)
     for fid, unit in zip(fids, ("rpm", "", "")):
         w.files[fid].channel_units["angle"] = unit
@@ -1739,7 +1751,7 @@ def test_exact_source_custom_x_never_substitutes_same_name_provider(
         "force": np.arange(200.0, 203.0),
     }).to_csv(short_path, index=False)
     w = MainWindow(); qtbot.addWidget(w)
-    w._load_one(str(long_path)); w._load_one(str(short_path))
+    w._load_one(str(long_path)); wait_for_imports(w); w._load_one(str(short_path)); wait_for_imports(w)
     source_fid, other_fid = list(w.files)
     w.navigator.set_checked_channels([
         (source_fid, "force"), (other_fid, "force"),
@@ -1762,7 +1774,7 @@ def test_xaxis_candidates_do_not_inject_unlocatable_legacy_exact_source(
     from mf4_analyzer.ui.main_window import MainWindow
     from mf4_analyzer.ui.time_xaxis import CustomXAxisSpec
 
-    w = MainWindow(); qtbot.addWidget(w); w._load_one(loaded_csv)
+    w = MainWindow(); qtbot.addWidget(w); w._load_one(loaded_csv); wait_for_imports(w)
     w._custom_xaxis_spec = CustomXAxisSpec(
         mode="channel",
         resolver="exact_source",
@@ -1790,7 +1802,7 @@ def test_all_custom_x_failures_use_empty_hint_and_card_diagnostic(
         "time": np.arange(4, dtype=float),
         "force": np.arange(10.0, 14.0),
     }).to_csv(path, index=False)
-    w = MainWindow(); qtbot.addWidget(w); w._load_one(str(path))
+    w = MainWindow(); qtbot.addWidget(w); w._load_one(str(path)); wait_for_imports(w)
     fid = next(iter(w.files))
     w._attach_files_to_focused_view([fid])
     w.navigator.set_checked_channels([(fid, "force")])
@@ -1847,6 +1859,7 @@ def test_channel_edit_refreshes_custom_xaxis_candidates(qapp, qtbot, loaded_csv)
         return_value=([loaded_csv], ""),
     ):
         w.load_files()
+        wait_for_imports(w)
     qapp.processEvents()
 
     fid = next(iter(w.files))
@@ -1886,6 +1899,7 @@ def test_file_load_refreshes_custom_xaxis_candidates_when_channel_mode(
         return_value=([loaded_csv], ""),
     ):
         w.load_files()
+        wait_for_imports(w)
     qapp.processEvents()
 
     w.inspector.top.set_xaxis_mode('channel')
@@ -1896,6 +1910,7 @@ def test_file_load_refreshes_custom_xaxis_candidates_when_channel_mode(
         return_value=([str(second)], ""),
     ):
         w.load_files()
+        wait_for_imports(w)
     qapp.processEvents()
 
     texts = _combo_texts(w.inspector.top._combo_xaxis_ch)
@@ -1916,6 +1931,7 @@ def test_channel_edit_removing_per_source_x_provider_keeps_logical_spec(
         return_value=([loaded_csv], ""),
     ):
         w.load_files()
+        wait_for_imports(w)
     qapp.processEvents()
 
     fid = next(iter(w.files))
@@ -1951,6 +1967,7 @@ def test_file_activation_updates_inspector_fs_and_range(qapp, qtbot, loaded_csv)
     with patch('mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames',
                return_value=([loaded_csv], "")):
         w.load_files()
+        wait_for_imports(w)
     fid = next(iter(w.files))
     fd = w.files[fid]
     # activation should have pushed fs + range-limit to inspector
@@ -2171,6 +2188,7 @@ def test_close_file_resets_inspector(qapp, qtbot, loaded_csv):
     with patch('mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames',
                return_value=([loaded_csv], "")):
         w.load_files()
+        wait_for_imports(w)
     assert w.files
     w._close(next(iter(w.files)), force=True)
     # No crash; stats strip shows placeholder
@@ -2191,6 +2209,7 @@ def test_file_load_does_not_autoplot_first_channel(qapp, qtbot, loaded_csv):
     with patch('mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames',
                return_value=([loaded_csv], "")):
         w.load_files()
+        wait_for_imports(w)
     qapp.processEvents()
 
     # File loaded.
@@ -2216,6 +2235,7 @@ def test_file_load_reload_with_prior_checks_still_opens_empty(qapp, qtbot, loade
     with patch('mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames',
                return_value=([loaded_csv], "")):
         w.load_files()
+        wait_for_imports(w)
     fid_first = next(iter(w.files))
     # Simulate user checking a channel manually.
     w.channel_list.check_first_channel(fid_first)
@@ -2229,6 +2249,7 @@ def test_file_load_reload_with_prior_checks_still_opens_empty(qapp, qtbot, loade
     with patch('mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames',
                return_value=([loaded_csv], "")):
         w.load_files()
+        wait_for_imports(w)
     qapp.processEvents()
     assert w.channel_list.get_checked_channels() == []
 
@@ -2253,6 +2274,7 @@ def test_file_load_multi_file_no_autocheck_per_file(qapp, qtbot, loaded_csv, tmp
     with patch('mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames',
                return_value=([loaded_csv, str(p2)], "")):
         w.load_files()
+        wait_for_imports(w)
     qapp.processEvents()
     assert len(w.files) == 2
     assert w.channel_list.get_checked_channels() == []
@@ -2282,6 +2304,7 @@ def test_explicit_time_plot_warns_when_no_channel_checked(
         return_value=([loaded_csv], ""),
     ):
         w.load_files()
+        wait_for_imports(w)
     qapp.processEvents()
     assert w.channel_list.get_checked_channels() == []
 
@@ -2329,6 +2352,7 @@ def test_automatic_time_replot_does_not_warn_for_empty_selection(
         return_value=([loaded_csv], ""),
     ):
         w.load_files()
+        wait_for_imports(w)
     qapp.processEvents()
     seen = []
     monkeypatch.setattr(w, "toast", lambda msg, level="info": seen.append((msg, level)))
@@ -2351,6 +2375,7 @@ def test_user_initiated_non_primary_time_plot_still_warns(
         return_value=([loaded_csv], ""),
     ):
         w.load_files()
+        wait_for_imports(w)
     qapp.processEvents()
     seen = []
     monkeypatch.setattr(w, "toast", lambda msg, level="info": seen.append((msg, level)))
@@ -2378,6 +2403,7 @@ def _load_time_window_with_checked(qapp, qtbot, loaded_csv, checked_names=("spee
     with patch('mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames',
                return_value=([loaded_csv], "")):
         w.load_files()
+        wait_for_imports(w)
     qapp.processEvents()
 
     fid = next(iter(w.files))
@@ -2674,6 +2700,7 @@ def test_plot_mode_toggle_preserves_xlim_overlay_to_subplot(qapp, qtbot, loaded_
     with patch('mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames',
                return_value=([loaded_csv], "")):
         w.load_files()
+        wait_for_imports(w)
     qapp.processEvents()
 
     # Check two channels so the overlay/subplot distinction is meaningful.
@@ -2737,6 +2764,7 @@ def test_multi_selected_channel_checkbox_plots_all_selected(qapp, qtbot, loaded_
     with patch('mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames',
                return_value=([loaded_csv], "")):
         w.load_files()
+        wait_for_imports(w)
     qapp.processEvents()
 
     fid = next(iter(w.files))
@@ -4288,6 +4316,7 @@ def test_nonuniform_analysis_keeps_plot_provenance_chip_hidden(qtbot, tmp_path):
     win = MainWindow()
     qtbot.addWidget(win)
     win._load_one(str(jittered))
+    wait_for_imports(win)
     fd = next(iter(win.files.values()))
     assert fd.is_time_axis_uniform() is False
     assert win._check_uniform_or_prompt(fd, "fft") is True
@@ -4298,6 +4327,7 @@ def test_nonuniform_analysis_keeps_plot_provenance_chip_hidden(qtbot, tmp_path):
 
     win.close_all(force=True)
     win._load_one(str(uniform))
+    wait_for_imports(win)
     fd2 = next(iter(win.files.values()))
     assert fd2.is_time_axis_uniform() is True
     win._check_uniform_or_prompt(fd2, "fft")
@@ -4324,6 +4354,7 @@ def test_frf_analysis_keeps_plot_provenance_chip_hidden(qtbot, tmp_path):
     win = MainWindow()
     qtbot.addWidget(win)
     win._load_one(str(path))
+    wait_for_imports(win)
     fid = next(iter(win.files))
     fd = win.files[fid]
     fd._time_source = "column"
@@ -4365,12 +4396,14 @@ def test_fft_panel_keeps_signal_selection_across_channel_edit(
         return_value=([loaded_csv], ""),
     ):
         w.load_files()
+        wait_for_imports(w)
     qapp.processEvents()
     with patch(
         'mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames',
         return_value=([str(second)], ""),
     ):
         w.load_files()
+        wait_for_imports(w)
     qapp.processEvents()
 
     # Resolve targets from the actual combo content — different builds
@@ -4491,6 +4524,7 @@ def test_overlay_set_primary_left_axis_reorders_and_preserves_xlim(
     with patch('mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames',
                return_value=([str(p)], "")):
         w.load_files()
+        wait_for_imports(w)
     qapp.processEvents()
 
     fid = next(iter(w.files))
@@ -4561,6 +4595,7 @@ def test_overlay_primary_cleared_when_channel_unchecked(qapp, qtbot, tmp_path):
     with patch('mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames',
                return_value=([str(p)], "")):
         w.load_files()
+        wait_for_imports(w)
     qapp.processEvents()
 
     fid = next(iter(w.files))
@@ -5239,6 +5274,7 @@ def test_close_all_clears_wwt_record_tree_without_waiting_for_plot(
     monkeypatch.setattr(win._wwt_import, "_ask_layout", lambda *_a, **_k: True)
     path = wwt.measurement_plus_record_only_tolerance(path=tmp_path / "tol.wwt")
     win._load_one(str(path))
+    wait_for_imports(win)
     qapp.processEvents()
     sync = getattr(win, "_sync_record_curve_tree", None)
     if callable(sync):
@@ -5271,6 +5307,7 @@ def test_close_single_wwt_source_filters_all_time_views_and_keeps_sibling(
     monkeypatch.setattr(win, "plot_time", lambda *_a, **_k: None)
     path = wwt.two_zeit_cohorts_record_only_on_owner_a(tmp_path / "split.wwt")
     win._load_one(str(path))
+    wait_for_imports(win)
     qapp.processEvents()
     fids = list(win.files)
     assert len(fids) == 2

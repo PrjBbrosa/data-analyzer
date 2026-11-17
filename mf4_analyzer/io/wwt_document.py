@@ -10,6 +10,7 @@ from pathlib import Path
 import numpy as np
 
 from .import_diagnostics import make_import_issue, set_import_diagnostics
+from .import_limits import get_import_budget
 from .wwt_display import (
     WwtCurveDisplay,
     WwtDisplayWindow,
@@ -601,6 +602,7 @@ def _materialize_groups(
     records_parsed: int,
     skipped: list[str],
     auxiliary: list[dict],
+    budget,
 ) -> list[dict]:
     merged: dict[tuple, dict] = {}
     order: list[tuple] = []
@@ -627,6 +629,12 @@ def _materialize_groups(
     groups: list[dict] = []
     for key in order:
         blk = merged[key]
+        # Catalog arrays remain shared; only the new group axis and DataFrame
+        # own additional buffers. Axis scratch was admitted while reading Zeit.
+        budget.reserve_array((blk["n"],), np.float64,
+                             label="WWT group time axis")
+        budget.reserve_array((blk["n"], len(blk["channels"]) + 1), np.float64,
+                             label="WWT group DataFrame")
         t = blk["t0"] + np.arange(blk["n"], dtype=np.float64) * blk["dt"]
         frame = {"Time": t}
         units: dict[str, str] = {}
@@ -672,10 +680,12 @@ def _materialize_groups(
     return groups
 
 
-def parse_wwt_document(fp: str | Path) -> WwtDocument:
+def parse_wwt_document(fp: str | Path, *, _budget=None) -> WwtDocument:
     """Parse body records, groups, and every structurally valid display window."""
     path = Path(fp)
     name = path.name
+    budget = get_import_budget() if _budget is None else _budget
+    budget.reserve(path.stat().st_size, label="WWT file bytes")
     data = path.read_bytes()
     size = len(data)
 
@@ -688,6 +698,7 @@ def parse_wwt_document(fp: str | Path) -> WwtDocument:
     title = _cstr(data[0x00F:0x10F])
     comment = _cstr(data[0x10F:0x20F])
     (count,) = struct.unpack_from("<H", data, 0x20F)
+    budget.check_channels(count, label="WWT records")
 
     blocks: list[dict] = []
     skipped: list[str] = []
@@ -697,6 +708,7 @@ def parse_wwt_document(fp: str | Path) -> WwtDocument:
     pos = _HEADER_SIZE
     records_parsed = 0
     current_zeit: int | None = None
+    scratch_bytes = 0
     while records_parsed < count:
         if data[pos:pos + len(_TRAILER_PREFIX)] == _TRAILER_PREFIX:
             break
@@ -765,6 +777,11 @@ def parse_wwt_document(fp: str | Path) -> WwtDocument:
                 raise ValueError(
                     f"WWT 文件截断/损坏: 通道 {ch_name!r} 声明点数 {n} 超出范围"
                     f"（偏移 0x{pos:x}）: {name}")
+            budget.reserve_array((n,), np.float64, label="WWT Zeit catalog")
+            needed_scratch = int(n) * 8 * 3
+            budget.reserve(max(0, needed_scratch - scratch_bytes),
+                           label="WWT axis/conversion scratch")
+            scratch_bytes = max(scratch_bytes, needed_scratch)
             dt = float(b)
             axis_record = rec_index
             current_zeit = rec_index
@@ -784,6 +801,13 @@ def parse_wwt_document(fp: str | Path) -> WwtDocument:
                     f"WWT 结构异常: 通道 {ch_name!r} 出现在首个 Zeit 记录之前"
                     f"（偏移 0x{pos:x}）: {name}")
             blk = blocks[-1]
+            budget.reserve_array((n,), np.float64, label="WWT measurement catalog")
+            # Float64 conversion, working copy, scale/offset arithmetic and
+            # freeze overlap. Reuse one high-water allowance across records.
+            needed_scratch = int(n) * 8 * 4
+            budget.reserve(max(0, needed_scratch - scratch_bytes),
+                           label="WWT axis/conversion scratch")
+            scratch_bytes = max(scratch_bytes, needed_scratch)
             raw = np.frombuffer(data, dtype=dtype, count=n, offset=data_pos)
             physical = _physical_from_raw(raw, a, c)
             values = physical
@@ -844,6 +868,7 @@ def parse_wwt_document(fp: str | Path) -> WwtDocument:
         records_parsed=records_parsed,
         skipped=skipped,
         auxiliary=auxiliary,
+        budget=budget,
     )
 
     windows: list[WwtDisplayWindow] = []
@@ -1010,7 +1035,29 @@ def load_wwt_document(fp: str | Path) -> WwtLoadResult:
     """Parse a WWT file and materialize supported ``Pars`` channels."""
     from .wwt_formula import evaluate_wwt_formulas
 
-    parsed = parse_wwt_document(fp)
+    budget = get_import_budget()
+    parsed = parse_wwt_document(fp, _budget=budget)
+    # A formula's declared_n does not constrain the evaluator: real leaf arrays
+    # do. Bound every output by the largest actual catalog array, and account
+    # for expression temporaries before invoking the evaluator.
+    max_length = max((rec.values.size for rec in parsed.records
+                      if rec.values is not None), default=0)
+    formula_scratch = 0
+    for rec in parsed.records:
+        if rec.tag != "Pars" or not rec.formula:
+            continue
+        budget.reserve_array((max_length,), np.float64, copies=3,
+                             label=f"WWT formula {rec.index} output and group copies")
+        operations = sum(rec.formula.count(op) for op in "+-*/") + rec.formula.count("abs")
+        needed_scratch = int(max_length) * 8 * (operations + 2)
+        budget.reserve(max(0, needed_scratch - formula_scratch),
+                       label="WWT formula scratch")
+        formula_scratch = max(formula_scratch, needed_scratch)
+    for group in parsed.groups:
+        # The document's original frame, a working copy and ordered output can
+        # overlap. The original was already admitted by _materialize_groups.
+        budget.reserve_array(group["data"].shape, np.float64, copies=2,
+                             label="WWT copied and ordered groups")
     records, formula_diagnostics = evaluate_wwt_formulas(
         parsed.records, strict=False
     )

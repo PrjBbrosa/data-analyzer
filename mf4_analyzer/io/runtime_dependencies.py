@@ -53,6 +53,14 @@ WINDOWS_BUILD_FLAVORS = frozenset({"full", "lite"})
 # the lazy-import scan but rely on PyInstaller's normal package hook.
 FROZEN_IMPORT_DEPENDENCIES = (
     FrozenImportDependency(
+        package="numpy",
+        requirement_name="numpy",
+        extensions=(),
+        purpose="numeric import admission and array transport",
+        component=COMPONENT_BASE,
+        collection=COLLECTION_STANDARD_HOOK,
+    ),
+    FrozenImportDependency(
         package="pandas",
         requirement_name="pandas",
         extensions=(),

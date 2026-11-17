@@ -349,7 +349,8 @@ class WwtImportCoordinator:
         )
 
     def offer_layout(
-        self, document, fids: list[str], *, reuse_blank: bool | None = None
+        self, document, fids: list[str], *, reuse_blank: bool | None = None,
+        prepared_files=None, request_valid=None, before_commit=None, before_replace=None,
     ) -> WwtImportOutcome | None:
         window = self._window
         if getattr(window, "_restoring_project", False):
@@ -358,7 +359,7 @@ class WwtImportCoordinator:
             # NOT_APPLICABLE: do not consume or overwrite a remembered choice.
             return WwtImportOutcome(0, 0, (), ())
         groups = []
-        files = getattr(window, "files", {}) or {}
+        files = prepared_files if prepared_files is not None else (getattr(window, "files", {}) or {})
         for fid in fids:
             fd = files.get(fid)
             if fd is None:
@@ -416,8 +417,16 @@ class WwtImportCoordinator:
                 accepted=accepted,
             )
 
+        def commit_sources():
+            if request_valid is not None and not request_valid():
+                return False
+            if before_commit is not None:
+                before_commit()
+            return request_valid is None or request_valid()
+
         if not proposals:
             # NOT_APPLICABLE: no askable layout; keep the current batch choice.
+            commit_sources()
             return _outcome(created=0)
 
         manager = window.view_manager
@@ -431,6 +440,8 @@ class WwtImportCoordinator:
             document, proposals, available=max(0, available)
         )
         prompt = self._resolve_layout_prompt(body, informative)
+        if not commit_sources():
+            return _outcome(created=0)
         self._remember_prompt_if_requested(prompt)
         if not prompt.accepted:
             return _outcome(created=0)
@@ -442,6 +453,10 @@ class WwtImportCoordinator:
         color_base = 0 if reusable else len(manager.views)
         for offset, item in enumerate(keep):
             item.state.tab_color = default_view_tab_color(color_base + offset)
+        if reusable and keep and before_replace is not None:
+            # Transfer an import's captured target before publication emits
+            # View signals, which may service its cancellation watchdog.
+            before_replace(manager.views[0].view_id, keep[0].state.view_id)
         indexes = manager.insert_states(
             [item.state for item in keep],
             reuse_blank=bool(reuse_blank),
