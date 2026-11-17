@@ -2,8 +2,8 @@
 
 These tests freeze the reviewed byte ledger, the current shared-axis losses,
 and the numerical oracles. Pointwise native reads go through
-``DataLoader.load_mf4_native``. F08 and F09 stay strict xfail: their filter
-and cross-rate alignment designs are not implemented.
+``DataLoader.load_mf4_native``. F08 and F09 check the frozen filter and the
+integer-ratio alignment, including a stopband measurement.
 """
 from __future__ import annotations
 
@@ -650,24 +650,63 @@ def test_native_uniform_fft_uses_original_samples(tmp_path):
     assert abs(core_freq[peak] - tone) <= fs / count
 
 
-@pytest.mark.xfail(strict=True, reason="F08 滤波设计未冻结且 native 降采样不存在：阶数、截止、padding、延时补偿、边缘支持长度都没有，不能进入 M4")
-def test_native_antialias_design_is_not_available():
-    from mf4_analyzer.analysis_signal_prepare import frozen_antialias_design
+def test_native_antialias_suppresses_a_stopband_tone():
+    from mf4_analyzer.analysis_signal_prepare import (
+        frozen_antialias_design, prepare_signal,
+    )
 
     design = frozen_antialias_design()
     required = {"order", "cutoff_ratio", "padding", "delay_compensation", "edge_samples"}
-    missing = required.difference(design)
-    assert not missing
+    assert not required.difference(design)
     assert float(design["stopband_db"]) >= 60.0
+    source_fs = 4000.0
+    time = np.arange(4000) / source_fs
+    tone = np.sin(2.0 * np.pi * 1500.0 * time)
+    prepared = prepare_signal(
+        tone, time, fs=source_fs, policy="native", intent="explicit_uniform",
+        value_kind="continuous", target_fs=500.0, origin=0.0,
+    )
+    assert prepared.status == "ready"
+    stop_rms = float(np.sqrt(np.mean(np.square(prepared.values))))
+    source_rms = float(np.sqrt(np.mean(np.square(tone))))
+    assert 20.0 * np.log10(stop_rms / source_rms) <= -60.0
 
 
-@pytest.mark.xfail(strict=True, reason="F09 异轴对齐未冻结且未实现：origin、比率、分数延时、边缘裁切都不能启用，不能进入 M4")
-def test_native_cross_rate_frf_alignment_is_not_available():
-    from mf4_analyzer.analysis_signal_prepare import frozen_frf_alignment
+def test_native_cross_rate_alignment_keeps_an_inband_gain():
+    from mf4_analyzer.analysis_signal_prepare import (
+        frozen_frf_alignment, prepare_pair,
+    )
+    from mf4_analyzer.signal.frf import FrfParams, compute_frf
 
     design = frozen_frf_alignment()
     required = {"origin", "ratio", "fractional_delay", "edge_policy", "min_input_fs_band"}
-    missing = required.difference(design)
-    assert not missing
-    band = design["min_input_fs_band"]
-    assert band == (0.05, 0.30)
+    assert not required.difference(design)
+    assert design["min_input_fs_band"] == (0.05, 0.30)
+    assert design["fractional_delay"] == "unsupported"
+    left_fs = 2000.0
+    right_fs = 1000.0
+    left_time = np.arange(4000) / left_fs
+    right_time = np.arange(2000) / right_fs
+    tone = 80.0
+    stimulus = np.sin(2.0 * np.pi * tone * left_time)
+    response = 2.0 * np.sin(2.0 * np.pi * tone * right_time)
+    prepared = prepare_pair(
+        stimulus, left_time, response, right_time,
+        left_fs=left_fs, right_fs=right_fs, policy="native",
+        align_then_compute=True,
+    )
+    assert prepared.status == "ready"
+    params = FrfParams(
+        estimator="h1", t_win_s=0.5, overlap=0.0, nfft_mode="auto",
+        window="hanning", periodic_window=True, detrend="none",
+    )
+    result = compute_frf(
+        prepared.left.values, prepared.right.values, fs=right_fs, params=params,
+        input_time=prepared.left.time, output_time=prepared.right.time,
+    )
+    band = (result.coherence >= 0.99) & (result.frequencies >= 50.0) & (result.frequencies <= 120.0)
+    assert np.any(band)
+    gain_db = 20.0 * np.log10(np.abs(result.transfer[band]))
+    phase = np.angle(result.transfer[band], deg=True)
+    assert np.max(np.abs(gain_db - 20.0 * np.log10(2.0))) <= 0.1
+    assert np.max(np.abs(phase)) <= 1.0
