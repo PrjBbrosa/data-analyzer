@@ -91,6 +91,25 @@ def _persisted_source_group(fd) -> str:
     return group
 
 
+def _restore_requests_native(ref, resolved) -> bool:
+    """Schema 6 native policy reopens MF4 through the explicit native broker."""
+    if str(getattr(ref, "sampling_policy", "") or "") != "native":
+        return False
+    return Path(resolved).suffix.lower() in {".mf4", ".mdf"}
+
+
+def _measured_rate(fd):
+    """File-level Fs for legacy matching. Native sources have no shared rate."""
+    if getattr(fd, "is_native", False):
+        return None
+    from ...io.file_data import LegacyAxisUnavailable
+
+    try:
+        return fd.fs
+    except LegacyAxisUnavailable:
+        return None
+
+
 def _optional_rate(value):
     try:
         number = float(value)
@@ -647,8 +666,10 @@ class ProjectIOMixin:
     def request_explicit_native_import(self, path, *, limits=None):
         """Open one MF4 through the native broker only when the caller asks.
 
-        Default open, drag-drop, recent files, project restore, Batch, and
-        Replay do not call this. Their method table stays ``load_mf4``.
+        Default open, drag-drop, recent files, Batch, and Replay stay on
+        ``load_mf4``. Restoring a saved native sampling policy uses the same
+        explicit broker inside project restore. The default method table does
+        not change.
         """
         return self._start_import_paths(
             [os.fspath(path)], limits=limits, explicit_native=True,
@@ -2831,6 +2852,7 @@ class ProjectIOMixin:
                 try:
                     loaded_fids[key] = yield from self._import_one_steps(
                         request, key, notify=False,
+                        explicit_native=_restore_requests_native(ref, resolved),
                         **_restore_load_kwargs(ref, resolved, pio, path),
                     )
                     request.loaded_files += bool(loaded_fids[key])
@@ -2859,7 +2881,7 @@ class ProjectIOMixin:
                     key=str(fid),
                     group_id=str(metadata.get("group_id") or ""),
                     channels=_signal_name_set(fd),
-                    measured_fs=_optional_rate(getattr(fd, "fs", None)),
+                    measured_fs=_optional_rate(_measured_rate(fd)),
                 ))
             facts = [
                 SourceRefFact(
@@ -2942,6 +2964,8 @@ class ProjectIOMixin:
         """Replay number-changing state onto a source the file confirmed."""
         from ...io.head_hdf import classify_saved_hdf_sampling
 
+        if getattr(fd, "is_native", False):
+            return self._replay_saved_channel_edits(fd, ref, new_fid)
         if getattr(ref, "sampling_policy", "") == "native" and not getattr(fd, "is_native", False):
             timebase_notices.append(
                 "该来源记录了原生采样政策，当前仍按公共轴读取；指定采样率和公式保持未应用。"

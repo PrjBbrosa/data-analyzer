@@ -191,3 +191,37 @@ def test_creation_rail_tracks_editable_free_grid_state(qapp, qtbot):
     page.hide_overview()
     page.set_presentation_active(True)
     assert rail.visible_enabled_author_tools() == ()
+
+
+def test_group_nudge_is_one_undo_on_the_real_coordinator(qapp):
+    """One AuthorNudgeIntent is one history entry on UltraViewCoordinator.
+
+    This is the MainWindow façade, not a page-test sink. U-7/U-8/U-9 were
+    not run on a real window.
+    """
+    from PyQt5.QtWidgets import QWidget
+
+    from mf4_analyzer.ui.chart_stack.ultraview.author_tools import AuthorNudgeIntent
+    from mf4_analyzer.ui.main_window.ultraview_coordinator import UltraViewCoordinator
+    from mf4_analyzer.ui.ultraview_state import BoardBox, StickyObject
+
+    host = QWidget()
+    coordinator = UltraViewCoordinator(host, parent=host)
+    board = coordinator.board
+    board.author_objects = [
+        StickyObject("a", "sticky", box=BoardBox(2.0, 3.0, 4.0, 3.0), text="A", palette="yellow"),
+        StickyObject("b", "sticky", box=BoardBox(8.0, 3.0, 4.0, 3.0), text="B", palette="yellow"),
+    ]
+    before = [(item.object_id, item.box.x, item.box.y) for item in board.author_objects]
+    coordinator._on_author_update(AuthorNudgeIntent(("a", "b"), 0.25, 0.5))
+    history = coordinator._grid_history(board)
+    assert len(history.undo) == 1
+    assert history.undo[-1].label == "author-nudge"
+    moved = {item.object_id: (item.box.x, item.box.y) for item in board.author_objects}
+    assert moved["a"] == (2.25, 3.5)
+    assert moved["b"] == (8.25, 3.5)
+    coordinator._on_free_grid_undo()
+    restored = [(item.object_id, item.box.x, item.box.y) for item in board.author_objects]
+    assert restored == before
+    assert len(history.undo) == 0
+    assert len(history.redo) == 1

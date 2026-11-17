@@ -1,6 +1,6 @@
 # 导入恢复 Followup 独立分支执行记录
 
-日期：2026-11-18。结论：**partial，可供集成审查；不能作为 native 默认启用或发布验收。** H01/H02/H04/H05 的定向缺陷已修复，H03 的项目重开、H06 的完整生命周期/Windows、S7 的联合接收仍有未闭合项。
+日期：2026-11-18。§1–§7 记录 `2c08c890` 独立分支验收；后续 main 合并接收见 §8，旧的未实施状态不直接代表合并后的源码。结论：**partial，不能作为 native 默认启用或发布验收。**
 
 合同：[Followup Spec](../specs/2026-11-17-import-recovery-review-followup-spec.md)、[Followup Plan](../plans/2026-11-17-import-recovery-review-followup-plan.md)。原始问题与严重度保留在 Spec §3；本记录不改写历史审查结果。
 
@@ -134,3 +134,19 @@ Batch 的现有 `fft_time/order_time` 参数正规化会忽略源数据 `time_ra
 | `tests/ui/test_import_coordinator.py` | `484f20cac7dae86f` |
 | `tests/ui/test_import_recovery_followup.py` | `a156864f36785562` |
 | `tests/ui/test_native_derived_followup.py` | `ac85ad33a73b09ed` |
+
+## 8. 用户授权 commit and merge 后的接收记录
+
+目标为本地 main；接收其提交 `67c64205ee603587098b4e4dc8faea9831010833`，包含 PR #44 的 native 项目重开/整数比对齐与 PR #41 的 UltraView 修复。先在隔离 worktree 合并并验证，再更新主工作区；不推送远端。
+
+唯一文本冲突位于 `analysis_signal_prepare.py` 的 imports：同时保留本分支精度 helper 与 main 的滤波依赖，保留精度政策版本 `m4-same-axis-2`。额外接缝测试发现 main 的 `_align_uniform_pair` 直接滤波/转换会绕过本分支的整数精度准入；左右输入两个红测均返回 ready 而非 rejected。已在该入口调用相同的中立精度 helper，拒绝时不运行 filter、不生成输出；没有复制精度算法或改变对齐设计。
+
+实际验证（相同 offscreen 前缀与项目运行时，未执行全套）：
+
+- 合并后的准备/保真/Batch 精度、配方/读取、依赖边界、真实产品导入/项目重开、native 消费者、coordinator 和 MainWindow ownership：**183 passed, 12 warnings**（`merge-focused.log`）。范围为 `tests/test_analysis_signal_prepare.py tests/test_mf4_native_fidelity.py tests/test_native_precision_routes.py tests/test_channel_edit_log.py tests/test_signal_access.py tests/test_native_import_boundaries.py tests/test_signal_no_gui_import.py tests/ui/test_native_derived_followup.py tests/ui/test_mf4_native_product_path.py tests/ui/test_native_signal_consumers.py tests/ui/test_import_coordinator.py tests/ui/test_main_window_state_ownership.py`。
+- 新增两条跨采样率精度接缝测试先 **2 failed**；补保护后重新跑受影响的 `test_analysis_signal_prepare.py`、`test_mf4_native_fidelity.py`、`test_native_precision_routes.py`、`test_signal_no_gui_import.py`、`test_native_import_boundaries.py`：**73 passed**（`merge-precision-green.log`）。两次通过数不相加为全树验收。
+- `git diff --check`、未解决冲突与文件范围检查通过。数值保护沿用既有 numeric-admission lesson，没有新独立规则。
+
+main 的 native 项目重开用例和 F08/F09 定向实现测试现已通过，因此 §5 对旧源码“尚未分派/两个 strict xfail”的描述仅为 `2c08c890` 历史状态；本次没有重做完整派生项目重开、全入口、资源或平台矩阵，不因此关闭整体 B5/B6。Cocoa 完整生命周期及 Windows UNKNOWN 仍保留。
+
+主工作区两份与已跟踪文件同名的未跟踪 followup 草稿，原字节移至其 `.state/import-recovery-followup/pre-merge-drafts-*/` 备份，避免覆盖；其他未跟踪目录和 native completion spec 不移动、不暂存。最终合并提交与工作区状态由本次交付消息给出。

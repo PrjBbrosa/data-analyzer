@@ -1,4 +1,4 @@
-"""M4 analysis-input contract. Same-axis passthrough only; cross-rate stays unsupported."""
+"""M4 analysis-input contract. Same-axis passthrough, anti-aliased downsample, and integer-ratio alignment."""
 from __future__ import annotations
 
 import hashlib
@@ -17,14 +17,22 @@ def _digest(values) -> str:
     return hashlib.sha256(np.ascontiguousarray(array).tobytes()).hexdigest()
 
 
-def test_module_does_not_export_frozen_filter_or_alignment_designs():
-    import mf4_analyzer.analysis_signal_prepare as prepare
+def test_frozen_designs_name_order_cutoff_and_the_supported_ratio():
+    from mf4_analyzer.analysis_signal_prepare import (
+        frozen_antialias_design, frozen_frf_alignment,
+    )
 
-    assert not hasattr(prepare, "frozen_antialias_design")
-    assert not hasattr(prepare, "frozen_frf_alignment")
-    exported = set(getattr(prepare, "__all__", ()))
-    assert "frozen_antialias_design" not in exported
-    assert "frozen_frf_alignment" not in exported
+    design = frozen_antialias_design()
+    assert design["order"] == 8
+    assert design["cutoff_ratio"] == 0.9
+    assert design["padding"] == "odd_reflect"
+    assert design["delay_compensation"] == 0
+    assert design["stopband_db"] >= 60.0
+    alignment = frozen_frf_alignment()
+    assert alignment["origin"] == "shared_start"
+    assert alignment["ratio"] == "integer_lower_fs"
+    assert alignment["fractional_delay"] == "unsupported"
+    assert alignment["min_input_fs_band"] == (0.05, 0.30)
 
 
 def test_same_axis_passthrough_converts_float_and_keeps_original_bytes():
@@ -137,19 +145,32 @@ def test_explicit_uniform_computes_new_values_and_times():
     assert _digest(values) == prepared.original_values_hash
 
 
-def test_explicit_uniform_rejects_downsample_without_frozen_antialias():
+def test_explicit_uniform_downsample_rejects_the_stopband():
     from mf4_analyzer.analysis_signal_prepare import prepare_signal
 
-    time = np.arange(32) / 32.0
-    values = np.sin(2.0 * np.pi * 4.0 * time)
-    prepared = prepare_signal(
-        values, time, fs=32.0, policy="native", intent="explicit_uniform",
-        value_kind="continuous", target_fs=8.0, origin=0.0,
+    source_fs = 4000.0
+    target_fs = 500.0
+    count = 4000
+    time = np.arange(count) / source_fs
+    stop = np.sin(2.0 * np.pi * 1500.0 * time)
+    keep = np.sin(2.0 * np.pi * 40.0 * time)
+    blocked = prepare_signal(
+        stop, time, fs=source_fs, policy="native", intent="explicit_uniform",
+        value_kind="continuous", target_fs=target_fs, origin=0.0,
     )
-    assert prepared.status == "unsupported"
-    assert prepared.values is None
-    assert prepared.method != "explicit_linear_uniform"
-    assert "抗混叠" in prepared.reason
+    passed = prepare_signal(
+        keep, time, fs=source_fs, policy="native", intent="explicit_uniform",
+        value_kind="continuous", target_fs=target_fs, origin=0.0,
+    )
+    assert blocked.status == "ready"
+    assert blocked.method == "antialiased_downsample"
+    assert blocked.provenance["delay_compensation"] == 0
+    stop_rms = float(np.sqrt(np.mean(np.square(blocked.values))))
+    source_rms = float(np.sqrt(np.mean(np.square(stop))))
+    assert 20.0 * np.log10(stop_rms / source_rms) <= -60.0
+    keep_rms = float(np.sqrt(np.mean(np.square(passed.values))))
+    assert abs(20.0 * np.log10(keep_rms / source_rms)) <= 1.0
+    assert np.array_equal(stop, np.sin(2.0 * np.pi * 1500.0 * time))
 
 
 def test_known_gap_is_not_bridged():
@@ -253,24 +274,35 @@ def test_pair_same_clock_passthrough_matches_core_frf():
     np.testing.assert_array_equal(via_prepare.coherence, direct.coherence)
 
 
-def test_align_then_compute_cross_rate_stays_unsupported():
+def test_integer_ratio_alignment_is_ready_and_other_ratios_stay_unsupported():
     from mf4_analyzer.analysis_signal_prepare import prepare_pair
 
-    left_time = np.arange(64) / 1000.0
-    right_time = np.arange(32) / 250.0
+    left_time = np.arange(800) / 1000.0
+    right_time = np.arange(200) / 250.0
+    tone = np.sin(2.0 * np.pi * 20.0 * left_time)
+    slow = np.sin(2.0 * np.pi * 20.0 * right_time)
     prepared = prepare_pair(
-        np.sin(left_time), left_time, np.cos(right_time), right_time,
+        tone, left_time, slow, right_time,
         left_fs=1000.0, right_fs=250.0, policy="native",
         align_then_compute=True,
     )
-    assert prepared.status == "unsupported"
-    assert prepared.relationship == "unsupported"
-    assert prepared.method != "same_axis_passthrough"
-    assert prepared.left is None or prepared.left.values is None
-    assert prepared.right is None or prepared.right.values is None
-    assert not hasattr(prepared, "phase") or prepared.phase is None
-    assert prepared.alignment_facts["resampled"] is False
-    assert "未验证" in prepared.reason or "unsupported" in prepared.reason
+    assert prepared.status == "ready"
+    assert prepared.method == "antialiased_lower_fs"
+    assert prepared.alignment_facts["resampled"] is True
+    assert prepared.alignment_facts["ratio"] == 4
+    assert len(prepared.left.values) == len(prepared.right.values)
+    assert prepared.left.target_fs == pytest.approx(250.0)
+
+    odd_right = np.arange(48) / 300.0
+    rejected = prepare_pair(
+        np.sin(left_time), left_time, np.cos(odd_right), odd_right,
+        left_fs=1000.0, right_fs=300.0, policy="native",
+        align_then_compute=True,
+    )
+    assert rejected.status == "unsupported"
+    assert rejected.alignment_facts["resampled"] is False
+    assert "整数" in rejected.reason
+    assert rejected.left is None
 
 
 def test_fs_reinterpret_does_not_resample_or_overwrite_the_original_axis():
@@ -490,3 +522,23 @@ def test_native_precision_checks_only_requested_samples_and_keeps_legacy_policy(
     assert selected.status == 'ready'
     np.testing.assert_array_equal(selected.values, [2., 3.])
     assert prepare_signal(raw, np.arange(3.), fs=1., policy='legacy').status == 'ready'
+
+
+@pytest.mark.parametrize('wide_side', ['left', 'right'])
+def test_cross_rate_alignment_preserves_integer_precision_admission(wide_side, monkeypatch):
+    from mf4_analyzer.analysis_signal_prepare import prepare_pair
+    left = np.ones(1024, dtype=np.int64)
+    right = np.ones(512, dtype=np.int64)
+    (left if wide_side == 'left' else right)[100] = 2**53 + 3
+    calls = []
+    def observed_filter(values, spec, fs):
+        calls.append(True)
+        return values
+    monkeypatch.setattr('mf4_analyzer.analysis_signal_prepare.apply_filter', observed_filter)
+    pair = prepare_pair(left, np.arange(1024.) / 128,
+                        right, np.arange(512.) / 64,
+                        left_fs=128, right_fs=64, align_then_compute=True)
+    assert pair.status == 'rejected'
+    assert 'float64' in pair.reason
+    assert pair.left is None and pair.right is None
+    assert not calls

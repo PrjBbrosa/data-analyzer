@@ -864,8 +864,9 @@ class SourceAdapter:
     def explicit_native_method(self) -> str:
         """Broker method for a caller-explicit native read.
 
-        ``loader_name`` stays ``load_mf4``. This does not open a file and is
-        not the default open, drag, recent, project, Batch, or Replay path.
+        ``loader_name`` stays ``load_mf4``. Ordinary open, drag, recent,
+        Batch, Replay, and legacy projects do not use it. Restoring a saved
+        native sampling policy does.
         """
         if self.key != "mdf" or self.loader_name != "load_mf4":
             raise SourceUnavailableError(f"{self.key} 没有显式原生读取")

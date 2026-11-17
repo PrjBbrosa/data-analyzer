@@ -788,3 +788,19 @@ def test_standalone_board_resize_still_arms_gesture(qtbot):
     QApplication.processEvents()
     assert board.gesture().is_armed()
     QTest.mouseRelease(card, Qt.LeftButton, Qt.NoModifier, QPoint(start.x() + 24, start.y()))
+
+
+def test_marquee_resolver_writes_only_the_owned_selection(qtbot):
+    harness = _Harness(qtbot)
+    free = harness.page._free_grid
+    controller = free.author_controller()
+    interaction = free.interaction()
+    assert not hasattr(controller, "_selection")
+    note = StickyObject("note", "sticky", box=BoardBox(4.0, 4.0, 3.0, 2.0), text="A")
+    free.set_author_objects((note,))
+    rect = controller._item_pixel_rect(note)
+    assert [key.object_id for key in interaction.author_marquee_hits(rect)] == ["note"]
+    assert interaction.selection() == frozenset()
+    interaction.reset_session()
+    assert interaction.author_marquee_hits(rect) == (AuthorKey("note"),)
+    assert interaction.selection() == frozenset()

@@ -191,9 +191,9 @@ def test_replay_warning_is_visible_before_play_and_follows_the_source(monkeypatc
         qapp.processEvents()
         warning = tab._alignment_warning
         assert warning.isVisible()
-        assert "已按公共时间轴对齐，可能包含非原始测量值" in warning.text()
-        assert "端点填充" in warning.text()
-        assert enabled_with_text and "端点填充" in enabled_with_text[-1]
+        assert "没有补点" in warning.text()
+        assert "端点填充" not in warning.text()
+        assert enabled_with_text and "没有补点" in enabled_with_text[-1]
         assert tab._play_btn.isEnabled()
         assert warning.wordWrap()
         assert warning.height() > warning.fontMetrics().lineSpacing() + 2
@@ -204,7 +204,7 @@ def test_replay_warning_is_visible_before_play_and_follows_the_source(monkeypatc
         tab.pause()
         assert warning.text() == enabled_with_text[-1]
         tab.stop()
-        assert "端点填充" in warning.text()
+        assert "没有补点" in warning.text()
         assert tab.state == "stopped"
 
         tab.load_file(clean_path)

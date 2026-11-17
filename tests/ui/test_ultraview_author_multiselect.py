@@ -1,7 +1,7 @@
 """M7: one selection truth, one toolbar capability resolver, one history funnel."""
 from __future__ import annotations
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import QPoint, Qt
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication, QLineEdit, QToolButton
 
@@ -842,3 +842,163 @@ def test_repeated_key_nudge_records_only_accepted_intents(qtbot):
     assert _item(harness.board, "note").box.x == note_x
     assert len(sink.undo) == 1
     assert any(str(code).split(":", 1)[0] == "grid_collision" for code in sink.warnings)
+
+
+class _Intents:
+    def __init__(self) -> None:
+        self.items: list[object] = []
+
+    def add(self, intent) -> None:
+        self.items.append(intent)
+
+
+def _pixel_center(board, item) -> QPoint:
+    from mf4_analyzer.ui.chart_stack.ultraview.author_geometry import board_box_to_pixels
+
+    box = item.box
+    mapped = board_box_to_pixels(
+        (box.x, box.y, box.width, box.height),
+        board.metrics(),
+        origin_offset=board.workspace_origin_offset(),
+    )
+    assert mapped is not None
+    return QPoint(
+        int(round(mapped[0] + mapped[2] / 2.0)),
+        int(round(mapped[1] + mapped[3] / 2.0)),
+    )
+
+
+def _show_authors(harness, qtbot, objects):
+    from tests.ui.test_ultraview_page import _prepare_free_grid
+
+    free, _cards = _prepare_free_grid(harness, qtbot, "card-0")
+    harness.board.author_objects = list(objects)
+    harness.page.set_board(harness.board)
+    QApplication.processEvents()
+    return free
+
+
+def test_marquee_selects_free_objects_with_the_card_intersection_rule(qtbot):
+    from PyQt5.QtCore import QRect
+
+    from mf4_analyzer.ui.chart_stack.ultraview.author_geometry import pixel_rects_intersect
+    from tests.ui.test_ultraview_page import _marquee
+
+    harness = _Harness(qtbot)
+    objects = [_shape(f"box-{index}", x=16.0 + index * 5.0, y=8.0) for index in range(5)]
+    free = _show_authors(harness, qtbot, objects)
+    controller = free.author_controller()
+    bounds = [controller._item_pixel_rect(item) for item in objects]
+    assert all(item is not None for item in bounds)
+    samples = (
+        ((0, 0, 10, 10), (9, 9, 4, 4)),
+        ((0, 0, 10, 10), (10, 0, 4, 4)),
+        ((0, 0, 10, 10), (0, 10, 4, 4)),
+        ((2, 3, 0, 8), (0, 0, 6, 6)),
+    )
+    for left, right in samples:
+        assert pixel_rects_intersect(left, right) is QRect(*left).intersects(QRect(*right))
+    _marquee(
+        free,
+        QPoint(bounds[0][0] - 8, bounds[0][1] - 8),
+        QPoint(bounds[-1][0] + bounds[-1][2] - 4, bounds[-1][1] + bounds[-1][3] - 4),
+    )
+    assert free.interaction().author_selection_ids() == {item.object_id for item in objects}
+
+    free.interaction().clear_selection()
+    partial = bounds[0]
+    _marquee(
+        free,
+        QPoint(partial[0] + partial[2] + 8, partial[1] + 4),
+        QPoint(partial[0] + partial[2] - 2, partial[1] + partial[3] - 4),
+    )
+    assert free.interaction().author_selection_ids() == {objects[0].object_id}
+
+    free.interaction().clear_selection()
+    _marquee(
+        free,
+        QPoint(partial[0] - 20, partial[1] + 4),
+        QPoint(partial[0] - 4, partial[1] + partial[3] - 4),
+    )
+    assert free.interaction().author_selection_ids() == set()
+
+    free.interaction().set_selection((AuthorKey(objects[0].object_id),))
+    added = bounds[4]
+    _marquee(
+        free,
+        QPoint(added[0] - 8, added[1] - 8),
+        QPoint(added[0] + added[2] - 4, added[1] + added[3] - 4),
+        shift=True,
+    )
+    assert free.interaction().author_selection_ids() == {
+        objects[0].object_id,
+        objects[4].object_id,
+    }
+
+
+def test_press_on_selected_author_moves_the_group_and_press_outside_replaces_it(qtbot):
+    from mf4_analyzer.ui.chart_stack.ultraview.author_geometry import snap_board_point
+    from mf4_analyzer.ui.chart_stack.ultraview.author_selection import translate_object
+    from tests.ui.test_ultraview_page import _send_mouse_move
+
+    harness = _Harness(qtbot)
+    first = _shape("a", x=16.0, y=8.0)
+    second = _shape("b", x=24.0, y=8.0)
+    third = _shape("c", x=32.0, y=8.0)
+    free = _show_authors(harness, qtbot, [first, second, third])
+    ref = make_ref("time", "card-0")
+    free.interaction().set_selection((CardKey(ref), AuthorKey("a"), AuthorKey("b")))
+    intents = _Intents()
+    free.author_update_requested.connect(intents.add)
+    start = _pixel_center(free, first)
+    pitch_x = free.metrics().exact_pitch()[0]
+    drag = max(3, int(round(0.20 * pitch_x)))
+    QTest.mousePress(free, Qt.LeftButton, Qt.NoModifier, start)
+    selected_authors = {
+        item.object_id for item in free.interaction().selection() if isinstance(item, AuthorKey)
+    }
+    assert selected_authors == {"a", "b"}
+    assert CardKey(ref) in free.interaction().selection()
+    assert free.author_controller().geometry_session["kind"] == "group-move"
+    moved = QPoint(start.x() + drag, start.y())
+    _send_mouse_move(free, moved)
+    session = free.author_controller().geometry_session
+    overrides = dict(free.author_paint_layer().model().geometry_overrides)
+    raw_dx = overrides["a"][1][0] - first.box.x
+    raw_dy = overrides["a"][1][1] - first.box.y
+    snapped = snap_board_point((raw_dx, raw_dy))
+    assert abs((overrides["b"][1][0] - second.box.x) - raw_dx) < 1e-9
+    assert abs((overrides["b"][1][1] - second.box.y) - raw_dy) < 1e-9
+    assert snapped == session["snapped_delta"]
+    assert abs(raw_dx - snapped[0]) > 0.02 or abs(raw_dy - snapped[1]) > 0.02
+    assert "c" not in overrides
+    overlay = free.ghost_overlay()._selection_rects
+    assert free.ghost_overlay()._handles_rect is None
+    member = session["members"][0]
+    drop = free.author_controller()._item_pixel_rect(
+        translate_object(member, snapped[0], snapped[1])
+    )
+    live = free.author_controller()._item_pixel_rect(
+        translate_object(member, raw_dx, raw_dy)
+    )
+    assert (overlay[0].x(), overlay[0].y(), overlay[0].width(), overlay[0].height()) == drop
+    assert live != drop
+    QTest.mouseRelease(free, Qt.LeftButton, Qt.NoModifier, moved)
+    assert len(intents.items) == 1
+    intent = intents.items[0]
+    assert isinstance(intent, AuthorNudgeIntent)
+    assert intent.object_ids == ("a", "b")
+    assert (intent.dx, intent.dy) == snapped
+    assert free.author_controller().geometry_session is None
+    assert free.author_paint_layer().model().geometry_overrides == ()
+
+    free.interaction().set_selection((AuthorKey("a"), AuthorKey("b")))
+    QTest.mousePress(free, Qt.LeftButton, Qt.NoModifier, _pixel_center(free, third))
+    assert free.interaction().author_selection_ids() == {"c"}
+    QTest.mouseRelease(free, Qt.LeftButton, Qt.NoModifier, _pixel_center(free, third))
+
+    free.interaction().set_selection((AuthorKey("a"),))
+    QTest.mousePress(free, Qt.LeftButton, Qt.ShiftModifier, _pixel_center(free, second))
+    assert free.interaction().author_selection_ids() == {"a", "b"}
+    assert free.author_controller().geometry_session is None
+    QTest.mouseRelease(free, Qt.LeftButton, Qt.ShiftModifier, _pixel_center(free, second))

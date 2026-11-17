@@ -2,11 +2,9 @@
 
 Same-axis data passes through as a local float copy. Native callers do not
 rebuild time by sample index. Explicit uniformization computes new values and
-new times. Cross-rate FRF alignment and anti-aliased downsampling stay
-unsupported until F08/F09 are frozen.
-
-This module must not define ``frozen_antialias_design`` or
-``frozen_frf_alignment``.
+new times. Downsampling uses the frozen zero-phase Butterworth design.
+Cross-rate FRF alignment is enabled only for a shared origin and an integer
+ratio onto the lower rate. Other ratios and fractional delays stay unsupported.
 """
 from __future__ import annotations
 
@@ -18,7 +16,12 @@ import math
 import numpy as np
 
 from .signal.numeric_precision import integers_exact_in_float64
+from .signal.filters import FilterSpec, apply as apply_filter, nyquist_guard
 from .signal.spectrogram import DEFAULT_TIME_JITTER_TOLERANCE
+
+_ANTIALIAS_ORDER = 8
+_ANTIALIAS_CUTOFF_RATIO = 0.9
+_ANTIALIAS_STOPBAND_DB = 60.0
 
 
 POLICY_VERSION = "m4-same-axis-2"
@@ -97,7 +100,7 @@ def preflight_prepare(*, sample_count: int, copies: int = 2, dtype_bytes: int = 
 
 
 def batch_stage_facts(*, pair_alignment=None) -> dict:
-    """Facts for the existing batch order. Native anti-alias is not a stage."""
+    """Native anti-alias sits before the user filter. Legacy batch keeps its own path."""
     return {
         "policy_version": POLICY_VERSION,
         "stage_order": [
@@ -105,9 +108,10 @@ def batch_stage_facts(*, pair_alignment=None) -> dict:
             "finite_policy",
             "scale_offset",
             "remove_mean",
+            "antialias_downsample",
             "user_filter",
         ],
-        "native_antialias": "not_inserted",
+        "native_antialias": "explicit_uniform_and_aligned_pair",
         "pair_alignment": None if not pair_alignment else dict(pair_alignment),
     }
 
@@ -292,7 +296,13 @@ def prepare_pair(
         or not math.isclose(left_rate, right_rate, rel_tol=1e-9, abs_tol=0.0)
     )
     if rates_differ or not _clocks_match(left_time_arr, right_time_arr, left_rate):
-        if align_then_compute or rates_differ:
+        if align_then_compute:
+            return _align_uniform_pair(
+                left_values_arr, left_time_arr, right_values_arr, right_time_arr,
+                left_rate, right_rate, facts, source_revision, byte_limit,
+                left_identity, right_identity,
+            )
+        if rates_differ:
             return _pair(
                 "unsupported",
                 "异轴对齐未验证，不能计算相位",
@@ -667,6 +677,244 @@ def _reinterpret(values, time, source_fs, policy, input_count, requested, common
     )
 
 
+def frozen_antialias_design() -> dict:
+    """Zero-phase FFT Butterworth used before a uniform downsample."""
+    return {
+        "order": _ANTIALIAS_ORDER,
+        "cutoff_ratio": _ANTIALIAS_CUTOFF_RATIO,
+        "padding": "odd_reflect",
+        "delay_compensation": 0,
+        "edge_samples": "min(n-1, max(16, n//10))",
+        "stopband_db": _ANTIALIAS_STOPBAND_DB,
+    }
+
+
+def frozen_frf_alignment() -> dict:
+    """Supported cross-rate FRF alignment. Other combinations stay unsupported."""
+    return {
+        "origin": "shared_start",
+        "ratio": "integer_lower_fs",
+        "fractional_delay": "unsupported",
+        "edge_policy": "drop_filter_support",
+        "min_input_fs_band": (0.05, 0.30),
+    }
+
+
+def _filter_edge_count(count: int) -> int:
+    if count < 2:
+        return 0
+    return min(count - 1, max(16, count // 10))
+
+
+def _uniform_declared(time, fs: float) -> bool:
+    count = int(np.asarray(time).shape[0])
+    if count < 2 or not math.isfinite(fs) or fs <= 0:
+        return False
+    axis = np.asarray(time, dtype=np.float64)
+    if not np.all(np.isfinite(axis)) or np.any(np.diff(axis) <= 0):
+        return False
+    step = 1.0 / float(fs)
+    expected = float(axis[0]) + np.arange(count, dtype=np.float64) * step
+    magnitude = max(abs(float(axis[0])), abs(float(axis[-1])), abs(step), 1.0)
+    tolerance = (8.0 * np.finfo(np.float64).eps * magnitude) + (
+        4.0 * count * np.finfo(np.float64).eps * magnitude
+    )
+    return bool(np.all(np.abs(axis - expected) <= tolerance))
+
+
+def _downsample_with_antialias(values, time, source_fs, target_fs, origin, input_count, requested, common):
+    count = int(time.shape[0])
+    edge = _filter_edge_count(count)
+    if edge * 2 >= count - 1:
+        return _reject(
+            "抗混叠边缘支持长度吃掉了有效段",
+            quality="edge",
+            input_count=input_count,
+            requested_range=requested,
+            status="unsupported",
+            method="unsupported",
+            **common,
+        )
+    cutoff = 0.5 * float(target_fs) * _ANTIALIAS_CUTOFF_RATIO
+    spec, _message = nyquist_guard(
+        FilterSpec("low", order=_ANTIALIAS_ORDER, cutoff=cutoff), source_fs,
+    )
+    filtered = apply_filter(np.asarray(values, dtype=np.float64), spec, source_fs)
+    interior_t = np.asarray(time[edge:count - edge], dtype=np.float64)
+    interior_y = np.asarray(filtered[edge:count - edge], dtype=np.float64)
+    grid = _covered_grid(float(origin), float(interior_t[0]), float(interior_t[-1]), target_fs)
+    if grid.size < 2:
+        return _reject(
+            "抗混叠后目标网格不足 2 点",
+            quality="coverage",
+            input_count=input_count,
+            requested_range=requested,
+            **common,
+        )
+    output = np.interp(grid, interior_t, interior_y)
+    return _ready(
+        np.asarray(output, dtype=np.float64),
+        grid,
+        method="antialiased_downsample",
+        source_fs=source_fs,
+        target_fs=float(target_fs),
+        input_count=input_count,
+        requested_range=requested if requested is not None else _range_of(time),
+        effective_range=_range_of(grid),
+        quality="finite",
+        provenance={
+            "value_source": "zero_phase_butterworth",
+            "time_source": "origin_plus_k_over_fs",
+            "bandwidth_claim": True,
+            "resamples_values": True,
+            "origin": float(grid[0]),
+            "antialias": frozen_antialias_design(),
+            "delay_compensation": 0,
+        },
+        **common,
+    )
+
+
+def _align_uniform_pair(
+    left_values, left_time, right_values, right_time,
+    left_rate, right_rate, facts, source_revision, byte_limit,
+    left_identity, right_identity,
+):
+    del byte_limit
+    facts = dict(facts)
+    facts["resampled"] = False
+    if not integers_exact_in_float64(left_values) or not integers_exact_in_float64(right_values):
+        return _pair(
+            "rejected", "整数样本不能精确表示为 float64，未启动对齐计算",
+            "integer_precision", "rejected", facts,
+        )
+    if (
+        left_rate is None or right_rate is None
+        or not _uniform_declared(left_time, left_rate)
+        or not _uniform_declared(right_time, right_rate)
+    ):
+        return _pair(
+            "unsupported",
+            "异轴对齐只接受各自均匀且无缺口的连续量",
+            "unsupported",
+            "unsupported",
+            facts,
+        )
+    origin_scale = max(abs(float(left_time[0])), abs(float(right_time[0])), 1.0)
+    if abs(float(left_time[0]) - float(right_time[0])) > 8.0 * np.finfo(np.float64).eps * origin_scale:
+        return _pair(
+            "unsupported",
+            "两端原点不一致，分数延时未验证，不能对齐",
+            "unsupported",
+            "unsupported",
+            facts,
+        )
+    target = min(float(left_rate), float(right_rate))
+    faster = max(float(left_rate), float(right_rate))
+    ratio = faster / target
+    nearest = int(round(ratio))
+    if nearest < 2 or abs(ratio - nearest) > 1e-6:
+        return _pair(
+            "unsupported",
+            "采样率比率不是大于 1 的整数，未验证的对齐不能计算相位",
+            "unsupported",
+            "unsupported",
+            facts,
+        )
+    if left_rate >= right_rate:
+        fast_values, fast_time, fast_fs = left_values, left_time, left_rate
+        slow_values, slow_time = right_values, right_time
+        fast_is_left = True
+    else:
+        fast_values, fast_time, fast_fs = right_values, right_time, right_rate
+        slow_values, slow_time = left_values, left_time
+        fast_is_left = False
+    edge = _filter_edge_count(int(fast_time.shape[0]))
+    edge_s = edge / float(fast_fs)
+    start = max(float(fast_time[0]), float(slow_time[0])) + edge_s
+    stop = min(float(fast_time[-1]), float(slow_time[-1])) - edge_s
+    if not stop > start:
+        return _pair(
+            "unsupported",
+            "抗混叠边缘支持长度吃掉了有效段",
+            "unsupported",
+            "unsupported",
+            facts,
+        )
+    slow_axis = np.asarray(slow_time, dtype=np.float64)
+    slow_mask = (slow_axis >= start - 1e-12) & (slow_axis <= stop + 1e-12)
+    grid = slow_axis[slow_mask]
+    slow_out = np.asarray(slow_values, dtype=np.float64)[slow_mask]
+    if grid.size < 2:
+        return _pair(
+            "unsupported",
+            "对齐后的共同网格不足 2 点",
+            "unsupported",
+            "unsupported",
+            facts,
+        )
+    cutoff = 0.5 * target * _ANTIALIAS_CUTOFF_RATIO
+    spec, _message = nyquist_guard(
+        FilterSpec("low", order=_ANTIALIAS_ORDER, cutoff=cutoff), fast_fs,
+    )
+    filtered = apply_filter(np.asarray(fast_values, dtype=np.float64), spec, fast_fs)
+    fast_out = np.interp(grid, np.asarray(fast_time, dtype=np.float64), filtered)
+    left_out, right_out = (fast_out, slow_out) if fast_is_left else (slow_out, fast_out)
+    left_fs_out = target
+    common_left = dict(
+        source_id=str(left_identity), physical_id="", source_revision=str(source_revision),
+        segment="", original_values_hash=array_content_hash(np.asarray(left_values)),
+        original_time_hash=array_content_hash(np.asarray(left_time)),
+    )
+    common_right = dict(
+        source_id=str(right_identity), physical_id="", source_revision=str(source_revision),
+        segment="", original_values_hash=array_content_hash(np.asarray(right_values)),
+        original_time_hash=array_content_hash(np.asarray(right_time)),
+    )
+    design = frozen_frf_alignment()
+    provenance = {
+        "value_source": "zero_phase_butterworth" if fast_is_left else "unchanged_samples",
+        "time_source": "lower_rate_grid",
+        "bandwidth_claim": True,
+        "resamples_values": fast_is_left,
+        "origin": float(grid[0]),
+        "alignment": design,
+    }
+    left = _ready(
+        left_out, np.array(grid, dtype=np.float64, copy=True),
+        method="antialiased_lower_fs", source_fs=float(left_rate), target_fs=left_fs_out,
+        input_count=int(np.asarray(left_values).shape[0]),
+        requested_range=_range_of(left_time), effective_range=_range_of(grid),
+        quality="finite", provenance=provenance, **common_left,
+    )
+    right_provenance = dict(provenance)
+    right_provenance["value_source"] = "unchanged_samples" if fast_is_left else "zero_phase_butterworth"
+    right_provenance["resamples_values"] = not fast_is_left
+    right = _ready(
+        right_out, np.array(grid, dtype=np.float64, copy=True),
+        method="antialiased_lower_fs", source_fs=float(right_rate), target_fs=target,
+        input_count=int(np.asarray(right_values).shape[0]),
+        requested_range=_range_of(right_time), effective_range=_range_of(grid),
+        quality="finite", provenance=right_provenance, **common_right,
+    )
+    facts["resampled"] = True
+    facts["rejected_proof"] = ""
+    facts["target_fs"] = target
+    facts["ratio"] = nearest
+    charged = int(left.bytes_charged) + int(right.bytes_charged)
+    return PreparedPair(
+        status="ready",
+        reason="",
+        left=left,
+        right=right,
+        relationship="aligned_lower_fs",
+        alignment_facts=facts,
+        method="antialiased_lower_fs",
+        policy_version=POLICY_VERSION,
+        bytes_charged=charged,
+    )
+
+
 def _explicit_uniform(values, time, source_fs, policy, value_kind, target_fs, origin, gaps, input_count, requested, common):
     del policy
     if value_kind not in {"continuous", "state"}:
@@ -691,17 +939,21 @@ def _explicit_uniform(values, time, source_fs, policy, value_kind, target_fs, or
             requested_range=requested,
             **common,
         )
-    if value_kind == "continuous" and _is_downsample(time_f, source_fs, rate):
-        return _reject(
-            "均匀降采样需要已冻结的抗混叠设计，当前不能启用",
-            quality="antialias",
-            input_count=input_count,
-            requested_range=requested,
-            status="unsupported",
-            method="unsupported",
-            **common,
-        )
     start = float(time_f[0] if origin is None else origin)
+    if value_kind == "continuous" and _is_downsample(time_f, source_fs, rate):
+        if source_fs is None or not _uniform_declared(time_f, float(source_fs)):
+            return _reject(
+                "均匀降采样只接受已声明且落在网格上的连续量",
+                quality="antialias",
+                input_count=input_count,
+                requested_range=requested,
+                status="unsupported",
+                method="unsupported",
+                **common,
+            )
+        return _downsample_with_antialias(
+            values, time_f, float(source_fs), rate, start, input_count, requested, common,
+        )
     grid = _covered_grid(start, float(time_f[0]), float(time_f[-1]), rate)
     if grid.size < 2:
         return _reject("目标网格在有效覆盖内不足 2 点", quality="coverage", input_count=input_count, requested_range=requested, **common)

@@ -168,19 +168,28 @@ def pixel_rects_intersect(
 ) -> bool:
     """Qt ``QRect.intersects`` for integer ``(x, y, width, height)`` rects.
 
-    Empty spans do not intersect. Rects that only share an edge do not either:
-    Qt's right and bottom edges are the inclusive ``origin + span - 1``.
+    The right and bottom edges are exclusive (``origin + span``). Rects that
+    only share an edge do not intersect. A null rect (both spans zero) does
+    not either; a single zero span still can, matching ``QRect``.
     """
     try:
         ax, ay, aw, ah = (int(left[0]), int(left[1]), int(left[2]), int(left[3]))
         bx, by, bw, bh = (int(right[0]), int(right[1]), int(right[2]), int(right[3]))
     except (TypeError, ValueError):
         return False
-    if aw <= 0 or ah <= 0 or bw <= 0 or bh <= 0:
+    if (aw == 0 and ah == 0) or (bw == 0 and bh == 0):
         return False
-    return max(ax, bx) <= min(ax + aw - 1, bx + bw - 1) and max(ay, by) <= min(
-        ay + ah - 1, by + bh - 1
-    )
+    ar, ab = ax + aw, ay + ah
+    br, bb = bx + bw, by + bh
+    if aw < 0:
+        ax, ar = ar, ax
+    if ah < 0:
+        ay, ab = ab, ay
+    if bw < 0:
+        bx, br = br, bx
+    if bh < 0:
+        by, bb = bb, by
+    return ax < br and bx < ar and ay < bb and by < ab
 
 
 def geometry_grid_bounds(

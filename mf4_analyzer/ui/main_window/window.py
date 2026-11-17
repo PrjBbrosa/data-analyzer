@@ -83,6 +83,51 @@ from ._view_mixin import ViewMixin
 _STATUS_HINTS_VISIBLE_SETTINGS_KEY = "quickref/status_hints_visible_v2"
 
 
+def _native_channels_share_clock(loaded) -> bool:
+    """True when every exported series uses the same timestamp vector."""
+    if not loaded:
+        return False
+    first = np.asarray(loaded[0][1].time)
+    return all(np.array_equal(first, np.asarray(series.time)) for _name, series in loaded[1:])
+
+
+def _native_export_has_invalid(loaded) -> bool:
+    for _name, series in loaded:
+        validity = getattr(series, "validity", None)
+        if validity is not None and bool(np.any(np.asarray(validity, dtype=bool))):
+            return True
+    return False
+
+
+def _native_excel_frame(loaded, include_time):
+    """Wide table for one shared valid clock; otherwise one row per sample."""
+    import pandas as pd
+
+    if _native_channels_share_clock(loaded) and not _native_export_has_invalid(loaded):
+        frame = pd.DataFrame()
+        if include_time:
+            frame["Time"] = np.asarray(loaded[0][1].time)
+        for name, series in loaded:
+            frame[name] = np.asarray(series.values)
+        return frame
+    rows = []
+    for name, series in loaded:
+        validity = getattr(series, "validity", None)
+        invalid = (
+            np.zeros(len(series.time), dtype=bool)
+            if validity is None
+            else np.asarray(validity, dtype=bool)
+        )
+        for stamp, value, bad in zip(series.time, series.values, invalid):
+            rows.append({
+                "Channel": name,
+                "Time": stamp,
+                "Value": value,
+                "Invalid": bool(bad),
+            })
+    return pd.DataFrame(rows, columns=["Channel", "Time", "Value", "Invalid"])
+
+
 @dataclass
 class TimePlotSlot:
     """One attempted ``(fid, channel)`` in workspace order.
@@ -1708,10 +1753,8 @@ class MainWindow(
 
     def _fft_trace_for_source(self, fid, ch, time_range=_INSPECTOR_TIME_RANGE):
         fd = self.files.get(fid)
-        if fd is None or ch not in fd.data.columns:
+        if fd is None:
             return None, None
-        t = np.asarray(fd.time_array, dtype=float)
-        sig = np.asarray(fd.data[ch].to_numpy(copy=False), dtype=float)
         if (
             time_range is _INSPECTOR_TIME_RANGE
             and self.inspector.top.range_enabled()
@@ -1719,6 +1762,25 @@ class MainWindow(
             time_range = self.inspector.top.range_values()
         if time_range is _INSPECTOR_TIME_RANGE:
             time_range = None
+        if getattr(fd, "is_native", False):
+            from ...io.file_data import SourceClosedError
+            from ...io.signal_access import SignalAccessError, TimeSpan, read_signal
+            from ..time_xaxis import display_samples
+
+            span = None
+            if time_range is not None:
+                lo, hi = time_range
+                span = TimeSpan(float(lo), float(hi))
+            try:
+                series = read_signal(fd, ch, span=span, representation="physical")
+            except (SignalAccessError, SourceClosedError, TypeError, ValueError):
+                return None, None
+            shown_t, shown_y, _marker, _broken = display_samples(series)
+            return np.asarray(shown_t, dtype=float), np.asarray(shown_y, dtype=float)
+        if ch not in fd.data.columns:
+            return None, None
+        t = np.asarray(fd.time_array, dtype=float)
+        sig = np.asarray(fd.data[ch].to_numpy(copy=False), dtype=float)
         t, sig = self._mask_time_range(t, sig, time_range=time_range)
         return t, sig
 
@@ -3337,12 +3399,14 @@ class MainWindow(
                     seen.add(channel)
                     channel_order.append(channel)
 
+        from ...io.signal_access import channel_in_source
+
         denominator = len(source_fids)
         cands = []
         for channel in channel_order:
             available = sum(
                 1 for fid in source_fids
-                if channel in self.files[fid].data.columns
+                if channel_in_source(self.files[fid], channel)
             )
             cands.append((
                 f"{channel} · {available}/{denominator} 文件可用",
@@ -3362,7 +3426,7 @@ class MainWindow(
                 source = self.files.get(applied.source_fid)
                 if (
                     source is not None
-                    and applied.channel in source.data.columns
+                    and channel_in_source(source, applied.channel)
                 ):
                     source_label = getattr(source, 'short_name', '')
                     cands.append((
@@ -3388,8 +3452,10 @@ class MainWindow(
         # retains the historical fail-closed behaviour when its owner vanishes.
         if spec.resolver == PER_SOURCE_NAME:
             return
+        from ...io.signal_access import channel_in_source
+
         fd = self.files.get(spec.source_fid)
-        if fd is not None and spec.channel in fd.data.columns:
+        if fd is not None and channel_in_source(fd, spec.channel):
             return
         self._custom_xaxis.clear()
         self.inspector.top.set_xaxis_mode('time')
@@ -3598,9 +3664,11 @@ class MainWindow(
                 return
         if not isinstance(key, (tuple, list)) or len(key) != 2:
             return
+        from ...io.signal_access import channel_in_source
+
         fid, channel = str(key[0]), str(key[1])
         fd = self.files.get(fid)
-        if fd is None or channel not in fd.data.columns:
+        if fd is None or not channel_in_source(fd, channel):
             return
         card_for = getattr(self.chart_stack, "_card_for_canvas", None)
         card = card_for(canvas) if callable(card_for) else None
@@ -4142,10 +4210,12 @@ class MainWindow(
                 fd = self.files.get(applied.source_fid)
                 unit = channel_unit(fd, applied.channel) if fd is not None else ''
             else:
+                from ...io.signal_access import channel_in_source
+
                 unit = next((
                     channel_unit(fd, applied.channel)
                     for fd in self.files.values()
-                    if applied.channel in fd.data.columns
+                    if channel_in_source(fd, applied.channel)
                 ), '')
         unit = str(unit).strip()
         unit_token = f'({unit})'
@@ -4731,6 +4801,32 @@ class MainWindow(
             )
         return result
 
+    def _native_channel_statistics(
+        self, fd, channel, range_enabled, range_lo, range_hi,
+    ):
+        """Valid-sample stats for one native channel. Invalid points stay out."""
+        from ...io.file_data import SourceClosedError
+        from ...io.signal_access import SignalAccessError, read_signal
+        from ..time_xaxis import native_sample_statistics
+
+        try:
+            series = read_signal(fd, channel, representation="physical")
+        except (SignalAccessError, SourceClosedError, TypeError, ValueError):
+            return None
+        window = (range_lo, range_hi) if range_enabled else None
+        facts = native_sample_statistics(series, time_range=window)
+        if not facts.get("valid_count"):
+            return None
+        return {
+            "min": facts["min"],
+            "max": facts["max"],
+            "mean": facts["mean"],
+            "rms": facts["rms"],
+            "std": facts["std"],
+            "p2p": facts["p2p"],
+            "unit": facts.get("unit") or "",
+        }
+
     def _build_time_statistics(
         self, checked, range_enabled, range_lo, range_hi,
     ):
@@ -4739,10 +4835,19 @@ class MainWindow(
         Eye visibility is a TimeDomain rendering preference, so hidden checked
         channels intentionally remain in this statistics source set.
         """
+        from ...io.signal_access import channel_in_source
+
         stats = {}
         for fid, channel, _color in checked:
             fd = self.channel_list.get_file_data(fid)
-            if fd is None or channel not in fd.data.columns:
+            if fd is None or not channel_in_source(fd, channel):
+                continue
+            if getattr(fd, "is_native", False):
+                native_stats = self._native_channel_statistics(
+                    fd, channel, range_enabled, range_lo, range_hi,
+                )
+                if native_stats is not None:
+                    stats[fd.get_prefixed_channel(channel)] = native_stats
                 continue
             signal = fd.data[channel].to_numpy(copy=False)
             if range_enabled:
@@ -5324,19 +5429,52 @@ class MainWindow(
                 fid, channels, include_time=include_time, use_range=use_range
             )
 
+    def _exportable_channels(self, fd, channels):
+        from ...io.signal_access import channel_in_source
+        return [
+            ch for ch in (channels or [])
+            if fd is not None and channel_in_source(fd, ch)
+        ]
+
+    def _load_native_export_series(self, fd, channels, use_range):
+        from ...io.file_data import SourceClosedError
+        from ...io.signal_access import SignalAccessError, TimeSpan, read_signal
+
+        span = None
+        if use_range:
+            lo, hi = self.inspector.top.range_values()
+            span = TimeSpan(float(lo), float(hi))
+        loaded = []
+        for channel in channels:
+            try:
+                series = read_signal(
+                    fd, channel, span=span, representation="physical",
+                )
+            except (SignalAccessError, SourceClosedError, TypeError, ValueError):
+                continue
+            loaded.append((channel, series))
+        return loaded
+
     def _do_export_excel(self, fid, channels, include_time, use_range):
         """Write the given channels of file ``fid`` to an Excel file. Invoked
         by the channel-editor's 导出 section (export_requested). Time column and
-        time-range filter mirror the former toolbar-export behavior."""
+        time-range filter mirror the former toolbar-export behavior.
+
+        A native source keeps each channel clock. Channels that share one time
+        vector and have no invalid samples stay a wide table. Anything else is
+        a long table of channel, time, value and invalid flag.
+        """
         from pathlib import Path
         from PyQt5.QtWidgets import QFileDialog, QMessageBox
         import pandas as pd
         fd = self.files.get(fid)
-        requested_channels = channels or []
-        valid_channels = [
-            ch for ch in requested_channels
-            if fd is not None and ch in fd.data.columns
-        ]
+        valid_channels = self._exportable_channels(fd, channels)
+        native_loaded = None
+        if fd is not None and getattr(fd, "is_native", False):
+            native_loaded = self._load_native_export_series(
+                fd, valid_channels, use_range,
+            )
+            valid_channels = [channel for channel, _series in native_loaded]
         if fd is None or not valid_channels:
             self.toast("没有可导出的数据或未勾选通道", "warning")
             return
@@ -5344,15 +5482,18 @@ class MainWindow(
         if not fp:
             return
         try:
-            df = pd.DataFrame()
-            if include_time and fd.time_array is not None:
-                df['Time'] = fd.time_array
-            for ch in valid_channels:
-                df[ch] = fd.data[ch].values
-            if use_range and fd.time_array is not None:
-                lo, hi = self.inspector.top.range_values()
-                m = (fd.time_array >= lo) & (fd.time_array <= hi)
-                df = df.loc[m].reset_index(drop=True)
+            if native_loaded is not None:
+                df = _native_excel_frame(native_loaded, include_time)
+            else:
+                df = pd.DataFrame()
+                if include_time and fd.time_array is not None:
+                    df['Time'] = fd.time_array
+                for ch in valid_channels:
+                    df[ch] = fd.data[ch].values
+                if use_range and fd.time_array is not None:
+                    lo, hi = self.inspector.top.range_values()
+                    m = (fd.time_array >= lo) & (fd.time_array <= hi)
+                    df = df.loc[m].reset_index(drop=True)
             df.to_excel(fp, index=False, engine='openpyxl')
             self._status_message(
                 f"导出完成: {Path(fp).name} ({len(df)} 行 × {len(df.columns)} 列)"
@@ -5377,28 +5518,38 @@ class MainWindow(
         from ...io.wwt_export import WwtExportError, export_wwt
 
         fd = self.files.get(fid)
-        requested_channels = channels or []
-        valid_channels = [
-            ch for ch in requested_channels
-            if fd is not None and ch in fd.data.columns
-        ]
+        valid_channels = self._exportable_channels(fd, channels)
         if fd is None or not valid_channels:
             self.toast("没有可导出的数据或未勾选通道", "warning")
             return
-        if fd.time_array is None or len(fd.time_array) < 2:
-            self.toast("当前文件没有可用时间轴，无法导出 WWT", "warning")
-            return
-
-        t = np.asarray(fd.time_array, dtype=np.float64)
-        series = {
-            ch: np.asarray(fd.data[ch].values, dtype=np.float64)
-            for ch in valid_channels
-        }
-        if use_range:
-            lo, hi = self.inspector.top.range_values()
-            mask = (t >= lo) & (t <= hi)
-            t = t[mask]
-            series = {ch: arr[mask] for ch, arr in series.items()}
+        if getattr(fd, "is_native", False):
+            loaded = self._load_native_export_series(fd, valid_channels, use_range)
+            if not loaded:
+                self.toast("没有可导出的数据或未勾选通道", "warning")
+                return
+            if not _native_channels_share_clock(loaded) or _native_export_has_invalid(loaded):
+                self.toast("这些通道没有一条共同的有效时间轴，不能收成 WWT", "warning")
+                return
+            t = np.asarray(loaded[0][1].time, dtype=np.float64)
+            series = {
+                ch: np.asarray(item.values, dtype=np.float64)
+                for ch, item in loaded
+            }
+            valid_channels = [ch for ch, _item in loaded]
+        else:
+            if fd.time_array is None or len(fd.time_array) < 2:
+                self.toast("当前文件没有可用时间轴，无法导出 WWT", "warning")
+                return
+            t = np.asarray(fd.time_array, dtype=np.float64)
+            series = {
+                ch: np.asarray(fd.data[ch].values, dtype=np.float64)
+                for ch in valid_channels
+            }
+            if use_range:
+                lo, hi = self.inspector.top.range_values()
+                mask = (t >= lo) & (t <= hi)
+                t = t[mask]
+                series = {ch: arr[mask] for ch, arr in series.items()}
         if len(t) < 2:
             QMessageBox.warning(
                 self,
