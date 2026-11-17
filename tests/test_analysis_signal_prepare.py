@@ -6,6 +6,7 @@ import hashlib
 import numpy as np
 import pytest
 
+from mf4_analyzer.analysis_signal_prepare import prepare_signal
 from mf4_analyzer.analysis_time_axis import prepare_analysis_time_axis
 from mf4_analyzer.signal.fft import one_sided_amplitude
 from mf4_analyzer.signal.frf import FrfParams, compute_frf
@@ -459,3 +460,33 @@ def test_native_loader_does_not_index_rebuild_a_uniform_channel(tmp_path):
     assert rejected.values is None
     rebuilt, _fs, _facts = prepare_analysis_time_axis(uneven, fs)
     assert rejected.time is None or not np.allclose(rejected.time, rebuilt)
+
+
+@pytest.mark.parametrize('dtype,value,exact', [
+    ('i8', 2**53-1, True), ('i8', 2**53, True), ('i8', 2**53+1, False),
+    ('i8', 2**53+2, True), ('i8', 2**53+3, False), ('i8', 2**53+5, False),
+    ('i8', -(2**53+1), False), ('i8', -(2**53+2), True),
+    ('i8', -(2**63), True), ('i8', 2**63-1, False),
+    ('u8', 2**64-1, False), ('u8', 2**64-2048, True),
+])
+def test_native_integer_float64_representation(dtype, value, exact):
+    raw = np.array([value, value], dtype=dtype)
+    before = raw.tobytes()
+    prepared = prepare_signal(raw, np.array([0., 1.]), fs=1.)
+    assert (prepared.status == 'ready') is exact
+    if exact:
+        assert all(int(v) == value for v in prepared.values)
+        assert prepared.provenance['compute_dtype'] == 'float64'
+    else:
+        assert prepared.quality == 'integer_precision'
+        assert 'float64' in prepared.reason
+        assert prepared.values is None
+    assert raw.tobytes() == before
+
+
+def test_native_precision_checks_only_requested_samples_and_keeps_legacy_policy():
+    raw = np.array([2**53+3, 2, 3], dtype=np.int64)
+    selected = prepare_signal(raw, np.arange(3.), fs=1., requested_range=(1., 2.))
+    assert selected.status == 'ready'
+    np.testing.assert_array_equal(selected.values, [2., 3.])
+    assert prepare_signal(raw, np.arange(3.), fs=1., policy='legacy').status == 'ready'

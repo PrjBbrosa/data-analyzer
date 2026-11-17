@@ -392,3 +392,46 @@ def test_repeated_display_names_survive_transport(tmp_path):
         for name in names
     }
     assert sorted(values.values()) == [[0.0, 5.0], [1.0, 0.0]]
+
+
+@pytest.mark.parametrize('version', ['2.14', '3.30', '4.10'])
+@pytest.mark.parametrize('count', [0, 1, 8])
+def test_versions_preserve_scalar_dtype_conversion_and_broker(tmp_path, version, count):
+    from asammdf import MDF, Signal
+    from mf4_analyzer.io.signal_access import read_signal
+
+    time = np.arange(count, dtype=float) / 4
+    expected = {}
+    with MDF(version=version) as mdf:
+        signals = []
+        for dtype in ['<i2', '>u4', '<f4', '>f8']:
+            for converted in [False, True]:
+                name = f'ch{len(signals)}'
+                raw = np.arange(count, dtype=np.dtype(dtype))
+                expected[name] = (raw, converted)
+                signals.append(Signal(raw, time, name=name, unit='V',
+                    conversion={'a': 2., 'b': 3.} if converted else None))
+        mdf.append(signals)
+        path = Path(mdf.save(tmp_path / 'version.mdf', overwrite=True))
+    digest = _sha256(path)
+    # A refused request must not poison the next real child/transport.
+    with pytest.raises(ImportProcessError) as caught:
+        run_import('load_mf4_native', path, limits=replace(default_limits(), max_output_bytes=1))
+    assert caught.value.code == 'resource_limit'
+    fd = run_import('load_mf4_native', path)
+    assert fd.is_native
+    for name, (raw, converted) in expected.items():
+        got = read_signal(fd, name, representation='raw')
+        physical = read_signal(fd, name)
+        np.testing.assert_array_equal(got.time, time)
+        np.testing.assert_array_equal(got.values, raw)
+        assert got.values.dtype.kind == raw.dtype.kind
+        assert got.values.dtype.itemsize == raw.dtype.itemsize
+        np.testing.assert_array_equal(physical.values, raw * 2 + 3 if converted else raw)
+        assert physical.unit == 'V'
+        assert not got.values.flags.writeable
+        if not converted:
+            channel = fd.native_store.channel(name)
+            assert channel.raw is channel.physical
+    assert _sha256(path) == digest
+    fd.close_source()

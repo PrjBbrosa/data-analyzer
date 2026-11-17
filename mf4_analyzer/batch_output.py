@@ -894,16 +894,22 @@ def _segment_of(segments, index) -> int:
     return 0
 
 
-def _series_rows(source, read_signal):
+def _series_rows(source, read_signal, channels=None, staged=None):
     store = source.native_store
     rows = []
     grouped = {}
-    for name in store.public_names():
-        channel = store.channel(name)
-        if channel.support_status != "numeric":
-            continue
-        series = read_signal(source, name, representation="physical")
-        grouped.setdefault(channel.axis_id, []).append((name, series))
+    from .io.signal_access import read_logical_channel, SignalAccessError
+    for name in store.public_names() if channels is None else channels:
+        try:
+            if staged and name in staged:
+                series = read_logical_channel(staged[name])
+            else:
+                if channels is None and store.channel(name).support_status != "numeric":
+                    continue
+                series = read_signal(source, name, representation="physical")
+        except SignalAccessError as exc:
+            raise NativeExportError(str(exc)) from exc
+        grouped.setdefault(series.axis_id, []).append((name, series))
         validity = None if series.validity is None else np.asarray(series.validity, dtype=bool)
         for index, (time, value) in enumerate(zip(series.time, series.values)):
             invalid = validity is not None and bool(validity[index])
@@ -914,7 +920,7 @@ def _series_rows(source, read_signal):
                 "time": time,
                 "value": value,
                 "valid": not invalid,
-                "axis_id": channel.axis_id,
+                "axis_id": series.axis_id,
             })
     return rows, grouped
 
@@ -1039,7 +1045,7 @@ def _interpolate(series, stamp):
     return float(left_value) + (float(right_value) - float(left_value)) * weight
 
 
-def export_native_samples(source, path, *, layout="long", grid=None,
+def export_native_samples(source, path, *, layout="long", grid=None, channels=None, staged=None,
                           max_data_rows: int = _XLSX_MAX_DATA_ROWS) -> NativeExportResult:
     """Write original samples as a long table or one table per shared axis.
 
@@ -1052,7 +1058,7 @@ def export_native_samples(source, path, *, layout="long", grid=None,
     if target.suffix.lower() in {".png", ".pdf", ".svg"}:
         raise NativeExportError("PNG/PDF 维持原来的渲染导出，不能当作原始数值表")
     file_data, _store, read_signal = _export_source(source)
-    rows, grouped = _series_rows(file_data, read_signal)
+    rows, grouped = _series_rows(file_data, read_signal, channels, staged)
     layout = str(layout or "long")
     if layout == "uniform":
         if grid is None:
@@ -1067,6 +1073,10 @@ def export_native_samples(source, path, *, layout="long", grid=None,
         else:
             paths = (_write_csv(target if target.suffix.lower() == ".csv" else target.with_suffix(".csv"), header, records, comment),)
         return NativeExportResult(paths, kind, layout, notes)
+    logical = channels is not None and any(
+        name in file_data.logical_channels or name in (staged or {}) for name in channels
+    )
+    kind = "logical_samples" if logical else "original_samples"
     if layout == "coaxial":
         notes = ("同轴分组保留各时钟自己的时间和有效性，没有把其他时钟补进同一张表。",)
         paths = []
@@ -1097,12 +1107,13 @@ def export_native_samples(source, path, *, layout="long", grid=None,
         if sheets:
             written, notes = _write_xlsx(target, sheets, notes, max_data_rows)
             paths = [written]
-        return NativeExportResult(tuple(paths), "original_samples", layout, notes)
+        return NativeExportResult(tuple(paths), kind, layout, notes)
     if layout != "long":
         raise NativeExportError(f"未知导出布局 {layout!r}")
     header = ["channel", "record", "segment", "time", "value", "valid"]
     notes = ("原始采样长表，每条记录保留自己的时间和有效性。",)
-    kind = "original_samples"
+    if logical:
+        notes = ("所选逻辑通道，含派生数值；各通道保留自己的时间和有效性。",)
     if target.suffix.lower() == ".xlsx":
         written, notes = _write_xlsx(target, [("原始采样", header, rows)], notes, max_data_rows)
         return NativeExportResult((written,), kind, layout, notes)

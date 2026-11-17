@@ -885,6 +885,7 @@ def _patch_message_boxes(monkeypatch, on_resource):
     shown, critical = [], []
 
     def drive(self):
+        self._captured_text = self._text_label.text()
         shown.append(self)
         on_resource(self)
         if self.message_result is None:
@@ -1259,8 +1260,8 @@ def test_project_restore_and_batch_dbc_use_the_resource_dialog(
     window.open_project(project)
     qtbot.waitUntil(lambda: not window._imports.busy, timeout=15000)
     assert len(shown) == 1 and not critical
-    assert shown[0]._text_label.text() == resource_user_text(exc)
-    assert "shared-axis" not in shown[0]._text_label.text()
+    assert shown[0]._captured_text == resource_user_text(exc)
+    assert "shared-axis" not in shown[0]._captured_text
     assert calls[before:] == ["restore.csv"]
     assert not window.files
 
@@ -1280,6 +1281,75 @@ def test_project_restore_and_batch_dbc_use_the_resource_dialog(
     qtbot.waitUntil(lambda: not window._imports.busy, timeout=15000)
     assert calls == ["read_blf_frames"]
     assert len(shown) == 2
-    assert shown[-1]._text_label.text() == resource_user_text(exc)
+    assert shown[-1]._captured_text == resource_user_text(exc)
     assert not critical
     assert resolved == []
+
+
+@pytest.mark.parametrize('outcome', ['success', 'error', 'cancel', 'invalidate_session'])
+def test_completed_call_releases_bound_transform_and_large_kwargs(qapp, qtbot, monkeypatch, outcome):
+    import weakref
+    import numpy as np
+    from PyQt5 import sip
+
+    # A synchronous diagnostic handler, like production. pytest's capturing
+    # handlers retain traceback frames (and their arrays) until test teardown.
+    import io
+    import logging
+    sink = io.StringIO()
+    diagnostic = logging.Logger("import-lifetime-test")
+    diagnostic.addHandler(logging.StreamHandler(sink))
+    monkeypatch.setattr("mf4_analyzer.ui.main_window.import_coordinator.logger", diagnostic)
+
+    class Host(QWidget):
+        def transform(self, path, result):
+            return result
+
+    host = Host()
+    payload = np.arange(1024.)
+    host_ref, payload_ref = weakref.ref(host), weakref.ref(payload)
+    entered, release = Event(), Event()
+    terminals = []
+
+    def broker(method, path, **kwargs):
+        entered.set()
+        assert release.wait(3)
+        if outcome == 'error':
+            raise ValueError('bad data')
+        return 1
+
+    def workflow(request, transform=host.transform, frames=payload):
+        yield ImportCall('load_can', 'frames', kwargs={'frames': frames}, transform=transform)
+
+    owner = ImportCoordinator(host, broker=broker)
+    owner.finished.connect(lambda request_id, status, value: terminals.append(status))
+    owner.submit(workflow)
+    del workflow, payload
+    try:
+        qtbot.waitUntil(entered.is_set)
+        if outcome in ('cancel', 'invalidate_session'):
+            getattr(owner, outcome)()
+        release.set()
+        qtbot.waitUntil(lambda: not owner.busy)
+        _drain_lifecycle_deletes()
+        assert payload_ref() is None
+        if outcome == "error":
+            assert "bad data" in sink.getvalue()
+            assert owner.failures[-1]["detail"] == "bad data"
+        assert len(terminals) == 1
+        # The next request still runs, independently of retired call cleanup.
+        def next_workflow(request):
+            yield ImportCall('load_csv', 'next')
+        owner.submit(next_workflow)
+        qtbot.waitUntil(lambda: not owner.busy)
+        assert len(terminals) == 2
+        owner.shutdown()
+        host.close()
+        del host
+        _drain_lifecycle_deletes()
+        assert host_ref() is None
+    finally:
+        release.set()
+        if host_ref() is not None and not sip.isdeleted(host_ref()):
+            host_ref().deleteLater()
+        _drain_lifecycle_deletes()

@@ -32,7 +32,7 @@ from PyQt5.QtGui import QColor, QPalette
 from ...io.channel_edit_log import (
     REASON_TEXT,
     ChannelEditLog,
-    evaluate_native_entry,
+    evaluate_native_channel,
 )
 from ...signal.channel_recipe import (
     RecipeError,
@@ -100,6 +100,7 @@ class ChannelEditorDialog(QDialog):
         )
         self.fd = self._files.get(self.current_fid)
         self.new_channels = {}
+        self._native_staged = {}
         self.removed_channels = set()
         self._edit_log = ChannelEditLog()
         self._expr_check_token = 0
@@ -508,6 +509,7 @@ class ChannelEditorDialog(QDialog):
         self.current_fid = fid
         self.fd = self._files.get(fid)
         self.new_channels = {}
+        self._native_staged = {}
         self.removed_channels = set()
         self._edit_log = ChannelEditLog()
         self._populate_channels()
@@ -729,7 +731,7 @@ class ChannelEditorDialog(QDialog):
     def _stored_name(self, name) -> bool:
         """True only for a name that already belongs to the file, not a staged derive."""
         if self._is_native_file():
-            return name in set(self.fd.native_store.public_names())
+            return name in set(self.fd.get_signal_channels())
         return name in self.fd.data.columns or name in self.fd.channels
 
     def _column_exists(self, name) -> bool:
@@ -779,9 +781,7 @@ class ChannelEditorDialog(QDialog):
                     axis="inherit", representation="physical",
                     source_revision=self.fd.native_store.revision,
                 )
-                values, _time, _axis, _representation = evaluate_native_entry(
-                    self.fd, entry, staged=self.new_channels,
-                )
+                values = self._evaluate_native(entry)
             else:
                 entry = make_single(name, self._unit_of(src), fn, src, param)
                 values = evaluate_derive(entry, self.fd.time_array, self._channel_signal)
@@ -838,28 +838,47 @@ class ChannelEditorDialog(QDialog):
 
     def _channel_signal(self, name):
         """Signal for a channel name, including ones staged in this session."""
+        if self._is_native_file():
+            from ...io.signal_access import read_logical_channel, read_signal
+            from ...signal.numeric_precision import integers_exact_in_float64
+            series = (read_logical_channel(self._native_staged[name])
+                      if name in self._native_staged else read_signal(self.fd, name))
+            if not integers_exact_in_float64(series.values):
+                raise ExpressionError("整数样本不能精确表示为 float64，未启动试算")
+            values = np.array(series.values, dtype=float, copy=True)
+            if series.validity is not None:
+                values[series.validity] = np.nan
+            return values
         if name in self.new_channels:
             return np.asarray(self.new_channels[name][0], dtype=float)
-        if self._is_native_file():
-            from ...io.signal_access import read_signal
-            series = read_signal(self.fd, name, representation="physical")
-            return np.asarray(series.values, dtype=float)
         return self.fd.data[name].values.astype(float)
+
+    def reject(self):
+        self._invalidate_expression_check()
+        self.new_channels.clear()
+        self._native_staged.clear()
+        self.removed_channels.clear()
+        self._edit_log = ChannelEditLog()
+        super().reject()
 
     def _unique_name(self, name):
         while self._column_exists(name):
             name += "_1"
         return name
 
+    def _evaluate_native(self, entry):
+        record = evaluate_native_channel(self.fd, entry, staged=self._native_staged)
+        self._native_staged[entry.name] = record
+        return record["values"]
+
     def _staged_axis(self, name):
-        if not self._is_native_file():
+        if not self._is_native_file() or not name:
             return None
-        found = self._edit_log.active_derive(name)
-        if found is not None and found.axis and found.axis != "inherit":
-            return found.axis
-        if name in set(self.fd.native_store.public_names()):
-            return self.fd.native_store.channel(name).axis_id
-        return None
+        from ...io.signal_access import read_signal
+        record = self._native_staged.get(name)
+        if record is not None:
+            return record["axis_id"]
+        return read_signal(self.fd, name).axis_id
 
     def _export_native_channels(self, channels):
         """Original-sample export. A shared-time sheet is not offered here."""
@@ -894,13 +913,16 @@ class ChannelEditorDialog(QDialog):
         if not path:
             return
         try:
-            result = export_native_samples(self.fd, path, layout=layout)
+            result = export_native_samples(
+                self.fd, path, layout=layout, channels=channels, staged=self._native_staged,
+            )
         except NativeExportError as exc:
             QMessageBox.warning(self, "无法导出", str(exc))
             return
         QMessageBox.information(
             self, "导出完成",
-            "已写出原始采样：" + "、".join(item.name for item in result.paths),
+            ("已写出所选逻辑通道：" if result.kind == "logical_samples" else "已写出原始采样：")
+            + "、".join(item.name for item in result.paths),
         )
 
     def _register_new(self, name, values, unit):
@@ -1007,10 +1029,13 @@ class ChannelEditorDialog(QDialog):
                 axes = [item for item in axes if item]
                 if len(set(axes)) != 1:
                     raise ExpressionError("跨时钟：请指定目标轴、对齐方法和段。当前未应用")
-                axis = self.fd.native_store.axis(axes[0])
-                if len(axis.segments) > 1:
+                from ...io.signal_access import read_logical_channel, read_signal
+                name = self.combo_a.currentText() or self.combo_b.currentText()
+                series = (read_logical_channel(self._native_staged[name])
+                          if name in self._native_staged else read_signal(self.fd, name))
+                if len(series.segments) > 1:
                     raise ExpressionError("已知缺口不能跨接。请选择段后再计算")
-                t = np.array(axis.values, copy=True)
+                t = np.array(series.time, copy=True)
             else:
                 t = np.array(self.fd.time_array, copy=True)
             channels = {}
@@ -1089,9 +1114,7 @@ class ChannelEditorDialog(QDialog):
                         representation="physical",
                         source_revision=self.fd.native_store.revision,
                     )
-                    values, _time, _axis, _representation = evaluate_native_entry(
-                        self.fd, entry, staged=self.new_channels,
-                    )
+                    values = self._evaluate_native(entry)
                 else:
                     entry = make_expression(name, "", expr, left, right)
                     values = evaluate_derive(entry, self.fd.time_array, self._channel_signal)
@@ -1143,9 +1166,7 @@ class ChannelEditorDialog(QDialog):
                     representation="physical",
                     source_revision=self.fd.native_store.revision,
                 )
-                values, _time, _axis, _representation = evaluate_native_entry(
-                    self.fd, entry, staged=self.new_channels,
-                )
+                values = self._evaluate_native(entry)
             else:
                 entry = make_dual(name, unit, _DUAL_FNS[op], ch_a, ch_b)
                 values = evaluate_derive(entry, self.fd.time_array, self._channel_signal)
@@ -1176,6 +1197,7 @@ class ChannelEditorDialog(QDialog):
         self.removed_channels.update(on_file)
         for name in sel:
             self.new_channels.pop(name, None)
+            self._native_staged.pop(name, None)
         remove = set(sel)
         for row in range(self.list_export.count() - 1, -1, -1):
             if self.list_export.item(row).text() in remove:

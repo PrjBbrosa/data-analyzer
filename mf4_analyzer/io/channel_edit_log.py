@@ -12,6 +12,8 @@ will disagree.
 from __future__ import annotations
 
 import logging
+import hashlib
+import json
 
 import numpy as np
 
@@ -42,7 +44,8 @@ REASON_TEXT = {
     "identity_unresolved": "物理通道不在当前来源，不能按显示名替补",
     "unapplied": "配方保持未应用",
     "alignment_unfrozen": "对齐方法尚未冻结，保持未应用",
-    "integer_precision": "原始整数超过 2^53，不能先变成浮点再计算",
+    "byte_limit": "派生副本超过字节预算，未创建通道",
+    "integer_precision": "整数样本不能精确表示为 float64，未创建通道",
 }
 
 
@@ -232,32 +235,7 @@ def _is_native(fd) -> bool:
 
 
 def _ensure_catalog(fd):
-    catalog = getattr(fd, "logical_channels", None)
-    if not isinstance(catalog, dict):
-        catalog = {}
-        fd.logical_channels = catalog
-    hidden = getattr(fd, "logical_hidden", None)
-    if not isinstance(hidden, set):
-        hidden = set(hidden or ())
-        fd.logical_hidden = hidden
-    return catalog, hidden
-
-
-def _install_logical_view(fd):
-    """List derived and hidden names without editing ``file_data.py``."""
-    if getattr(fd, "_native_logical_view", False):
-        return
-    original = fd.get_signal_channels
-
-    def listed():
-        names = [name for name in original() if name not in fd.logical_hidden]
-        for name in fd.logical_channels:
-            if name not in names and name not in fd.logical_hidden:
-                names.append(name)
-        return names
-
-    fd.get_signal_channels = listed
-    fd._native_logical_view = True
+    return fd.logical_channels, fd.logical_hidden
 
 
 def _segment_count(series) -> int:
@@ -272,32 +250,28 @@ def _invalid_mask(series):
 
 
 def _too_wide_integer(values) -> bool:
-    array = np.asarray(values)
-    if array.dtype.kind not in "iu":
-        return False
-    if array.size == 0:
-        return False
-    return bool(np.max(np.abs(array.astype(object))) > 2 ** 53)
+    from ..signal.numeric_precision import integers_exact_in_float64
+    return not integers_exact_in_float64(values)
 
 
 def _native_series(fd, name, representation, segment, staged):
     from .signal_access import SignalAccessError, read_signal
 
-    if staged and name in staged:
-        values, _unit = staged[name]
-        array = np.asarray(values)
-        if _too_wide_integer(array):
-            raise RecipeError("integer_precision")
-        return array, None, 1, ""
     try:
-        series = read_signal(
-            fd, name, representation=representation or "physical", segment=segment,
-        )
+        if staged and name in staged:
+            from .signal_access import read_logical_channel
+            record = staged[name]
+            if not isinstance(record, dict) or "time" not in record:
+                raise RecipeError("time_unavailable")
+            series = read_logical_channel(record, segment=segment, representation=representation)
+        else:
+            series = read_signal(
+                fd, name, representation=representation or "physical", segment=segment,
+            )
     except SignalAccessError as exc:
-        text = str(exc)
-        if "segment" in text:
-            raise RecipeError("known_gap", text) from exc
-        raise RecipeError("missing_input") from exc
+        if "segment" in str(exc):
+            raise RecipeError("known_gap", str(exc)) from exc
+        raise RecipeError("missing_input", str(exc)) from exc
     values = series.values
     if _too_wide_integer(values):
         raise RecipeError("integer_precision")
@@ -305,17 +279,18 @@ def _native_series(fd, name, representation, segment, staged):
 
 
 def _axis_of(fd, name, staged):
-    catalog, _hidden = _ensure_catalog(fd)
-    if name in catalog and catalog[name].get("axis_id"):
-        return catalog[name]["axis_id"]
     if staged and name in staged:
-        return ""
+        return staged[name]["axis_id"]
+    if name in fd.logical_channels:
+        return fd.logical_channels[name]["axis_id"]
     return fd.native_store.channel(name).axis_id
 
 
-def evaluate_native_entry(fd, entry, staged=None):
-    """Compute one native recipe. Does not modify raw arrays or the catalog."""
-    from ..signal.channel_recipe import DeriveEntry, derive_from_dict
+def evaluate_native_channel(fd, entry, staged=None):
+    """Return one complete, immutable recipe result, for staging or replay."""
+    from ..signal.channel_recipe import derive_from_dict
+    from .native_signal_store import NativeContractError, build_segments
+    from ..analysis_signal_prepare import DEFAULT_PREPARE_BYTE_LIMIT, preflight_prepare
 
     if not isinstance(entry, DeriveEntry):
         entry = derive_from_dict(entry)
@@ -324,74 +299,90 @@ def evaluate_native_entry(fd, entry, staged=None):
     store = fd.native_store
     if entry.source_revision and entry.source_revision != store.revision:
         raise RecipeError("source_changed")
-    if entry.input_tokens:
-        from .native_signal_store import NativeContractError
-
-        for token in entry.input_tokens:
-            try:
-                store.channel(token)
-            except NativeContractError as exc:
-                raise RecipeError("identity_unresolved") from exc
+    for token in entry.input_tokens or ():
+        try:
+            store.channel(token)
+        except NativeContractError as exc:
+            raise RecipeError("identity_unresolved") from exc
     representation = entry.representation or "physical"
-    if entry.kind == "single":
-        series, _mask, segments, _name = _native_series(
-            fd, entry.src, representation, entry.segment, staged,
-        )
-        if not isinstance(series, np.ndarray) and segments > 1 and entry.segment is None and entry.fn in {"derivative", "integral"}:
-            raise RecipeError("known_gap")
-        time = series if isinstance(series, np.ndarray) else series.time
-        values = series if isinstance(series, np.ndarray) else series.values
-        produced = evaluate_derive(
-            entry, time, lambda key, values=values: values,
-        )
-        axis_id = _axis_of(fd, entry.src, staged)
-        return produced, time, axis_id, representation
-    if entry.method not in {None, "direct"}:
-        raise RecipeError("alignment_unfrozen")
-    names = [name for name in entry.inputs() if name]
-    axes = {_axis_of(fd, name, staged) for name in names}
-    if entry.method != "direct" or len(axes) != 1 or "" in axes and len(names) > 1:
-        if len(axes) != 1:
+    names = list(dict.fromkeys(entry.inputs()))
+    if not names:
+        raise RecipeError("time_unavailable")
+    inputs = {name: _native_series(fd, name, representation, entry.segment, staged)[0]
+              for name in names}
+    first = inputs[names[0]]
+    axis_id = _axis_of(fd, names[0], staged)
+    if entry.kind != "single":
+        if entry.method not in {None, "direct"}:
+            raise RecipeError("alignment_unfrozen")
+        if entry.method != "direct" or any(_axis_of(fd, name, staged) != axis_id for name in names):
             raise RecipeError("cross_clock")
-        raise RecipeError("cross_clock")
-    left, _mask, segments, _name = _native_series(
-        fd, names[0], representation, entry.segment, staged,
-    )
-    if not isinstance(left, np.ndarray) and segments > 1 and entry.segment is None:
+    for series in inputs.values():
+        if series.values.ndim != 1 or series.values.shape != first.time.shape:
+            raise RecipeError("length_mismatch")
+        if not np.array_equal(series.time, first.time):
+            raise RecipeError("cross_clock")
+    # Reuse the native prepare admission policy before recipe copies. Existing
+    # applied/staged results consume the same bounded working-set allowance.
+    retained = {id(record[key]): record[key].nbytes
+                for record in (*fd.logical_channels.values(), *(staged or {}).values())
+                for key in ("time", "values", "validity") if record[key] is not None}
+    decision = preflight_prepare(sample_count=len(first.time), copies=4 + len(inputs),
+                                byte_limit=DEFAULT_PREPARE_BYTE_LIMIT - sum(retained.values()))
+    if not decision["admitted"]:
+        raise RecipeError("byte_limit")
+    invalid = np.zeros(first.time.shape, dtype=bool)
+    for series in inputs.values():
+        invalid |= ~np.isfinite(series.values)
+        if series.validity is not None:
+            if series.validity.shape != series.values.shape:
+                raise RecipeError("length_mismatch")
+            invalid |= series.validity
+    neighborhood = entry.kind == "single" and entry.fn in {"derivative", "integral", "moving_avg"}
+    if neighborhood and (len(first.segments) > 1 or invalid.any()):
         raise RecipeError("known_gap")
-    time = left if isinstance(left, np.ndarray) else left.time
+    def lookup(name):
+        series = inputs[name]
+        if invalid.any():
+            values = np.array(series.values, dtype=float, copy=True)
+            values[invalid] = np.nan
+            return values
+        return series.values
+    produced = evaluate_derive(entry, first.time, lookup)
+    if produced.shape != first.time.shape:
+        raise RecipeError("length_mismatch")
+    invalid |= ~np.isfinite(produced)
+    if invalid.any():
+        produced[invalid] = np.nan
+    produced.setflags(write=False)
+    invalid.setflags(write=False)
+    payload = {"recipe": entry.to_dict(), "inputs": [s.revision for s in inputs.values()],
+               "axis": axis_id, "policy": "native-derived-1"}
+    revision = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+    # A segment result has its own extent even when it inherits the source clock.
+    if entry.segment is not None:
+        axis_id = f"{axis_id}:segment:{entry.segment}"
+    return dict(time=first.time, values=produced, validity=invalid if invalid.any() else None,
+                segments=build_segments(first.time), unit=entry.unit, axis_id=axis_id,
+                representation=representation, sampling=first.sampling, revision=revision,
+                physical_key=("derived", entry.name), public_name=entry.name,
+                source_id=store.source_id)
 
-    def lookup(name, staged=staged, representation=representation, segment=entry.segment):
-        found, _mask, _segments, _public = _native_series(
-            fd, name, representation, segment, staged,
-        )
-        return found if isinstance(found, np.ndarray) else found.values
 
-    produced = evaluate_derive(entry, time, lookup)
-    return produced, time, next(iter(axes)), representation
-
-
-def _remember_derived(fd, name, values, time, unit, axis_id, representation):
-    catalog, _hidden = _ensure_catalog(fd)
-    catalog[name] = {
-        "time": None if time is None else np.asarray(time),
-        "values": np.asarray(values),
-        "unit": "" if unit is None else str(unit),
-        "axis_id": "" if axis_id is None else str(axis_id),
-        "representation": representation or "physical",
-        "segments": (),
-    }
-    _install_logical_view(fd)
+def evaluate_native_entry(fd, entry, staged=None):
+    """Compatibility result; native staging retains evaluate_native_channel's DTO."""
+    result = evaluate_native_channel(fd, entry, staged)
+    return result["values"], result["time"], result["axis_id"], result["representation"]
 
 
 def _hide_name(fd, name):
     catalog, hidden = _ensure_catalog(fd)
     catalog.pop(name, None)
+    fd.channel_units.pop(name, None)
     store = fd.native_store
     if name in set(store.public_names()):
         hidden.add(name)
     _ephemeral(fd).discard(name)
-    _install_logical_view(fd)
 
 
 def _replay_native(fd, items) -> list:
@@ -435,14 +426,15 @@ def _replay_native(fd, items) -> list:
             results.append(ReplayResult("skipped", reason, name, entry))
             continue
         try:
-            values, time, axis_id, representation = evaluate_native_entry(fd, entry)
+            record = evaluate_native_channel(fd, entry)
         except RecipeError as exc:
             skipped_outputs.add(name)
             reason = _reason(exc.code, str(exc) if exc.code == "expression_error" else "")
             logger.warning("channel edit skipped: %s (%s)", name, reason)
             results.append(ReplayResult("skipped", reason, name, entry))
             continue
-        _remember_derived(fd, name, values, time, entry.unit, axis_id, representation)
+        catalog[name] = record
+        fd.channel_units[name] = entry.unit
         created.add(name)
         skipped_outputs.discard(name)
         results.append(ReplayResult("applied", None, name, entry))
@@ -539,11 +531,9 @@ def replay(fd, entries) -> list:
 def apply_unlogged(fd, new_channels, removed_channels):
     """Session-only channel writes that have no replayable recipe."""
     if _is_native(fd):
-        ephemeral = _ephemeral(fd)
-        for name, payload in (new_channels or {}).items():
-            values, unit = payload
-            _remember_derived(fd, name, values, None, unit, "", "physical")
-            ephemeral.add(name)
+        if new_channels:
+            # Values alone cannot establish a native time/quality identity.
+            raise RecipeError("time_unavailable")
         for name in removed_channels or ():
             _hide_name(fd, name)
         return

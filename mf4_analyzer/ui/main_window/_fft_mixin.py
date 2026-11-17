@@ -453,7 +453,7 @@ class FFTMixin:
             params['prepare_policy'] = 'native'
         return params
 
-    def _fft_fetch_signal(self, fid, ch, time_range=_INSPECTOR_TIME_RANGE, *, params=None):
+    def _fft_fetch_signal(self, fid, ch, time_range=_INSPECTOR_TIME_RANGE, *, params=None, rejections=None):
         """Fetch + range-gate a single FFT source's signal. Returns
         ``(sig, fs)`` or ``(None, None)`` when unavailable."""
         fd = self.files.get(fid)
@@ -471,6 +471,8 @@ class FFTMixin:
             from ...analysis_signal_prepare import load_native_channel
             prepared = load_native_channel(fd, ch, time_range)
             if prepared.status != "ready" or prepared.source_fs is None:
+                if rejections is not None:
+                    rejections.append(f"{ch}: {prepared.reason}")
                 return None, None
             return prepared.values, prepared.source_fs
         if ch not in fd.data.columns:
@@ -692,10 +694,12 @@ class FFTMixin:
                 if not getattr(fd, "is_native", False) and not self._check_uniform_or_prompt(fd, 'fft'):
                     outcome.skipped.append("时间轴无效")
                     continue
+                rejections = []
                 sig, fs = self._fft_fetch_signal(
-                    fid, ch, time_range=time_range, params=fft_params)
+                    fid, ch, time_range=time_range, params=fft_params,
+                    **({"rejections": rejections} if getattr(fd, "is_native", False) else {}))
                 if sig is None:
-                    outcome.skipped.append("源通道缺失")
+                    outcome.skipped.extend(rejections or ["源通道缺失"])
                     continue
                 if len(sig) < 10:
                     outcome.skipped.append("信号过短")

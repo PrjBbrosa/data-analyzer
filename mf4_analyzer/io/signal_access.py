@@ -55,6 +55,7 @@ class SignalSeries:
     index_start: int | None
     index_stop: int | None
     sample_index: np.ndarray | None
+    axis_id: str = ""
 
     @property
     def invalidation_bits(self):
@@ -93,10 +94,17 @@ def read_signal(
 
 
 def _read_native(file_data, store, channel_key, span, representation, segment, neighbor_halo=0):
+    if channel_key in file_data.logical_channels:
+        return read_logical_channel(file_data.logical_channels[channel_key], span, segment,
+                                    representation, neighbor_halo=neighbor_halo)
+    if channel_key in file_data.logical_hidden:
+        raise SignalAccessError(f"通道 {channel_key!r} 已删除")
     try:
         channel = store.channel(channel_key)
     except NativeContractError as exc:
         raise SignalAccessError(str(exc)) from exc
+    if channel.public_name in file_data.logical_hidden:
+        raise SignalAccessError(f"通道 {channel.public_name!r} 已删除")
     if channel.support_status == "unsupported" or channel.conversion == "unsupported":
         raise SignalAccessError(
             f"通道 {channel.public_name!r} 不受支持，不能发布截短后的数值"
@@ -123,7 +131,25 @@ def _read_native(file_data, store, channel_key, span, representation, segment, n
         public_name=channel.public_name,
         representation=representation,
         source_id=store.source_id,
+        axis_id=axis.axis_id,
         neighbor_halo=neighbor_halo,
+    )
+
+
+def read_logical_channel(record, span=None, segment=None, representation="physical", *, neighbor_halo=0):
+    """Read a staged or applied recipe through the same span/halo contract."""
+    if representation != record["representation"]:
+        raise SignalAccessError("派生通道只有创建时的数值表示，不能冒充原始 raw/physical")
+    time, values, validity = record["time"], record["values"], record["validity"]
+    if time.ndim != 1 or values.ndim != 1 or time.shape != values.shape:
+        raise SignalAccessError("派生通道时间与数值的长度或形状不一致")
+    if validity is not None and validity.shape != time.shape:
+        raise SignalAccessError("派生通道失效掩码的长度或形状不一致")
+    return _assemble(
+        **{key: record[key] for key in (
+            "time", "values", "validity", "segments", "unit", "sampling", "revision",
+            "physical_key", "public_name", "representation", "source_id", "axis_id",
+        )}, span=span, segment=segment, neighbor_halo=neighbor_halo,
     )
 
 
@@ -131,7 +157,9 @@ def known_sampling_hz(file_data, channel):
     """Known Fs for one channel. Native files have no file-level substitute."""
     if getattr(file_data, "is_native", False):
         try:
-            series = read_signal(file_data, channel, representation="raw")
+            record = file_data.logical_channels.get(channel)
+            representation = record["representation"] if record is not None else "raw"
+            series = read_signal(file_data, channel, representation=representation)
         except (SignalAccessError, SourceClosedError, TypeError, ValueError):
             return None
         sampling = series.sampling
@@ -150,14 +178,15 @@ def known_sampling_hz(file_data, channel):
 def channel_in_source(file_data, channel) -> bool:
     """True when ``channel`` is a real column or native public name."""
     if getattr(file_data, "is_native", False):
-        store = getattr(file_data, "native_store", None)
-        if store is None:
+        if channel in file_data.logical_channels:
+            return True
+        if channel in file_data.logical_hidden:
             return False
         try:
-            store.channel(channel)
+            found = file_data.native_store.channel(channel)
         except NativeContractError:
             return False
-        return True
+        return found.public_name not in file_data.logical_hidden
     data = getattr(file_data, "data", None)
     return data is not None and channel in getattr(data, "columns", ())
 
@@ -294,7 +323,7 @@ def _legacy_revision(file_data, name, time, values):
 
 def _assemble(*, time, values, validity, segments, span, segment, unit, sampling,
               revision, physical_key, public_name, representation, source_id,
-              neighbor_halo=0):
+              neighbor_halo=0, axis_id=""):
     chosen = _choose_segment(segments, segment)
     index = _select(time, segments, chosen, span, neighbor_halo)
     part_time = _take(time, index)
@@ -328,6 +357,7 @@ def _assemble(*, time, values, validity, segments, span, segment, unit, sampling
         index_start=index_start,
         index_stop=index_stop,
         sample_index=sample_index,
+        axis_id=axis_id,
     )
 
 

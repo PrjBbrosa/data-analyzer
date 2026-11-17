@@ -460,6 +460,14 @@ class ImportCoordinator(QObject):
             logger.exception('Import cleanup failed: %s', request.request_id)
         finally:
             self.dismiss_progress(request)
+            # Retry/continuation has settled and the supervisor has drained.
+            # A completed call may hold a bound window method and CAN frames;
+            # diagnostic history must retain only the bounded facts above.
+            self._last_call = None
+            request.workflow = None
+            request.factory = None
+            request.on_done = None
+            request.progress_callback = None
             self._active = None
             self.finished.emit(request.request_id, status, value)
             QTimer.singleShot(0, self._start_next)

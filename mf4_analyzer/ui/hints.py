@@ -281,7 +281,7 @@ _HINTS = (
     ),
     Hint(
         id="channel.export_wwt_storage",
-        text="通道编辑可导 WWT 无损·紧凑",
+        text="通道编辑导出遵循勾选；原生派生通道可导长表或同轴分组",
         surface="discovery",
         retire_on="export_wwt",
         priority=70,

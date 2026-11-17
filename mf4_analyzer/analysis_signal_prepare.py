@@ -17,10 +17,11 @@ import math
 
 import numpy as np
 
+from .signal.numeric_precision import integers_exact_in_float64
 from .signal.spectrogram import DEFAULT_TIME_JITTER_TOLERANCE
 
 
-POLICY_VERSION = "m4-same-axis-1"
+POLICY_VERSION = "m4-same-axis-2"
 DEFAULT_PREPARE_BYTE_LIMIT = 512 * 1024 * 1024
 _RPM_UNITS = frozenset({"", "rpm", "r/min", "1/min", "min^-1", "rev/min"})
 
@@ -178,6 +179,8 @@ def prepare_signal(
         )
     if policy not in {"native", "legacy"}:
         return _reject("未知分析时间政策", quality="policy", input_count=int(values_arr.shape[0]), **common)
+    if policy == "native" and values_arr.dtype.kind not in "biuf":
+        return _reject("native 分析只接受实数值数组", quality="dtype", input_count=len(values_arr), **common)
     count = int(values_arr.shape[0])
     if byte_limit is not None:
         decision = preflight_prepare(sample_count=count, byte_limit=int(byte_limit))
@@ -197,6 +200,9 @@ def prepare_signal(
     elif requested is None:
         requested = None
 
+    if invalid is not None and np.asarray(invalid).shape != values_arr.shape:
+        return _reject("失效掩码形状必须与样本一致", quality="invalid", input_count=count, requested_range=requested, **common)
+
     if count and requested_range is not None:
         lo, hi = requested
         keep = (time_arr >= lo) & (time_arr <= hi)
@@ -207,7 +213,7 @@ def prepare_signal(
 
     usable = np.ones(values_arr.shape[0], dtype=bool)
     if values_arr.size:
-        usable &= np.isfinite(np.asarray(values_arr, dtype=float))
+        usable &= np.isfinite(values_arr if policy == "native" else np.asarray(values_arr, dtype=float))
         usable &= np.isfinite(np.asarray(time_arr, dtype=float))
     if invalid is not None:
         invalid_arr = np.asarray(invalid, dtype=bool).reshape(-1)
@@ -226,6 +232,12 @@ def prepare_signal(
         return _reject(reason, quality=quality, input_count=count, requested_range=requested, **common)
     elif values_arr.shape[0] < 2:
         return _reject("至少需要 2 个有效样本", quality="short", input_count=count, requested_range=requested, **common)
+
+    if policy == "native" and not integers_exact_in_float64(values_arr):
+        return _reject(
+            "整数样本不能精确表示为 float64；未启动计算，请缩小范围或选择可精确表示的通道",
+            quality="integer_precision", input_count=count, requested_range=requested, **common,
+        )
 
     if intent == "reinterpret_fs":
         return _reinterpret(values_arr, time_arr, source_fs, policy, count, requested, common)
@@ -389,6 +401,9 @@ def prepare_order_speed(
         return _reject("转速倍率必须是有限数值", quality="unit", input_count=int(signal.size), provenance=provenance, **common)
     if rpm_values is None or rpm_time is None:
         return _reject("缺少转速通道", quality="missing", input_count=int(signal.size), provenance=provenance, **common)
+    if policy == "native" and not integers_exact_in_float64(np.asarray(rpm_values)):
+        return _reject("转速整数样本不能精确表示为 float64，未启动计算",
+                       quality="integer_precision", input_count=int(signal.size), **common)
     rpm = np.asarray(rpm_values, dtype=float).reshape(-1)
     rpm_axis = np.asarray(rpm_time, dtype=float).reshape(-1)
     common["original_values_hash"] = array_content_hash(rpm)
@@ -573,6 +588,7 @@ def _passthrough(values, time, source_fs, policy, input_count, requested, common
         quality="finite",
         provenance={
             "value_source": "unchanged_samples",
+            "compute_dtype": "float64",
             "time_source": "original_axis",
             "bandwidth_claim": False,
             "resamples_values": False,
@@ -604,6 +620,7 @@ def _legacy_rebuild(values, time, source_fs, input_count, requested, common):
         quality="finite",
         provenance={
             "value_source": "unchanged_samples",
+            "compute_dtype": "float64",
             "time_source": "legacy_index_rebuild",
             "bandwidth_claim": False,
             "resamples_values": False,
@@ -640,6 +657,7 @@ def _reinterpret(values, time, source_fs, policy, input_count, requested, common
         quality="finite",
         provenance={
             "value_source": "unchanged_samples",
+            "compute_dtype": "float64",
             "time_source": "fs_reinterpret",
             "bandwidth_claim": False,
             "resamples_values": False,

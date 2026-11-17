@@ -302,6 +302,8 @@ class FileData:
         # Editor recipes for this logical source. Empty until the user creates
         # or deletes a channel; closed with the source, never a second copy.
         self.channel_edits = ChannelEditLog()
+        self.logical_channels = {}
+        self.logical_hidden = set()
         self.session_ephemeral_channels = set()
         if native_store is not None:
             if df is not None:
@@ -421,6 +423,9 @@ class FileData:
     def close_source(self):
         """Drop this source. A job hold keeps the same store, not a sample copy."""
         self._source_closed = True
+        self.logical_channels.clear()
+        self.logical_hidden.clear()
+        self.session_ephemeral_channels.clear()
         if self._native_store is not None:
             self._native_store.close()
 
@@ -597,7 +602,9 @@ class FileData:
         if self._native_store is not None:
             if self._native_store.closed or self._source_closed:
                 raise SourceClosedError("来源已关闭")
-            return list(self._native_store.public_names())
+            return [name for name in dict.fromkeys((*self._native_store.public_names(),
+                                                    *self.logical_channels))
+                    if name not in self.logical_hidden or name in self.logical_channels]
         if "time_column" in self.source_metadata:
             explicit = self.source_metadata.get("time_column")
             return [c for c in self.channels if c != explicit]

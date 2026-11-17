@@ -39,7 +39,7 @@ class OrderMixin:
     every job carries its own cache/render context back to this mixin.
     """
 
-    def _order_sig_for(self, source, time_range=_INSPECTOR_TIME_RANGE):
+    def _order_sig_for(self, source, time_range=_INSPECTOR_TIME_RANGE, *, rejections=None):
         """Fetch + range-gate an explicit Order signal source ``(fid, ch)``.
         Returns ``(t, sig)`` or ``(None, None)``. V7b: the split queue must
         fetch a NON-focused pane's source, not the inspector selection."""
@@ -61,6 +61,8 @@ class OrderMixin:
                     time_range = None
             prepared = load_native_channel(fd, ch, time_range)
             if prepared.status != "ready":
+                if rejections is not None:
+                    rejections.append(f"{ch}: {prepared.reason}")
                 return None, None
             return prepared.time, prepared.values
         if ch not in fd.data.columns:
@@ -80,7 +82,7 @@ class OrderMixin:
         return t, sig
 
     def _order_rpm_for(self, rpm_source, n, time_range=_INSPECTOR_TIME_RANGE,
-                       t_sig=None, *, params=None):
+                       t_sig=None, *, params=None, rejections=None):
         """Fetch + range-gate + scale an explicit Order RPM source. ``n`` is
         the signal length the rpm must match. Returns the scaled rpm array or
         ``None`` (caller skips the pane). The scale factor is the current
@@ -139,7 +141,7 @@ class OrderMixin:
                 series = read_signal(fd, ch, span=span, neighbor_halo=halo)
             except (SignalAccessError, TypeError, ValueError):
                 return None
-            rpm = np.asarray(series.values, dtype=float)
+            rpm = np.asarray(series.values)
             t_rpm = np.asarray(series.time, dtype=float)
             if not unit:
                 unit = str(series.unit or "")
@@ -149,6 +151,11 @@ class OrderMixin:
             rpm = np.asarray(fd.data[ch].values, dtype=float)
             t_rpm = fd.time_array
         if t_sig is None:
+            from ...signal.numeric_precision import integers_exact_in_float64
+            if getattr(fd, "is_native", False) and not integers_exact_in_float64(rpm):
+                if rejections is not None:
+                    rejections.append(f"{ch}: 转速整数样本不能精确表示为 float64")
+                return None
             if len(rpm) != n:
                 return None
             return np.asarray(rpm, dtype=float) * float(factor)
@@ -165,6 +172,8 @@ class OrderMixin:
             or prepared.values is None
             or len(prepared.values) != int(n)
         ):
+            if rejections is not None:
+                rejections.append(prepared.reason or "转速不可用")
             return None
         return np.asarray(prepared.values, dtype=float)
 
@@ -611,11 +620,17 @@ class OrderMixin:
             view_id = self.analysis_managers['order'].get(
                 self.analysis_managers['order'].active
             ).view_id
-        t, sig = self._order_sig_for((fid, ch), time_range=time_range)
+        rejections = []
+        t, sig = self._order_sig_for(
+            (fid, ch), time_range=time_range,
+            **({"rejections": rejections} if getattr(self.files.get(fid), "is_native", False) else {}),
+        )
         if sig is None:
             outcome = getattr(self, '_order_outcome', None)
             if outcome is not None:
-                outcome.skipped.append("源通道缺失")
+                outcome.skipped.extend(rejections or ["源通道缺失"])
+            elif rejections:
+                self.toast(rejections[0], "warning")
             return None
         if len(sig) < 100:
             outcome = getattr(self, '_order_outcome', None)
@@ -623,11 +638,15 @@ class OrderMixin:
                 outcome.skipped.append("信号过短")
             return None
         rpm = self._order_rpm_for(
-            rpm_source, len(sig), time_range=time_range, t_sig=t, params=op)
+            rpm_source, len(sig), time_range=time_range, t_sig=t, params=op,
+            **({"rejections": rejections} if rpm_source and
+               getattr(self.files.get(rpm_source[0]), "is_native", False) else {}))
         if rpm is None:
             outcome = getattr(self, '_order_outcome', None)
             if outcome is not None:
-                outcome.skipped.append("缺转速")
+                outcome.skipped.extend(rejections or ["缺转速"])
+            elif rejections:
+                self.toast(rejections[0], "warning")
             return None
         if warn:
             self._warn_if_order_speed_unsuitable(rpm)

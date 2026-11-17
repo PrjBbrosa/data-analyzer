@@ -223,6 +223,10 @@ def open_native_mdf(path, factory):
                 mdf.close()
                 mdf = factory(path, add_array_components=True, process_bus_logging=False)
                 _validate_mdf4(mdf, budget, expanded=True)
+        elif str(mdf.version).startswith(("2", "3")):
+            _validate_native_mdf23(mdf, budget)
+        else:
+            raise MdfSafetyError(f"MDF native unsupported version: {mdf.version}")
         _reserve_native_output(mdf, budget)
         return mdf
     except BaseException:
@@ -230,7 +234,57 @@ def open_native_mdf(path, factory):
         raise
 
 
-def _raw_itemsize(channel):
+def _validate_native_mdf23(mdf, budget):
+    """Admit old fixed scalar records before decoding; arrays stay unsupported."""
+    count = 0
+    for group in mdf.groups:
+        cycles = _integer(group.channel_group.cycles_nr, "cycle count")
+        size = _integer(group.channel_group.samples_byte_nr, "record size")
+        if not group.sorted:
+            raise MdfSafetyError("MDF native unsupported unsorted record storage")
+        covered = 0
+        for block in group.data_blocks:
+            original = _integer(block.original_size, "block expanded bytes")
+            limit = original if block.block_limit is None else _integer(block.block_limit, "block limit")
+            if limit > original:
+                raise MdfSafetyError("MDF block limit exceeds expanded bytes")
+            covered += limit
+        if covered < cycles * size:
+            raise MdfSafetyError("MDF incomplete record coverage")
+        for channel in group.channels:
+            bit = _integer(channel.start_offset, "channel bit offset")
+            extra = _integer(getattr(channel, "additional_byte_offset", 0), "additional byte offset")
+            width = _integer(channel.bit_count, "channel bit count")
+            if extra * 8 + bit + width > size * 8:
+                raise MdfSafetyError(f"MDF channel outside record: {channel.name}")
+        count += len(group.channels)
+        budget.check_channels(count, label="MDF native channels", phase="mdf_admission")
+        budget.reserve_array((cycles, size), "u1", copies=3, label="MDF record buffers",
+                             phase="mdf_admission", estimate_basis="declared_layout")
+    budget.reserve(count * 2048, label="MDF channel metadata", phase="mdf_admission")
+
+
+def _numeric_types(version):
+    if str(version).startswith(("2", "3")):
+        from asammdf.blocks import v2_v3_constants as c
+        return ({c.DATA_TYPE_UNSIGNED, c.DATA_TYPE_SIGNED, c.DATA_TYPE_UNSIGNED_INTEL,
+                 c.DATA_TYPE_SIGNED_INTEL, c.DATA_TYPE_UNSIGNED_MOTOROLA, c.DATA_TYPE_SIGNED_MOTOROLA},
+                {c.DATA_TYPE_FLOAT, c.DATA_TYPE_DOUBLE, c.DATA_TYPE_FLOAT_INTEL,
+                 c.DATA_TYPE_DOUBLE_INTEL, c.DATA_TYPE_FLOAT_MOTOROLA, c.DATA_TYPE_DOUBLE_MOTOROLA})
+    from asammdf.blocks import v4_constants as c
+    return ({c.DATA_TYPE_UNSIGNED_INTEL, c.DATA_TYPE_UNSIGNED_MOTOROLA,
+             c.DATA_TYPE_SIGNED_INTEL, c.DATA_TYPE_SIGNED_MOTOROLA},
+            {c.DATA_TYPE_REAL_INTEL, c.DATA_TYPE_REAL_MOTOROLA})
+
+
+def _nonnumeric(channel, version):
+    if str(version).startswith(("2", "3")):
+        from asammdf.blocks import v2_v3_constants as c
+        return channel.data_type in {c.DATA_TYPE_STRING, c.DATA_TYPE_BYTEARRAY}
+    return 6 <= int(getattr(channel, "data_type", -1)) <= 16
+
+
+def _raw_itemsize(channel, version="4.10"):
     """Byte width of one raw sample. Unknown layouts return None, never zero."""
     data_type = getattr(channel, "data_type", None)
     bit_count = getattr(channel, "bit_count", None)
@@ -240,11 +294,12 @@ def _raw_itemsize(channel):
     bits = int(bit_count)
     if bits <= 0 or bits > 64:
         return None
-    if data_type in (4, 5):
+    integers, reals = _numeric_types(version)
+    if data_type in reals:
         if bits <= 32:
             return 4
         return 8
-    if data_type in (0, 1, 2, 3):
+    if data_type in integers:
         nbytes = (bits + 7) // 8
         if nbytes <= 1:
             return 1
@@ -257,15 +312,35 @@ def _raw_itemsize(channel):
 
 
 def _is_array_parent(dependency):
-    if not dependency:
+    if not dependency or not isinstance(dependency, (tuple, list)):
         return False
     from asammdf.blocks.v4_blocks import ChannelArrayBlock
 
     return any(isinstance(item, ChannelArrayBlock) for item in dependency)
 
 
-def _conversion_plan(channel):
+def _conversion_plan(channel, version="4.10"):
     """Return identity, library, enum, or unknown. Unknown is not a zero-byte plan."""
+    if str(version).startswith(("2", "3")):
+        from asammdf.blocks import v2_v3_constants as c
+        conversion = getattr(channel, "conversion", None)
+        if conversion is None:
+            return "identity"
+        kind = getattr(conversion, "conversion_type", None)
+        if kind == c.CONVERSION_TYPE_NONE:
+            return "identity"
+        if kind in {c.CONVERSION_TYPE_TABX, c.CONVERSION_TYPE_RTABX}:
+            return "enum"
+        if kind == c.CONVERSION_TYPE_LINEAR:
+            a, b = getattr(conversion, "a", None), getattr(conversion, "b", None)
+            if a is None or b is None:
+                return "unknown"
+            return "identity" if float(a) == 1 and float(b) == 0 else "library"
+        if kind in {c.CONVERSION_TYPE_TABI, c.CONVERSION_TYPE_TAB, c.CONVERSION_TYPE_POLY,
+                    c.CONVERSION_TYPE_EXPO, c.CONVERSION_TYPE_LOGH, c.CONVERSION_TYPE_RAT,
+                    c.CONVERSION_TYPE_FORMULA}:
+            return "library"
+        return "unknown"
     from asammdf.blocks import v4_constants as c
 
     conversion = getattr(channel, "conversion", None)
@@ -294,7 +369,10 @@ def _conversion_plan(channel):
     return "unknown"
 
 
-def _invalidation_bytes(channel, cycles):
+def _invalidation_bytes(channel, cycles, version="4.10"):
+    if str(version).startswith(("2", "3")):
+        # MDF 2/3 fixed records have no MDF4 invalidation field.
+        return 0
     flags = getattr(channel, "flags", None)
     if flags is None:
         return None
@@ -321,13 +399,13 @@ def _reserve_native_output(mdf, budget):
         cycles = _integer(group.channel_group.cycles_nr, "cycle count")
         master_index = _master_index(mdf, group_index, group)
         master = group.channels[master_index]
-        master_size = _raw_itemsize(master)
+        master_size = _raw_itemsize(master, version)
         if master_size is None:
             raise MdfSafetyError(f"MDF native time size is unknown: {getattr(master, 'name', master_index)}")
         described = _axis_description(master, version)
         if described[0] == "time":
             # Converted timestamps are float64 when the clock itself is scaled.
-            if _conversion_plan(master) == "library" or master_size < 8:
+            if _conversion_plan(master, version) == "library" or master_size < 8:
                 master_size = 8
         time_bytes += cycles * master_size
         dependencies = getattr(group, "channel_dependencies", None) or ()
@@ -345,24 +423,24 @@ def _reserve_native_output(mdf, budget):
                 raise MdfSafetyError(
                     f"MDF native unsupported channel dependency: {getattr(channel, 'name', channel_index)}"
                 )
-            plan = _conversion_plan(channel)
+            plan = _conversion_plan(channel, version)
             if plan == "unknown":
                 raise MdfSafetyError(
                     f"MDF native conversion size is unknown: {getattr(channel, 'name', channel_index)}"
                 )
-            itemsize = _raw_itemsize(channel)
+            itemsize = _raw_itemsize(channel, version)
             if itemsize is None:
-                if plan == "enum" or int(getattr(channel, "data_type", -1)) >= 6:
+                if _nonnumeric(channel, version):
                     continue
                 raise MdfSafetyError(
                     f"MDF native raw size is unknown: {getattr(channel, 'name', channel_index)}"
                 )
-            if int(getattr(channel, "data_type", -1)) >= 6 and plan != "enum":
+            if _nonnumeric(channel, version):
                 continue
             raw_bytes += cycles * itemsize
             if plan == "library":
                 physical_bytes += cycles * 8
-            invalid = _invalidation_bytes(channel, cycles)
+            invalid = _invalidation_bytes(channel, cycles, version)
             if invalid is None:
                 raise MdfSafetyError(
                     f"MDF native validity size is unknown: {getattr(channel, 'name', channel_index)}"
@@ -575,10 +653,10 @@ def _native_file(mdf, path, source_id):
                 continue
             if dependency:
                 raise MdfSafetyError(f"MDF native unsupported channel dependency: {name}")
-            plan = _conversion_plan(channel)
+            plan = _conversion_plan(channel, version)
             if plan == "unknown":
                 raise MdfSafetyError(f"MDF native conversion size is unknown: {name}")
-            if int(getattr(channel, "data_type", -1)) >= 6 and plan != "enum":
+            if _nonnumeric(channel, version):
                 unsupported.append({
                     "name": name,
                     "group": group_index,

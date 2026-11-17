@@ -2359,7 +2359,7 @@ class BatchRunner:
                 )
                 if explicit_time and signal_name == explicit_time:
                     raise ValueError(f'missing signal: {signal_name}')
-                if signal_name not in fd_or_fail.data.columns:
+                if not self._source_has_channel(fd_or_fail, signal_name):
                     raise ValueError(f'missing signal: {signal_name}')
                 computed = self._compute_group_task(
                     preset,
@@ -3861,7 +3861,7 @@ class BatchRunner:
                 )
                 if explicit_time and signal_name == explicit_time:
                     raise ValueError(f"missing signal: {signal_name}")
-                if signal_name not in fd_or_fail.data.columns:
+                if not self._source_has_channel(fd_or_fail, signal_name):
                     raise ValueError(f"missing signal: {signal_name}")
                 item = self._run_one(preset, fid, fd_or_fail,
                                      signal_name, output_dir,
@@ -4975,6 +4975,8 @@ class BatchRunner:
             "time_column" in meta or meta.get("renamed_channels")
         ):
             return None
+        if getattr(fd, "is_native", False):
+            return None
         columns = getattr(getattr(fd, "data", None), "columns", ())
         if fd is not None and channel in columns:
             return channel
@@ -5176,7 +5178,9 @@ class BatchRunner:
         warnings: list[str] = list(effective.migration_warnings)
         try:
             self._check_cancel(cancel_token, 'preprocess')
-            signal, time, fs = self._task_channel_arrays(fd, signal_name, params.get('fs'))
+            signal, time, fs = self._task_channel_arrays(
+                fd, signal_name, params.get('fs'), time_range=params.get('time_range'),
+            )
             x_values = None
             if str(params.get('x_source', 'time') or 'time').lower() == 'channel':
                 x_channel = str(params.get('x_channel', '') or '').strip()
@@ -5184,7 +5188,7 @@ class BatchRunner:
                 if not x_column or not self._source_has_channel(fd, x_column):
                     raise ValueError(f'missing X channel: {x_channel}')
                 x_values, _x_time, _x_fs = self._task_channel_arrays(
-                    fd, x_column, None, require_fs=False,
+                    fd, x_column, None, require_fs=False, time_range=params.get("time_range"),
                 )
             preprocessed = preprocess_batch_signal(
                 signal, time, fs, params, x_values=x_values,
@@ -5702,7 +5706,7 @@ class BatchRunner:
         try:
             self._check_cancel(cancel_token, "preprocess")
             sig, time, fs = self._task_channel_arrays(
-                fd, signal_name, requested_params.get('fs'),
+                fd, signal_name, requested_params.get('fs'), time_range=requested_params.get('time_range'),
             )
 
             warnings_out: list[str] = []
@@ -5714,6 +5718,7 @@ class BatchRunner:
                     target_source_id=fid,
                     target_channel=signal_name,
                     warnings_out=warnings_out,
+                    time_range=requested_params.get("time_range"),
                 )
 
             x_values = None
@@ -5727,7 +5732,7 @@ class BatchRunner:
                 if not x_column or not self._source_has_channel(fd, x_column):
                     raise ValueError(f"missing X channel: {x_channel}")
                 x_values, _x_time, _x_fs = self._task_channel_arrays(
-                    fd, x_column, None, require_fs=False,
+                    fd, x_column, None, require_fs=False, time_range=requested_params.get("time_range"),
                 )
 
             preprocessed = preprocess_batch_signal(
@@ -6578,7 +6583,7 @@ class BatchRunner:
         from .io.signal_access import channel_in_source
         return channel_in_source(fd, name)
 
-    def _task_channel_arrays(self, fd, name, fs_raw, *, require_fs=True):
+    def _task_channel_arrays(self, fd, name, fs_raw, *, require_fs=True, time_range=None, neighbor_halo=0):
         """Return ``(values, time, fs)`` for one channel.
 
         Native sources use that channel's clock. A missing known rate is an
@@ -6586,10 +6591,22 @@ class BatchRunner:
         is set; the file-level legacy axis is not invented. RPM and Custom-X
         reads set ``require_fs`` false because alignment uses the timestamps.
         """
-        from .io.signal_access import SignalAccessError, channel_time_values
+        from .io.signal_access import SignalAccessError, channel_time_values, read_signal, TimeSpan
+        from .signal.numeric_precision import integers_exact_in_float64
 
         try:
-            time, values, native_fs = channel_time_values(fd, name)
+            if getattr(fd, "is_native", False):
+                span = None if time_range is None else TimeSpan(*time_range)
+                series = read_signal(fd, name, span=span, neighbor_halo=neighbor_halo)
+                time, values = series.time, series.values
+                native_fs = series.sampling.fs_hz if series.sampling.status == "known" else None
+                if not integers_exact_in_float64(values):
+                    raise ValueError(f"通道 {name!r} 整数样本不能精确表示为 float64，未启动计算")
+                if series.validity is not None and np.any(series.validity):
+                    values = np.array(values, dtype=float, copy=True)
+                    values[series.validity] = np.nan
+            else:
+                time, values, native_fs = channel_time_values(fd, name)
         except SignalAccessError as exc:
             raise ValueError(str(exc)) from exc
         signal = np.asarray(values, dtype=float)
@@ -6615,6 +6632,7 @@ class BatchRunner:
         target_source_id=None,
         target_channel=None,
         warnings_out: list[str] | None = None,
+        time_range=None,
     ):
         if preset.rpm_signal is not None:
             rpm_source_id, rpm_ch = preset.rpm_signal
@@ -6642,14 +6660,14 @@ class BatchRunner:
                 )
             factor = float(preset.params.get('rpm_factor', 1.0))
             rpm, rpm_time, _rpm_fs = self._task_channel_arrays(
-                rpm_fd, rpm_ch, None, require_fs=False,
+                rpm_fd, rpm_ch, None, require_fs=False, time_range=time_range, neighbor_halo=1,
             )
             if rpm_source_id == target_source_id and not getattr(fd, "is_native", False):
                 return rpm * factor
 
             if target_channel:
                 target_time, _target_values, _target_fs = self._task_channel_arrays(
-                    fd, target_channel, None, require_fs=False,
+                    fd, target_channel, None, require_fs=False, time_range=time_range,
                 )
             else:
                 target_time = fd.time_array
@@ -6688,7 +6706,7 @@ class BatchRunner:
             raise ValueError("rpm channel is required for order batch analysis")
         factor = float(preset.params.get('rpm_factor', 1.0))
         rpm, _rpm_time, _rpm_fs = self._task_channel_arrays(
-            fd, rpm_channel, None, require_fs=False,
+            fd, rpm_channel, None, require_fs=False, time_range=time_range,
         )
         return np.asarray(rpm, dtype=float) * factor
 
