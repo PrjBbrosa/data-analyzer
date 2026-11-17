@@ -62,7 +62,11 @@ from .batch_manifest import (
     source_file_facts,
     utc_now,
 )
-from .batch_preprocess import BatchPreprocessResult, preprocess_batch_signal
+from .batch_preprocess import (
+    BatchPreprocessResult,
+    preprocess_batch_signal,
+    time_request_needs_rate,
+)
 from .batch_recipe import normalize_batch_params, recipe_fingerprint
 from .renderer_import_policy import is_optional_renderer_import_error
 from .batch_types import (
@@ -5179,7 +5183,11 @@ class BatchRunner:
         try:
             self._check_cancel(cancel_token, 'preprocess')
             signal, time, fs = self._task_channel_arrays(
-                fd, signal_name, params.get('fs'), time_range=params.get('time_range'),
+                fd, signal_name, params.get('fs'),
+                require_fs=(
+                    str(preset.method) != "time" or time_request_needs_rate(params)
+                ),
+                time_range=params.get('time_range'),
             )
             x_values = None
             if str(params.get('x_source', 'time') or 'time').lower() == 'channel':
@@ -5707,7 +5715,9 @@ class BatchRunner:
         try:
             self._check_cancel(cancel_token, "preprocess")
             sig, time, fs = self._task_channel_arrays(
-                fd, signal_name, requested_params.get('fs'), time_range=requested_params.get('time_range'),
+                fd, signal_name, requested_params.get('fs'),
+                require_fs=method != "time" or time_request_needs_rate(requested_params),
+                time_range=requested_params.get('time_range'),
             )
 
             warnings_out: list[str] = []

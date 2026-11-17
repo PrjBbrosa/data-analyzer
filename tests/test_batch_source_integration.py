@@ -744,6 +744,29 @@ def test_custom_x_runner_rejects_an_equal_length_nonoverlapping_clock(tmp_path):
     assert not item.data_path
 
 
+def test_native_time_export_keeps_unknown_fs_and_a_single_sample(tmp_path):
+    from mf4_analyzer.io.native_signal_store import AxisSpec, ChannelSpec, NativeSignalStore
+
+    store = NativeSignalStore.build(
+        "native-unknown",
+        [AxisSpec("t", "clk", "time", "s", np.array([1.25]))],
+        [ChannelSpec(0, 1, "sig", "t", np.array([7.5]), unit="Nm")],
+    )
+    fd = FileData.from_native_store(tmp_path / "one.mf4", store)
+    preset = AnalysisPreset.from_current_single(
+        name="one point",
+        method="time",
+        signal=("native-unknown", "sig"),
+        outputs=BatchOutput(export_data=True, export_image=False),
+    )
+    result = BatchRunner({"native-unknown": fd}).run(preset, tmp_path / "out")
+    item = result.items[0]
+    assert item.status == "done", item.message
+    text = Path(item.data_path).read_text(encoding="utf-8")
+    assert "7.5" in text
+    assert "1.25" in text
+
+
 def test_native_frf_job_uses_the_prepared_lower_rate(tmp_path):
     from mf4_analyzer.batch_compute import _prepare_native_frf_task
     from mf4_analyzer.io.native_signal_store import AxisSpec, ChannelSpec, NativeSignalStore

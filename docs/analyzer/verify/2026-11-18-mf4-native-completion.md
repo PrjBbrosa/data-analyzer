@@ -12,7 +12,7 @@
 | --- | --- | --- |
 | L01 | 未重写已接收的 `_source_has_channel` | 接收 |
 | L02 | 原生 RPM 按真实时钟对齐。信号 `[.2,1,1.8]` 不再把 RPM `[100,200,300]` 变成 `[120,200,280]`。覆盖不足仍拒绝，不延长端点 | PASS（定向） |
-| L03 | GUI 中点失效 999 不再算出转速。等长且不重叠的 Custom-X 真实 Runner 单次失败。未知 Fs 的时域原始导出仍走现有「fs 必须为正」合同，本轮没有放宽 | partial |
+| L03 | GUI 中点失效 999 不再算出转速。等长且不重叠的 Custom-X 真实 Runner 单次失败。时域原始导出在已有时间轴上接受未知 Fs 和单点；滤波、重采样和频谱仍要求正的 Fs 与至少两点 | PASS（定向） |
 | L04 | Batch 与 GUI 频响使用 prepared 目标 Fs。2000/1000 Hz 作业的 DTO 为 1000 Hz | PASS（定向） |
 | L05 | `byte_limit=1` 在滤波前拒绝，spy 看不到 `_apply_antialias`。对齐段内部 NaN 拒绝，段外坏点不阻断 | PASS（定向） |
 | L06 / F08 | 冻结零相位 Chebyshev II。4000→500 的 300/510 Hz、通带 0.30 Ft、2/4/8 倍率和非零初相位进入独立 oracle。用户 Butterworth 未改。单次纹波用 0.049 dB，避免 `sosfiltfilt` 把恰好 0.05 dB 推过 0.1 dB | PASS（offscreen oracle） |

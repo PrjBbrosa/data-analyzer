@@ -354,3 +354,27 @@ def test_default_preprocess_effective_facts_do_not_gain_x_key():
 
     assert result.x_values is None
     assert "x_channel_aligned" not in result.effective
+
+
+def test_original_time_export_keeps_an_unknown_rate_and_a_single_sample():
+    result = preprocess_batch_signal(
+        [7.5], [1.25], None, {}, nonfinite_policy="preserve",
+    )
+    np.testing.assert_array_equal(result.signal, [7.5])
+    np.testing.assert_array_equal(result.time, [1.25])
+    assert result.effective_fs is None
+
+
+def test_unknown_rate_still_rejects_resampling_and_filtering():
+    with pytest.raises(ValueError, match="fs must be finite"):
+        preprocess_batch_signal(
+            [1.0, 2.0], [0.0, 1.0], None,
+            {"time_preprocess": {"sample_mode": "decimate", "decimation_factor": 2}},
+            nonfinite_policy="preserve",
+        )
+    with pytest.raises(ValueError, match="fs must be finite"):
+        preprocess_batch_signal(
+            [1.0, 2.0], [0.0, 1.0], None,
+            {"filter": {"enabled": True}},
+            nonfinite_policy="preserve",
+        )
