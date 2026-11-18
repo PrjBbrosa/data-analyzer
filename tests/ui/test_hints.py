@@ -44,6 +44,8 @@ def test_context_hints_filter_by_mode_and_tier_priority():
         "filter.view_scope",
         "chart_options.view_scope",
         "cursor.pin_off",
+        "channel.export_native_table",
+        "time.filter_quality",
     ]
 
     subplot = HintState(mode="time", plot_mode="subplot")
@@ -56,6 +58,8 @@ def test_context_hints_filter_by_mode_and_tier_priority():
         "filter.view_scope",
         "chart_options.view_scope",
         "cursor.pin_off",
+        "channel.export_native_table",
+        "time.filter_quality",
     ]
 
     dual = HintState(mode="time", plot_mode="overlay", cursor_mode="dual")
@@ -102,6 +106,8 @@ def test_context_hints_suppress_recently_used_ids():
         "filter.view_scope",
         "chart_options.view_scope",
         "cursor.pin_off",
+        "channel.export_native_table",
+        "time.filter_quality",
     ]
 
 
@@ -266,6 +272,29 @@ def test_wwt_export_storage_is_a_shipped_discovery_hint():
     assert "WWT" in hint.text
     assert "无损" in hint.text and "紧凑" in hint.text
     assert hints.hint_display_width(hint.text) <= hints.HINT_MAX_WIDTH
+
+
+def test_quality_followup_hints_keep_separate_limits():
+    """R07: WWT storage, native export, segment, filter and multirate stay distinct."""
+    by_id = {item.id: item for item in hints.all_hints()}
+    wwt = by_id["channel.export_wwt_storage"]
+    native = by_id["channel.export_native_table"]
+    assert native.id != wwt.id
+    assert native.retire_on == "export_native_table"
+    assert native.retire_on != wwt.retire_on
+    assert "长表" in native.text and "同轴" in native.text
+    assert "WWT" not in native.text
+    assert "选段" in by_id["replay.mf4_alignment"].text
+    assert "有效段" in by_id["time.filter_quality"].text
+    policy = by_id["file.native_sampling_project"]
+    assert "默认" in policy.text and "MF4" in policy.text
+    align = by_id["frf.align_then_compute"]
+    assert "同轴" in align.text and "整数" in align.text
+    for item in (
+        wwt, native, by_id["replay.mf4_alignment"], by_id["time.filter_quality"],
+        policy, align, by_id["file.import_cancel"], by_id["time.native_samples"],
+    ):
+        assert hints.hint_display_width(item.text) <= hints.HINT_MAX_WIDTH
 
 
 def test_range_tab_discovery_mentions_tab_and_stays_in_budget():

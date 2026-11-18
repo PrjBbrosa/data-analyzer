@@ -421,7 +421,7 @@ def test_help_has_no_developer_jargon():
 
 def test_panel_guides_cover_new_topics():
     checks = {
-        "time-domain-guide.html": ["滤波", "框选", "Shift", "原始辅助线", "游标显示设置", "按 P 可固定读数", "色标", "⋯"],
+        "time-domain-guide.html": ["滤波", "框选", "Shift", "原始辅助线", "游标显示设置", "按 P 可固定读数", "色标", "⋯", "缩小到有效段或选择有效段"],
         "fft-guide.html": ["A 计权", "查看全部", "游标显示设置", "按 P 可固定当前读数", "色标", "⋯"],
         "ffttime-guide.html": ["A 计权", "游标显示设置", "色标", "⋯"],
         "order-analysis-guide.html": ["加权", "采样率", "游标显示设置", "色标", "⋯"],
@@ -441,7 +441,8 @@ def test_frf_guide_is_mapped_and_covers_frozen_frf_contract():
     text = FRF_GUIDE.read_text(encoding="utf-8")
     for keyword in (
         "H1", "H2", "coherence", "窗长", "重叠", "df", "段数",
-        "20log10", "1 ratio-unit", "output/input", "严格同时间轴",
+        "20log10", "1 ratio-unit", "output/input", "同轴直接计算",
+        "对齐后计算", "同原点", "整数比", "不插值", "只给出计划",
         "NumPy-only", "SciPy", "custom-X", "common",
         "available_per_source", "frequency_hz", "pxy_imag",
         "默认关闭", "2–9", "双游标", "Δf", "按 P 固定同一频率", "保留，不做自动补偿",
@@ -456,6 +457,19 @@ def test_frf_guide_is_mapped_and_covers_frozen_frf_contract():
     # D8: jitter path is auto-rebuild, not a hard block label.
     assert '>自动重建</div>' in text
     assert "数据被阻断" not in text
+    assert "严格同时间轴" not in text
+    assert "已经默认对齐" not in text
+    assert "任意分数" not in text
+    assert "不表示数值已经合格" in text
+
+
+def test_manual_names_replay_segment_limit():
+    text = MANUAL.read_text(encoding="utf-8")
+    assert "局部段号" in text
+    assert "不能合并回放" in text
+    assert "先选段" in text
+    assert "严格同时间轴" not in text
+    assert "所有导入已默认" not in text
 
 
 def test_ultraview_guide_is_mapped_and_covers_readonly_board_contract():
@@ -648,8 +662,9 @@ def test_import_resource_recheck_is_documented_apart_from_timeout():
     current_manual, changelog = manual.split('  "changelog": [', 1)
     guide = PUBLISHED_GUIDE.read_text(encoding="utf-8")
     phrase = "重新检查后仍可能无法导入"
+    assert "只加倍时限" in hints
+    assert "内存预估可重新检查" in hints
     for name, blob in (
-        ("hints", hints),
         ("quickref", quickref),
         ("manual", current_manual),
         ("user-guide", guide),

@@ -926,3 +926,208 @@ def load_native_checked_curve(file_data, channel):
         query=query,
         point_marker=query.point_marker,
     )
+
+
+class DisplayBindingError(ValueError):
+    """Display X, Y, and record indices do not describe the same samples."""
+
+
+class NativeDisplayBinding:
+    """One native curve's plot arrays plus the acquisition query they came from.
+
+    ``display_x`` / ``display_y`` are the only arrays attach and refresh draw.
+    ``display_time`` / ``display_values`` stay the acquisition-time display
+    clock from ``query`` and are not a plotting coordinate. ``series.time``
+    is the raw acquisition clock. Filter code must keep using that clock,
+    never ``display_x``.
+    """
+
+    def __init__(
+        self,
+        *,
+        query,
+        display_x,
+        display_y,
+        record_indices,
+        input_indices,
+        point_marker,
+        has_break,
+        source_fid,
+        channel,
+    ):
+        self._query = query
+        self.series = query.series
+        self.revision = query.revision
+        self.display_time = query.display_time
+        self.display_values = query.display_values
+        self.closed = query.closed
+        self.display_x = display_x
+        self.display_y = display_y
+        self.record_indices = record_indices
+        self._input_indices = input_indices
+        self.point_marker = bool(point_marker)
+        self.has_break = bool(has_break)
+        self.source_fid = str(source_fid)
+        self.channel = str(channel)
+
+    def is_closed(self) -> bool:
+        return self._query.is_closed()
+
+    @property
+    def acquisition_time(self):
+        """Raw acquisition clock. Not the Custom-X display coordinate."""
+        return self.series.time
+
+    def align_companion_y(self, values):
+        """Map a same-length companion onto ``display_x``.
+
+        Returns ``None`` when ``values`` is not parallel to the selected
+        records. Callers then keep their existing arrays instead of trimming
+        with ``min(len(x), len(y))``.
+        """
+        companion = np.asarray(values)
+        selected = np.asarray(self._input_indices)
+        if companion.ndim != 1 or companion.shape[0] != selected.shape[0]:
+            return None
+        if not self.has_break:
+            return values
+        lookup = {
+            int(index): companion[pos]
+            for pos, index in enumerate(selected.tolist())
+        }
+        out = np.empty(int(self.record_indices.shape[0]), dtype=float)
+        for pos, index in enumerate(np.asarray(self.record_indices).tolist()):
+            if int(index) < 0:
+                out[pos] = np.nan
+            else:
+                out[pos] = lookup[int(index)]
+        x = np.asarray(self.display_x, dtype=float)
+        if x.shape[0] == out.shape[0]:
+            out[~np.isfinite(x)] = np.nan
+        return out
+
+
+def _segment_cuts(series):
+    segments = tuple(getattr(series, "segments", ()) or ())
+    if len(segments) <= 1:
+        return []
+    return [int(segment.stop) for segment in segments[:-1]]
+
+
+def _crosses_cut(previous, current, cuts) -> bool:
+    return any(int(previous) < cut <= int(current) for cut in cuts)
+
+
+def _selection_crosses_cut(indices, cuts) -> bool:
+    if indices.shape[0] < 2 or not cuts:
+        return False
+    previous = int(indices[0])
+    for current in indices[1:]:
+        current = int(current)
+        if _crosses_cut(previous, current, cuts):
+            return True
+        previous = current
+    return False
+
+
+def build_native_display_binding(
+    *,
+    source_fid,
+    channel,
+    query,
+    display_x,
+    display_y,
+    record_indices,
+):
+    """Project resolved display X/Y onto the selected records.
+
+    Invalid samples, non-finite values, and acquisition-time resets stay in
+    the sequence as gaps. They are not deleted and then joined. The raw
+    series arrays are not written.
+    """
+    x = np.asarray(display_x)
+    y = np.asarray(display_y)
+    indices = np.asarray(record_indices, dtype=np.int64)
+    if x.ndim != 1 or y.ndim != 1 or indices.ndim != 1:
+        raise DisplayBindingError(
+            f"显示绑定必须是一维数组（X {getattr(x, 'shape', None)} / "
+            f"Y {getattr(y, 'shape', None)} / 索引 {getattr(indices, 'shape', None)}）"
+        )
+    if not (int(x.shape[0]) == int(y.shape[0]) == int(indices.shape[0])):
+        raise DisplayBindingError(
+            f"X/Y/索引长度不一致（{x.shape[0]}/{y.shape[0]}/{indices.shape[0]}）"
+        )
+    series = query.series
+    count = int(np.asarray(series.time).shape[0])
+    if indices.size and (
+        int(indices.min()) < 0 or int(indices.max()) >= count
+    ):
+        raise DisplayBindingError("记录索引超出采集序列")
+
+    invalid = np.zeros(indices.shape[0], dtype=bool)
+    validity = getattr(series, "validity", None)
+    if validity is not None and indices.size:
+        invalid |= np.asarray(validity, dtype=bool)[indices]
+    if indices.size:
+        try:
+            numeric = np.asarray(series.values, dtype=float)[indices]
+        except (TypeError, ValueError) as exc:
+            raise DisplayBindingError("Y 无法按记录索引读取") from exc
+        invalid |= ~np.isfinite(numeric)
+        y_float = np.asarray(y, dtype=float)
+        x_float = np.asarray(x, dtype=float)
+        invalid |= ~np.isfinite(y_float)
+        bad_x = ~np.isfinite(x_float)
+    else:
+        y_float = np.asarray(y, dtype=float)
+        x_float = np.asarray(x, dtype=float)
+        bad_x = np.zeros(0, dtype=bool)
+    finite_pairs = np.isfinite(x_float) & np.isfinite(y_float) & ~invalid & ~bad_x
+    point_marker = bool(indices.size) and int(np.count_nonzero(finite_pairs)) == 1
+    cuts = _segment_cuts(series)
+    needs_gap = bool(indices.size) and (
+        bool(np.any(invalid))
+        or bool(np.any(bad_x))
+        or _selection_crosses_cut(indices, cuts)
+    )
+    if not needs_gap:
+        return NativeDisplayBinding(
+            query=query,
+            display_x=display_x,
+            display_y=display_y,
+            record_indices=indices,
+            input_indices=indices,
+            point_marker=point_marker,
+            has_break=False,
+            source_fid=source_fid,
+            channel=channel,
+        )
+
+    x_src = np.array(x_float, copy=True)
+    y_src = np.array(y_float, copy=True)
+    y_src[invalid | bad_x] = np.nan
+    x_src[bad_x] = np.nan
+    out_x = []
+    out_y = []
+    out_index = []
+    previous = None
+    for pos, index in enumerate(indices.tolist()):
+        if previous is not None and _crosses_cut(previous, index, cuts):
+            out_x.append(np.nan)
+            out_y.append(np.nan)
+            out_index.append(-1)
+        out_x.append(x_src[pos])
+        out_y.append(y_src[pos])
+        out_index.append(int(index))
+        previous = int(index)
+    return NativeDisplayBinding(
+        query=query,
+        display_x=np.asarray(out_x, dtype=float),
+        display_y=np.asarray(out_y, dtype=float),
+        record_indices=np.asarray(out_index, dtype=np.int64),
+        input_indices=indices,
+        point_marker=point_marker,
+        has_break=True,
+        source_fid=source_fid,
+        channel=channel,
+    )

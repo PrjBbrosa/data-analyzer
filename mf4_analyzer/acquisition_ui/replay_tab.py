@@ -7,12 +7,14 @@ and never creates a ``CaptureController`` writer session.
 
 from __future__ import annotations
 
+import math
 import time
 from pathlib import Path
 
 from PyQt5.QtCore import QEvent, Qt, QTimer, pyqtSignal
 from PyQt5.QtWidgets import (
     QButtonGroup,
+    QComboBox,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -59,10 +61,13 @@ class ReplayTab(QWidget):
         super().__init__(parent)
         self.setObjectName("ReplayTab")
         self._source: ReplaySource | None = None
+        self._retained_source: ReplaySource | None = None
         self._backend: ReplayRecorderBackend | None = None
         self._state: ReplayState = "idle"
         self._speed_multiplier = 1.0
         self._last_position_s = 0.0
+        self._segment_start_s = 0.0
+        self._filling_segments = False
 
         self._timer = QTimer(self)
         self._timer.setInterval(int(poll_interval_ms))
@@ -142,6 +147,18 @@ class ReplayTab(QWidget):
         self._alignment_warning.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self._alignment_warning.setVisible(False)
         outer.addWidget(self._alignment_warning)
+
+        segment_row = QHBoxLayout()
+        self._segment_label = QLabel("回放段", self)
+        self._segment_label.setObjectName("replaySegmentLabel")
+        self._segment_label.setVisible(False)
+        segment_row.addWidget(self._segment_label)
+        self._segment_combo = QComboBox(self)
+        self._segment_combo.setObjectName("replaySegmentCombo")
+        self._segment_combo.setVisible(False)
+        self._segment_combo.currentIndexChanged.connect(self._on_segment_chosen)
+        segment_row.addWidget(self._segment_combo, stretch=1)
+        outer.addLayout(segment_row)
 
         progress_row = QHBoxLayout()
         self._position_label = QLabel("00:00.000", self)
@@ -277,6 +294,8 @@ class ReplayTab(QWidget):
         self._position_slider.setMaximum(max(0, int(source.duration_s * 1000)))
         self._position_slider.setValue(0)
         self._position_label.setText(self._format_position(0.0))
+        self._retained_source = source
+        self._release_backend()
         self._live_cards.set_signals(
             [(m.name, m.unit, None) for m in source.selected]
         )
@@ -287,7 +306,8 @@ class ReplayTab(QWidget):
             event_capacity={},
             disk_free_bytes=10 * 1024 * 1024 * 1024,
         )
-        self._set_transport_enabled(True)
+        self._fill_segment_choices(source)
+        self._arm_position(source)
         self._apply_state("idle")
 
     def set_speed_multiplier(self, speed: float) -> None:
@@ -307,16 +327,20 @@ class ReplayTab(QWidget):
     def play(self) -> None:
         if self._source is None:
             raise RuntimeError("load an MF4 before replaying")
+        if not self._playback_ready():
+            return
         if self._state == "paused" and self._backend is not None:
             self._backend.resume()
         else:
+            self._arm_position(self._source)
             self._backend = ReplayRecorderBackend(
                 source_samples=list(self._source.source_samples),
                 speed_multiplier=self._speed_multiplier,
+                time_origin=self._segment_start_s,
             )
             self._backend.start(self._source.selected)
-            self._last_position_s = 0.0
-            self._position_slider.setValue(0)
+            self._last_position_s = self._segment_start_s
+            self._position_slider.setValue(self._position_ms(self._segment_start_s))
             for card in self._live_cards.cards.values():
                 card.reset_buffer()
         self._live_cards.set_recording(True, 0.0)
@@ -338,9 +362,9 @@ class ReplayTab(QWidget):
         if self._backend is not None:
             self._backend.stop()
         self._live_cards.set_recording(False, None)
-        self._last_position_s = 0.0
-        self._position_slider.setValue(0)
-        self._position_label.setText(self._format_position(0.0))
+        self._last_position_s = self._segment_start_s
+        self._position_slider.setValue(self._position_ms(self._segment_start_s))
+        self._position_label.setText(self._format_position(self._segment_start_s))
         if self._source is None:
             self._apply_state("idle")
         else:
@@ -373,14 +397,122 @@ class ReplayTab(QWidget):
             self.state_changed.emit(state)
         else:
             self._state = state
-        self._play_btn.setEnabled(self._source is not None and state != "playing")
+        self._play_btn.setEnabled(self._playback_ready() and state != "playing")
         self._pause_btn.setEnabled(state == "playing")
         self._stop_btn.setEnabled(self._source is not None and state in {"playing", "paused"})
 
     def _set_transport_enabled(self, enabled: bool) -> None:
-        self._play_btn.setEnabled(enabled)
-        self._pause_btn.setEnabled(False)
-        self._stop_btn.setEnabled(False)
+        if not enabled:
+            self._play_btn.setEnabled(False)
+            self._pause_btn.setEnabled(False)
+            self._stop_btn.setEnabled(False)
+            return
+        self._play_btn.setEnabled(self._playback_ready() and self._state != "playing")
+        self._pause_btn.setEnabled(self._state == "playing")
+        self._stop_btn.setEnabled(
+            self._source is not None and self._state in {"playing", "paused"}
+        )
+
+    def _playback_ready(self) -> bool:
+        source = self._source
+        if source is None or source.replay_mode == "segment_required":
+            return False
+        return bool(source.source_samples)
+
+    def _release_backend(self) -> None:
+        self._timer.stop()
+        if self._backend is not None:
+            self._backend.stop()
+            self._backend = None
+        self._live_cards.set_recording(False, None)
+
+    def _clear_card_buffers(self) -> None:
+        for card in self._live_cards.cards.values():
+            card.reset_buffer()
+
+    @staticmethod
+    def _position_ms(seconds: float) -> int:
+        return int(round(float(seconds) * 1000.0))
+
+    def _sample_bounds(self, source: ReplaySource) -> tuple[float, float]:
+        stamps = []
+        for _channel, stamp, _value in source.source_samples:
+            try:
+                value = float(stamp)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(value):
+                stamps.append(value)
+        if not stamps:
+            return 0.0, float(source.duration_s or 0.0)
+        return min(stamps), max(stamps)
+
+    def _arm_position(self, source: ReplaySource) -> None:
+        start, end = self._sample_bounds(source)
+        self._segment_start_s = start
+        self._last_position_s = start
+        self._position_slider.setMinimum(self._position_ms(start))
+        self._position_slider.setMaximum(self._position_ms(end))
+        self._position_slider.setValue(self._position_ms(start))
+        self._position_label.setText(self._format_position(start))
+
+    def _fill_segment_choices(self, source: ReplaySource) -> None:
+        show = (
+            source.replay_mode == "segment_required"
+            and ReplayRecorderBackend.segment_block_reason(source) is None
+        )
+        options = ReplayRecorderBackend.segment_options(source) if show else ()
+        self._filling_segments = True
+        self._segment_combo.blockSignals(True)
+        try:
+            self._segment_combo.clear()
+            if not options:
+                self._segment_combo.setVisible(False)
+                self._segment_label.setVisible(False)
+                return
+            self._segment_combo.addItem("请选择回放段", None)
+            for option in options:
+                self._segment_combo.addItem(str(option["text"]), int(option["segment"]))
+            self._segment_combo.setCurrentIndex(0)
+            self._segment_combo.setVisible(True)
+            self._segment_label.setVisible(True)
+        finally:
+            self._segment_combo.blockSignals(False)
+            self._filling_segments = False
+
+    def _on_segment_chosen(self, index: int) -> None:
+        if self._filling_segments or self._retained_source is None:
+            return
+        if index < 0:
+            return
+        was_playing = self._state == "playing"
+        data = self._segment_combo.itemData(index)
+        self._release_backend()
+        self._clear_card_buffers()
+        if data is None:
+            self._source = self._retained_source
+            self._apply_source_warning(self._source)
+            self._arm_position(self._source)
+            self._apply_state("stopped")
+            return
+        try:
+            chosen = ReplayRecorderBackend.select_retained_segment(
+                self._retained_source, int(data),
+            )
+        except ValueError as exc:
+            self._source = self._retained_source
+            self._alignment_warning.setText(str(exc))
+            self._alignment_warning.setVisible(True)
+            self._arm_position(self._source)
+            self._apply_state("stopped")
+            return
+        self._source = chosen
+        self._apply_source_warning(chosen)
+        self._arm_position(chosen)
+        if was_playing and self._playback_ready():
+            self.play()
+            return
+        self._apply_state("stopped")
 
     def _refresh_right_panel(self) -> None:
         self._right_panel.show_recording(

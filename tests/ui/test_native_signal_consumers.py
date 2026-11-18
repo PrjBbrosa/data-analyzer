@@ -653,6 +653,727 @@ def test_native_wwt_export_reports_a_failed_channel_instead_of_saving(qapp, tmp_
         mw.close()
 
 
+def _angle_case(n=1000):
+    """Independent numeric oracle for the Custom-X display contract.
+
+    The expected X is this angle array. It is not read back from another
+    product implementation.
+    """
+    time = np.arange(n, dtype=float) / float(n)
+    signal = np.sin(2.0 * np.pi * 3.0 * time)
+    angle = 10.0 + 10.0 * time
+    return time, signal, angle
+
+
+def _write_angle_native(path, time, signal, angle, **extra):
+    from asammdf import MDF, Signal
+
+    samples = {
+        "sig": signal,
+        "angle": angle,
+    }
+    samples.update(extra)
+    mdf = MDF(version="4.10")
+    mdf.append([
+        Signal(
+            samples=np.asarray(values, dtype=float),
+            timestamps=np.asarray(time, dtype=float),
+            name=name,
+            unit="deg" if name == "angle" else "Nm",
+        )
+        for name, values in samples.items()
+    ])
+    mdf.save(str(path), overwrite=True)
+    mdf.close()
+    return path
+
+
+def _plot_host(fd, *, fid="f0", x_channel=None, range_enabled=False, range_lo=0.0, range_hi=0.0):
+    spec = CustomXAxisSpec()
+    if x_channel:
+        spec = CustomXAxisSpec(
+            mode="channel",
+            resolver="per_source_name",
+            channel=x_channel,
+            label=x_channel,
+        )
+    return SimpleNamespace(
+        channel_list=SimpleNamespace(
+            get_file_data=lambda key, owner=fd, owner_fid=fid: (
+                owner if key == owner_fid else None
+            ),
+            checked_axis_groups=lambda: {},
+        ),
+        files={fid: fd},
+        _active_time_curve_bindings=lambda view_idx=None: [],
+        _custom_xaxis_spec=spec,
+        navigator_order=None,
+    )
+
+
+def _plot_item_xy(canvas):
+    for _key, _name, pair in canvas._channel_lines.composite_items():
+        data = pair[1].plot_data_item.getData()
+        return np.asarray(data[0], dtype=float), np.asarray(data[1], dtype=float)
+    pytest.fail("画布没有 PlotDataItem")
+
+
+def _finite_endpoints(values):
+    array = np.asarray([] if values is None else values, dtype=float)
+    if array.size == 0:
+        return None, None, 0
+    finite = array[np.isfinite(array)]
+    if finite.size == 0:
+        return None, None, 0
+    return float(finite[0]), float(finite[-1]), int(finite.size)
+
+
+def test_custom_x_plot_item_uses_angle_on_attach_and_refresh(qapp, tmp_path):
+    """R01: the drawn PlotDataItem X is the validated angle, not acquisition time."""
+    from mf4_analyzer.ui.main_window.window import MainWindow
+    from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+    time, signal, angle = _angle_case()
+    path = _write_angle_native(tmp_path / "angle.mf4", time, signal, angle)
+    fd = DataLoader.load_mf4_native(str(path))
+    canvas = TimeDomainCanvasPG()
+    try:
+        series = read_signal(fd, "sig")
+        raw_time = np.array(series.time, copy=True)
+        raw_values = np.array(series.values, copy=True)
+        built = MainWindow._build_time_plot_data(
+            _plot_host(fd, x_channel="angle"),
+            checked=[("f0", "sig", "#1769e0")],
+            range_enabled=False,
+        )
+        rows = [row for row in built.rows if "sig" in str(row[0])]
+        assert rows, "sig 没有进入时域行"
+        payload_x = np.asarray(rows[0][2], dtype=float)
+        canvas.resize(2400, 800)
+        canvas.show()
+        canvas.plot_channels(built.rows, mode="single", xlabel="angle")
+        QCoreApplication.processEvents()
+        attach_x, _attach_y = _plot_item_xy(canvas)
+        canvas._refresh_visible_data()
+        QCoreApplication.processEvents()
+        refresh_x, _refresh_y = _plot_item_xy(canvas)
+        np.testing.assert_array_equal(np.asarray(series.time), raw_time)
+        np.testing.assert_array_equal(np.asarray(series.values), raw_values)
+        problems = []
+        for label, drawn in (("attach", attach_x), ("refresh", refresh_x)):
+            finite = drawn[np.isfinite(drawn)] if drawn.size else drawn
+            if finite.size != angle.size or not np.allclose(finite, angle):
+                problems.append(
+                    f"{label} ends={_finite_endpoints(drawn)} "
+                    f"payload_ends={_finite_endpoints(payload_x)}"
+                )
+        assert not problems, (
+            "PlotDataItem X 必须是 angle（首尾 10 与 19.99），实际 "
+            + "; ".join(problems)
+        )
+        assert _finite_endpoints(attach_x)[:2] == pytest.approx((10.0, 19.99))
+        assert _finite_endpoints(refresh_x)[:2] == pytest.approx((10.0, 19.99))
+        lo, hi = canvas.get_visible_xlim()
+        assert lo == pytest.approx(10.0)
+        assert hi == pytest.approx(19.99)
+        assert "angle" in canvas.axes_list[0].get_xlabel()
+        assert series.time.dtype == raw_time.dtype
+        assert series.values.dtype == raw_values.dtype
+    finally:
+        canvas.close()
+        fd.close_source()
+
+
+def _write_channels(path, channels):
+    from asammdf import MDF, Signal
+
+    mdf = MDF(version="4.10")
+    for channel in channels:
+        kwargs = {}
+        invalidation = channel.get("invalidation")
+        if invalidation is not None:
+            kwargs["invalidation_bits"] = np.asarray(invalidation, dtype=np.uint8)
+        mdf.append(Signal(
+            samples=np.asarray(channel["samples"], dtype=float),
+            timestamps=np.asarray(channel["timestamps"], dtype=float),
+            name=channel["name"],
+            unit=channel.get("unit") or "",
+            **kwargs,
+        ))
+    mdf.save(str(path), overwrite=True)
+    mdf.close()
+    return path
+
+
+def _files_host(files, *, x_channel=None):
+    spec = CustomXAxisSpec()
+    if x_channel:
+        spec = CustomXAxisSpec(
+            mode="channel",
+            resolver="per_source_name",
+            channel=x_channel,
+            label=x_channel,
+        )
+    table = dict(files)
+    return SimpleNamespace(
+        channel_list=SimpleNamespace(
+            get_file_data=lambda key, sources=table: sources.get(key),
+            checked_axis_groups=lambda: {},
+        ),
+        files=table,
+        _active_time_curve_bindings=lambda view_idx=None: [],
+        _custom_xaxis_spec=spec,
+        navigator_order=None,
+    )
+
+
+def _draw(rows, *, mode="single", xlabel="Time (s)"):
+    from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+    canvas = TimeDomainCanvasPG()
+    canvas.resize(2400, 800)
+    canvas.show()
+    canvas.plot_channels(list(rows), mode=mode, xlabel=xlabel)
+    QCoreApplication.processEvents()
+    return canvas
+
+
+def _curves(canvas):
+    found = []
+    for _key, name, pair in canvas._channel_lines.composite_items():
+        pdi = pair[1].plot_data_item
+        x, y = pdi.getData()
+        found.append((
+            str(name),
+            np.asarray(x, dtype=float),
+            np.asarray(y, dtype=float),
+            pdi,
+        ))
+    return found
+
+
+def _refresh_curves(canvas):
+    canvas._refresh_visible_data()
+    QCoreApplication.processEvents()
+    return _curves(canvas)
+
+
+def _assert_curve_xy(curve, expect_x, expect_y):
+    _name, x, y, _pdi = curve
+    np.testing.assert_allclose(x, np.asarray(expect_x, dtype=float), equal_nan=True)
+    np.testing.assert_allclose(y, np.asarray(expect_y, dtype=float), equal_nan=True)
+
+
+def test_time_and_custom_x_keep_range_gaps_and_single_points(qapp, tmp_path):
+    from mf4_analyzer.ui.main_window.window import MainWindow
+
+    time, signal, angle = _angle_case()
+    path = _write_angle_native(tmp_path / "range.mf4", time, signal, angle)
+    ranged = DataLoader.load_mf4_native(str(path))
+    gap_path = _write_channels(tmp_path / "gaps.mf4", [
+        {
+            "name": "sig",
+            "timestamps": [0.0, 0.1, 0.2, 0.3],
+            "samples": [10.0, 20.0, 30.0, 40.0],
+            "invalidation": [0, 1, 0, 0],
+        },
+        {
+            "name": "angle",
+            "timestamps": [0.0, 0.1, 0.2, 0.3],
+            "samples": [5.0, 6.0, 7.0, 8.0],
+            "unit": "deg",
+        },
+        {
+            "name": "reset_sig",
+            "timestamps": [0.0, 1.0, 0.2],
+            "samples": [1.0, 2.0, 3.0],
+        },
+        {
+            "name": "reset_angle",
+            "timestamps": [0.0, 1.0, 0.2],
+            "samples": [10.0, 11.0, 12.0],
+            "unit": "deg",
+        },
+        {
+            "name": "dot",
+            "timestamps": [1.5],
+            "samples": [4.0],
+        },
+        {
+            "name": "dot_angle",
+            "timestamps": [1.5],
+            "samples": [42.0],
+            "unit": "deg",
+        },
+        {
+            "name": "hole_sig",
+            "timestamps": [0.0, 1.0, 2.0],
+            "samples": [1.0, 2.0, 3.0],
+        },
+        {
+            "name": "hole_angle",
+            "timestamps": [0.0, 1.0, 2.0],
+            "samples": [10.0, np.nan, 12.0],
+            "unit": "deg",
+        },
+    ])
+    gaps = DataLoader.load_mf4_native(str(gap_path))
+    canvases = []
+    try:
+        selected = np.arange(100, 201)
+        for x_channel, expect_x in (
+            (None, time[selected]),
+            ("angle", angle[selected]),
+        ):
+            built = MainWindow._build_time_plot_data(
+                _plot_host(ranged, x_channel=x_channel),
+                checked=[("f0", "sig", "#1769e0")],
+                range_enabled=True,
+                range_lo=0.10,
+                range_hi=0.20,
+            )
+            binding = built.rows[0][7]["display_binding"]
+            np.testing.assert_array_equal(binding.record_indices, selected)
+            np.testing.assert_allclose(np.asarray(binding.acquisition_time), time)
+            np.testing.assert_allclose(np.asarray(binding.display_time), time)
+            canvas = _draw(
+                built.rows,
+                xlabel="angle" if x_channel else "Time (s)",
+            )
+            canvases.append(canvas)
+            _assert_curve_xy(_curves(canvas)[0], expect_x, signal[selected])
+            _assert_curve_xy(_refresh_curves(canvas)[0], expect_x, signal[selected])
+
+        gap_cases = (
+            ("sig", None, [0.0, 0.1, 0.2, 0.3], [10.0, np.nan, 30.0, 40.0]),
+            ("sig", "angle", [5.0, 6.0, 7.0, 8.0], [10.0, np.nan, 30.0, 40.0]),
+            ("reset_sig", None, [0.0, 1.0, np.nan, 0.2], [1.0, 2.0, np.nan, 3.0]),
+            ("reset_sig", "reset_angle", [10.0, 11.0, np.nan, 12.0], [1.0, 2.0, np.nan, 3.0]),
+            ("dot", None, [1.5], [4.0]),
+            ("dot", "dot_angle", [42.0], [4.0]),
+            ("hole_sig", "hole_angle", [10.0, np.nan, 12.0], [1.0, np.nan, 3.0]),
+        )
+        for channel, x_channel, expect_x, expect_y in gap_cases:
+            built = MainWindow._build_time_plot_data(
+                _files_host({"f0": gaps}, x_channel=x_channel),
+                checked=[("f0", channel, "#1769e0")],
+                range_enabled=False,
+            )
+            assert built.rows, channel
+            canvas = _draw(built.rows, xlabel=x_channel or "Time (s)")
+            canvases.append(canvas)
+            curve = _curves(canvas)[0]
+            _assert_curve_xy(curve, expect_x, expect_y)
+            refreshed = _refresh_curves(canvas)[0]
+            _assert_curve_xy(refreshed, expect_x, expect_y)
+            if len(expect_x) == 1:
+                assert curve[3].opts.get("symbol") == "o"
+                assert refreshed[3].opts.get("symbol") == "o"
+            if np.isnan(np.asarray(expect_y, dtype=float)).any():
+                assert refreshed[3].opts.get("connect") == "finite"
+    finally:
+        for canvas in canvases:
+            canvas.close()
+        ranged.close_source()
+        gaps.close_source()
+
+
+def test_same_name_custom_x_curves_stay_on_their_own_source(qapp, tmp_path):
+    from mf4_analyzer.ui.main_window.window import MainWindow
+
+    time = np.arange(4, dtype=float) / 4.0
+    signal = np.sin(2.0 * np.pi * 3.0 * time)
+    left = 10.0 + 10.0 * time
+    right = 30.0 + 10.0 * time
+    fd_left = DataLoader.load_mf4_native(str(_write_angle_native(
+        tmp_path / "left.mf4", time, signal, left,
+    )))
+    fd_right = DataLoader.load_mf4_native(str(_write_angle_native(
+        tmp_path / "right.mf4", time, signal, right,
+    )))
+    canvas = None
+    try:
+        built = MainWindow._build_time_plot_data(
+            _files_host({"a": fd_left, "b": fd_right}, x_channel="angle"),
+            checked=[("a", "sig", "#1769e0"), ("b", "sig", "#dc2626")],
+            range_enabled=False,
+        )
+        canvas = _draw(built.rows, mode="subplot", xlabel="angle")
+        curves = _refresh_curves(canvas)
+        assert len(curves) == 2
+        drawn = sorted(
+            (float(curve[1][0]), curve[1]) for curve in curves
+        )
+        np.testing.assert_allclose(drawn[0][1], left)
+        np.testing.assert_allclose(drawn[1][1], right)
+    finally:
+        if canvas is not None:
+            canvas.close()
+        fd_left.close_source()
+        fd_right.close_source()
+
+
+def test_custom_x_view_restore_settles_on_angle(qapp, tmp_path):
+    from mf4_analyzer.ui.main_window.window import MainWindow
+
+    time, signal, angle = _angle_case()
+    fd = DataLoader.load_mf4_native(str(_write_angle_native(
+        tmp_path / "restore.mf4", time, signal, angle,
+    )))
+    canvas = None
+    try:
+        built = MainWindow._build_time_plot_data(
+            _plot_host(fd, x_channel="angle"),
+            checked=[("f0", "sig", "#1769e0")],
+            range_enabled=False,
+        )
+        canvas = _draw(built.rows, xlabel="angle")
+        assert canvas._quality.timer.interval() == 150
+        canvas.restore_visible_xlim((11.0, 18.0), flush=False)
+        canvas.restore_visible_ylims({})
+        canvas.settle_view_restore()
+        QCoreApplication.processEvents()
+        assert canvas._quality.timer.interval() == 150
+        lo, hi = canvas.get_visible_xlim()
+        assert lo == pytest.approx(11.0)
+        assert hi == pytest.approx(18.0)
+        _name, drawn, _y, _pdi = _curves(canvas)[0]
+        finite = drawn[np.isfinite(drawn)]
+        assert finite.size
+        # Settlement envelopes a 25% X buffer, then clips to the angle union.
+        # The samples must still be angle values, not the 0..0.999 clock.
+        assert finite[0] == pytest.approx(10.0)
+        assert finite[-1] > 18.0
+        expected = angle[
+            (angle >= float(finite[0]) - 1e-9)
+            & (angle <= float(finite[-1]) + 1e-9)
+        ]
+        np.testing.assert_allclose(finite, expected)
+        assert "angle" in canvas.axes_list[0].get_xlabel()
+    finally:
+        if canvas is not None:
+            canvas.close()
+        fd.close_source()
+
+
+def test_duplicate_custom_x_is_not_read_as_a_unique_clock(qapp, tmp_path):
+    from mf4_analyzer.ui.main_window.window import MainWindow
+    from mf4_analyzer.ui.time_xaxis import CursorXAxisContext
+
+    path = _write_channels(tmp_path / "dup.mf4", [
+        {
+            "name": "sig",
+            "timestamps": [0.0, 1.0, 2.0],
+            "samples": [10.0, 20.0, 30.0],
+        },
+        {
+            "name": "angle",
+            "timestamps": [0.0, 1.0, 2.0],
+            "samples": [1.0, 1.0, 2.0],
+            "unit": "deg",
+        },
+    ])
+    fd = DataLoader.load_mf4_native(str(path))
+    canvas = None
+    try:
+        built = MainWindow._build_time_plot_data(
+            _files_host({"f0": fd}, x_channel="angle"),
+            checked=[("f0", "sig", "#1769e0")],
+            range_enabled=False,
+        )
+        canvas = _draw(built.rows, xlabel="angle")
+        _assert_curve_xy(_curves(canvas)[0], [1.0, 1.0, 2.0], [10.0, 20.0, 30.0])
+        canvas.set_cursor_x_axis_context(CursorXAxisContext(
+            mode="channel", label="angle",
+        ))
+        custom = canvas.evaluate_single_cursor(1.0)
+        # Existing exact-hit rule keeps the first display sample. It must not
+        # collapse the repeated angle onto the unique acquisition time 1.0,
+        # whose Y is 20.
+        assert [float(branch.current_value) for branch in custom[0].branches] == [
+            10.0
+        ]
+        canvas.set_cursor_x_axis_context(CursorXAxisContext(mode="time"))
+        clock = canvas.evaluate_single_cursor(1.0)
+        assert clock[0].current_value == pytest.approx(20.0)
+        assert clock[0].sample_time == pytest.approx(1.0)
+    finally:
+        if canvas is not None:
+            canvas.close()
+        fd.close_source()
+
+
+def test_mismatched_or_empty_bindings_do_not_invent_a_line(qapp, tmp_path):
+    from mf4_analyzer.ui.main_window.window import MainWindow
+
+    path = _write_channels(tmp_path / "short.mf4", [
+        {
+            "name": "sig",
+            "timestamps": [0.0, 0.1, 0.2, 0.3, 0.4],
+            "samples": [1.0, 2.0, 3.0, 4.0, 5.0],
+        },
+        {
+            "name": "angle",
+            "timestamps": [0.0, 0.1],
+            "samples": [10.0, 11.0],
+            "unit": "deg",
+        },
+    ])
+    fd = DataLoader.load_mf4_native(str(path))
+    canvas = None
+    empty = None
+    try:
+        built = MainWindow._build_time_plot_data(
+            _files_host({"f0": fd}, x_channel="angle"),
+            checked=[("f0", "sig", "#1769e0")],
+            range_enabled=False,
+        )
+        assert any(issue.code == "unaligned" for issue in built.issues)
+        assert built.rows == []
+        canvas = _draw(built.rows)
+        assert _curves(canvas) == []
+        empty_built = MainWindow._build_time_plot_data(
+            _files_host({"f0": fd}),
+            checked=[],
+            range_enabled=False,
+        )
+        assert empty_built.rows == []
+        empty = _draw(empty_built.rows)
+        assert _curves(empty) == []
+        empty.show_empty_hint("当前时间范围内无可绘制数据 · 0/0")
+        assert empty._empty_hint_text == "当前时间范围内无可绘制数据 · 0/0"
+    finally:
+        if canvas is not None:
+            canvas.close()
+        if empty is not None:
+            empty.close()
+        fd.close_source()
+
+
+def _invalid_spike_channel():
+    """Fs=1000, N=1000, zeros except index 500 = 1000 with invalidation."""
+    count = 1000
+    time = np.arange(count, dtype=np.float64) / 1000.0
+    samples = np.zeros(count, dtype=np.float64)
+    samples[500] = 1000.0
+    invalidation = np.zeros(count, dtype=np.uint8)
+    invalidation[500] = 1
+    return {
+        "name": "torque",
+        "timestamps": time,
+        "samples": samples,
+        "invalidation": invalidation,
+        "unit": "Nm",
+    }
+
+
+def _spike_filter_payload():
+    return {
+        "enabled": True,
+        "spec": {
+            "kind": "low",
+            "order": 6,
+            "cutoff": 50.0,
+            "cutoff_lo": 100.0,
+            "cutoff_hi": 2000.0,
+        },
+        "show_original": True,
+        "show_filtered": True,
+    }
+
+
+def _companion_rows(rows):
+    found = []
+    for row in rows:
+        meta = row[7] if len(row) >= 8 and isinstance(row[7], dict) else {}
+        if meta.get("companion_of"):
+            found.append(row)
+    return found
+
+
+def _sample_at(values, index):
+    array = np.asarray([] if values is None else values, dtype=float)
+    if array.size <= index:
+        return None
+    return float(array[index])
+
+
+def test_invalid_thousand_spike_does_not_enter_the_time_filter(qapp, tmp_path, monkeypatch):
+    """R02 production draw: an invalid 1000 pulse must not become a filter peak.
+
+    The numeric oracle is the raw valid samples, which are zero. This does not
+    compare the companion against a second call to the current filter.
+    """
+    from mf4_analyzer.ui.main_window.window import MainWindow
+
+    path = _write_channels(tmp_path / "invalid-spike.mf4", [_invalid_spike_channel()])
+    fd = DataLoader.load_mf4_native(str(path))
+    canvas = None
+    try:
+        series = read_signal(fd, "torque")
+        raw_values = np.array(series.values, copy=True)
+        calls = []
+        import mf4_analyzer.signal.filters as filters
+        real_apply = filters.apply
+
+        def spy(sig, spec, fs):
+            calls.append(np.array(sig, copy=True))
+            return real_apply(sig, spec, fs)
+
+        monkeypatch.setattr(filters, "apply", spy)
+        assert series.sampling.status == "known"
+        assert float(series.sampling.fs_hz) == pytest.approx(1000.0)
+        assert bool(np.asarray(series.validity)[500]) is True
+        assert raw_values[500] == pytest.approx(1000.0)
+        assert np.all(raw_values[np.arange(raw_values.size) != 500] == 0.0)
+        host = _files_host({"f0": fd})
+        host._filter_suffix = MainWindow._filter_suffix.__get__(host)
+        built = MainWindow._build_time_plot_data(
+            host,
+            checked=[("f0", "torque", "#1769e0")],
+            range_enabled=False,
+            time_filter=_spike_filter_payload(),
+        )
+        companions = _companion_rows(built.rows)
+        originals = [
+            row for row in built.rows
+            if "torque" in str(row[0]) and row not in companions
+        ]
+        assert originals, "原始扭矩曲线必须保留"
+        canvas = _draw(built.rows)
+        drawn = _curves(canvas)
+        drawn_companions = [
+            curve for key, curve in zip(
+                (item[0] for item in canvas._channel_lines.composite_items()),
+                drawn,
+            )
+            if key in canvas._companion_names or "Hz" in curve[0]
+        ]
+        if companions or drawn_companions or canvas._companion_names:
+            payload_y = companions[0][3] if companions else None
+            drawn_y = drawn_companions[0][2] if drawn_companions else None
+            pytest.fail(
+                "invalid 千值脉冲进入了滤波并留下 companion："
+                f"payload[499]={_sample_at(payload_y, 499)!r} "
+                f"payload[500]={_sample_at(payload_y, 500)!r} "
+                f"drawn[499]={_sample_at(drawn_y, 499)!r} "
+                f"drawn[500]={_sample_at(drawn_y, 500)!r} "
+                f"companion_names={sorted(canvas._companion_names)!r} "
+                f"issues={[getattr(issue, 'detail', '') for issue in built.issues]!r}"
+            )
+        assert built.issues, "拒绝 companion 时必须给出通道和原因"
+        text = " ".join(
+            f"{issue.target_channel} {issue.detail}" for issue in built.issues
+        )
+        assert "torque" in text
+        assert ("有效段" in text) or ("缩小" in text)
+        original_y = np.asarray(originals[0][3], dtype=float)
+        finite = original_y[np.isfinite(original_y)]
+        assert finite.size == 999
+        assert np.all(finite == 0.0)
+        drawn_originals = [curve for curve in drawn if curve not in drawn_companions]
+        assert drawn_originals
+        drawn_finite = drawn_originals[0][2][np.isfinite(drawn_originals[0][2])]
+        assert drawn_finite.size
+        assert np.max(np.abs(drawn_finite)) == 0.0
+        np.testing.assert_array_equal(np.asarray(series.values), raw_values)
+        assert not canvas._companion_names
+        assert calls == []
+    finally:
+        if canvas is not None:
+            canvas.close()
+        fd.close_source()
+
+
+def test_valid_segment_far_from_the_spike_filters_to_zero(qapp, tmp_path):
+    """A long zero segment that does not reach the invalid pulse stays zero."""
+    from mf4_analyzer.ui.main_window.window import MainWindow
+
+    path = _write_channels(tmp_path / "valid-segment.mf4", [_invalid_spike_channel()])
+    fd = DataLoader.load_mf4_native(str(path))
+    canvas = None
+    try:
+        series = read_signal(fd, "torque")
+        hi = float(series.time[180])
+        host = _files_host({"f0": fd})
+        host._filter_suffix = MainWindow._filter_suffix.__get__(host)
+        built = MainWindow._build_time_plot_data(
+            host,
+            checked=[("f0", "torque", "#1769e0")],
+            range_enabled=True,
+            range_lo=float(series.time[0]),
+            range_hi=hi,
+            time_filter=_spike_filter_payload(),
+        )
+        companions = _companion_rows(built.rows)
+        assert len(companions) == 1
+        companion = np.asarray(companions[0][3], dtype=float)
+        assert companion.shape == (181,)
+        np.testing.assert_array_equal(companion, 0.0)
+        canvas = _draw(built.rows)
+        drawn = [
+            curve for curve in _curves(canvas)
+            if "Hz" in curve[0]
+        ]
+        assert drawn
+        finite = drawn[0][2][np.isfinite(drawn[0][2])]
+        assert finite.size
+        assert np.max(np.abs(finite)) == 0.0
+        assert not any(issue.code == "filter_quality" for issue in built.issues)
+    finally:
+        if canvas is not None:
+            canvas.close()
+        fd.close_source()
+
+
+def test_invalid_spike_filter_keeps_custom_x_on_angle(qapp, tmp_path):
+    """Filtering must not put the curve back on acquisition time."""
+    from mf4_analyzer.ui.main_window.window import MainWindow
+
+    time = np.arange(1000, dtype=np.float64) / 1000.0
+    angle = 10.0 + 10.0 * time
+    spike = _invalid_spike_channel()
+    path = _write_channels(tmp_path / "angle-spike.mf4", [
+        spike,
+        {
+            "name": "angle",
+            "timestamps": time,
+            "samples": angle,
+            "unit": "deg",
+        },
+    ])
+    fd = DataLoader.load_mf4_native(str(path))
+    canvas = None
+    try:
+        host = _files_host({"f0": fd}, x_channel="angle")
+        host._filter_suffix = MainWindow._filter_suffix.__get__(host)
+        built = MainWindow._build_time_plot_data(
+            host,
+            checked=[("f0", "torque", "#1769e0")],
+            range_enabled=False,
+            time_filter=_spike_filter_payload(),
+        )
+        assert _companion_rows(built.rows) == []
+        assert any(issue.code == "filter_quality" for issue in built.issues)
+        originals = [
+            row for row in built.rows if "torque" in str(row[0])
+        ]
+        assert originals
+        canvas = _draw(built.rows, xlabel="angle")
+        drawn = _curves(canvas)
+        assert drawn
+        assert not any("Hz" in curve[0] for curve in drawn)
+        lo, hi, count = _finite_endpoints(drawn[0][1])
+        assert count == 1000
+        assert lo == pytest.approx(10.0)
+        assert hi == pytest.approx(19.99)
+        assert not canvas._companion_names
+    finally:
+        if canvas is not None:
+            canvas.close()
+        fd.close_source()
+
+
 def _leaf_counts(widget):
     counts = {}
     root = widget.tree.topLevelItem(0)

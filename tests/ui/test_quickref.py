@@ -767,3 +767,31 @@ def test_wwt_record_rows_live_under_owner_file_not_inspector():
     assert "Inspector 列出" not in joined
     assert "Inspector 眼睛" not in joined
     assert "左侧树" in (row.gesture or "")
+
+
+def test_quickref_states_segment_filter_and_multirate_limits():
+    joined = "\n".join(
+        f"{row.desc}\n{row.sub or ''}"
+        for group in quickref.QUICKREF
+        for row in group.rows
+    )
+    for token in (
+        "先选段",
+        "未选不能播放",
+        "同一物理时钟",
+        "局部段号",
+        "不能合并回放",
+        "缩小到有效段",
+        "不插值",
+        "对齐后计算",
+        "同轴直接计算",
+        "默认关闭",
+        "长表",
+        "无损",
+        "紧凑",
+        "公共轴",
+    ):
+        assert token in joined, token
+    assert "所有导入已默认" not in joined
+    assert "已经默认对齐" not in joined
+    assert "任意分数" not in joined

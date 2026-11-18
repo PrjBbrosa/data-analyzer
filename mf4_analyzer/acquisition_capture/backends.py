@@ -79,6 +79,175 @@ class ReplayEvent:
     segment: int
     valid: bool
     order: int
+    axis_id: str = ""
+
+
+def _event_axis(event) -> str:
+    return str(getattr(event, "axis_id", "") or "")
+
+
+def _group_replay_events(events):
+    grouped: dict[str, list] = {}
+    order: list[str] = []
+    for event in events:
+        key = _event_axis(event)
+        if key not in grouped:
+            grouped[key] = []
+            order.append(key)
+        grouped[key].append(event)
+    return tuple((key, grouped[key]) for key in order)
+
+
+def _segment_ids(events) -> list[int]:
+    return sorted({int(event.segment) for event in events})
+
+
+def _axis_needs_segment(events) -> bool:
+    return len(_segment_ids(events)) > 1
+
+
+def _independent_clock_reason(groups) -> str | None:
+    """Local segment indexes on different clocks are not one acquisition."""
+    if len(groups) <= 1:
+        return None
+    if not any(_axis_needs_segment(events) for _axis, events in groups):
+        return None
+    parts = []
+    for axis_id, events in groups:
+        names = "、".join(dict.fromkeys(event.channel for event in events))
+        label = axis_id or "未命名时钟"
+        parts.append(f"{label}（{names}）")
+    return (
+        "通道分别在时钟 " + "、".join(parts) + " 上。"
+        "局部段号不能当成同一次采集，当前不能合并回放。"
+    )
+
+
+def _is_playable_event(event) -> bool:
+    if not event.valid or event.value is None:
+        return False
+    try:
+        stamp = float(event.time_s)
+    except (TypeError, ValueError):
+        return False
+    if not math.isfinite(stamp):
+        return False
+    if isinstance(event.value, float) and not math.isfinite(event.value):
+        return False
+    return True
+
+
+def _finite_event_times(events) -> list[float]:
+    stamps = []
+    for event in events:
+        try:
+            stamp = float(event.time_s)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(stamp):
+            stamps.append(stamp)
+    return stamps
+
+
+def _segment_option_text(segment: int, events) -> str:
+    chosen = [event for event in events if int(event.segment) == int(segment)]
+    stamps = _finite_event_times(chosen)
+    if not stamps:
+        span = "时间无效"
+    else:
+        span = f"{min(stamps):.3f}-{max(stamps):.3f} s"
+    playable = sum(1 for event in chosen if _is_playable_event(event))
+    return (
+        f"段 {int(segment) + 1}  {span}  记录 {len(chosen)}  可播放 {playable}"
+    )
+
+
+def _segment_fact_lines(groups) -> list[str]:
+    lines = []
+    multiple = len(groups) > 1
+    for axis_id, events in groups:
+        names = "、".join(dict.fromkeys(event.channel for event in events))
+        prefix = f"时钟 {axis_id or '未命名时钟'}（{names}）" if multiple else ""
+        for segment in _segment_ids(events):
+            text = _segment_option_text(segment, events)
+            lines.append(f"{prefix}{text}" if prefix else text)
+    return lines
+
+
+def _carried_replay_notes(source) -> list[str]:
+    kept = []
+    for note in tuple(getattr(source, "notices", ()) or ()):
+        text = str(note)
+        if (
+            "请选择要回放的段" in text
+            or text.startswith("段 ")
+            or text.startswith("时钟 ")
+            or text.startswith("当前段")
+            or text.startswith("通道分别在时钟")
+            or text.startswith("所选段没有可播放点")
+        ):
+            continue
+        kept.append(text)
+    return kept
+
+
+def _playback_source(source, events, *, segment_choice, notes) -> ReplaySource:
+    """Build a playable source from events already in memory."""
+    chosen = list(events)
+    playable = [event for event in chosen if _is_playable_event(event)]
+    playable.sort(key=lambda event: (float(event.time_s), int(event.order)))
+    samples = [
+        (event.channel, float(event.time_s), event.value) for event in playable
+    ]
+    duration = max((float(event.time_s) for event in playable), default=0.0)
+    note_list = list(dict.fromkeys(str(item) for item in notes if str(item)))
+    if any(not event.valid for event in chosen):
+        note_list.append("失效样本不作为采集值。")
+    if segment_choice is not None and not playable:
+        note_list.append("所选段没有可播放点。")
+    elif segment_choice is not None and playable:
+        start = min(float(event.time_s) for event in playable)
+        note_list.append(
+            f"当前段 {int(segment_choice) + 1}：{start:.3f}-{duration:.3f} s，"
+            f"记录 {len(chosen)}，可播放 {len(playable)}"
+        )
+    return ReplaySource(
+        path=source.path,
+        selected=source.selected,
+        source_samples=samples,
+        duration_s=float(duration),
+        warnings=tuple(source.warnings),
+        source_metadata=dict(source.source_metadata),
+        events=tuple(chosen),
+        replay_mode="native_events",
+        segment_choice=None if segment_choice is None else int(segment_choice),
+        notices=tuple(dict.fromkeys(note_list)),
+    )
+
+
+def _waiting_replay_source(path, selected, events, notices, metadata) -> ReplaySource:
+    groups = _group_replay_events(events)
+    block = _independent_clock_reason(groups)
+    note_list = [str(item) for item in notices if str(item)]
+    if block:
+        note_list.append(block)
+    else:
+        note_list.append("时间回退，请选择要回放的段")
+    note_list.extend(_segment_fact_lines(groups))
+    if any(not event.valid for event in events):
+        note_list.append("失效样本不作为采集值。")
+    return ReplaySource(
+        path=Path(path),
+        selected=tuple(selected),
+        source_samples=[],
+        duration_s=0.0,
+        warnings=(),
+        source_metadata=dict(metadata),
+        events=tuple(events),
+        replay_mode="segment_required",
+        segment_choice=None,
+        notices=tuple(dict.fromkeys(note_list)),
+    )
 
 
 @dataclass(frozen=True)
@@ -283,12 +452,17 @@ class ReplayRecorderBackend(RecorderBackend):
         synth_duration_s: float = 2.0,
         synth_rate_hz: float = 50.0,
         speed_multiplier: float = 1.0,
+        time_origin: float | None = None,
     ) -> None:
         self._source = None if source_samples is None else list(source_samples)
         self._synth_duration = float(synth_duration_s)
         self._synth_rate = float(synth_rate_hz)
         self._speed_multiplier = 1.0
         self.speed_multiplier = speed_multiplier
+        # None keeps the historical "seconds from session start" clock.
+        # A selected segment passes its own first timestamp so playback
+        # starts at that segment without rewriting the sample times.
+        self._time_origin = None if time_origin is None else float(time_origin)
         self._cursor = 0
         self._started = False
         self._t_start: float | None = None
@@ -305,6 +479,8 @@ class ReplayRecorderBackend(RecorderBackend):
         self._selected = tuple(selected)
         if self._source is None:
             self._source = self._synthesize(self._selected)
+        if self._time_origin is None:
+            self._time_origin = 0.0
         self._cursor = 0
         self._started = True
         self._t_start = time.monotonic()
@@ -321,7 +497,8 @@ class ReplayRecorderBackend(RecorderBackend):
         if not self._started or self._t_start is None or self._source is None:
             return []
         now = self._paused_at if self._paused_at is not None else time.monotonic()
-        now_rel = (now - self._t_start) * self._speed_multiplier
+        origin = 0.0 if self._time_origin is None else float(self._time_origin)
+        now_rel = origin + (now - self._t_start) * self._speed_multiplier
         out: list[tuple[str, float, float]] = []
         while self._cursor < len(self._source):
             ch, ts, val = self._source[self._cursor]
@@ -456,59 +633,101 @@ class ReplayRecorderBackend(RecorderBackend):
                     segment=segment_index,
                     valid=valid,
                     order=order,
+                    axis_id=str(getattr(channel, "axis_id", "") or ""),
                 ))
                 order += 1
-        segment_ids = {event.segment for event in events}
-        if segment is None and len(segment_ids) > 1:
-            return ReplaySource(
-                path=source_path,
-                selected=tuple(
-                    SelectedMeasurement(name=name, unit=str(units.get(name, "") or ""))
-                    for name in selected_names
-                ),
-                source_samples=[],
-                duration_s=0.0,
-                warnings=(),
-                source_metadata={"layout": "native_events"},
-                events=tuple(events),
-                replay_mode="segment_required",
-                segment_choice=None,
-                notices=tuple(dict.fromkeys([
-                    *notices,
-                    "时间回退，请选择要回放的段",
-                ])),
-            )
-        chosen = list(events)
-        if segment is not None:
-            chosen = [event for event in events if event.segment == segment]
-            if not chosen and events:
-                raise ValueError(f"segment {segment} 超出范围，共有 {len(segment_ids)} 段")
-        playable = [event for event in chosen if event.valid and math.isfinite(event.time_s)]
-        playable.sort(key=lambda event: (event.time_s, event.order))
-        source_samples = [
-            (event.channel, event.time_s, event.value) for event in playable
-        ]
-        duration = max((event.time_s for event in playable), default=0.0)
+        selected = tuple(
+            SelectedMeasurement(name=name, unit=str(units.get(name, "") or ""))
+            for name in selected_names
+        )
+        metadata = {"layout": "native_events"}
         note_list = list(dict.fromkeys(notices))
         if len(set(clocks)) > 1:
             note_list.append("各通道按自己的事件时间回放，没有补点。")
             note_list.append("不同时钟保持各自的记录，没有收成一条时间轴。")
-        if any(not event.valid for event in chosen):
-            note_list.append("失效样本不作为采集值。")
-        return ReplaySource(
+        groups = _group_replay_events(events)
+        needs_choice = any(_axis_needs_segment(group) for _axis, group in groups)
+        if segment is None and needs_choice:
+            return _waiting_replay_source(
+                source_path, selected, events, note_list, metadata,
+            )
+        block = _independent_clock_reason(groups)
+        if segment is not None and block:
+            raise ValueError(block)
+        chosen = list(events)
+        segment_choice = None
+        if segment is not None:
+            segment_choice = int(segment)
+            if len(groups) != 1:
+                raise ValueError(block or "没有可选择的回放段")
+            ids = _segment_ids(groups[0][1])
+            if segment_choice not in ids:
+                raise ValueError(
+                    f"segment {segment_choice} 超出范围，共有 {len(ids)} 段"
+                )
+            chosen = [
+                event for event in groups[0][1]
+                if int(event.segment) == segment_choice
+            ]
+        base = ReplaySource(
             path=source_path,
-            selected=tuple(
-                SelectedMeasurement(name=name, unit=str(units.get(name, "") or ""))
-                for name in selected_names
-            ),
-            source_samples=source_samples,
-            duration_s=float(duration),
+            selected=selected,
+            source_samples=[],
+            duration_s=0.0,
             warnings=(),
-            source_metadata={"layout": "native_events"},
-            events=tuple(chosen),
-            replay_mode="native_events",
-            segment_choice=None if segment is None else int(segment),
+            source_metadata=metadata,
+            events=tuple(events),
             notices=tuple(note_list),
+        )
+        return _playback_source(
+            base, chosen, segment_choice=segment_choice, notes=note_list,
+        )
+
+    @classmethod
+    def select_retained_segment(cls, source: ReplaySource, segment: int) -> ReplaySource:
+        """Choose one segment from events already kept on ``source``.
+
+        This does not open the MF4 and does not read the native store again.
+        Independent clocks are refused: a local segment index is not shared.
+        """
+        groups = _group_replay_events(tuple(source.events))
+        block = _independent_clock_reason(groups)
+        if block:
+            raise ValueError(block)
+        if len(groups) != 1:
+            raise ValueError("没有可选择的回放段")
+        events = groups[0][1]
+        ids = _segment_ids(events)
+        choice = int(segment)
+        if choice not in ids:
+            raise ValueError(f"segment {choice} 超出范围，共有 {len(ids)} 段")
+        chosen = [event for event in events if int(event.segment) == choice]
+        return _playback_source(
+            source,
+            chosen,
+            segment_choice=choice,
+            notes=_carried_replay_notes(source),
+        )
+
+    @classmethod
+    def segment_block_reason(cls, source: ReplaySource) -> str | None:
+        if str(getattr(source, "replay_mode", "") or "") != "segment_required":
+            return None
+        return _independent_clock_reason(_group_replay_events(tuple(source.events)))
+
+    @classmethod
+    def segment_options(cls, source: ReplaySource) -> tuple[dict, ...]:
+        if cls.segment_block_reason(source):
+            return ()
+        if str(getattr(source, "replay_mode", "") or "") != "segment_required":
+            return ()
+        groups = _group_replay_events(tuple(source.events))
+        if len(groups) != 1:
+            return ()
+        events = groups[0][1]
+        return tuple(
+            {"segment": segment, "text": _segment_option_text(segment, events)}
+            for segment in _segment_ids(events)
         )
 
     @classmethod

@@ -235,6 +235,245 @@ def test_replay_warning_is_visible_before_play_and_follows_the_source(monkeypatc
         tab.close()
 
 
+def _write_reset_channel_mf4(path: Path, *, samples=None, timestamps=None,
+                             name: str = "Torque", invalid: bool = False) -> Path:
+    from asammdf import MDF, Signal
+    import numpy as np
+
+    values = np.asarray([0, 1, 2, 3, 4, 5] if samples is None else samples, dtype=float)
+    stamps = np.asarray(
+        [0.0, 0.1, 0.2, 0.0, 0.1, 0.2] if timestamps is None else timestamps,
+        dtype=float,
+    )
+    kwargs = {}
+    if invalid:
+        kwargs["invalidation_bits"] = np.ones(values.shape[0], dtype=np.uint8)
+    mdf = MDF(version="4.10")
+    mdf.append([Signal(samples=values, timestamps=stamps, name=name, unit="Nm", **kwargs)])
+    mdf.save(str(path), overwrite=True)
+    mdf.close()
+    return path
+
+
+def _write_grouped_mf4(path: Path, groups) -> Path:
+    from tests._helpers.mf4_factory import write_signal_groups_mf4
+    return write_signal_groups_mf4(path, groups)
+
+
+def _segment_combo(tab):
+    from PyQt5.QtWidgets import QComboBox
+    return tab.findChild(QComboBox, "replaySegmentCombo")
+
+
+def _choose_segment(tab, segment):
+    combo = _segment_combo(tab)
+    assert combo is not None and combo.isVisible()
+    for index in range(combo.count()):
+        if combo.itemData(index) == segment:
+            combo.setCurrentIndex(index)
+            return combo
+    raise AssertionError(segment)
+
+
+def _card_values(tab, name: str):
+    return [value for _ts, value in tab.live_cards.cards[name]._spark._buffer]
+
+
+def _close_replay(tab, qapp=None):
+    tab._timer.stop()
+    if tab._backend is not None:
+        tab._backend.stop()
+    tab.close()
+    if qapp is not None:
+        qapp.processEvents()
+
+
+def test_reset_file_disables_play_and_guards_direct_play(qtbot, qapp, tmp_path: Path):
+    path = _write_reset_channel_mf4(tmp_path / "reset.mf4")
+    tab = ReplayTab()
+    qtbot.addWidget(tab)
+    tab.resize(1200, 720)
+    tab.show()
+    try:
+        tab.load_file(path)
+        qtbot.waitUntil(lambda: not tab._imports.busy, timeout=20000)
+        qapp.processEvents()
+        warning = tab._alignment_warning
+        assert warning.isVisible()
+        assert "段" in warning.text()
+        assert tab._play_btn.isEnabled() is False
+        assert tab._timer.isActive() is False
+        tab._play_btn.setEnabled(True)
+        tab.play()
+        assert tab.backend is None
+        assert tab._timer.isActive() is False
+        assert tab.state != "playing"
+        assert not tab._source.source_samples
+
+        combo = _choose_segment(tab, 0)
+        assert "段 1" in combo.currentText()
+        assert "可播放 3" in combo.currentText()
+        assert tab._play_btn.isEnabled()
+        tab.set_speed_multiplier(1000.0)
+        tab.play()
+        qtbot.waitUntil(lambda: tab.state == "stopped", timeout=3000)
+        assert _card_values(tab, "Torque") == pytest.approx([0.0, 1.0, 2.0])
+
+        tab.play()
+        qtbot.waitUntil(lambda: tab.state == "stopped", timeout=3000)
+        assert _card_values(tab, "Torque") == pytest.approx([0.0, 1.0, 2.0])
+
+        tab.set_speed_multiplier(0.001)
+        tab.play()
+        tab._timer.stop()
+        tab.drain_once()
+        assert tab.state == "playing"
+        assert _card_values(tab, "Torque") == pytest.approx([0.0])
+        tab.pause()
+        assert tab.state == "paused"
+        assert tab._timer.isActive() is False
+        held = list(_card_values(tab, "Torque"))
+        tab.drain_once()
+        assert _card_values(tab, "Torque") == held
+        tab.play()
+        assert tab.state == "playing"
+        _choose_segment(tab, 1)
+        assert "段 2" in _segment_combo(tab).currentText()
+        tab._timer.stop()
+        tab.drain_once()
+        assert _card_values(tab, "Torque") == pytest.approx([3.0])
+        assert tab.position_slider.value() == 0
+        assert tab.position_slider.maximum() == 200
+        tab.set_speed_multiplier(1000.0)
+        tab._timer.start()
+        qtbot.waitUntil(lambda: tab.state == "stopped", timeout=3000)
+        assert _card_values(tab, "Torque") == pytest.approx([3.0, 4.0, 5.0])
+
+        _choose_segment(tab, None)
+        assert tab._play_btn.isEnabled() is False
+        assert tab.backend is None or tab.backend.status().started is False
+        assert tab._timer.isActive() is False
+        assert _card_values(tab, "Torque") == []
+        tab.play()
+        assert tab.state != "playing"
+    finally:
+        _close_replay(tab, qapp)
+
+
+def test_replay_segment_edges_cancel_reload_and_parent_close(qtbot, qapp, tmp_path: Path, monkeypatch):
+    from threading import Event
+    from PyQt5.QtWidgets import QWidget
+    from tests._helpers.mf4_factory import write_single_channel_mf4
+
+    invalid_path = _write_reset_channel_mf4(tmp_path / "invalid.mf4", invalid=True)
+    single_path = write_single_channel_mf4(
+        tmp_path / "one.mf4", name="Mark", unit="Nm",
+        timestamps=[1.25], samples=[4.0],
+    )
+    shared_path = _write_grouped_mf4(tmp_path / "shared.mf4", [[
+        ("Torque", [0, 1, 2, 3, 4, 5], [0.0, 0.1, 0.2, 0.0, 0.1, 0.2], "Nm"),
+        ("Speed", [10, 11, 12, 13, 14, 15], [0.0, 0.1, 0.2, 0.0, 0.1, 0.2], "rpm"),
+    ]])
+    split_path = _write_grouped_mf4(tmp_path / "split.mf4", [
+        [("Torque", [0, 1, 2, 3, 4, 5], [0.0, 0.1, 0.2, 0.0, 0.1, 0.2], "Nm")],
+        [("Speed", [10, 11, 12], [0.0, 0.1, 0.0], "rpm")],
+    ])
+    clean_path = _write_replay_mf4(tmp_path / "clean.mf4")
+    parent = QWidget()
+    qtbot.addWidget(parent)
+    tab = ReplayTab(parent=parent)
+    parent.resize(1200, 720)
+    parent.show()
+    release = Event()
+    try:
+        tab.load_file(invalid_path)
+        qtbot.waitUntil(lambda: not tab._imports.busy, timeout=20000)
+        _choose_segment(tab, 0)
+        assert tab._play_btn.isEnabled() is False
+        assert "失效" in tab._alignment_warning.text() or "可播放" in tab._alignment_warning.text()
+        tab.play()
+        assert tab.backend is None
+        assert tab._timer.isActive() is False
+
+        tab.load_file(single_path)
+        qtbot.waitUntil(lambda: not tab._imports.busy, timeout=20000)
+        qapp.processEvents()
+        assert tab._play_btn.isEnabled()
+        assert "单点" in tab._alignment_warning.text()
+        assert _segment_combo(tab) is None or not _segment_combo(tab).isVisible()
+        tab.play()
+        assert tab.backend is not None
+        assert tab.backend._source[0][1] == pytest.approx(1.25)
+        assert tab.backend._source[0][2] == pytest.approx(4.0)
+        tab.stop()
+
+        tab.load_file(shared_path)
+        qtbot.waitUntil(lambda: not tab._imports.busy, timeout=20000)
+        _choose_segment(tab, 0)
+        tab.set_speed_multiplier(1000.0)
+        tab.play()
+        qtbot.waitUntil(lambda: tab.state == "stopped", timeout=3000)
+        assert _card_values(tab, "Torque") == pytest.approx([0.0, 1.0, 2.0])
+        assert _card_values(tab, "Speed") == pytest.approx([10.0, 11.0, 12.0])
+
+        tab.load_file(split_path)
+        qtbot.waitUntil(lambda: not tab._imports.busy, timeout=20000)
+        qapp.processEvents()
+        assert tab._play_btn.isEnabled() is False
+        assert "局部段号" in tab._alignment_warning.text()
+        combo = _segment_combo(tab)
+        assert combo is None or not combo.isVisible()
+        tab.play()
+        assert tab.backend is None
+        assert tab._source.source_samples == []
+
+        written = []
+        monkeypatch.setattr(
+            "PyQt5.QtCore.QSettings.setValue",
+            lambda *args, **kwargs: written.append(args),
+        )
+        tab.load_file(clean_path)
+        qtbot.waitUntil(lambda: not tab._imports.busy, timeout=20000)
+        qapp.processEvents()
+        assert tab.source_path == clean_path
+        assert tab._play_btn.isEnabled()
+        assert _segment_combo(tab) is None or not _segment_combo(tab).isVisible()
+        assert "局部段号" not in tab._alignment_warning.text()
+        assert written == []
+        text = Path(__file__).resolve().parents[2].joinpath(
+            "mf4_analyzer", "acquisition_ui", "replay_tab.py",
+        ).read_text(encoding="utf-8")
+        assert "QSettings" not in text
+
+        stale_path = _write_reset_channel_mf4(tmp_path / "stale.mf4")
+        entered, release = Event(), Event()
+        real_broker = tab._imports.broker
+
+        def broker(method, path, **kwargs):
+            if Path(str(path)) == stale_path:
+                entered.set()
+                assert release.wait(3)
+            return real_broker(method, path, **kwargs)
+
+        tab._imports.broker = broker
+        tab.load_file(stale_path)
+        qtbot.waitUntil(entered.is_set, timeout=20000)
+        tab.load_file(clean_path)
+        release.set()
+        qtbot.waitUntil(lambda: not tab._imports.busy, timeout=20000)
+        assert tab.source_path == clean_path
+        assert tab._play_btn.isEnabled()
+        parent.close()
+        qapp.processEvents()
+        assert tab._timer.isActive() is False
+        assert tab.backend is None or tab.backend.status().started is False
+    finally:
+        release.set()
+        _close_replay(tab, qapp)
+        parent.close()
+        qapp.processEvents()
+
+
 def test_replay_import_keeps_gui_live_and_parent_close_cancels(qtbot, monkeypatch):
     from threading import Event
     from PyQt5.QtCore import QTimer

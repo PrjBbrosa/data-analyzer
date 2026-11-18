@@ -281,7 +281,7 @@ _HINTS = (
     ),
     Hint(
         id="channel.export_wwt_storage",
-        text="通道编辑导出遵循勾选；原生派生通道可导长表或同轴分组",
+        text="通道编辑可导 WWT 无损·紧凑",
         surface="discovery",
         retire_on="export_wwt",
         priority=70,
@@ -320,7 +320,7 @@ _HINTS = (
     ),
     Hint(
         id="file.import_cancel",
-        text="超时选「延长并重试」只加倍时限；内存预估可重新检查，重新检查后仍可能无法导入",
+        text="超时只加倍时限；内存预估可重新检查",
         surface="discovery",
         priority=43,
     ),
@@ -338,19 +338,19 @@ _HINTS = (
     ),
     Hint(
         id="file.native_sampling_project",
-        text="旧工程仍按公共轴恢复；原生采样政策、原始长表和回放事件要单独确认",
+        text="多采样率默认关，仅新开MF4",
         surface="discovery",
         priority=40,
     ),
     Hint(
         id="replay.mf4_alignment",
-        text="回放页按各通道自己的时间打开",
+        text="时间回退须先选段才能播",
         surface="discovery",
         priority=40,
     ),
     Hint(
         id="frf.align_then_compute",
-        text="异采样先勾选对齐再计算",
+        text="同轴直接算；整数比才对齐",
         surface="discovery",
         modes=frozenset({"frf"}),
         priority=44,
@@ -365,7 +365,7 @@ _HINTS = (
     ),
     Hint(
         id="time.native_samples",
-        text="时域游标读各通道原始采样点，不读屏幕包络；等距取较早的点，缺口处无数据",
+        text="游标读原始采样，不读包络",
         surface="discovery",
         modes=frozenset({"time"}),
         priority=42,
@@ -983,6 +983,23 @@ _HINTS = (
         tier="A",
         modes=frozenset({"time"}),
         priority=64,
+    ),
+    Hint(
+        id="channel.export_native_table",
+        text="原生可导长表或同轴分组",
+        surface="context",
+        tier="A",
+        modes=frozenset({"time", "fft", "fft_time", "frf", "order"}),
+        retire_on="export_native_table",
+        priority=30,
+    ),
+    Hint(
+        id="time.filter_quality",
+        text="坏段拒绝滤波，请缩到有效段",
+        surface="context",
+        tier="A",
+        modes=frozenset({"time"}),
+        priority=30,
     ),
     Hint(
         id="chart_options.empty_title",

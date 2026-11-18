@@ -10,6 +10,7 @@ follows "显示原始", the filtered trace's follows "显示滤波后".
 from tests._helpers.import_tasks import wait_for_imports
 import numpy as np
 import pytest
+from PyQt5.QtCore import QCoreApplication
 
 from mf4_analyzer.ui.main_window import MainWindow
 
@@ -191,6 +192,284 @@ def test_lowpass_zero_cutoff_does_not_draw_companion(
         "overlay", w.navigator.get_checked_channels(),
     )
     assert risk.filter_enabled is False
+
+
+def _write_invalid_spike_mf4(path):
+    """Fs=1000, N=1000, zeros except index 500 = 1000 and invalid=True."""
+    from asammdf import MDF, Signal
+
+    count = 1000
+    time = np.arange(count, dtype=np.float64) / 1000.0
+    samples = np.zeros(count, dtype=np.float64)
+    samples[500] = 1000.0
+    invalidation = np.zeros(count, dtype=np.uint8)
+    invalidation[500] = 1
+    mdf = MDF(version="4.10")
+    mdf.append(Signal(
+        samples=samples,
+        timestamps=time,
+        name="torque",
+        unit="Nm",
+        invalidation_bits=invalidation,
+    ))
+    mdf.save(str(path), overwrite=True)
+    mdf.close()
+    return path
+
+
+def test_invalid_spike_native_plot_rejects_the_filter_companion(
+    qapp, qtbot, tmp_path,
+):
+    """R02 on a real MainWindow: the invalid pulse must not be filtered.
+
+    Uses the explicit native import and ``plot_time``. The expected valid
+    samples are zero; the assertion does not treat another filter call as the
+    oracle.
+    """
+    from mf4_analyzer.io.signal_access import read_signal
+
+    path = _write_invalid_spike_mf4(tmp_path / "invalid-spike.mf4")
+    win = MainWindow()
+    qtbot.addWidget(win)
+    win.chart_stack.set_mode("time")
+    win.request_explicit_native_import(path)
+    wait_for_imports(win)
+    assert len(win.files) == 1
+    fid, fd = next(iter(win.files.items()))
+    assert fd.is_native is True
+    series = read_signal(fd, "torque")
+    raw = np.array(series.values, copy=True)
+    assert float(series.sampling.fs_hz) == pytest.approx(1000.0)
+    assert bool(np.asarray(series.validity)[500]) is True
+    win.navigator.set_checked_channels([(fid, "torque")])
+    panel = win.inspector.filter_panel
+    panel.set_kind("低通")
+    panel.set_order(6)
+    panel.set_cutoff(50.0)
+    panel.set_enabled(True)
+    result = win.plot_time()
+    canvas = win.chart_stack.focused_canvas()
+    QCoreApplication.processEvents()
+    companions = [
+        row for row in getattr(result, "rows", ())
+        if len(row) >= 8 and isinstance(row[7], dict) and row[7].get("companion_of")
+    ]
+    drawn_names = list(canvas._companion_names)
+    if companions or drawn_names:
+        payload = np.asarray(companions[0][3], dtype=float) if companions else None
+        drawn = None
+        for key, name, pair in canvas._channel_lines.composite_items():
+            if key in canvas._companion_names or "Hz" in str(name):
+                _x, y = pair[1].plot_data_item.getData()
+                drawn = np.asarray(y, dtype=float)
+                break
+
+        def _at(array, index):
+            if array is None or np.asarray(array).size <= index:
+                return None
+            return float(np.asarray(array, dtype=float)[index])
+
+        pytest.fail(
+            "invalid 千值脉冲进入了 MainWindow 滤波："
+            f"payload[499]={_at(payload, 499)!r} payload[500]={_at(payload, 500)!r} "
+            f"drawn[499]={_at(drawn, 499)!r} drawn[500]={_at(drawn, 500)!r} "
+            f"companion_names={drawn_names!r} "
+            f"issues={[getattr(issue, 'detail', '') for issue in getattr(result, 'issues', ())]!r}"
+        )
+    assert result.issues, "拒绝 companion 时必须给出原因"
+    text = " ".join(
+        f"{issue.target_channel} {issue.detail}" for issue in result.issues
+    )
+    assert "torque" in text
+    assert ("有效段" in text) or ("缩小" in text)
+    originals = [
+        row for row in result.rows
+        if "torque" in str(row[0])
+    ]
+    assert originals
+    finite = np.asarray(originals[0][3], dtype=float)
+    finite = finite[np.isfinite(finite)]
+    assert finite.size
+    assert np.max(np.abs(finite)) == 0.0
+    np.testing.assert_array_equal(np.asarray(series.values), raw)
+    assert not canvas._companion_names
+    assert "有效段" in win.statusBar.currentMessage()
+
+
+def _companion_names(canvas):
+    return {
+        str(name)
+        for key, name, _pair in canvas._channel_lines.composite_items()
+        if key in canvas._companion_names or "Hz" in str(name)
+    }
+
+
+def test_valid_segment_and_filter_toggle_do_not_keep_a_stale_companion(
+    qapp, qtbot, tmp_path,
+):
+    """A zero segment filters to zero. Closing the filter or widening onto the
+    invalid pulse removes that companion instead of leaving the previous one.
+    """
+    from mf4_analyzer.io.signal_access import read_signal
+
+    path = _write_invalid_spike_mf4(tmp_path / "segment-spike.mf4")
+    win = MainWindow()
+    qtbot.addWidget(win)
+    win.chart_stack.set_mode("time")
+    win.request_explicit_native_import(path)
+    wait_for_imports(win)
+    fid, fd = next(iter(win.files.items()))
+    series = read_signal(fd, "torque")
+    win.navigator.set_checked_channels([(fid, "torque")])
+    panel = win.inspector.filter_panel
+    panel.set_kind("低通")
+    panel.set_order(6)
+    panel.set_cutoff(50.0)
+    panel.set_enabled(True)
+    win.inspector.top.set_range_enabled(True)
+    win.inspector.top.set_range_values(float(series.time[0]), float(series.time[180]))
+    ranged = win.plot_time()
+    canvas = win.chart_stack.focused_canvas()
+    QCoreApplication.processEvents()
+    companions = [
+        row for row in ranged.rows
+        if len(row) >= 8 and isinstance(row[7], dict) and row[7].get("companion_of")
+    ]
+    assert len(companions) == 1
+    np.testing.assert_array_equal(np.asarray(companions[0][3], dtype=float), 0.0)
+    assert _companion_names(canvas)
+
+    win.inspector.top.set_range_enabled(False)
+    rejected = win.plot_time()
+    QCoreApplication.processEvents()
+    assert not [
+        row for row in rejected.rows
+        if len(row) >= 8 and isinstance(row[7], dict) and row[7].get("companion_of")
+    ]
+    assert any(issue.code == "filter_quality" for issue in rejected.issues)
+    assert not canvas._companion_names
+    assert "有效段" in win.statusBar.currentMessage()
+
+    panel.set_enabled(False)
+    hidden = win.plot_time()
+    QCoreApplication.processEvents()
+    assert not [
+        row for row in hidden.rows
+        if len(row) >= 8 and isinstance(row[7], dict) and row[7].get("companion_of")
+    ]
+    assert not canvas._companion_names
+    assert any("torque" in str(row[0]) for row in hidden.rows)
+
+
+def test_view_switch_drops_a_filtered_companion(qapp, qtbot, tmp_path):
+    path = _write_invalid_spike_mf4(tmp_path / "view-spike.mf4")
+    win = MainWindow()
+    qtbot.addWidget(win)
+    win.chart_stack.set_mode("time")
+    win.request_explicit_native_import(path)
+    wait_for_imports(win)
+    fid, _fd = next(iter(win.files.items()))
+    win.navigator.set_checked_channels([(fid, "torque")])
+    panel = win.inspector.filter_panel
+    panel.set_kind("低通")
+    panel.set_cutoff(50.0)
+    panel.set_order(6)
+    panel.set_enabled(True)
+    win.inspector.top.set_range_enabled(True)
+    from mf4_analyzer.io.signal_access import read_signal
+    series = read_signal(win.files[fid], "torque")
+    win.inspector.top.set_range_values(float(series.time[0]), float(series.time[180]))
+    shown = win.plot_time()
+    canvas = win.chart_stack.focused_canvas()
+    QCoreApplication.processEvents()
+    assert any(
+        len(row) >= 8 and isinstance(row[7], dict) and row[7].get("companion_of")
+        for row in shown.rows
+    )
+    assert canvas._companion_names
+    first = win.view_manager.active
+    win._capture_current_view()
+    second = win.view_manager.new_view(activate=True)
+    QCoreApplication.processEvents()
+    assert second != first
+    assert not canvas._companion_names
+    win._switch_view(first)
+    QCoreApplication.processEvents()
+    restored = win.plot_time()
+    QCoreApplication.processEvents()
+    for row in restored.rows:
+        meta = row[7] if len(row) >= 8 and isinstance(row[7], dict) else {}
+        if not meta.get("companion_of"):
+            continue
+        y = np.asarray(row[3], dtype=float)
+        finite = y[np.isfinite(y)]
+        assert finite.size
+        assert np.max(np.abs(finite)) == 0.0
+    drawn = [
+        np.asarray(pair[1].plot_data_item.getData()[1], dtype=float)
+        for key, _name, pair in canvas._channel_lines.composite_items()
+        if key in canvas._companion_names
+    ]
+    for y in drawn:
+        finite = y[np.isfinite(y)]
+        if finite.size:
+            assert np.max(np.abs(finite)) == 0.0
+    assert any("torque" in str(row[0]) for row in restored.rows)
+
+
+def test_clean_channel_still_filters_when_a_sibling_is_rejected(
+    qapp, qtbot, tmp_path,
+):
+    from asammdf import MDF, Signal
+    from mf4_analyzer.io.signal_access import read_signal
+
+    count = 1000
+    time = np.arange(count, dtype=np.float64) / 1000.0
+    torque = np.zeros(count, dtype=np.float64)
+    torque[500] = 1000.0
+    invalidation = np.zeros(count, dtype=np.uint8)
+    invalidation[500] = 1
+    speed = np.zeros(count, dtype=np.float64)
+    path = tmp_path / "pair.mf4"
+    mdf = MDF(version="4.10")
+    mdf.append([
+        Signal(
+            samples=torque, timestamps=time, name="torque", unit="Nm",
+            invalidation_bits=invalidation,
+        ),
+        Signal(samples=speed, timestamps=time, name="speed", unit="rpm"),
+    ])
+    mdf.save(str(path), overwrite=True)
+    mdf.close()
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    win.chart_stack.set_mode("time")
+    win.request_explicit_native_import(path)
+    wait_for_imports(win)
+    fid, fd = next(iter(win.files.items()))
+    assert read_signal(fd, "speed").sampling.fs_hz == pytest.approx(1000.0)
+    win.navigator.set_checked_channels([(fid, "torque"), (fid, "speed")])
+    panel = win.inspector.filter_panel
+    panel.set_kind("低通")
+    panel.set_order(6)
+    panel.set_cutoff(50.0)
+    panel.set_enabled(True)
+    result = win.plot_time()
+    companions = [
+        row for row in result.rows
+        if len(row) >= 8 and isinstance(row[7], dict) and row[7].get("companion_of")
+    ]
+    assert len(companions) == 1
+    assert "speed" in str(companions[0][7]["companion_of"])
+    np.testing.assert_array_equal(np.asarray(companions[0][3], dtype=float), 0.0)
+    assert any(
+        issue.code == "filter_quality" and issue.target_channel == "torque"
+        for issue in result.issues
+    )
+    assert not any(issue.target_channel == "speed" for issue in result.issues)
+    originals = [row for row in result.rows if row not in companions]
+    assert len(originals) == 2
 
 
 def test_filter_state_change_invalidates_time_canvas_cache(

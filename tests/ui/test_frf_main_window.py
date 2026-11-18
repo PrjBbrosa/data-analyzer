@@ -1374,3 +1374,47 @@ def test_frf_cache_lookup_does_not_copy_signals_or_allocate_the_grid(
     assert restore_key == context["analysis_key"]
     assert prepared == [False]
     assert signal_reads == []
+
+
+def test_native_frf_window_passes_owner_limit_and_reports_refusal(qtbot, tmp_path, monkeypatch):
+    """GUI 生产入口传入同一中立额度；低预算变成预检错误，而不是静默准备。"""
+    from mf4_analyzer.analysis_signal_prepare import prepare_pair
+    from mf4_analyzer.io.import_limits import ImportLimits, budget_context
+    from mf4_analyzer.io.native_signal_store import AxisSpec, ChannelSpec, NativeSignalStore
+
+    win, _fid, state, _time = _window_with_pair(qtbot, n=100, fs=100.0)
+    count = 100
+    rate = 100.0
+    axis = np.arange(count) / rate
+    store = NativeSignalStore.build(
+        "gui-budget",
+        [AxisSpec("t0", "clock", "time", "s", axis, fs_status="known", fs_hz=rate)],
+        [
+            ChannelSpec(0, 0, "input", "t0", np.linspace(0.0, 1.0, count), unit="Nm"),
+            ChannelSpec(0, 1, "output", "t0", np.linspace(1.0, 2.0, count), unit="Nm"),
+        ],
+    )
+    fd = FileData.from_native_store(tmp_path / "gui-budget.mf4", store)
+    captured = {}
+    real = prepare_pair
+
+    def spy(*args, **kwargs):
+        captured["byte_limit"] = kwargs.get("byte_limit", "missing")
+        captured["resource_budget"] = kwargs.get("resource_budget", "missing")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr("mf4_analyzer.analysis_signal_prepare.prepare_pair", spy)
+    with budget_context(ImportLimits(max_memory_bytes=65536, max_output_bytes=32768)) as budget:
+        prepared = win._frf_prepare_native_pair(
+            state, state.panes[0], fd, fd, materialize=True,
+        )
+        assert captured["byte_limit"] == 65536
+        assert captured["resource_budget"] is budget
+    assert prepared["input_fs"] == pytest.approx(rate)
+
+    with budget_context(ImportLimits(max_memory_bytes=1600, max_output_bytes=800)):
+        with pytest.raises(FrfPreflightError, match="预算") as caught:
+            win._frf_prepare_native_pair(
+                state, state.panes[0], fd, fd, materialize=True,
+            )
+    assert "缩小" in str(caught.value)

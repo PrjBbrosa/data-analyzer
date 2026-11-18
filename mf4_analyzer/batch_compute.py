@@ -346,8 +346,9 @@ def prepare_frf_task(fd, input_channel: str, output_channel: str, params) -> Pre
 
 def _prepare_native_frf_task(fd, input_channel, output_channel, params) -> PreparedBatchFrf:
     """Native FRF uses each prepared target rate. Alignment runs only when requested."""
-    from .analysis_signal_prepare import load_native_channel, prepare_pair
+    from .analysis_signal_prepare import prepare_native_frf_pair
     from .batch_frf import alignment_fact
+    from .io.import_limits import active_import_budget, analysis_request_byte_limit
 
     input_channel = str(input_channel or "").strip()
     output_channel = str(output_channel or "").strip()
@@ -355,23 +356,19 @@ def _prepare_native_frf_task(fd, input_channel, output_channel, params) -> Prepa
         raise BatchFrfDataError("FRF input and output channels are required")
     if input_channel == output_channel:
         raise BatchFrfDataError("FRF input and output channels must differ")
-    time_range = params.get("time_range")
-    left = load_native_channel(fd, input_channel, time_range)
-    right = load_native_channel(fd, output_channel, time_range)
-    if left.status != "ready" or right.status != "ready":
-        raise BatchFrfDataError(left.reason or right.reason or "native 分析输入不可用")
-    pair = prepare_pair(
-        left.values,
-        left.time,
-        right.values,
-        right.time,
-        left_fs=left.source_fs,
-        right_fs=right.source_fs,
-        policy="native",
+    budget = active_import_budget()
+    pair = prepare_native_frf_pair(
+        fd,
+        input_channel,
+        fd,
+        output_channel,
+        requested_range=params.get("time_range"),
         align_then_compute=bool(params.get("align_then_compute")),
+        materialize=True,
+        byte_limit=analysis_request_byte_limit(budget),
+        resource_budget=budget,
         left_identity=input_channel,
         right_identity=output_channel,
-        source_revision=left.source_revision,
     )
     if pair.status != "ready" or pair.left is None or pair.right is None:
         raise BatchFrfDataError(pair.reason)

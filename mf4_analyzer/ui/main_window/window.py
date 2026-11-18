@@ -4156,12 +4156,24 @@ class MainWindow(
         if result is None:
             setter(attempted=0, successful=0, details=())
             return
+        attempted = len(result.attempted_channel_keys)
+        successful = len(result.successful_channel_keys)
+        details = tuple(
+            self._time_plot_issue_text(issue) for issue in result.issues
+        )
+        # The diagnostics pill only appears when successful < attempted.
+        # A refused companion still leaves the original curve successful, so
+        # count that refusal or the reason never reaches the existing pill.
+        filter_refusals = sum(
+            1 for issue in result.issues
+            if getattr(issue, "code", "") == "filter_quality"
+        )
+        if filter_refusals and successful == attempted:
+            attempted += filter_refusals
         setter(
-            attempted=len(result.attempted_channel_keys),
-            successful=len(result.successful_channel_keys),
-            details=tuple(
-                self._time_plot_issue_text(issue) for issue in result.issues
-            ),
+            attempted=attempted,
+            successful=successful,
+            details=details,
         )
 
     def _time_axis_label(self, unit=None):
@@ -4768,9 +4780,15 @@ class MainWindow(
             success_files = len({
                 fid for fid, _channel in result.successful_channel_keys
             })
-            self.statusBar.showMessage(
-                f"绘制: {successful}/{attempted} 通道，{success_files} 文件"
-            )
+            message = f"绘制: {successful}/{attempted} 通道，{success_files} 文件"
+            filter_note = next((
+                self._time_plot_issue_text(issue)
+                for issue in result.issues
+                if getattr(issue, "code", "") == "filter_quality"
+            ), "")
+            if filter_note:
+                message = f"{message}；{filter_note}"
+            self.statusBar.showMessage(message)
         return result
 
     def _native_channel_statistics(
@@ -5127,6 +5145,9 @@ class MainWindow(
                 x_axis = time_axis
             unit = fd.channel_units.get(ch, '')
             name = fd.get_prefixed_channel(ch)
+            # Filter admission reads this acquisition clock, never display X.
+            acquisition_time = time_axis
+            acquisition_values = sig
             # Range controls are always in acquisition time, even when the
             # visible X axis is a channel.
             if range_enabled:
@@ -5147,6 +5168,7 @@ class MainWindow(
 
             filtered = None
             gspec = None
+            filter_issue = None
             if filt_enabled:
                 # Native single points and unknown clocks do not invent Fs.
                 if native_curve is not None and not native_curve.fs_hz:
@@ -5154,16 +5176,68 @@ class MainWindow(
                 elif native_curve is not None:
                     fs = float(native_curve.fs_hz)
                 else:
-                    fs = float(fd.fs) or self._estimate_fs(time_axis)
+                    estimated = float(fd.fs) or self._estimate_fs(acquisition_time)
+                    fs = float(estimated) if estimated else None
                 if fs is not None:
                     try:
                         gspec, _msg = _filters.nyquist_guard(spec, fs)
                     except ValueError:
                         # band/bandstop with lo >= hi → draw original only.
                         gspec = None
-                    if gspec is not None:
+                if fs is None or gspec is not None:
+                    from ...analysis_signal_prepare import prepare_time_filter_input
+                    from ...io.import_limits import (
+                        active_import_budget,
+                        analysis_request_byte_limit,
+                    )
+
+                    validity = None
+                    segments = ()
+                    revision = ""
+                    if native_curve is not None:
+                        series = native_curve.query.series
+                        validity = getattr(series, "validity", None)
+                        segments = getattr(series, "segments", ()) or ()
+                        revision = str(getattr(series, "revision", "") or "")
+                    budget = active_import_budget()
+                    prepared = prepare_time_filter_input(
+                        acquisition_values,
+                        acquisition_time,
+                        fs=fs,
+                        invalid=validity,
+                        segments=segments,
+                        requested_range=(
+                            (float(range_lo), float(range_hi))
+                            if range_enabled else None
+                        ),
+                        source_id=str(fid),
+                        source_revision=revision,
+                        byte_limit=analysis_request_byte_limit(budget),
+                        resource_budget=budget,
+                    )
+                    admitted = (
+                        prepared.status == "ready"
+                        and prepared.values is not None
+                        and int(prepared.values.shape[0]) == int(np.asarray(sig).shape[0])
+                    )
+                    if not admitted:
+                        gspec = None
+                        filtered = None
+                        filter_issue = prepared.reason or (
+                            "滤波读取区间与当前显示记录不一致，未画出滤波曲线。"
+                            "请缩小到有效段或选择有效段。"
+                        )
+                    else:
                         with _pp.filter_apply():
-                            filtered = _filters.apply(sig, gspec, fs)
+                            filtered = _filters.apply(
+                                prepared.values, gspec, float(prepared.source_fs),
+                            )
+                        if np.asarray(filtered).shape != np.asarray(sig).shape:
+                            filtered = None
+                            gspec = None
+                            filter_issue = (
+                                "滤波输出长度与选区不一致，未保留滤波曲线。"
+                            )
 
             if applied_x.mode == CHANNEL_MODE:
                 finite_x = np.isfinite(np.asarray(x_axis, dtype=float))
@@ -5198,7 +5272,10 @@ class MainWindow(
                 # is finite. Besides avoiding an unnecessary allocation, this
                 # keeps selection-delta signatures stable across identical
                 # replots. Fancy-index only when there is actually work to do.
-                if not finite_x.all():
+                # Native curves keep non-finite X in the record sequence;
+                # the display binding turns those records into gaps. Legacy
+                # tables keep the historical finite mask.
+                if not finite_x.all() and native_curve is None:
                     x_axis = x_axis[finite_x]
                     sig = sig[finite_x]
                     if filtered is not None:
@@ -5210,13 +5287,53 @@ class MainWindow(
                 "fid": str(fid),
                 "channel": str(ch),
             }}
+            plotted_x = x_axis
+            plotted_y = sig
+            binding = None
             if native_curve is not None:
-                appearance_meta["native_query"] = native_curve.query
-                appearance_meta["point_marker"] = native_curve.point_marker
+                from ..time_curve_bindings import (
+                    DisplayBindingError,
+                    build_native_display_binding,
+                )
+
+                record_indices = np.arange(
+                    len(native_curve.values), dtype=np.int64,
+                )
+                if range_enabled:
+                    record_indices = record_indices[m]
+                try:
+                    binding = build_native_display_binding(
+                        source_fid=str(fid),
+                        channel=str(ch),
+                        query=native_curve.query,
+                        display_x=x_axis,
+                        display_y=sig,
+                        record_indices=record_indices,
+                    )
+                except DisplayBindingError as exc:
+                    append_placeholder(TimePlotIssue(
+                        code='unaligned',
+                        source_fid=str(fid),
+                        source_label=source_label,
+                        target_channel=str(ch),
+                        x_channel=str(applied_x.channel or ''),
+                        detail=str(exc),
+                    ))
+                    completed_work += source_work * (2 if filt_enabled else 1)
+                    report_progress()
+                    continue
+                plotted_x = binding.display_x
+                plotted_y = binding.display_y
+                # The binding keeps the original quality query. Its
+                # display_x/display_y are what the canvas draws; display_time
+                # remains the acquisition clock and is not the plot X.
+                appearance_meta["native_query"] = binding
+                appearance_meta["display_binding"] = binding
+                appearance_meta["point_marker"] = binding.point_marker
             if gid is not None:
                 appearance_meta["axis_group"] = gid
             primary_row = (
-                name, show_orig, x_axis, sig, color, unit, fid,
+                name, show_orig, plotted_x, plotted_y, color, unit, fid,
                 appearance_meta,
             )
             slot_rows = [primary_row]
@@ -5247,8 +5364,15 @@ class MainWindow(
                     companion_color = companion_colors.get(
                         _appearance_color_key((str(fid), str(ch))), color,
                     )
+                companion_x = x_axis
+                companion_y = filtered
+                if binding is not None:
+                    aligned = binding.align_companion_y(filtered)
+                    if aligned is not None:
+                        companion_x = plotted_x
+                        companion_y = aligned
                 companion_row = (
-                    fname, show_filt, x_axis, filtered, companion_color,
+                    fname, show_filt, companion_x, companion_y, companion_color,
                     unit, fid, meta,
                 )
                 slot_rows.append(companion_row)
@@ -5258,6 +5382,15 @@ class MainWindow(
             elif filt_enabled:
                 completed_work += source_work
                 report_progress()
+                if filter_issue:
+                    result.issues.append(TimePlotIssue(
+                        code="filter_quality",
+                        source_fid=str(fid),
+                        source_label=source_label,
+                        target_channel=str(ch),
+                        x_channel=str(applied_x.channel or ""),
+                        detail=str(filter_issue),
+                    ))
             result.slots.append(TimePlotSlot(
                 key=(str(fid), str(ch)),
                 kind="success",

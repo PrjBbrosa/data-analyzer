@@ -407,3 +407,37 @@ def test_windows_memory_query_initializes_structure_length(monkeypatch):
     monkeypatch.setattr(ctypes, "windll", SimpleNamespace(kernel32=SimpleNamespace(
         GlobalMemoryStatusEx=query)), raising=False)
     assert limits.default_limits().max_memory_bytes == 2 * 1024 ** 3
+
+
+def test_analysis_request_ceiling_does_not_raise_or_touch_used_bytes():
+    from mf4_analyzer.io.import_limits import (
+        active_import_budget, analysis_request_byte_limit, budget_context,
+    )
+
+    assert active_import_budget() is None
+    assert analysis_request_byte_limit() == 512 * 1024 ** 2
+    small = ImportBudget(ImportLimits(max_memory_bytes=1000, max_output_bytes=500))
+    assert analysis_request_byte_limit(small) == 1000
+    assert small.used_bytes == 0
+    huge = ImportBudget(ImportLimits(max_memory_bytes=2 * 1024 ** 3, max_output_bytes=1024 ** 3))
+    assert analysis_request_byte_limit(huge) == 512 * 1024 ** 2
+    with budget_context(ImportLimits(max_memory_bytes=4096, max_output_bytes=2048)) as budget:
+        assert active_import_budget() is budget
+        assert analysis_request_byte_limit() == 4096
+    assert active_import_budget() is None
+
+
+def test_analysis_request_release_is_idempotent_and_leaves_import_used_bytes():
+    budget = ImportBudget(ImportLimits(max_memory_bytes=5000, max_output_bytes=2500))
+    budget.reserve(100, label="import-copy")
+    token = budget.open_analysis_request(200, label="prepare")
+    assert budget.analysis_request_outstanding() == 200
+    assert budget.used_bytes == 100
+    budget.release_analysis_request(token)
+    budget.release_analysis_request(token)
+    assert budget.analysis_request_outstanding() == 0
+    assert budget.used_bytes == 100
+    with pytest.raises(ImportResourceError):
+        budget.open_analysis_request(5001, label="too-big")
+    assert budget.analysis_request_outstanding() == 0
+    assert budget.used_bytes == 100

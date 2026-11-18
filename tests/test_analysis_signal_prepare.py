@@ -796,3 +796,756 @@ def test_preview_alignment_describes_the_grid_without_filtering_or_hashing(monke
     assert pair.left.original_values_hash == ""
     assert pair.bytes_charged == 0
     assert pair.left.effective_range[0] < pair.left.effective_range[1]
+
+
+def _hash_spy(monkeypatch):
+    """Count full content hashes and the bytes each one materializes."""
+    from mf4_analyzer.analysis_signal_prepare import array_content_hash
+
+    seen = []
+
+    def spy(values):
+        array = np.asarray(values)
+        seen.append(int(np.ascontiguousarray(array).nbytes))
+        return array_content_hash(values)
+
+    monkeypatch.setattr("mf4_analyzer.analysis_signal_prepare.array_content_hash", spy)
+    return seen
+
+
+def _arange_spy(monkeypatch):
+    """Record lengths of arange results. The real allocator still runs."""
+    import mf4_analyzer.analysis_signal_prepare as prepare_module
+
+    real = prepare_module.np.arange
+    lengths = []
+
+    def spy(*args, **kwargs):
+        grid = real(*args, **kwargs)
+        lengths.append(int(np.asarray(grid).shape[0]))
+        return grid
+
+    monkeypatch.setattr(prepare_module.np, "arange", spy)
+    return lengths
+
+
+def test_same_axis_pair_rejects_when_both_sides_share_one_budget():
+    """两侧各 100 点、100 Hz、limit=1600。合计结果 3200 字节，不能各拿完整额度。"""
+    from mf4_analyzer.analysis_signal_prepare import prepare_pair
+
+    count = 100
+    rate = 100.0
+    left_time = np.arange(count) / rate
+    right_time = np.arange(count) / rate
+    left = np.linspace(0.0, 1.0, count)
+    right = np.linspace(1.0, 2.0, count)
+    pair = prepare_pair(
+        left, left_time, right, right_time,
+        left_fs=rate, right_fs=rate, byte_limit=1600,
+    )
+    assert (pair.status, pair.bytes_charged) == ("rejected", 0), (
+        pair.status, pair.bytes_charged,
+    )
+    assert "预算" in pair.reason
+    assert "缩小" in pair.reason
+    assert pair.left is None and pair.right is None
+
+
+def test_explicit_uniform_rejects_before_the_thousand_point_grid(monkeypatch):
+    """[1, 2] @ [0, 1] 升到 1000 Hz 会是 1001 点、16016 字节。limit=32 必须先拒绝。"""
+    from mf4_analyzer.analysis_signal_prepare import prepare_signal
+
+    lengths = _arange_spy(monkeypatch)
+    hashes = _hash_spy(monkeypatch)
+    prepared = prepare_signal(
+        np.array([1.0, 2.0]),
+        np.array([0.0, 1.0]),
+        intent="explicit_uniform",
+        value_kind="continuous",
+        target_fs=1000.0,
+        byte_limit=32,
+    )
+    assert (prepared.status, prepared.output_count, prepared.bytes_charged) == (
+        "rejected", 0, 0,
+    ), (prepared.status, prepared.output_count, prepared.bytes_charged)
+    assert 1001 not in lengths, lengths
+    assert hashes == []
+    assert "预算" in prepared.reason
+    assert "缩小" in prepared.reason
+
+
+def test_low_budget_rejects_before_any_full_hash(monkeypatch):
+    """100 点、limit=1。拒绝前完整 hash 字节必须是 0，而不是两个数组共 1600。"""
+    from mf4_analyzer.analysis_signal_prepare import prepare_signal
+
+    hashes = _hash_spy(monkeypatch)
+    prepared = prepare_signal(
+        np.ones(100), np.arange(100) / 100.0, fs=100.0, byte_limit=1,
+    )
+    assert prepared.status == "rejected"
+    assert prepared.values is None
+    assert sum(hashes) == 0, hashes
+    assert "预算" in prepared.reason
+
+
+def _budget(cap):
+    from mf4_analyzer.io.import_limits import ImportBudget, ImportLimits
+
+    return ImportBudget(ImportLimits(max_memory_bytes=cap, max_output_bytes=max(1, cap // 2)))
+
+
+def test_request_budget_matches_and_misses_by_one_byte(monkeypatch):
+    """额度刚好等于峰值则通过；少 1 字节在 hash / grid 之前拒绝。"""
+    from mf4_analyzer.analysis_signal_prepare import prepare_pair, prepare_signal
+
+    count = 100
+    item = 8
+    pair_peak = 2 * count * item * 2  # 两侧各一份 float64 值副本和一份时间副本，同时存活
+    assert pair_peak == 3200
+    left_time = np.arange(count) / 100.0
+    right_time = np.arange(count) / 100.0
+    left = np.linspace(0.0, 1.0, count)
+    right = np.linspace(1.0, 2.0, count)
+    admitted = prepare_pair(
+        left, left_time, right, right_time, left_fs=100.0, right_fs=100.0,
+        byte_limit=pair_peak,
+    )
+    assert admitted.status == "ready"
+    assert admitted.bytes_charged == pair_peak
+    assert admitted.peak_bytes == pair_peak
+    assert admitted.bytes_charged == (
+        admitted.left.bytes_charged + admitted.right.bytes_charged
+    )
+    hashes = _hash_spy(monkeypatch)
+    lengths = _arange_spy(monkeypatch)
+    refused = prepare_pair(
+        left, left_time, right, right_time, left_fs=100.0, right_fs=100.0,
+        byte_limit=pair_peak - 1,
+    )
+    assert refused.status == "rejected"
+    assert refused.bytes_charged == 0
+    assert hashes == []
+    assert lengths == []
+
+    # [0, 1] 以 1000 Hz 覆盖，标量计数是 1001，结果两路 float64 共 16016。
+    grid_count = 1001
+    uniform_peak = grid_count * item * 2
+    assert uniform_peak == 16016
+    ready = prepare_signal(
+        np.array([1.0, 2.0]), np.array([0.0, 1.0]),
+        intent="explicit_uniform", value_kind="continuous", target_fs=1000.0,
+        byte_limit=uniform_peak,
+    )
+    assert ready.status == "ready"
+    assert ready.output_count == grid_count
+    assert ready.bytes_charged == uniform_peak
+    assert ready.peak_bytes == uniform_peak
+    np.testing.assert_allclose(ready.time[0], 0.0)
+    np.testing.assert_allclose(ready.time[-1], 1.0)
+    lengths.clear()
+    hashes.clear()
+    too_small = prepare_signal(
+        np.array([1.0, 2.0]), np.array([0.0, 1.0]),
+        intent="explicit_uniform", value_kind="continuous", target_fs=1000.0,
+        byte_limit=uniform_peak - 1,
+    )
+    assert too_small.status == "rejected"
+    assert hashes == []
+    assert 1001 not in lengths
+
+
+def test_same_axis_plan_lists_components_without_double_counting_shared_time():
+    from mf4_analyzer.analysis_signal_prepare import plan_pair_cost
+
+    count = 100
+    item = 8
+    time = np.arange(count) / 100.0
+    left = np.arange(count, dtype=np.float64)
+    right = np.arange(count, dtype=np.float64) + 1.0
+    plan = plan_pair_cost(left, time, right, time, left_fs=100.0, right_fs=100.0)
+    components = plan.as_components()
+    assert components["resident_input_bytes"] == (left.nbytes + right.nbytes + time.nbytes)
+    assert components["new_input_copy_bytes"] == 2 * count * item
+    assert components["quality_index_bytes"] == 3 * count
+    assert components["hash_bytes"] == count * item
+    assert components["grid_output_bytes"] == 2 * count * item * 2
+    assert components["filter_workspace_bytes"] == 0
+    assert components["peak_bytes"] == 3200
+    assert components["result_bytes"] == 3200
+    assert plan.peak_bytes == plan.result_bytes
+
+
+def test_integer_ratio_budget_boundary_is_one_shared_peak(monkeypatch):
+    """2:1 的滤波工作区使峰值大于结果字节。公式在测试里按分量冻结。"""
+    from mf4_analyzer.analysis_signal_prepare import prepare_pair
+
+    fast_count, slow_count = 800, 400
+    sections = 3
+    pad = 3 * (2 * sections + 1)
+    samples = fast_count + slow_count
+    workspace = fast_count + 2 * pad
+    peak = 8 * (samples * 6 + workspace * 4 + slow_count * 4)
+    assert sections == 3 and pad == 21 and peak == 97344
+    left_time = np.arange(fast_count) / 2000.0
+    right_time = np.arange(slow_count) / 1000.0
+    left = np.sin(left_time)
+    right = np.sin(right_time)
+    admitted = prepare_pair(
+        left, left_time, right, right_time,
+        left_fs=2000.0, right_fs=1000.0, align_then_compute=True,
+        byte_limit=peak,
+    )
+    assert admitted.status == "ready", admitted.reason
+    assert admitted.peak_bytes == peak
+    assert admitted.bytes_charged == (
+        admitted.left.bytes_charged + admitted.right.bytes_charged
+    )
+    assert admitted.bytes_charged < admitted.peak_bytes
+    assert admitted.left.target_fs == pytest.approx(1000.0)
+    hashes = _hash_spy(monkeypatch)
+    filters = []
+
+    def filter_spy(values, source_fs, target_fs):
+        filters.append(int(np.asarray(values).shape[0]))
+        raise AssertionError("filter started")
+
+    monkeypatch.setattr("mf4_analyzer.analysis_signal_prepare._apply_antialias", filter_spy)
+    refused = prepare_pair(
+        left, left_time, right, right_time,
+        left_fs=2000.0, right_fs=1000.0, align_then_compute=True,
+        byte_limit=peak - 1,
+    )
+    assert refused.status == "rejected"
+    assert refused.bytes_charged == 0
+    assert "缩小" in refused.reason
+    assert hashes == []
+    assert filters == []
+
+
+def test_pair_second_side_failure_keeps_no_reservation_or_result():
+    from mf4_analyzer.analysis_signal_prepare import prepare_pair
+
+    budget = _budget(100_000)
+    count = 100
+    left_time = np.arange(count) / 100.0
+    right_time = np.arange(count) / 100.0
+    right = np.ones(count)
+    right[40] = np.nan
+    pair = prepare_pair(
+        np.ones(count), left_time, right, right_time,
+        left_fs=100.0, right_fs=100.0, byte_limit=100_000,
+        resource_budget=budget,
+    )
+    assert pair.status == "rejected"
+    assert pair.left is None and pair.right is None
+    assert pair.bytes_charged == 0
+    assert budget.analysis_request_outstanding() == 0
+    assert budget.used_bytes == 0
+
+
+def test_cancel_releases_the_request_reservation(monkeypatch):
+    from mf4_analyzer.analysis_signal_prepare import prepare_pair, prepare_signal
+
+    budget = _budget(100_000)
+    hashes = _hash_spy(monkeypatch)
+    cancelled = prepare_signal(
+        np.ones(32), np.arange(32) / 32.0, fs=32.0,
+        byte_limit=100_000, resource_budget=budget, cancel_check=lambda: True,
+    )
+    assert cancelled.status == "cancelled"
+    assert cancelled.values is None
+    assert cancelled.bytes_charged == 0
+    assert hashes == []
+    assert budget.analysis_request_outstanding() == 0
+
+    pair_budget = _budget(100_000)
+    pair = prepare_pair(
+        np.ones(32), np.arange(32) / 32.0, np.ones(32), np.arange(32) / 32.0,
+        left_fs=32.0, right_fs=32.0, byte_limit=100_000,
+        resource_budget=pair_budget, cancel_check=lambda: True,
+    )
+    assert pair.status == "cancelled"
+    assert pair.left is None and pair.right is None
+    assert pair_budget.analysis_request_outstanding() == 0
+    assert pair_budget.used_bytes == 0
+
+
+def test_metadata_errors_do_not_hash(monkeypatch):
+    from mf4_analyzer.analysis_signal_prepare import prepare_signal
+
+    hashes = _hash_spy(monkeypatch)
+    empty = prepare_signal(np.array([]), np.array([]), fs=10.0)
+    short = prepare_signal(np.array([1.0]), np.array([0.0]), fs=10.0)
+    missing_fs = prepare_signal(np.array([1.0, 2.0]), np.array([0.0, 1.0]), fs=float("nan"))
+    zero_fs = prepare_signal(np.array([1.0, 2.0]), np.array([0.0, 1.0]), fs=0.0)
+    negative_fs = prepare_signal(np.array([1.0, 2.0]), np.array([0.0, 1.0]), fs=-5.0)
+    shape = prepare_signal(np.ones((2, 2)), np.ones(4), fs=1.0)
+    length = prepare_signal(np.ones(3), np.ones(2), fs=1.0)
+    lengths = _arange_spy(monkeypatch)
+    overflow = prepare_signal(
+        np.array([1.0, 2.0]), np.array([0.0, 1.0]),
+        intent="explicit_uniform", value_kind="continuous", target_fs=1e308,
+    )
+    bad_target = prepare_signal(
+        np.array([1.0, 2.0]), np.array([0.0, 1.0]),
+        intent="explicit_uniform", value_kind="continuous", target_fs=float("nan"),
+    )
+    assert empty.quality == "short"
+    assert short.quality == "short"
+    assert missing_fs.quality == "fs"
+    assert zero_fs.quality == "fs"
+    assert negative_fs.quality == "fs"
+    assert shape.quality == "shape"
+    assert length.quality == "shape"
+    assert overflow.quality == "unrepresentable"
+    assert bad_target.quality == "fs"
+    assert hashes == []
+    assert lengths == []
+    for prepared in (empty, short, missing_fs, shape, length, overflow, bad_target):
+        assert prepared.values is None
+        assert prepared.original_values_hash == ""
+
+
+def test_success_and_owner_cap_both_release_without_touching_import_used_bytes():
+    from mf4_analyzer.analysis_signal_prepare import prepare_signal
+
+    budget = _budget(100_000)
+    ready = prepare_signal(
+        np.arange(8, dtype=float), np.arange(8) / 8.0, fs=8.0,
+        byte_limit=100_000, resource_budget=budget,
+    )
+    assert ready.status == "ready"
+    assert ready.bytes_charged == ready.values.nbytes + ready.time.nbytes
+    assert ready.peak_bytes >= ready.bytes_charged
+    assert budget.analysis_request_outstanding() == 0
+    assert budget.used_bytes == 0
+
+    tight = _budget(1000)
+    blocked = prepare_signal(
+        np.ones(100), np.arange(100) / 100.0, fs=100.0,
+        byte_limit=100_000, resource_budget=tight,
+    )
+    assert blocked.status == "rejected"
+    assert blocked.quality == "byte_limit"
+    assert tight.analysis_request_outstanding() == 0
+    assert tight.used_bytes == 0
+
+
+def _spike_clock(count=1000, fs=1000.0):
+    time = np.arange(count, dtype=np.float64) / float(fs)
+    values = np.zeros(count, dtype=np.float64)
+    values[count // 2] = 1000.0
+    invalid = np.zeros(count, dtype=bool)
+    invalid[count // 2] = True
+    return time, values, invalid
+
+
+def test_time_filter_rejects_invalid_spike_without_hashing_or_filtering(monkeypatch):
+    """Full-series invalid pulse is refused. Zero is the only numeric oracle."""
+    from mf4_analyzer.analysis_signal_prepare import prepare_time_filter_input
+    from mf4_analyzer.signal.filters import FilterSpec, apply
+
+    time, values, invalid = _spike_clock()
+    raw = values.copy()
+    hashes = _hash_spy(monkeypatch)
+    lengths = _arange_spy(monkeypatch)
+    calls = []
+    real_apply = apply
+
+    def spy(sig, spec, fs):
+        calls.append(int(np.asarray(sig).shape[0]))
+        return real_apply(sig, spec, fs)
+
+    monkeypatch.setattr("mf4_analyzer.signal.filters.apply", spy)
+    refused = prepare_time_filter_input(
+        values, time, fs=1000.0, invalid=invalid,
+    )
+    assert refused.status == "rejected"
+    assert refused.quality == "invalid"
+    assert refused.values is None
+    assert refused.bytes_charged == 0
+    assert "有效段" in refused.reason
+    assert "缩小" in refused.reason
+    assert refused.provenance["halo_samples"] == 0
+    assert refused.provenance["read_start"] == 0
+    assert refused.provenance["read_stop"] == 1000
+    assert refused.provenance["output_start"] == refused.provenance["read_start"]
+    assert hashes == []
+    assert lengths == []
+    assert calls == []
+    np.testing.assert_array_equal(values, raw)
+
+    # A long all-zero window away from the pulse is admitted, then the real
+    # filter runs. The expected output is zero because the input is zero.
+    start = 0
+    stop = 181
+    admitted = prepare_time_filter_input(
+        values, time, fs=1000.0, invalid=invalid,
+        requested_range=(float(time[start]), float(time[stop - 1])),
+    )
+    assert admitted.status == "ready"
+    assert admitted.output_count == stop - start
+    assert admitted.output_count != values.size
+    assert admitted.provenance["read_start"] == start
+    assert admitted.provenance["read_stop"] == stop
+    assert admitted.provenance["output_stop"] == stop
+    assert admitted.provenance["halo_samples"] == 0
+    assert admitted.values.shape == (stop - start,)
+    np.testing.assert_array_equal(admitted.values, 0.0)
+    filtered = apply(
+        admitted.values, FilterSpec("low", order=6, cutoff=50.0), admitted.source_fs,
+    )
+    assert filtered.shape == admitted.values.shape
+    np.testing.assert_array_equal(filtered, 0.0)
+    np.testing.assert_array_equal(values, raw)
+
+
+def test_time_filter_quality_matrix_rejects_before_a_filter(monkeypatch):
+    from mf4_analyzer.analysis_signal_prepare import prepare_time_filter_input
+
+    hashes = _hash_spy(monkeypatch)
+    time = np.arange(8, dtype=np.float64) / 1000.0
+
+    nan_values = np.zeros(8)
+    nan_values[3] = np.nan
+    nan = prepare_time_filter_input(nan_values, time, fs=1000.0)
+    assert nan.status == "rejected" and nan.quality == "nonfinite" and nan.values is None
+    assert np.isnan(nan_values[3])
+
+    inf_values = np.zeros(8)
+    inf_values[2] = np.inf
+    inf = prepare_time_filter_input(inf_values, time, fs=1000.0)
+    assert inf.status == "rejected" and inf.quality == "nonfinite"
+
+    reset_time = np.array([10.0, 10.001, 10.002, 10.003, 0.0, 0.001, 0.002, 0.003])
+    reset_values = np.zeros(8)
+    crossed = prepare_time_filter_input(reset_values, reset_time, fs=1000.0)
+    assert crossed.status == "rejected" and crossed.quality == "gap" and crossed.values is None
+    kept = prepare_time_filter_input(
+        reset_values, reset_time, fs=1000.0,
+        requested_range=(0.0, 0.003),
+    )
+    assert kept.status == "ready"
+    assert kept.output_count == 4
+    np.testing.assert_array_equal(kept.values, 0.0)
+    assert kept.provenance["read_start"] == 4
+    assert kept.provenance["read_stop"] == 8
+    forward = np.array([0.0, 0.001, 0.002, 0.003, 1.0, 1.001, 1.002, 1.003])
+    uneven = prepare_time_filter_input(np.zeros(8), forward, fs=1000.0)
+    assert uneven.status == "rejected" and uneven.quality == "time"
+
+    short = prepare_time_filter_input(
+        np.zeros(3), np.arange(3) / 1000.0, fs=1000.0,
+    )
+    assert short.status == "rejected" and short.quality == "short" and short.values is None
+    empty = prepare_time_filter_input(np.zeros(0), np.zeros(0), fs=1000.0)
+    assert empty.status == "rejected" and empty.quality == "short"
+    missing_fs = prepare_time_filter_input(np.zeros(8), time, fs=None)
+    assert missing_fs.status == "rejected" and missing_fs.quality == "fs"
+    shape = prepare_time_filter_input(np.zeros((2, 2)), np.zeros(4), fs=1000.0)
+    assert shape.status == "rejected" and shape.quality == "shape"
+    length = prepare_time_filter_input(np.zeros(8), np.zeros(7), fs=1000.0)
+    assert length.status == "rejected" and length.quality == "shape"
+    complex_values = np.zeros(8, dtype=np.complex128)
+    complex_refused = prepare_time_filter_input(complex_values, time, fs=1000.0)
+    assert complex_refused.status == "rejected" and complex_refused.quality == "dtype"
+    labels = np.array(["a"] * 8)
+    categorical = prepare_time_filter_input(labels, time, fs=1000.0)
+    assert categorical.status == "rejected" and categorical.quality == "dtype"
+
+    exact = np.full(8, 2**53, dtype=np.int64)
+    exact[1] = 2**53 + 2
+    exact_ready = prepare_time_filter_input(exact, time, fs=1000.0)
+    assert exact_ready.status == "ready"
+    np.testing.assert_array_equal(exact_ready.values, exact.astype(np.float64))
+    np.testing.assert_array_equal(exact, np.array([
+        2**53, 2**53 + 2, 2**53, 2**53, 2**53, 2**53, 2**53, 2**53
+    ], dtype=np.int64))
+
+    inexact = np.full(8, 2**53 + 1, dtype=np.int64)
+    inexact_raw = inexact.copy()
+    inexact_refused = prepare_time_filter_input(inexact, time, fs=1000.0)
+    assert inexact_refused.status == "rejected"
+    assert inexact_refused.quality == "integer_precision"
+    assert inexact_refused.values is None
+    np.testing.assert_array_equal(inexact, inexact_raw)
+
+    outside = np.zeros(12, dtype=np.int64)
+    outside[0] = np.int64(2**53 + 1)
+    outside_time = np.arange(12, dtype=np.float64) / 1000.0
+    distant = prepare_time_filter_input(
+        outside, outside_time, fs=1000.0,
+        requested_range=(float(outside_time[4]), float(outside_time[11])),
+    )
+    assert distant.status == "ready"
+    assert distant.provenance["read_start"] == 4
+    np.testing.assert_array_equal(distant.values, 0.0)
+
+    for prepared in (
+        nan, inf, crossed, short, empty, missing_fs, shape, length,
+        complex_refused, categorical, inexact_refused,
+    ):
+        assert prepared.values is None
+        assert prepared.status == "rejected"
+        assert prepared.bytes_charged == 0
+        assert prepared.original_values_hash == ""
+    # kept, exact and the distant exact window are the only admitted calls.
+    assert len(hashes) == 6
+
+
+def test_time_filter_low_budget_rejects_before_hash_and_releases(monkeypatch):
+    from mf4_analyzer.analysis_signal_prepare import prepare_time_filter_input
+
+    time = np.arange(100) / 100.0
+    values = np.ones(100)
+    hashes = _hash_spy(monkeypatch)
+    lengths = _arange_spy(monkeypatch)
+    budget = _budget(100_000)
+    refused = prepare_time_filter_input(
+        values, time, fs=100.0, byte_limit=1, resource_budget=budget,
+    )
+    assert refused.status == "rejected"
+    assert refused.quality == "byte_limit"
+    assert refused.values is None
+    assert refused.bytes_charged == 0
+    assert sum(hashes) == 0
+    assert lengths == []
+    assert budget.analysis_request_outstanding() == 0
+    assert budget.used_bytes == 0
+
+    hashes.clear()
+    ready_budget = _budget(100_000)
+    ready = prepare_time_filter_input(
+        np.zeros(16), np.arange(16) / 100.0, fs=100.0,
+        byte_limit=100_000, resource_budget=ready_budget,
+    )
+    assert ready.status == "ready"
+    assert ready.bytes_charged == ready.values.nbytes + ready.time.nbytes
+    assert ready.peak_bytes >= ready.bytes_charged
+    assert ready_budget.analysis_request_outstanding() == 0
+    assert ready_budget.used_bytes == 0
+    assert hashes  # admission passed, so the window was hashed
+
+    tight = _budget(64)
+    blocked = prepare_time_filter_input(
+        np.zeros(32), np.arange(32) / 100.0, fs=100.0,
+        byte_limit=10_000_000, resource_budget=tight,
+    )
+    assert blocked.status == "rejected"
+    assert blocked.quality == "byte_limit"
+    assert tight.analysis_request_outstanding() == 0
+    assert tight.used_bytes == 0
+
+
+def test_half_sample_origin_offset_stays_unsupported():
+    """A true fractional offset is not an integer-ratio same-origin pair."""
+    from mf4_analyzer.analysis_signal_prepare import prepare_pair
+
+    left_time = np.arange(4000) / 2000.0
+    right_time = (0.5 / 2000.0) + np.arange(2000) / 1000.0
+    shifted = prepare_pair(
+        np.sin(left_time), left_time, np.sin(right_time), right_time,
+        left_fs=2000.0, right_fs=1000.0, align_then_compute=True,
+    )
+    assert shifted.status == "unsupported"
+    assert shifted.left is None
+    assert "原点" in shifted.reason
+
+
+def test_reset_axis_is_not_aligned(tmp_path):
+    from mf4_analyzer.analysis_signal_prepare import prepare_native_frf_pair
+    from mf4_analyzer.io.file_data import FileData
+    from mf4_analyzer.io.native_signal_store import AxisSpec, ChannelSpec, NativeSignalStore
+
+    left_time = np.array([0.0, 0.1, 0.2, 0.0, 0.1, 0.2])
+    right_time = np.array([0.0, 0.2, 0.0, 0.2])
+    store = NativeSignalStore.build(
+        "native-reset",
+        [
+            AxisSpec("in", "clk-in", "time", "s", left_time, fs_status="known", fs_hz=10.0),
+            AxisSpec("out", "clk-out", "time", "s", right_time, fs_status="known", fs_hz=5.0),
+        ],
+        [
+            ChannelSpec(0, 1, "stimulus", "in", np.arange(6.0), unit="Nm"),
+            ChannelSpec(1, 1, "response", "out", np.arange(4.0), unit="Nm"),
+        ],
+    )
+    fd = FileData.from_native_store(tmp_path / "reset.mf4", store)
+    prepared = prepare_native_frf_pair(
+        fd, "stimulus", fd, "response", align_then_compute=True, materialize=False,
+        byte_limit=1024,
+    )
+    assert prepared.status == "unsupported"
+    assert prepared.left is None
+    assert "复位" in prepared.reason or "分段" in prepared.reason
+
+
+def test_shared_origin_range_is_not_read_from_the_cropped_first_sample(tmp_path):
+    """Production preparation of [.1001, 3.5] must keep origin 0, not .1005/.101."""
+    from mf4_analyzer.batch_compute import prepare_frf_task
+    from mf4_analyzer.io.file_data import FileData
+    from mf4_analyzer.io.native_signal_store import AxisSpec, ChannelSpec, NativeSignalStore
+
+    left_fs = 2000.0
+    right_fs = 1000.0
+    left_time = np.arange(8000) / left_fs
+    right_time = np.arange(4000) / right_fs
+    tone = 80.0
+    store = NativeSignalStore.build(
+        "native-origin",
+        [
+            AxisSpec("in", "clk-in", "time", "s", left_time, fs_status="known", fs_hz=left_fs),
+            AxisSpec("out", "clk-out", "time", "s", right_time, fs_status="known", fs_hz=right_fs),
+        ],
+        [
+            ChannelSpec(0, 1, "stimulus", "in", np.sin(2.0 * np.pi * tone * left_time), unit="Nm"),
+            ChannelSpec(1, 1, "response", "out", 2.0 * np.sin(2.0 * np.pi * tone * right_time), unit="Nm"),
+        ],
+    )
+    fd = FileData.from_native_store(tmp_path / "origin.mf4", store)
+    prepared = prepare_frf_task(
+        fd, "stimulus", "response",
+        {
+            "align_then_compute": True,
+            "time_range": (0.1001, 3.5),
+            "estimator": "h1",
+            "t_win_s": 0.25,
+            "overlap": 0.0,
+            "nfft_mode": "auto",
+            "window": "hanning",
+            "periodic_window": True,
+            "detrend": "none",
+        },
+    )
+    assert prepared.fs == pytest.approx(right_fs)
+    assert float(prepared.input_time[0]) >= 0.1001 - 1e-12
+    assert float(prepared.input_time[-1]) <= 3.5 + 1e-9
+    assert float(prepared.output_time[0]) >= 0.1001 - 1e-12
+    assert float(prepared.output_time[-1]) <= 3.5 + 1e-9
+    assert prepared.input_values.shape == prepared.output_values.shape
+    assert float(prepared.input_time[0]) > 0.1001
+
+
+def _ratio_recording(path, *, lower_fs, ratio, high_side, origin, delay, tones):
+    from mf4_analyzer.io.file_data import FileData
+    from mf4_analyzer.io.native_signal_store import AxisSpec, ChannelSpec, NativeSignalStore
+
+    higher_fs = float(lower_fs) * int(ratio)
+    duration = 2.0
+    left_fs = higher_fs if high_side == "input" else float(lower_fs)
+    right_fs = float(lower_fs) if high_side == "input" else higher_fs
+    left_time = origin + np.arange(int(duration * left_fs)) / left_fs
+    right_time = origin + np.arange(int(duration * right_fs)) / right_fs
+    stimulus = np.zeros(left_time.shape, dtype=float)
+    response = np.zeros(right_time.shape, dtype=float)
+    for tone in tones:
+        stimulus += np.sin(2.0 * np.pi * tone * (left_time - origin))
+        response += 2.0 * np.sin(2.0 * np.pi * tone * (right_time - origin - delay))
+    store = NativeSignalStore.build(
+        f"oracle-{high_side}-{ratio}",
+        [
+            AxisSpec("in", "clk-in", "time", "s", left_time, fs_status="known", fs_hz=left_fs),
+            AxisSpec("out", "clk-out", "time", "s", right_time, fs_status="known", fs_hz=right_fs),
+        ],
+        [
+            ChannelSpec(0, 1, "stimulus", "in", stimulus, unit="Nm"),
+            ChannelSpec(1, 1, "response", "out", response, unit="Nm"),
+        ],
+    )
+    return FileData.from_native_store(path, store), left_fs, right_fs
+
+
+def _assert_known_gain(result, tone, *, lower_fs, delay):
+    band = (
+        (result.coherence >= 0.99)
+        & (np.abs(result.frequencies - tone) <= lower_fs / max(result.frequencies.size, 1))
+        & (result.frequencies >= 0.05 * lower_fs)
+        & (result.frequencies <= 0.30 * lower_fs)
+    )
+    assert np.any(band), (tone, result.frequencies[:5], float(np.nanmax(result.coherence)))
+    gain_db = 20.0 * np.log10(np.abs(result.transfer[band]))
+    phase = np.angle(result.transfer[band], deg=True)
+    expected_phase = -360.0 * tone * delay
+    assert np.max(np.abs(gain_db - 20.0 * np.log10(2.0))) <= 0.1
+    assert np.max(np.abs(phase - expected_phase)) <= 1.0
+
+
+@pytest.mark.parametrize("ratio", (2, 4, 8))
+@pytest.mark.parametrize("high_side", ("input", "output"))
+@pytest.mark.parametrize("origin", (0.0, 1.25))
+def test_integer_ratio_request_matches_the_known_gain_and_delay(tmp_path, ratio, high_side, origin):
+    """Oracle is the known gain and delay, not a GUI/Batch equality check."""
+    from mf4_analyzer.analysis_signal_prepare import prepare_native_frf_pair
+    from mf4_analyzer.signal.frf import FrfParams, compute_frf
+
+    lower_fs = 1000.0
+    tone = 0.15 * lower_fs
+    delay = 0.001
+    fd, _left_fs, _right_fs = _ratio_recording(
+        tmp_path / "oracle.mf4", lower_fs=lower_fs, ratio=ratio, high_side=high_side,
+        origin=origin, delay=delay, tones=(tone,),
+    )
+    request = (origin + 0.15, origin + 1.85)
+    described = prepare_native_frf_pair(
+        fd, "stimulus", fd, "response", requested_range=request,
+        align_then_compute=True, materialize=False,
+        byte_limit=512 * 1024 * 1024,
+    )
+    prepared = prepare_native_frf_pair(
+        fd, "stimulus", fd, "response", requested_range=request,
+        align_then_compute=True, materialize=True,
+        byte_limit=512 * 1024 * 1024,
+    )
+    assert described.status == "ready", described.reason
+    assert described.left.quality == "pending_verification"
+    assert described.left.values is None and described.right.values is None
+    assert described.left.original_values_hash == ""
+    assert prepared.status == "ready", prepared.reason
+    assert prepared.left.effective_range == described.left.effective_range
+    assert prepared.left.target_fs == pytest.approx(described.left.target_fs)
+    assert prepared.alignment_facts["cache_policy"] == described.alignment_facts["cache_policy"]
+    assert prepared.alignment_facts["input_revision"]
+    assert prepared.alignment_facts["output_revision"]
+    assert "input_revision" in prepared.alignment_facts["cache_policy"]
+    assert "output_revision" in prepared.alignment_facts["cache_policy"]
+    assert request[0] - 1e-9 <= prepared.left.effective_range[0] <= prepared.left.effective_range[1] <= request[1] + 1e-9
+    assert prepared.left.effective_range != request
+    params = FrfParams(
+        estimator="h1", t_win_s=0.5, overlap=0.0, nfft_mode="auto",
+        window="hanning", periodic_window=True, detrend="none",
+    )
+    result = compute_frf(
+        prepared.left.values, prepared.right.values, fs=float(prepared.left.target_fs),
+        params=params, input_time=prepared.left.time, output_time=prepared.right.time,
+    )
+    _assert_known_gain(result, tone, lower_fs=lower_fs, delay=delay)
+
+
+def test_multisine_request_keeps_each_safe_tone(tmp_path):
+    from mf4_analyzer.analysis_signal_prepare import prepare_native_frf_pair
+    from mf4_analyzer.signal.frf import FrfParams, compute_frf
+
+    lower_fs = 1000.0
+    origin = 0.5
+    tones = (80.0, 160.0)
+    fd, _left_fs, _right_fs = _ratio_recording(
+        tmp_path / "multi.mf4", lower_fs=lower_fs, ratio=4, high_side="input",
+        origin=origin, delay=0.0, tones=tones,
+    )
+    prepared = prepare_native_frf_pair(
+        fd, "stimulus", fd, "response",
+        requested_range=(origin + 0.1, origin + 1.9),
+        align_then_compute=True, materialize=True,
+        byte_limit=512 * 1024 * 1024,
+    )
+    assert prepared.status == "ready", prepared.reason
+    params = FrfParams(
+        estimator="h1", t_win_s=0.5, overlap=0.0, nfft_mode="auto",
+        window="hanning", periodic_window=True, detrend="none",
+    )
+    result = compute_frf(
+        prepared.left.values, prepared.right.values, fs=float(prepared.left.target_fs),
+        params=params, input_time=prepared.left.time, output_time=prepared.right.time,
+    )
+    for tone in tones:
+        _assert_known_gain(result, tone, lower_fs=lower_fs, delay=0.0)

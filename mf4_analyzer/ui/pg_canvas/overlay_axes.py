@@ -56,6 +56,14 @@ _OVERLAY_AXIS_LABEL_VERTICAL_PADDING_PX = 32.0
 # collapses: ticks still paint, stacked on the same X.
 _OVERLAY_AXIS_MIN_TEXT_WIDTH = 30.0
 
+def _finite_connect_kw(values):
+    """Keep NaN gaps from being stroked as one continuous segment."""
+    array = np.asarray(values, dtype=float)
+    if array.size and not np.isfinite(array).all():
+        return {"connect": "finite"}
+    return {}
+
+
 class OverlayAxisManager(_CanvasBackref):
     """Overlay axis binding, graticule, selection, and interaction routing."""
 
@@ -330,8 +338,20 @@ class OverlayAxisManager(_CanvasBackref):
         plot_s = sig_arr
         explicit_revision = None
         if query is not None:
-            plot_t = np.asarray(query.display_time)
-            plot_s = np.asarray(query.display_values)
+            # A display binding carries the resolved plot X/Y (Time-Y clock
+            # or validated Custom-X). display_time stays the acquisition
+            # clock and must not replace that X. Queries without display_x
+            # keep the historical break arrays.
+            display_x = getattr(query, "display_x", None)
+            if display_x is not None:
+                plot_t = np.asarray(display_x)
+                plot_s = np.asarray(query.display_y)
+                t_arr = plot_t
+                sig_arr = plot_s
+                is_monotonic = self._cached_is_monotonic(data_id, name, t_arr)
+            else:
+                plot_t = np.asarray(query.display_time)
+                plot_s = np.asarray(query.display_values)
             explicit_revision = query.revision
         source_revision = source_revision_for(
             t_arr, sig_arr, explicit_revision=explicit_revision,
@@ -370,8 +390,9 @@ class OverlayAxisManager(_CanvasBackref):
         pen = pg.mkPen(color=color, width=width)
         primary_vb = pi.getViewBox() if hasattr(pi, "getViewBox") else None
         target_vb = axis_handle.view_box
+        connect_kw = _finite_connect_kw(bind_s)
         if target_vb is not None and target_vb is not primary_vb:
-            pdi = pg.PlotDataItem(bind_t, bind_s, pen=pen, name=name)
+            pdi = pg.PlotDataItem(bind_t, bind_s, pen=pen, name=name, **connect_kw)
             try:
                 target_vb.addItem(pdi)
             except Exception:
@@ -380,7 +401,7 @@ class OverlayAxisManager(_CanvasBackref):
             if callable(add_line_item):
                 add_line_item(pdi)
         else:
-            pdi = pi.plot(bind_t, bind_s, pen=pen, name=name)
+            pdi = pi.plot(bind_t, bind_s, pen=pen, name=name, **connect_kw)
         if query is not None and query.point_marker:
             pdi.setSymbol("o")
             pdi.setSymbolSize(8)
@@ -485,8 +506,9 @@ class OverlayAxisManager(_CanvasBackref):
         )
         primary_vb = pi.getViewBox() if hasattr(pi, "getViewBox") else None
         target_vb = source_handle.view_box
+        connect_kw = _finite_connect_kw(bind_s)
         if target_vb is not None and target_vb is not primary_vb:
-            pdi = pg.PlotDataItem(bind_t, bind_s, pen=pen, name=name)
+            pdi = pg.PlotDataItem(bind_t, bind_s, pen=pen, name=name, **connect_kw)
             try:
                 target_vb.addItem(pdi)
             except Exception:
@@ -495,7 +517,7 @@ class OverlayAxisManager(_CanvasBackref):
             if callable(add_line_item):
                 add_line_item(pdi)
         else:
-            pdi = pi.plot(bind_t, bind_s, pen=pen, name=name)
+            pdi = pi.plot(bind_t, bind_s, pen=pen, name=name, **connect_kw)
         try:
             pdi.setVisible(bool(visible))
         except Exception:

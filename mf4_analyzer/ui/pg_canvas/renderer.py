@@ -539,9 +539,11 @@ class Renderer(_CanvasBackref):
                 pass
             active_channel_count += 1
             t, sig, color, _unit = entry
-            # channel_data keeps the raw samples. A native query's display
-            # arrays are the only values that may carry NaN breaks; refreshing
-            # from raw would draw an invalid sample back onto the line.
+            # Resolved display bindings carry plot X/Y (the Time-Y clock or a
+            # validated Custom-X), including gaps. ``display_time`` stays the
+            # acquisition clock and is only the plot X when the query has no
+            # ``display_x`` — that preserves older native break arrays.
+            # A resolved display X must not be replaced by that clock.
             explicit_revision = None
             query = (getattr(self, "_native_queries", None) or {}).get(ck)
             if query is not None:
@@ -550,8 +552,13 @@ class Renderer(_CanvasBackref):
                 except Exception:
                     closed = True
                 if not closed:
-                    t = np.asarray(query.display_time)
-                    sig = np.asarray(query.display_values)
+                    display_x = getattr(query, "display_x", None)
+                    if display_x is not None:
+                        t = np.asarray(display_x)
+                        sig = np.asarray(query.display_y)
+                    else:
+                        t = np.asarray(query.display_time)
+                        sig = np.asarray(query.display_values)
                     explicit_revision = getattr(query, "revision", None)
             source_revision = source_revision_for(
                 t, sig, explicit_revision=explicit_revision,
@@ -733,6 +740,13 @@ class Renderer(_CanvasBackref):
                     line_facade.plot_data_item.setData(env_t, env_s)
                 else:
                     line_facade.plot_data_item.setData(env_t, env_s, connect=connect)
+                if query is not None and getattr(query, "point_marker", False):
+                    line_facade.plot_data_item.setSymbol("o")
+                    line_facade.plot_data_item.setSymbolSize(8)
+                    line_facade.plot_data_item.setSymbolBrush(pg.mkBrush(color))
+                    line_facade.plot_data_item.setSymbolPen(
+                        pg.mkPen(color, width=1)
+                    )
             except Exception as exc:
                 _log.warning("PlotDataItem.setData failed for %r: %s", name, exc)
                 if self._raster_backend_eligible(ck):

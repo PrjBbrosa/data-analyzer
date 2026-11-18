@@ -517,3 +517,77 @@ def test_vector_runtime_uses_dynamic_pyxcp_imports_for_pyinstaller():
         text = (root / relative).read_text(encoding="utf-8")
         assert "from pyxcp" not in text
         assert "import pyxcp" not in text
+
+
+def _reset_waiting_source(path: Path):
+    from mf4_analyzer.acquisition_capture.backends import ReplayEvent, ReplaySource
+
+    events = []
+    times = [0.0, 0.1, 0.2, 0.0, 0.1, 0.2]
+    values = [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]
+    for index, (stamp, value) in enumerate(zip(times, values)):
+        events.append(ReplayEvent(
+            channel="Torque",
+            time_s=stamp,
+            value=value,
+            record=index,
+            segment=0 if index < 3 else 1,
+            valid=True,
+            order=index,
+        ))
+    return ReplaySource(
+        path=path,
+        selected=(SelectedMeasurement(name="Torque", unit="Nm"),),
+        source_samples=[],
+        duration_s=0.0,
+        events=tuple(events),
+        replay_mode="segment_required",
+        notices=("时间回退，请选择要回放的段",),
+    )
+
+
+def test_retained_events_convert_to_the_selected_segment_without_rereading(tmp_path, monkeypatch):
+    """A reset waiting source already holds the events. Choosing a segment
+    must not open the MF4 or read the store again."""
+    waiting = _reset_waiting_source(tmp_path / "reset.mf4")
+
+    def boom(*_args, **_kwargs):
+        raise AssertionError("segment selection re-read the recording")
+
+    monkeypatch.setattr("mf4_analyzer.io.signal_access.read_signal", boom)
+    monkeypatch.setattr(
+        "mf4_analyzer.acquisition_capture.backends.run_import", boom,
+    )
+    first = ReplayRecorderBackend.select_retained_segment(waiting, 0)
+    second = ReplayRecorderBackend.select_retained_segment(waiting, 1)
+    replay = ReplayRecorderBackend.select_retained_segment(waiting, 0)
+    assert [sample[2] for sample in first.source_samples] == [0.0, 1.0, 2.0]
+    assert [sample[2] for sample in second.source_samples] == [3.0, 4.0, 5.0]
+    assert [sample[2] for sample in replay.source_samples] == [0.0, 1.0, 2.0]
+    assert [sample[1] for sample in first.source_samples] == [0.0, 0.1, 0.2]
+    assert waiting.source_samples == []
+    assert first.replay_mode == "native_events"
+    assert first.segment_choice == 0
+
+
+def test_selected_segment_clock_starts_at_its_own_first_timestamp(monkeypatch):
+    now = {"t": 50.0}
+    monkeypatch.setattr(backends_module.time, "monotonic", lambda: now["t"])
+    backend = ReplayRecorderBackend(
+        source_samples=[
+            ("Torque", 5.0, 3.0),
+            ("Torque", 5.1, 4.0),
+            ("Torque", 5.2, 5.0),
+        ],
+        time_origin=5.0,
+    )
+    backend.start((SelectedMeasurement(name="Torque", unit="Nm"),))
+    assert backend.poll() == [("Torque", 5.0, 3.0)]
+    now["t"] += 0.1
+    assert backend.poll() == [("Torque", 5.1, 4.0)]
+    backend.pause()
+    now["t"] += 5.0
+    assert backend.poll() == []
+    backend.resume()
+    now["t"] += 0.1
+    assert backend.poll() == [("Torque", 5.2, 5.0)]

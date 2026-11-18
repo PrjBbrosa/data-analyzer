@@ -453,7 +453,8 @@ class FrfMixin:
 
     def _frf_prepare_native_pair(self, state, pane, input_fd, output_fd, *, materialize):
         """Native pair uses each channel's clock. Cross-rate runs only after an explicit align request."""
-        from ...analysis_signal_prepare import load_native_channel, prepare_pair
+        from ...analysis_signal_prepare import prepare_native_frf_pair
+        from ...io.import_limits import active_import_budget, analysis_request_byte_limit
 
         if input_fd is None or output_fd is None:
             raise FrfPreflightError("输入和输出必须来自同一个逻辑来源")
@@ -467,17 +468,16 @@ class FrfMixin:
             raise FrfPreflightError("输入和输出必须来自同一个逻辑来源")
         requested = self._frf_requested_range_for_pane(state, pane)
         align = bool((getattr(state, "params", None) or {}).get("align_then_compute"))
-        left = load_native_channel(input_fd, input_key[1], requested)
-        right = load_native_channel(output_fd, output_key[1], requested)
-        if left.status != "ready" or right.status != "ready":
-            raise FrfPreflightError(left.reason or right.reason or "native 分析输入不可用")
-        pair = prepare_pair(
-            left.values, left.time, right.values, right.time,
-            left_fs=left.source_fs, right_fs=right.source_fs,
-            policy="native", align_then_compute=align,
-            left_identity=input_key[1], right_identity=output_key[1],
-            source_revision=left.source_revision,
+        budget = active_import_budget()
+        pair = prepare_native_frf_pair(
+            input_fd, input_key[1], output_fd, output_key[1],
+            requested_range=requested,
+            align_then_compute=align,
             materialize=materialize,
+            byte_limit=analysis_request_byte_limit(budget),
+            resource_budget=budget,
+            left_identity=input_key[1],
+            right_identity=output_key[1],
         )
         if pair.status != "ready" or pair.left is None or pair.right is None:
             raise FrfPreflightError(pair.reason)
@@ -719,7 +719,7 @@ class FrfMixin:
         time_axis = prepared.get("time_axis")
         if isinstance(time_axis, dict) and time_axis.get("policy") == "native":
             canonical["prepare_method"] = time_axis.get("method")
-            canonical["prepare_policy"] = "native"
+            canonical["prepare_policy"] = time_axis.get("cache_policy") or "native"
         # Single source of truth for nperseg/noverlap/hop/segments shape and
         # its viability gates: ``plan_frf_request`` (compute_frf runs the
         # same call again once the job actually dispatches). Do not
@@ -1045,7 +1045,7 @@ class FrfMixin:
             time_axis = described.get("time_axis")
             if isinstance(time_axis, dict) and time_axis.get("policy") == "native":
                 canonical["prepare_method"] = time_axis.get("method")
-                canonical["prepare_policy"] = "native"
+                canonical["prepare_policy"] = time_axis.get("cache_policy") or "native"
         except FrfPreflightError:
             return None
         return self.analysis_caches["frf"].make_key(

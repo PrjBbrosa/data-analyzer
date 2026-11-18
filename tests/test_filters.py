@@ -203,6 +203,21 @@ def test_nan_positions_preserved():
     assert np.isfinite(y[0]) and np.isfinite(y[-1])
 
 
+def test_zero_slice_does_not_see_a_spike_outside_the_array():
+    """apply() reflects its own edges. A spike that is not in the array stays out.
+
+    The oracle is the zero input: a low-pass of zeros is zeros. This does not
+    compare against filtering the spiked parent series.
+    """
+    parent = np.zeros(1000, dtype=float)
+    parent[500] = 1000.0
+    window = parent[:181]
+    filtered = apply(window, FilterSpec("low", order=6, cutoff=50.0), 1000.0)
+    assert filtered.shape == window.shape
+    np.testing.assert_array_equal(filtered, 0.0)
+    assert parent[500] == 1000.0
+
+
 def test_lowpass_preserves_constant_signal_exactly():
     x = np.ones(4096, dtype=float)
 

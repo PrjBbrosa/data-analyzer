@@ -19,6 +19,8 @@ import sys
 
 _MIB = 1024 ** 2
 _GIB = 1024 ** 3
+# Historical analysis-prepare ceiling. Do not raise it here.
+_ANALYSIS_REQUEST_CEILING = 512 * _MIB
 _MAX_PHASE = 120
 _MAX_BASIS = 80
 _MAX_LABEL = 240
@@ -257,6 +259,16 @@ def default_limits():
 
 
 @dataclass(frozen=True)
+class AnalysisRequestHold:
+    """One prepare request. Releasing it does not change import ``used_bytes``."""
+
+    token: int
+    nbytes: int
+    label: str
+    released: bool
+
+
+@dataclass(frozen=True)
 class LifecycleRecord:
     """A live native buffer note. It is not part of the cumulative admission."""
 
@@ -276,6 +288,8 @@ class ImportBudget:
         self.used_bytes = 0
         self._components = []
         self._lifecycle = []
+        self._analysis_requests = []
+        self._analysis_outstanding = 0
 
     def reserve(self, nbytes, *, label, phase="admission",
                 estimate_basis="cumulative_admission"):
@@ -341,6 +355,49 @@ class ImportBudget:
     def lifecycle_snapshot(self):
         return tuple(self._lifecycle)
 
+    def analysis_request_outstanding(self):
+        """Bytes held by prepare requests. Independent of monotonic ``used_bytes``."""
+        return int(self._analysis_outstanding)
+
+    def open_analysis_request(self, nbytes, *, label):
+        """Hold one prepare peak against this owner's memory cap.
+
+        The hold is not an import admission and does not change ``used_bytes``.
+        Live sources, bound results, the prepare cache and sibling tasks are
+        not included; those remain the unfinished application ledger.
+        """
+        nbytes = operator.index(nbytes)
+        if nbytes < 0:
+            raise ValueError(f"{label}: negative analysis request")
+        requested = self._analysis_outstanding + nbytes
+        if requested > self.limits.max_memory_bytes or nbytes > sys.maxsize:
+            raise ImportResourceError(
+                label, requested, self.limits.max_memory_bytes,
+                resource_kind="memory_estimate", unit="bytes",
+                phase="analysis_request", estimate_basis="request_peak",
+                components=((str(label), int(nbytes), "bytes"),),
+            )
+        token = len(self._analysis_requests)
+        self._analysis_requests.append(AnalysisRequestHold(
+            token, int(nbytes), str(label), False,
+        ))
+        self._analysis_outstanding = requested
+        return token
+
+    def release_analysis_request(self, token):
+        """Return one prepare hold. A second release is a no-op.
+
+        ``used_bytes`` stays where import admission left it.
+        """
+        token = operator.index(token)
+        current = self._analysis_requests[token]
+        if current.released:
+            return
+        self._analysis_outstanding -= current.nbytes
+        self._analysis_requests[token] = AnalysisRequestHold(
+            current.token, current.nbytes, current.label, True,
+        )
+
     def check_channels(self, count, *, label, phase="admission",
                        estimate_basis="declared_count"):
         count = operator.index(count)
@@ -361,6 +418,35 @@ _CURRENT_BUDGET = ContextVar("import_allocation_budget", default=None)
 def get_import_budget():
     budget = _CURRENT_BUDGET.get()
     return budget if budget is not None else ImportBudget()
+
+
+def active_import_budget():
+    """Budget installed by ``budget_context``, or None.
+
+    Unlike ``get_import_budget``, this does not create a throwaway ledger and
+    does not query available memory.
+    """
+    return _CURRENT_BUDGET.get()
+
+
+def analysis_request_byte_limit(budget=None) -> int:
+    """Effective byte ceiling for one analysis prepare request.
+
+    Uses the active owner's memory cap when a budget is installed, and never
+    exceeds the historical 512 MiB prepare ceiling. ``used_bytes`` is not read.
+    This is not the application peak: live sources, bound results, the byte
+    LRU and concurrent tasks are still uncharged.
+    """
+    if budget is None:
+        budget = _CURRENT_BUDGET.get()
+    if budget is None:
+        return _ANALYSIS_REQUEST_CEILING
+    cap = operator.index(budget.limits.max_memory_bytes)
+    if cap <= 0:
+        raise ValueError("analysis request limit must be positive")
+    if cap < _ANALYSIS_REQUEST_CEILING:
+        return int(cap)
+    return _ANALYSIS_REQUEST_CEILING
 
 
 @contextmanager

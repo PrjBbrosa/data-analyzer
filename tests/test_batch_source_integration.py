@@ -804,3 +804,198 @@ def test_native_frf_job_uses_the_prepared_lower_rate(tmp_path):
     assert prepared.fs == pytest.approx(right_fs)
     assert prepared.input_values.shape == prepared.output_values.shape
     assert prepared.input_time.shape == prepared.output_time.shape
+
+
+def _native_same_rate_frf(path, *, count=100, fs=100.0):
+    from mf4_analyzer.io.native_signal_store import AxisSpec, ChannelSpec, NativeSignalStore
+
+    time = np.arange(count) / fs
+    store = NativeSignalStore.build(
+        "native-budget",
+        [AxisSpec("t0", "clock", "time", "s", time, fs_status="known", fs_hz=fs)],
+        [
+            ChannelSpec(0, 0, "stimulus", "t0", np.linspace(0.0, 1.0, count), unit="Nm"),
+            ChannelSpec(0, 1, "response", "t0", np.linspace(1.0, 2.0, count), unit="Nm"),
+        ],
+    )
+    return FileData.from_native_store(path, store)
+
+
+def test_native_frf_prepare_passes_the_owner_byte_limit(tmp_path, monkeypatch):
+    """生产 prepare_pair 必须拿到中立额度，不能靠默认 None 绕过准入。"""
+    from mf4_analyzer.analysis_signal_prepare import prepare_pair
+    from mf4_analyzer.batch_compute import _prepare_native_frf_task
+    from mf4_analyzer.io.import_limits import analysis_request_byte_limit
+
+    captured = {}
+    real = prepare_pair
+
+    def spy(*args, **kwargs):
+        captured["byte_limit"] = kwargs.get("byte_limit", "missing")
+        captured["resource_budget"] = kwargs.get("resource_budget", "missing")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr("mf4_analyzer.analysis_signal_prepare.prepare_pair", spy)
+    fd = _native_same_rate_frf(tmp_path / "budget.mf4")
+    _prepare_native_frf_task(
+        fd, "stimulus", "response",
+        {"align_then_compute": False, "t_win_s": 0.2, "overlap": 0.0, "nfft_mode": "auto",
+         "window": "hanning", "periodic_window": True, "detrend": "none"},
+    )
+    assert captured["byte_limit"] == analysis_request_byte_limit(None)
+    assert captured["byte_limit"] == 512 * 1024 * 1024
+    assert captured["byte_limit"] is not None
+    assert captured["resource_budget"] is None
+
+
+def test_native_frf_prepare_reports_a_resource_refusal(tmp_path):
+    from mf4_analyzer.batch_compute import BatchFrfDataError, _prepare_native_frf_task
+    from mf4_analyzer.io.import_limits import ImportLimits, budget_context
+
+    fd = _native_same_rate_frf(tmp_path / "tight.mf4")
+    with budget_context(ImportLimits(max_memory_bytes=1600, max_output_bytes=800)):
+        with pytest.raises(BatchFrfDataError, match="预算") as caught:
+            _prepare_native_frf_task(
+                fd, "stimulus", "response",
+                {"align_then_compute": False, "t_win_s": 0.2, "overlap": 0.0,
+                 "nfft_mode": "auto", "window": "hanning", "periodic_window": True,
+                 "detrend": "none"},
+            )
+    assert "缩小" in str(caught.value)
+
+
+def _native_integer_ratio_frf(path, *, origin=0.0, left_fs=2000.0, right_fs=1000.0, duration=4.0, tone=80.0, gain=2.0, delay=0.0):
+    """Same-origin integer-ratio pair. The right clock is not pre-cropped."""
+    from mf4_analyzer.io.native_signal_store import AxisSpec, ChannelSpec, NativeSignalStore
+
+    left_n = int(duration * left_fs)
+    right_n = int(duration * right_fs)
+    left_time = origin + np.arange(left_n) / left_fs
+    right_time = origin + np.arange(right_n) / right_fs
+    stimulus = np.sin(2.0 * np.pi * tone * (left_time - origin))
+    response = gain * np.sin(2.0 * np.pi * tone * (right_time - origin - delay))
+    store = NativeSignalStore.build(
+        "native-frf-range",
+        [
+            AxisSpec("in", "clk-in", "time", "s", left_time, fs_status="known", fs_hz=left_fs),
+            AxisSpec("out", "clk-out", "time", "s", right_time, fs_status="known", fs_hz=right_fs),
+        ],
+        [
+            ChannelSpec(0, 1, "stimulus", "in", stimulus, unit="Nm"),
+            ChannelSpec(1, 1, "response", "out", response, unit="Nm"),
+        ],
+    )
+    return FileData.from_native_store(path, store)
+
+
+def _frf_range_params(time_range):
+    return {
+        "align_then_compute": True,
+        "time_range": time_range,
+        "estimator": "h1",
+        "t_win_s": 0.25,
+        "overlap": 0.0,
+        "nfft_mode": "auto",
+        "window": "hanning",
+        "periodic_window": True,
+        "detrend": "none",
+    }
+
+
+def test_native_frf_range_keeps_the_shared_clock_origin(tmp_path):
+    """[.1001, 3.5] is a same-origin 2:1 request. Cropped first samples differ."""
+    from mf4_analyzer.batch_compute import BatchFrfDataError, prepare_frf_task
+
+    fd = _native_integer_ratio_frf(tmp_path / "origin.mf4")
+    outcomes = {}
+    for label, span in (("0", (0.0, 3.5)), ("0.1001", (0.1001, 3.5)), ("0.1006", (0.1006, 3.5))):
+        try:
+            prepared = prepare_frf_task(fd, "stimulus", "response", _frf_range_params(span))
+        except BatchFrfDataError as exc:
+            outcomes[label] = ("error", str(exc))
+            continue
+        outcomes[label] = (
+            "ready",
+            float(prepared.fs),
+            float(prepared.input_time[0]),
+            float(prepared.output_time[0]),
+            float(prepared.input_time[-1]),
+            int(prepared.input_values.size),
+        )
+    assert outcomes["0"][0] == "ready", outcomes
+    assert outcomes["0.1006"][0] == "ready", outcomes
+    assert outcomes["0.1001"][0] == "ready", outcomes
+    ready = outcomes["0.1001"]
+    assert ready[1] == pytest.approx(1000.0)
+    assert 0.1001 - 1e-9 <= ready[2] <= ready[4] <= 3.5 + 1e-9
+    assert 0.1001 - 1e-9 <= ready[3] <= 3.5 + 1e-9
+
+
+def test_fractional_clock_offset_stays_rejected(tmp_path):
+    """A half-sample origin shift is not an integer-grid relationship."""
+    from mf4_analyzer.batch_compute import BatchFrfDataError, prepare_frf_task
+    from mf4_analyzer.io.native_signal_store import AxisSpec, ChannelSpec, NativeSignalStore
+
+    left_fs = 2000.0
+    right_fs = 1000.0
+    left_time = np.arange(8000) / left_fs
+    right_time = 0.5 / left_fs + np.arange(4000) / right_fs
+    store = NativeSignalStore.build(
+        "native-frf-fraction",
+        [
+            AxisSpec("in", "clk-in", "time", "s", left_time, fs_status="known", fs_hz=left_fs),
+            AxisSpec("out", "clk-out", "time", "s", right_time, fs_status="known", fs_hz=right_fs),
+        ],
+        [
+            ChannelSpec(0, 1, "stimulus", "in", np.sin(left_time), unit="Nm"),
+            ChannelSpec(1, 1, "response", "out", np.sin(right_time), unit="Nm"),
+        ],
+    )
+    fd = FileData.from_native_store(tmp_path / "fraction.mf4", store)
+    with pytest.raises(BatchFrfDataError, match="原点") as caught:
+        prepare_frf_task(fd, "stimulus", "response", _frf_range_params((0.0, 3.5)))
+    assert "分数" in str(caught.value)
+
+
+def test_batch_runner_accepts_shared_origin_range(tmp_path):
+    """BatchRunner.run is the normal entry, not only the private prepare helper."""
+    fd = _native_integer_ratio_frf(tmp_path / "runner.mf4", delay=0.0)
+    source_id = fd.native_store.source_id
+    preset = replace(
+        AnalysisPreset.free_config(
+            name="shared origin range",
+            method="frf",
+            frf_pair_rules=(FrfPairRule("stimulus", ("response",)),),
+            params={
+                "align_then_compute": True,
+                "time_range": [0.1001, 3.5],
+                "estimator": "h1",
+                "t_win_s": 0.25,
+                "overlap": 0.0,
+                "nfft_mode": "auto",
+                "window": "hanning",
+                "periodic_window": True,
+                "detrend": "none",
+            },
+            outputs=BatchOutput(export_data=True, export_image=False),
+        ),
+        source_ids=(source_id,),
+        source_paths=(str(tmp_path / "runner.mf4"),),
+    )
+    result = BatchRunner({source_id: fd}).run(preset, tmp_path / "out")
+    assert result.status == "done", getattr(result, "blocked", None) or [
+        (item.status, item.message) for item in result.items
+    ]
+    assert result.items
+    item = result.items[0]
+    assert item.status == "done", item.message
+    frame = pd.read_csv(item.data_path)
+    band = (
+        (frame["coherence"] >= 0.99)
+        & (np.abs(frame["frequency_hz"] - 80.0) <= 4.0)
+    )
+    assert bool(band.any())
+    gain = frame.loc[band, "magnitude_db"].to_numpy(dtype=float)
+    phase = frame.loc[band, "phase_deg_unwrapped"].to_numpy(dtype=float)
+    assert np.max(np.abs(gain - 20.0 * np.log10(2.0))) <= 0.1
+    assert np.max(np.abs(phase)) <= 1.0

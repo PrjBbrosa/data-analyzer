@@ -198,6 +198,97 @@ def test_replay_duplicate_times_reset_and_single_point():
     assert any("单点" in note for note in one.notices)
 
 
+def test_shared_axis_segment_keeps_both_channels_and_record_order():
+    shared = NativeSignalStore.build("mdf:shared", (
+        _axis("t", [0.0, 0.1, 0.2, 0.0, 0.1, 0.2]),
+    ), (
+        _channel(0, 1, "Torque", "t", [0.0, 1.0, 2.0, 3.0, 4.0, 5.0], unit="Nm"),
+        _channel(0, 2, "Speed", "t", [10.0, 11.0, 12.0, 13.0, 14.0, 15.0], unit="rpm"),
+    ))
+    waiting = ReplayRecorderBackend.source_from_native("/data/shared.mf4", shared)
+    assert waiting.replay_mode == "segment_required"
+    assert waiting.source_samples == []
+    chosen = ReplayRecorderBackend.select_retained_segment(waiting, 0)
+    assert [(item[0], item[2]) for item in chosen.source_samples] == [
+        ("Torque", 0.0), ("Speed", 10.0),
+        ("Torque", 1.0), ("Speed", 11.0),
+        ("Torque", 2.0), ("Speed", 12.0),
+    ]
+    assert chosen.segment_choice == 0
+    assert all(event.segment == 0 for event in chosen.events)
+
+
+def test_independent_reset_clocks_are_not_one_segment_choice():
+    split = NativeSignalStore.build("mdf:split", (
+        _axis("left", [0.0, 0.1, 0.2, 0.0, 0.1, 0.2]),
+        _axis("right", [0.0, 0.1, 0.0]),
+    ), (
+        _channel(0, 1, "Torque", "left", [0.0, 1.0, 2.0, 3.0, 4.0, 5.0], unit="Nm"),
+        _channel(1, 1, "Speed", "right", [10.0, 11.0, 12.0], unit="rpm"),
+    ))
+    waiting = ReplayRecorderBackend.source_from_native("/data/split.mf4", split)
+    assert waiting.replay_mode == "segment_required"
+    assert waiting.source_samples == []
+    assert any("局部段号" in note for note in waiting.notices)
+    with pytest.raises(ValueError, match="局部段号"):
+        ReplayRecorderBackend.source_from_native("/data/split.mf4", split, segment=0)
+    with pytest.raises(ValueError, match="局部段号"):
+        ReplayRecorderBackend.select_retained_segment(waiting, 0)
+
+
+def test_invalid_duplicate_and_single_point_segments_do_not_invent_samples():
+    invalid = NativeSignalStore.build("mdf:invalid", (
+        _axis("t", [0.0, 0.1, 0.0, 0.1]),
+    ), (
+        _channel(
+            0, 1, "Torque", "t", [1.0, 2.0, 3.0, 4.0], unit="Nm",
+            validity=np.array([True, True, True, True]),
+        ),
+    ))
+    waiting = ReplayRecorderBackend.source_from_native("/data/invalid.mf4", invalid)
+    assert waiting.replay_mode == "segment_required"
+    chosen = ReplayRecorderBackend.select_retained_segment(waiting, 0)
+    assert chosen.source_samples == []
+    assert any(event.value is None for event in chosen.events)
+    assert any("失效" in note or "可播放" in note for note in chosen.notices)
+
+    duplicated = NativeSignalStore.build("mdf:dupseg", (
+        _axis("t", [0.0, 0.0, 0.2, 0.0, 0.1]),
+    ), (
+        _channel(0, 1, "Torque", "t", [1.0, 2.0, 3.0, 9.0, 8.0], unit="Nm"),
+    ))
+    waiting = ReplayRecorderBackend.source_from_native("/data/dupseg.mf4", duplicated)
+    first = ReplayRecorderBackend.select_retained_segment(waiting, 0)
+    assert [(event.time_s, event.value) for event in first.events if event.channel == "Torque"] == [
+        (0.0, 1.0), (0.0, 2.0), (0.2, 3.0),
+    ]
+    assert [sample[2] for sample in first.source_samples] == [1.0, 2.0, 3.0]
+
+    single = NativeSignalStore.build("mdf:one", (
+        _axis("t", [1.25]),
+    ), (
+        _channel(0, 1, "Mark", "t", [4.0], unit="Nm"),
+    ))
+    one = ReplayRecorderBackend.source_from_native("/data/one.mf4", single)
+    assert one.replay_mode == "native_events"
+    assert len(one.source_samples) == 1
+    assert one.source_samples[0][1] == 1.25
+
+
+def test_multirate_without_a_reset_stays_playable_on_its_own_clocks():
+    store = NativeSignalStore.build("mdf:rates", (
+        _axis("slow", [0.0, 0.2]),
+        _axis("fast", [0.0, 0.05, 0.1]),
+    ), (
+        _channel(0, 1, "Torque", "slow", [1.0, 2.0], unit="Nm"),
+        _channel(1, 1, "Speed", "fast", [10.0, 11.0, 12.0], unit="rpm"),
+    ))
+    source = ReplayRecorderBackend.source_from_native("/data/rates.mf4", store)
+    assert source.replay_mode == "native_events"
+    assert len(source.source_samples) == 5
+    assert "局部段号" not in " ".join(source.notices)
+
+
 def test_product_replay_entry_still_calls_load_mf4(monkeypatch):
     seen = {}
 
