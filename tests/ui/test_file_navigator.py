@@ -761,6 +761,26 @@ def test_follow_link_menu_is_compact_and_emits_prefs(qapp, qtbot):
     assert "已启用 3 项" in nav.btn_auto_attach.toolTip()
 
 
+def test_mf4_multirate_option_is_independent_of_file_follow(qapp, qtbot):
+    nav = FileNavigator()
+    qtbot.addWidget(nav)
+    before = nav.follow_prefs()
+    action = nav._act_mf4_multirate
+    assert action in nav._follow_menu.actions()
+    assert action.isCheckable()
+    assert not nav.mf4_multirate_enabled()
+    with qtbot.assertNotEmitted(nav.follow_prefs_changed):
+        with qtbot.waitSignal(nav.mf4_multirate_changed, timeout=200) as emitted:
+            action.trigger()
+    assert emitted.args == [True]
+    assert nav.mf4_multirate_enabled()
+    assert nav.follow_prefs() == before
+    assert "MF4" in nav.btn_auto_attach.toolTip()
+    with qtbot.assertNotEmitted(nav.mf4_multirate_changed):
+        nav.set_mf4_multirate_enabled(False)
+    assert not nav.mf4_multirate_enabled()
+
+
 def test_follow_link_active_chrome_survives_hover_and_idle_stays_plain(qapp, qtbot):
     """Active follow link keeps its wash; idle never flashes a pressed wash."""
     from mf4_analyzer.ui_kit import load_stylesheet

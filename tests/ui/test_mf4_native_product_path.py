@@ -1,6 +1,7 @@
 """Explicit native product path: adapter, broker, transport, then GUI registration.
 
-The default method table stays ``load_mf4``. These tests never call the reader
+The unchecked default stays ``load_mf4``; the navigator can opt MF4 into native.
+These tests never call the reader
 in the parent process. A direct ``DataLoader.load_mf4_native`` call is a failure.
 """
 from __future__ import annotations
@@ -187,6 +188,65 @@ def test_default_method_table_is_still_load_mf4():
     assert adapter.loader_name == "load_mf4"
     assert adapter.explicit_native_method() == "load_mf4_native"
     assert adapter.loader_name == "load_mf4"
+
+
+def test_mf4_option_persists_and_routes_only_new_mf4_opens(qtbot, monkeypatch, tmp_path):
+    _silence_dialogs(monkeypatch)
+    window = _window(qtbot, monkeypatch)
+    assert not window.navigator.mf4_multirate_enabled()
+    window.navigator._act_mf4_multirate.trigger()
+    second = _window(qtbot, monkeypatch)
+    assert second.navigator.mf4_multirate_enabled()
+
+    native_path = _write_pair(tmp_path / "rates.MF4")
+    # Same real MDF4 contents with the legacy extension: the option is MF4-only.
+    mdf_path = tmp_path / "legacy.mdf"
+    mdf_path.write_bytes(native_path.read_bytes())
+    csv_path = tmp_path / "plain.csv"
+    csv_path.write_text("Time,value\n0,1\n1,2\n2,3\n", encoding="utf-8")
+    _forbid_parent_reader(monkeypatch)
+    seen = []
+    real_broker = window._imports.broker
+
+    def broker(method, path, **kwargs):
+        seen.append(method)
+        return real_broker(method, path, **kwargs)
+
+    window._imports.broker = broker
+    window._start_import_paths([native_path, mdf_path, csv_path])
+    # A running request keeps its chosen policy, including queued files/retries.
+    window.navigator._act_mf4_multirate.trigger()
+    qtbot.waitUntil(lambda: not window._imports.busy, timeout=30000)
+    assert seen == ["load_mf4_native", "load_mf4", "load_csv"]
+    assert not window._imports.failures
+    loaded = {Path(fd.filepath).suffix.lower(): fd for fd in window.files.values()}
+    assert set(loaded) == {".mf4", ".mdf", ".csv"}
+    assert loaded[".mf4"].is_native
+    assert not loaded[".mdf"].is_native
+    assert not loaded[".csv"].is_native
+    from mf4_analyzer.io.signal_access import read_signal
+
+    burst = read_signal(loaded[".mf4"], "burst", representation="raw")
+    np.testing.assert_array_equal(burst.time, [0.10, 0.11, 0.12])
+    np.testing.assert_array_equal(burst.values, [0.0, 100.0, 0.0])
+
+    legacy_path = tmp_path / "disabled.mf4"
+    legacy_path.write_bytes(native_path.read_bytes())
+    window._load_one(str(legacy_path))
+    qtbot.waitUntil(lambda: not window._imports.busy, timeout=30000)
+    assert seen[-1] == "load_mf4"
+    legacy = next(fd for fd in window.files.values() if Path(fd.filepath) == legacy_path)
+    assert not legacy.is_native
+
+    # A saved legacy project must stay legacy even with the new-open option on.
+    project = tmp_path / "mixed.tlproj"
+    assert window.save_project(project)
+    second.open_project(project)
+    qtbot.waitUntil(lambda: not second._imports.busy, timeout=30000)
+    restored = {Path(fd.filepath).name: fd for fd in second.files.values()}
+    assert restored[native_path.name].is_native
+    assert not restored[legacy_path.name].is_native
+    assert not restored[mdf_path.name].is_native
 
 
 def test_saved_native_project_reopens_through_the_native_broker(qtbot, monkeypatch, tmp_path):

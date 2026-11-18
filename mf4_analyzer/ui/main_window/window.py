@@ -321,6 +321,7 @@ class MainWindow(
         )
         self._init_ui()
         self._init_channel_scope()
+        self._init_mf4_import_preference()
         # D-E1: the cross-section analysis helpers get their collaborators
         # injected by name instead of reaching through `self`.  Built after
         # _init_ui() because inspector / chart_stack / analysis_managers are

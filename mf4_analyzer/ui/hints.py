@@ -522,7 +522,7 @@ _HINTS = (
     ),
     Hint(
         id="file.scope_follow",
-        text="链接=文件范围跟随（加载/新建/切分析）",
+        text="链接菜单：文件范围跟随 / MF4 多采样率",
         surface="discovery",
         priority=78,
     ),

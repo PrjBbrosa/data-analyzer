@@ -408,6 +408,7 @@ class FileNavigator(QWidget):
     auto_attach_changed = pyqtSignal(bool)
     # Stage 1.1: full follow-prefs payload (FollowPrefs dataclass).
     follow_prefs_changed = pyqtSignal(object)
+    mf4_multirate_changed = pyqtSignal(bool)
     channel_config_save_requested = pyqtSignal()
     channel_config_apply_requested = pyqtSignal(str)
     channel_config_manage_requested = pyqtSignal(object)
@@ -494,6 +495,15 @@ class FileNavigator(QWidget):
             self._act_fill_on_mode_entry,
         ):
             act.toggled.connect(self._on_follow_action_toggled)
+        self._follow_menu.addSeparator()
+        self._act_mf4_multirate = self._follow_menu.addAction("多采样率（仅 MF4）")
+        self._act_mf4_multirate.setCheckable(True)
+        self._act_mf4_multirate.setChecked(False)
+        self._act_mf4_multirate.setToolTip(
+            "新打开的 .mf4 保留各通道原始时间与采样点；已加载文件需关闭后重新打开。"
+        )
+        self._follow_menu.setToolTipsVisible(True)
+        self._act_mf4_multirate.toggled.connect(self._on_mf4_multirate_toggled)
         bind_popup_trigger(self._follow_menu, self.btn_auto_attach)
         self.btn_auto_attach.clicked.connect(self._open_follow_menu)
         self._sync_auto_attach_button()
@@ -1022,6 +1032,15 @@ class FileNavigator(QWidget):
         """Item-1 shim: whether new loads attach into the active context."""
         return self._act_attach_on_load.isChecked()
 
+    def mf4_multirate_enabled(self):
+        return self._act_mf4_multirate.isChecked()
+
+    def set_mf4_multirate_enabled(self, enabled):
+        blocker = QSignalBlocker(self._act_mf4_multirate)
+        self._act_mf4_multirate.setChecked(bool(enabled))
+        del blocker
+        self._sync_auto_attach_button()
+
     def set_auto_attach_enabled(self, enabled):
         """Item-1 shim: update attach_on_load without emitting prefs signals."""
         blocker = QSignalBlocker(self._act_attach_on_load)
@@ -1141,6 +1160,10 @@ class FileNavigator(QWidget):
         # Keep the legacy bool signal in sync with item 1 for older callers.
         self.auto_attach_changed.emit(bool(prefs.attach_on_load))
 
+    def _on_mf4_multirate_toggled(self, checked):
+        self._sync_auto_attach_button()
+        self.mf4_multirate_changed.emit(bool(checked))
+
     def _sync_auto_attach_button(self):
         # Read actions directly so chrome sync never imports main_window.
         flags = (
@@ -1154,11 +1177,14 @@ class FileNavigator(QWidget):
             "mdi.link-variant" if enabled else "mdi.link-variant-off",
             color="#4b6078" if enabled else "#8b98aa",
         ))
-        self.btn_auto_attach.setToolTip(
+        tooltip = (
             f"已启用 {count} 项文件范围跟随 · 点击调整"
             if enabled
             else "未启用文件范围跟随"
         )
+        if self.mf4_multirate_enabled():
+            tooltip += "\nMF4 多采样率已开启（新打开生效）"
+        self.btn_auto_attach.setToolTip(tooltip)
         self.btn_auto_attach.setAccessibleName(self.btn_auto_attach.toolTip())
         # QSS matches [active="true"|"false"] string attrs (same as #fileRow).
         self.btn_auto_attach.setProperty(

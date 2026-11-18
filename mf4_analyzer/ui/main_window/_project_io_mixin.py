@@ -231,6 +231,7 @@ OPEN_FILES_FILTER = (
 AUDIO_VIDEO_FILE_FILTER = f"音视频文件 ({AUDIO_VIDEO_GLOB})"
 BLF_DBC_RECENT_SETTINGS_KEY = "blf/recent_dbc_path_sets"
 BLF_DBC_RECENT_MAX = 20
+MF4_MULTIRATE_SETTINGS_KEY = "import/mf4_multirate"
 
 
 class ProjectIOMixin:
@@ -258,6 +259,20 @@ class ProjectIOMixin:
     #: keeps the existing window-close / open-replace wording; ``close`` and
     #: ``new`` are product session-end intents and default to Cancel.
     _unsaved_prompt_intent = "leave"
+
+    def _init_mf4_import_preference(self):
+        from ..inspector_sections._helpers import _preset_settings
+
+        enabled = _preset_settings().value(MF4_MULTIRATE_SETTINGS_KEY, False, type=bool)
+        self.navigator.set_mf4_multirate_enabled(enabled)
+        self.navigator.mf4_multirate_changed.connect(self._save_mf4_import_preference)
+
+    def _save_mf4_import_preference(self, enabled):
+        from ..inspector_sections._helpers import _preset_settings
+
+        settings = _preset_settings()
+        settings.setValue(MF4_MULTIRATE_SETTINGS_KEY, bool(enabled))
+        settings.sync()
 
     def _note_user_project_mutation(self, token=None):
         """Publish one persistable user mutation. No-op while restoring."""
@@ -666,10 +681,9 @@ class ProjectIOMixin:
     def request_explicit_native_import(self, path, *, limits=None):
         """Open one MF4 through the native broker only when the caller asks.
 
-        Default open, drag-drop, recent files, Batch, and Replay stay on
-        ``load_mf4``. Restoring a saved native sampling policy uses the same
-        explicit broker inside project restore. The default method table does
-        not change.
+        New-open MF4 can also opt in through the navigator preference.
+        Restoring a saved native sampling policy uses the same explicit broker
+        inside project restore. The default method table does not change.
         """
         return self._start_import_paths(
             [os.fspath(path)], limits=limits, explicit_native=True,
@@ -683,6 +697,9 @@ class ProjectIOMixin:
         paths = list(paths)
         coordinator = self._imports
         target = coordinator.capture_target()
+        # Freeze new-open intent for the entire request, including queued files
+        # and retries. Project restore uses its saved per-source policy instead.
+        mf4_multirate = self.navigator.mf4_multirate_enabled()
 
         def workflow(request):
             token = self._begin_compute_progress("加载文件", total=0)
@@ -745,7 +762,10 @@ class ProjectIOMixin:
                                 continue
                         fids = yield from self._import_one_steps(
                             request, fp, notify=notify and len(paths) == 1,
-                            explicit_native=bool(request.explicit_native), **options,
+                            explicit_native=(
+                                bool(request.explicit_native)
+                                or (mf4_multirate and Path(fp).suffix.lower() == ".mf4")
+                            ), **options,
                         )
                     except Exception as exc:
                         coordinator.record_failure(request, exc)
