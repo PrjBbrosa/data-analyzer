@@ -662,6 +662,7 @@ def test_cancel_stays_up_until_reap_and_the_next_import_is_not_cancelled(qtbot, 
         window._load_one('slow.csv')
         qtbot.waitUntil(entered.is_set)
         dialog = window._imports.progress_dialog
+        qtbot.waitUntil(dialog.isVisible)
         button = next(item for item in dialog.findChildren(QPushButton) if item.text() == '取消导入')
         qtbot.mouseClick(button, Qt.LeftButton)
         snap = window._imports.current_progress
@@ -1353,3 +1354,25 @@ def test_completed_call_releases_bound_transform_and_large_kwargs(qapp, qtbot, m
         if host_ref() is not None and not sip.isdeleted(host_ref()):
             host_ref().deleteLater()
         _drain_lifecycle_deletes()
+
+
+def test_fast_import_finishes_before_progress_dialog_show(qtbot, monkeypatch):
+    from mf4_analyzer.ui_kit.import_progress_dialog import ImportProgressDialog
+
+    shown = []
+    original_show = ImportProgressDialog.show
+
+    def show(dialog):
+        shown.append(dialog)
+        return original_show(dialog)
+
+    monkeypatch.setattr(ImportProgressDialog, "show", show)
+    window, errors = _main_window(qtbot, monkeypatch, lambda *a, **kw: _csv_result())
+    # Control the display deadline independently of CI load.
+    window._imports._progress_show_timer.setInterval(60_000)
+    window._load_one("fast.csv")
+    qtbot.waitUntil(lambda: bool(window.files) and not window._imports.busy)
+    assert window._imports.current_progress is None
+    assert not window._imports._progress_show_timer.isActive()
+    assert not shown
+    assert not errors

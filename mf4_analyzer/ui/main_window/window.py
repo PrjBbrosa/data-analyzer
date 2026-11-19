@@ -4590,7 +4590,10 @@ class MainWindow(
             _pp_section.__enter__()
 
         progress_token = None
-        if update_primary_ui or user_initiated:
+        # A restore suppresses canvas paints until its axes and data settle.
+        # Updating a visible QProgressBar can synchronously paint the parent
+        # card while that canvas is suppressed, even without processEvents().
+        if not defer_axis_finalize and (update_primary_ui or user_initiated):
             progress_token = self._begin_compute_progress(
                 "时间域绘制中",
                 total=1000,
@@ -4748,7 +4751,10 @@ class MainWindow(
                             self.view_manager.get(view_idx), canvas,
                         )
                 xt, yt = self.inspector.top.tick_density()
-                canvas.set_tick_density(xt, yt)
+                if delta_result.get("applied") and mode == "overlay":
+                    canvas.set_tick_density(xt, yt, reframe_overlay_y=False)
+                else:
+                    canvas.set_tick_density(xt, yt)
             # [perf-probe] 诊断探针，定位后移除。诊断行 + 强制同步首帧 paint
             # （离屏 settle 后是缓存 blit，需 repaint() 触发 paintEvent hook 记真实首帧）。
             if _pp.ENABLED:
@@ -6331,6 +6337,9 @@ class MainWindow(
 
     def showEvent(self, event):  # noqa: N802 - Qt API
         super().showEvent(event)
+        imports = getattr(self, "_imports", None)
+        if imports is not None:
+            imports.enable_prewarm()
         if getattr(self, "_startup_preload_armed", False):
             return
         coord = getattr(self, "_startup_coordinator", None)

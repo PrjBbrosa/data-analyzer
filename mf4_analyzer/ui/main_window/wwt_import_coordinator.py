@@ -330,13 +330,15 @@ class WwtImportCoordinator:
         )
 
     def _resolve_layout_prompt(
-        self, body: str, informative: str
+        self, body: str, informative: str, *, before_prompt=None
     ) -> WwtLayoutPromptResult:
         if self._batch_active:
             if self._batch_choice is WwtBatchChoice.APPLY_LAYOUT:
                 return WwtLayoutPromptResult(accepted=True, apply_to_remaining=False)
             if self._batch_choice is WwtBatchChoice.LOAD_DATA_ONLY:
                 return WwtLayoutPromptResult(accepted=False, apply_to_remaining=False)
+        if before_prompt is not None:
+            before_prompt()
         return coerce_layout_prompt(self._ask_layout(body, informative))
 
     def _remember_prompt_if_requested(self, prompt: WwtLayoutPromptResult) -> None:
@@ -351,6 +353,7 @@ class WwtImportCoordinator:
     def offer_layout(
         self, document, fids: list[str], *, reuse_blank: bool | None = None,
         prepared_files=None, request_valid=None, before_commit=None, before_replace=None,
+        before_prompt=None, before_plot=None,
     ) -> WwtImportOutcome | None:
         window = self._window
         if getattr(window, "_restoring_project", False):
@@ -439,7 +442,7 @@ class WwtImportCoordinator:
         body, informative = layout_dialog_text(
             document, proposals, available=max(0, available)
         )
-        prompt = self._resolve_layout_prompt(body, informative)
+        prompt = self._resolve_layout_prompt(body, informative, before_prompt=before_prompt)
         if not commit_sources():
             return _outcome(created=0)
         self._remember_prompt_if_requested(prompt)
@@ -457,6 +460,8 @@ class WwtImportCoordinator:
             # Transfer an import's captured target before publication emits
             # View signals, which may service its cancellation watchdog.
             before_replace(manager.views[0].view_id, keep[0].state.view_id)
+        if keep and before_plot is not None:
+            before_plot()
         indexes = manager.insert_states(
             [item.state for item in keep],
             reuse_blank=bool(reuse_blank),

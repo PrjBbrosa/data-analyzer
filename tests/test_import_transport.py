@@ -460,3 +460,32 @@ for name in sys.modules:
     assert not name.startswith(('PyQt', 'PySide', 'mf4_analyzer.ui', 'asammdf', 'av.', 'h5py'))
 """
     subprocess.run([sys.executable, "-c", code], check=True, capture_output=True, text=True)
+
+
+@pytest.mark.parametrize("damage", [None, "overlap", "bad_checksum"])
+def test_packed_arrays_share_one_file_and_validate_array_boundaries(tmp_path, damage):
+    directory = tmp_path / "transport"
+    first = np.asfortranarray(np.arange(12, dtype=">u8").reshape(3, 4))
+    second = np.arange(10, dtype="<i2")[::-2]
+    second.setflags(write=False)
+    inputs = [first, second, first, np.empty(0)]
+    path = write_import_result(inputs, directory, request_id="packed", max_bytes=BUDGET,
+                               packed_arrays=True)
+    manifest = json.loads(path.read_text())
+    assert len(manifest["files"]) == 3
+    assert len(list(directory.glob("*.bin"))) == 1
+    if damage:
+        if damage == "overlap":
+            manifest["files"][1]["offset"] = manifest["files"][0]["size"] - 1
+        else:
+            manifest["files"][1]["sha256"] = "0" * 64
+        path.write_text(json.dumps(manifest))
+        with pytest.raises(ImportTransportError):
+            read_import_result(directory, request_id="packed", max_bytes=BUDGET)
+        return
+    restored = read_import_result(directory, request_id="packed", max_bytes=BUDGET)
+    shutil.rmtree(directory)
+    assert restored[0] is restored[2]
+    assert restored[0].flags.f_contiguous
+    for expected, actual in zip(inputs, restored):
+        assert_same(expected, actual)

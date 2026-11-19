@@ -16,6 +16,7 @@ the broker. One writer owns each private directory; it publishes exactly once.
 """
 from __future__ import annotations
 
+from contextlib import ExitStack
 from dataclasses import fields
 import hashlib
 import importlib
@@ -38,6 +39,7 @@ __all__ = ["write_import_result", "read_import_result", "ImportTransportError",
            "ImportTransportLimitError"]
 
 _VERSION = 1
+_PACKED_VERSION = 2
 _MAX_MANIFEST = 8 * 1024 * 1024
 _MAX_ITEMS = 500_000
 _MAX_NODES = 100_000
@@ -48,7 +50,7 @@ _CHUNK = 64 * 1024
 # Conservative admission allowance for each reconstructed Python CAN tuple,
 # float, integer, bytes header and list pointer, in addition to its payload.
 _CAN_FRAME_OVERHEAD = 256
-_FILE_NAME = re.compile(r"[a-f0-9]{32}-(?:[0-9]+\.npy|bytes\.bin)\Z")
+_FILE_NAME = re.compile(r"[a-f0-9]{32}-(?:[0-9]+\.npy|(?:arrays|bytes)\.bin)\Z")
 _DATACLASSES = {
     "WwtRecord": "mf4_analyzer.io.wwt_document",
     "WwtDocument": "mf4_analyzer.io.wwt_document",
@@ -148,6 +150,47 @@ def _digest(stream):
     return checksum.hexdigest()
 
 
+class _HashingStream:
+    """Hash bytes as the underlying stream reads or writes them."""
+
+    def __init__(self, stream):
+        self.stream = stream
+        self.digest = hashlib.sha256()
+
+    def write(self, block):
+        written = self.stream.write(block)
+        if written != len(block):
+            raise OSError("short import transport write")
+        self.digest.update(block)
+        return written
+
+    def read(self, size):
+        block = self.stream.read(size)
+        self.digest.update(block)
+        return block
+
+
+def _read_array(stream, spec, start):
+    reader = _HashingStream(stream)
+    version = np.lib.format.read_magic(reader)
+    _require(version == (1, 0), "unsupported NumPy file version")
+    shape, fortran, dtype = np.lib.format.read_array_header_1_0(
+        reader, max_header_size=_MAX_HEADER,
+    )
+    _require(list(shape) == spec["shape"] and dtype.str == spec["dtype"]
+             and spec["size"] == stream.tell() - start + spec["nbytes"],
+             "NumPy header disagrees with manifest")
+    order = "F" if fortran else "C"
+    array = np.empty(shape, dtype=dtype, order=order)
+    target = memoryview(array.ravel(order=order).view(np.uint8))
+    for offset in range(0, len(target), _CHUNK * 16):
+        block = target[offset:offset + _CHUNK * 16]
+        _require(stream.readinto(block) == len(block), "truncated array payload")
+        reader.digest.update(block)
+    _require(reader.digest.hexdigest() == spec["sha256"], "payload checksum mismatch")
+    return array
+
+
 def _raw_can_frames(value):
     return bool(value) and all(
         type(row) is tuple and len(row) == 3 and type(row[0]) is float
@@ -157,7 +200,7 @@ def _raw_can_frames(value):
 
 
 class _Writer:
-    def __init__(self, directory, max_bytes):
+    def __init__(self, directory, max_bytes, *, packed_arrays=False):
         self.directory = directory
         self.max_bytes = max_bytes
         self.prefix = uuid.uuid4().hex
@@ -171,6 +214,9 @@ class _Writer:
         self.disk_bytes = 0
         self.numeric_bytes = 0
         self.blob = None
+        self.packed_arrays = packed_arrays
+        self.array_stream = None
+        self.array_path = None
 
     def charge(self, *, disk=0, numeric=0):
         self.disk_bytes += disk
@@ -267,12 +313,30 @@ class _Writer:
                 "shape": array.shape,
             })
             self.charge(disk=header.tell() + nbytes)
-            path = self.new_file(f"{len(self.files)}.npy")
-            with path.open("wb") as stream:
-                np.save(stream, array, allow_pickle=False)
-            spec = {"path": path.name, "kind": "array", "size": path.stat().st_size,
-                    "dtype": array.dtype.str, "shape": list(array.shape), "nbytes": nbytes}
-            _require(spec["size"] == header.tell() + nbytes, "unexpected NumPy header size")
+            _limit(len(self.files) < _MAX_FILES, "too many transport files")
+            if self.packed_arrays:
+                if self.array_stream is None:
+                    self.array_path = self.new_file("arrays.bin")
+                    self.array_stream = self.array_path.open("wb")
+                path = self.array_path
+                stream = self.array_stream
+            else:
+                path = self.new_file(f"{len(self.files)}.npy")
+                stream = path.open("wb")
+            try:
+                offset = stream.tell()
+                writer = _HashingStream(stream)
+                np.save(writer, array, allow_pickle=False)
+                size = stream.tell() - offset
+            finally:
+                if not self.packed_arrays:
+                    stream.close()
+            spec = {"path": path.name, "kind": "array", "size": size,
+                    "dtype": array.dtype.str, "shape": list(array.shape), "nbytes": nbytes,
+                    "sha256": writer.digest.hexdigest()}
+            if self.packed_arrays:
+                spec["offset"] = offset
+            _require(size == header.tell() + nbytes, "unexpected NumPy header size")
             self.files.append(spec)
             return {"kind": "scalar" if isinstance(value, np.generic) else "array",
                     "file": len(self.files) - 1, "writeable": bool(array.flags.writeable)}
@@ -437,11 +501,16 @@ class _Writer:
         }
 
     def publish(self, value, request_id):
-        root = self.encode(value)
-        for spec in self.files:
-            with _open_regular(self.directory / spec["path"]) as stream:
-                spec["sha256"] = _digest(stream)
-        manifest = {"version": _VERSION, "request_id": request_id,
+        try:
+            root = self.encode(value)
+        finally:
+            if self.array_stream is not None:
+                self.array_stream.close()
+        if self.blob is not None:
+            with _open_regular(self.directory / self.blob["path"]) as stream:
+                self.blob["sha256"] = _digest(stream)
+        version = _PACKED_VERSION if self.packed_arrays else _VERSION
+        manifest = {"version": version, "request_id": request_id,
                     "root": root, "nodes": self.nodes, "files": self.files}
         temporary = self.directory / f"{self.prefix}-manifest.tmp"
         size = 0
@@ -462,7 +531,8 @@ class _Writer:
         return target
 
 
-def write_import_result(value: Any, directory, *, request_id: str, max_bytes: int) -> Path:
+def write_import_result(value: Any, directory, *, request_id: str, max_bytes: int,
+                        packed_arrays: bool = False) -> Path:
     """Publish once in a broker-owned private directory; return manifest path.
 
     Failure removes only files created by this call. I/O failures propagate as
@@ -474,7 +544,7 @@ def write_import_result(value: Any, directory, *, request_id: str, max_bytes: in
     directory.mkdir(parents=True, exist_ok=True)
     _require(not (directory / "manifest.json").exists()
              and not (directory / "manifest.json").is_symlink(), "manifest already published")
-    writer = _Writer(directory, max_bytes)
+    writer = _Writer(directory, max_bytes, packed_arrays=packed_arrays)
     try:
         return writer.publish(value, request_id)
     finally:
@@ -503,39 +573,62 @@ class _Reader:
         self.items = 0
         self.cache = {}
         self.arrays = {}
+        self.array_mutability = {}
         self.active = set()
         self.paths = []
         disk_bytes = manifest_size
         seen = set()
+        packed = manifest["version"] == _PACKED_VERSION
+        packed_path = None
+        packed_size = 0
+        root = directory.resolve()
         for spec in self.files:
             _require(type(spec) is dict, "invalid file descriptor")
             name = spec["path"]
-            _require(type(name) is str and _FILE_NAME.fullmatch(name) is not None
-                     and name not in seen, "invalid/duplicate payload path")
-            seen.add(name)
+            _require(type(name) is str and _FILE_NAME.fullmatch(name) is not None,
+                     "invalid payload path")
             path = directory / name
-            _require(path.resolve().parent == directory.resolve(), "payload path escapes task directory")
             size = _integer(spec["size"])
             disk_bytes += size
             _limit(disk_bytes <= max_bytes, "import transport disk budget exceeded")
             if spec["kind"] == "array":
-                dtype, nbytes = _numeric(spec["dtype"], spec["shape"])
+                _dtype, nbytes = _numeric(spec["dtype"], spec["shape"])
                 _require(_integer(spec["nbytes"]) == nbytes, "array byte count mismatch")
                 self.charge(nbytes)
             else:
                 _require(spec["kind"] == "bytes", "invalid file kind")
-            with _open_regular(path) as stream:
-                _require(os.fstat(stream.fileno()).st_size == size, "payload file size mismatch")
-                if spec["kind"] == "array":
-                    version = np.lib.format.read_magic(stream)
-                    _require(version == (1, 0), "unsupported NumPy file version")
-                    shape, _fortran, header_dtype = np.lib.format.read_array_header_1_0(
-                        stream, max_header_size=_MAX_HEADER)
-                    _require(list(shape) == spec["shape"] and header_dtype == dtype
-                             and size == stream.tell() + nbytes, "NumPy header disagrees with manifest")
-                stream.seek(0)
-                _require(_digest(stream) == spec["sha256"], "payload checksum mismatch")
+            if packed and spec["kind"] == "array":
+                _require(name.endswith("-arrays.bin")
+                         and (packed_path is None or path == packed_path)
+                         and _integer(spec["offset"]) == packed_size,
+                         "invalid packed array path or offset")
+                packed_path = path
+                packed_size += size
+            else:
+                _require(name not in seen and "offset" not in spec
+                         and not name.endswith("-arrays.bin"), "invalid/duplicate payload path")
+                seen.add(name)
             self.paths.append(path)
+
+        with ExitStack() as stack:
+            packed_stream = None
+            if packed_path is not None:
+                _require(packed_path.resolve().parent == root, "payload path escapes task directory")
+                packed_stream = stack.enter_context(_open_regular(packed_path))
+                _require(os.fstat(packed_stream.fileno()).st_size == packed_size,
+                         "packed array file size mismatch")
+            for ref, (spec, path) in enumerate(zip(self.files, self.paths)):
+                if packed_stream is not None and path == packed_path:
+                    _require(packed_stream.tell() == spec["offset"], "invalid packed array boundary")
+                    self.arrays[ref] = _read_array(packed_stream, spec, spec["offset"])
+                    continue
+                _require(path.resolve().parent == root, "payload path escapes task directory")
+                with _open_regular(path) as stream:
+                    _require(os.fstat(stream.fileno()).st_size == spec["size"], "payload file size mismatch")
+                    if spec["kind"] == "array":
+                        self.arrays[ref] = _read_array(stream, spec, 0)
+                    else:
+                        _require(_digest(stream) == spec["sha256"], "payload checksum mismatch")
 
     def charge(self, size):
         self.numeric_bytes += size
@@ -613,17 +706,14 @@ class _Reader:
             values = [decode(item) for item in items]
             return tuple(values) if kind == "tuple" else values
         if kind in ("array", "scalar"):
-            ref, spec, path = self.file(node, "array")
-            _require(type(node["writeable"]) is bool, "invalid array mutability")
-            if ref not in self.arrays:
-                with _open_regular(path) as stream:
-                    array = np.load(stream, allow_pickle=False, max_header_size=_MAX_HEADER)
-                _require(list(array.shape) == spec["shape"] and array.dtype.str == spec["dtype"],
-                         "array changed after validation")
-                array.setflags(write=node["writeable"])
-                self.arrays[ref] = array
+            ref, _spec, _path = self.file(node, "array")
+            writeable = node["writeable"]
+            _require(type(writeable) is bool, "invalid array mutability")
             array = self.arrays[ref]
-            _require(array.flags.writeable == node["writeable"], "conflicting array mutability")
+            if ref not in self.array_mutability:
+                array.setflags(write=writeable)
+                self.array_mutability[ref] = writeable
+            _require(array.flags.writeable == writeable, "conflicting array mutability")
             if kind == "scalar":
                 _require(array.ndim == 0, "invalid NumPy scalar")
                 return array[()]
@@ -842,7 +932,7 @@ def read_import_result(directory, *, request_id: str, max_bytes: int) -> Any:
         _require(len(raw) == size, "manifest changed during read")
         manifest = json.loads(raw, object_pairs_hook=_unique_object)
         _require(type(manifest) is dict and type(manifest["version"]) is int
-                 and manifest["version"] == _VERSION, "unsupported manifest version")
+                 and manifest["version"] in (_VERSION, _PACKED_VERSION), "unsupported manifest version")
         _require(manifest["request_id"] == request_id, "request ID mismatch")
         reader = _Reader(directory, manifest, max_bytes, len(raw))
         return reader.decode(manifest["root"])

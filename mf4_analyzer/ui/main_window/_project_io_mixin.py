@@ -675,7 +675,6 @@ class ProjectIOMixin:
             path=path,
             phase=phase,
         )
-        dialog.show()
         return dialog
 
     def request_explicit_native_import(self, path, *, limits=None):
@@ -1301,6 +1300,7 @@ class ProjectIOMixin:
             new_fids = []
 
             def commit_sources():
+                self._imports.note_handoff(request, "登记导入数据")
                 new_fids.extend(self._commit_prepared_files(
                     prepared, reserved_fids=reserved, mark_dirty=False,
                 ))
@@ -1319,6 +1319,9 @@ class ProjectIOMixin:
                 request_valid=partial(self._imports.is_valid, request),
                 before_commit=commit_sources,
                 before_replace=replace_target,
+                before_prompt=partial(self._imports.note_user_wait, request,
+                                      "等待选择 WinWert 排版", show_progress=False),
+                before_plot=partial(self._imports.note_handoff, request, "正在绘图"),
             )
             if not self._imports.is_valid(request):
                 return []
@@ -1326,6 +1329,7 @@ class ProjectIOMixin:
             for meta in metas:
                 meta.pop("skipped_channels", None)
         else:
+            self._imports.note_handoff(request, "登记导入数据")
             new_fids = self._commit_prepared_files(prepared, mark_dirty=False)
         logger.info("Import request=%s path=%s registered %d groups in %.3fs",
                     request.request_id, fp, len(new_fids), monotonic() - commit_started)

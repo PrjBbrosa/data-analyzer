@@ -751,7 +751,7 @@ class OverlayAxisManager(_CanvasBackref):
         axis.setWidth(None)
 
     def _realize_overlay_axis_columns(self):
-        """Give each extra right overlay axis a measured PlotItem column.
+        """Realize the left and right overlay columns before the first paint.
 
         Extra ``AxisItem``s live in PlotItem grid columns 3+. If those columns
         collapse, pyqtgraph still paints the tick text — the items sit on
@@ -765,7 +765,7 @@ class OverlayAxisManager(_CanvasBackref):
         """
         if not getattr(self, "_overlay_mode", False):
             return
-        for axis in list(self._overlay_aux_axes)[1:]:
+        for axis in list(self._overlay_aux_axes):
             try:
                 self._seed_overlay_axis_auto_width(axis)
             except RuntimeError:

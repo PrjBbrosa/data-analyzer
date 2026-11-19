@@ -8,10 +8,12 @@ paths:
   - mf4_analyzer/ui/main_window/_view_mixin.py
   - mf4_analyzer/ui/main_window/window.py
   - tests/ui/test_timedomain_mode_switch_empty_frame.py
+  - tests/ui/test_wwt_initial_view_contract.py
 checks:
   - rg -n "suppress_display_updates|_canvas_display_update_scope" mf4_analyzer/ui/pg_canvas/canvas.py mf4_analyzer/ui/main_window
 tests:
   - TMPDIR=/tmp MPLCONFIGDIR=/tmp QT_QPA_PLATFORM=offscreen PYTHONPATH=. .venv/bin/python -m pytest tests/ui/test_timedomain_mode_switch_empty_frame.py -q
+  - TMPDIR=/tmp MPLCONFIGDIR=/tmp QT_QPA_PLATFORM=offscreen PYTHONPATH=. .venv/bin/python -m pytest tests/ui/test_wwt_initial_view_contract.py::test_wwt_restore_keeps_progress_writes_outside_suppressed_canvas -q
 ---
 
 # Progress Repaint After Clear Paints An Empty Viewport
@@ -23,3 +25,11 @@ Past failure: Mode change made selection-delta fail, so `plot_channels` cleared 
 Rule: Own a nested-safe `setUpdatesEnabled` scope on the canvas. Enter before `plot_channels`/`clear` and leave after `settle_view_restore` on the View path; also wrap non-View full rebuilds that clear plus progress. Restore the original flag in `finally` without using `return` — a finally `return` swallows an exception raised in a nested inner scope. Do not use the suppress scope to measure tick text, do not change the selection-delta hot path, and do not treat `_settle_layout()` as proof that inner axes have converged.
 
 Verification: `tests/ui/test_timedomain_mode_switch_empty_frame.py` goes through TimeCard mode buttons or `plot_time()` full rebuild, probes a layout-neutral `repaint()` from the progress callback, and forbids a visible `n_axes=0` frame. Offscreen proves the suppress contract, not Cocoa/TraceLab/Windows foreground flash.
+
+Follow-up on WWT View restore: the Cocoa parent card still painted while the
+canvas had updates disabled and zero axes. The call stack went through
+`QProgressBar.setValue()` even with explicit event pumping and repaint off.
+Keep compute progress writes outside the suppressed View restore. When
+importing, publish the drawing phase before entering the restore. Check the
+parent card and natural viewport paints in the foreground trace, plus the
+WWT restore progress test.

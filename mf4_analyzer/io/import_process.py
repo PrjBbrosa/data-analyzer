@@ -6,7 +6,7 @@ in their coordinator's worker thread; batch callers keep a synchronous API.
 from __future__ import annotations
 
 from dataclasses import asdict
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from contextvars import ContextVar
 import json
 import logging
@@ -30,6 +30,8 @@ from .import_limits import (
 logger = logging.getLogger(__name__)
 _SLOT = threading.Semaphore(1)
 _CANCEL_CHECK = ContextVar("import_cancel_check", default=None)
+IMPORT_TIMINGS_ENV = "TRACELAB_IMPORT_TIMINGS"
+MDF_IMPORT_METHODS = frozenset({"load_mf4", "load_mf4_native"})
 IMPORT_METHODS = frozenset({
     "load_mf4", "load_mf4_native", "load_csv", "load_excel", "load_ascii", "load_tdms",
     "load_wwt", "load_wwt_document", "load_zfd", "load_mat", "load_hdf",
@@ -80,6 +82,7 @@ def _runtime_identity():
     return {
         "mode": snapshot.mode,
         "app_root": str(snapshot.app_root),
+        "generation": getattr(getattr(snapshot, "active", None), "generation", None),
         "components": {key: [value.status, value.package_sha256]
                        for key, value in snapshot.components.items()},
     }
@@ -239,6 +242,147 @@ def _rss_bytes(pid):
     return None
 
 
+def _launch_worker(request_path, diagnostics):
+    env = os.environ.copy()
+    package_root = str(Path(__file__).resolve().parents[2])
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, [package_root, env.get("PYTHONPATH")]))
+    env["TRACELAB_IMPORT_CHILD"] = "1"
+    env["TRACELAB_STARTUP_SPLASH"] = "0"
+    options = {"start_new_session": True} if os.name != "nt" else {
+        "creationflags": subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP}
+    return subprocess.Popen(_worker_command(request_path), env=env,
+                            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                            stderr=diagnostics, **options)
+
+
+def _admit_worker(proc, root):
+    if os.name != "nt" or proc.poll() is not None:
+        return None
+    try:
+        job = _WindowsJob(proc)
+    except OSError:
+        if proc.poll() is not None:
+            return None
+        raise
+    try:
+        (root / "admitted").touch()
+    except BaseException:
+        job.close()
+        raise
+    return job
+
+
+def _reap_worker(proc, root, grace, job):
+    if proc.poll() is None:
+        # The stop path already terminates the group. Signalling it again
+        # can raise EPERM on macOS while a killed descendant is exiting.
+        _stop_process(proc, root, grace, job)
+    elif job is not None:
+        job.close()
+    else:
+        _kill_owned_group(proc)
+
+
+class MdfImportPrewarm:
+    """Own one idle child until the broker atomically claims its cleanup."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._wake = threading.Event()
+        self._thread = None
+        self._ready = None
+        self._closed = False
+
+    @property
+    def running(self):
+        return self._thread is not None and self._thread.is_alive()
+
+    def start(self):
+        with self._lock:
+            if self._closed or self.running:
+                return
+            self._wake.clear()
+            self._thread = threading.Thread(target=self._prepare, name="mf4-import-prewarm", daemon=True)
+            self._thread.start()
+
+    def close(self):
+        with self._lock:
+            self._closed = True
+            self._wake.set()
+
+    def discard(self):
+        """Release an idle or initializing child before an unrelated import."""
+        with self._lock:
+            self._wake.set()
+            self._ready = None
+
+    def claim(self, runtime, resources, reaper, grace):
+        with self._lock:
+            ready = self._ready
+            self._wake.set()
+            if self._closed or ready is None:
+                return None
+            root, proc, child_runtime, owner, worker, job = ready
+            if child_runtime != runtime or proc.poll() is not None:
+                return None
+            resources.enter_context(owner.pop_all())
+            # The active attempt owns process cleanup with its current limits.
+            worker.pop_all()
+            reaper.callback(_reap_worker, proc, root, grace, job)
+            self._ready = None
+            return root, proc
+
+    def _prepare(self):
+        try:
+            self._prepare_worker()
+        except (OSError, ImportProcessError, subprocess.SubprocessError):
+            logger.warning("MF4 import prewarm failed", exc_info=True)
+
+    def _prepare_worker(self):
+        with ExitStack() as owner, ExitStack() as worker:
+            root = Path(owner.enter_context(tempfile.TemporaryDirectory(prefix="tracelab-import-")))
+            diagnostics = owner.enter_context((root / "stderr.log").open("wb"))
+            runtime = _runtime_identity()
+            request_path = root / "warmup.json"
+            request_path.write_text(json.dumps({"runtime": runtime}), encoding="utf-8")
+            launched = time.monotonic()
+            proc = _launch_worker(request_path, diagnostics)
+            try:
+                job = _admit_worker(proc, root)
+            except OSError:
+                _reap_worker(proc, root, 0, None)
+                raise
+            worker.callback(_reap_worker, proc, root, ImportLimits().cancel_grace_seconds, job)
+            ready_path = root / "ready.json"
+            deadline = time.monotonic() + 30
+            while not self._wake.is_set() and time.monotonic() < deadline:
+                if proc.poll() is not None:
+                    break
+                ready = _read_json(ready_path, 65536)
+                if ready is not None and ready.get("runtime") == runtime:
+                    if os.environ.get(IMPORT_TIMINGS_ENV) == "1":
+                        logger.info("MF4 prewarm timing total_ms=%.1f bootstrap_ms=%s decoder_ms=%s",
+                                    (time.monotonic() - launched) * 1000,
+                                    ready.get("bootstrap_ms"), ready.get("mdf_dependency_ms"))
+                    with self._lock:
+                        if self._wake.is_set():
+                            return
+                        self._ready = (root, proc, runtime, owner, worker, job)
+                    try:
+                        self._wake.wait(30)
+                    finally:
+                        with self._lock:
+                            self._ready = None
+                    return
+                self._wake.wait(.025)
+            if not self._wake.is_set():
+                with (root / "stderr.log").open("rb") as stream:
+                    stream.seek(max(stream.seek(0, os.SEEK_END) - 2048, 0))
+                    detail = stream.read(2048).decode("utf-8", errors="replace")
+                logger.warning("MF4 import prewarm did not become ready (exit=%s): %s",
+                               proc.poll(), detail)
+
+
 def _cancelled(cancel_check):
     return cancel_check is not None and bool(cancel_check())
 
@@ -254,7 +398,7 @@ def import_context(*, cancel_check=None):
 
 
 def run_import(method, path, *, kwargs=None, cancel_check=None,
-               progress_callback=None, limits=None):
+               progress_callback=None, limits=None, prewarm=None, diagnostic_id=None):
     """Parse once in a disposable child and return the loader's original shape."""
     if method not in IMPORT_METHODS:
         raise ValueError(f"unsupported importer operation: {method}")
@@ -275,12 +419,13 @@ def run_import(method, path, *, kwargs=None, cancel_check=None,
         if _cancelled(cancel_check):
             raise ImportProcessError("cancelled", "已取消导入")
         return _run_import(method, path, dict(kwargs or {}), cancel_check,
-                           progress_callback, limits, admitted_at)
+                           progress_callback, limits, admitted_at, prewarm, diagnostic_id)
     finally:
         _SLOT.release()
 
 
-def _run_import(method, path, kwargs, cancel_check, progress_callback, limits, started):
+def _run_import(method, path, kwargs, cancel_check, progress_callback, limits, started, prewarm, diagnostic_id):
+    setup_started = time.monotonic()
     from .import_transport import ImportTransportLimitError, read_import_result, write_import_result
     path = Path(path).expanduser().resolve()
     try:
@@ -288,8 +433,15 @@ def _run_import(method, path, kwargs, cancel_check, progress_callback, limits, s
     except OSError as exc:
         raise ImportProcessError("data_error", f"无法读取文件：{path.name}", detail=str(exc)) from exc
     request_id = uuid.uuid4().hex
-    with tempfile.TemporaryDirectory(prefix="tracelab-import-") as temporary:
-        root = Path(temporary)
+    timing_enabled = os.environ.get(IMPORT_TIMINGS_ENV) == "1"
+    with ExitStack() as resources, ExitStack() as worker:
+        runtime = _runtime_identity()
+        ready = (prewarm.claim(runtime, resources, worker, limits.cancel_grace_seconds)
+                 if prewarm is not None and method in MDF_IMPORT_METHODS else None)
+        if ready is None:
+            root = Path(resources.enter_context(tempfile.TemporaryDirectory(prefix="tracelab-import-")))
+        else:
+            root, proc = ready
         try:
             write_import_result(kwargs, root / "arguments", request_id=request_id,
                                 max_bytes=limits.max_output_bytes)
@@ -300,16 +452,8 @@ def _run_import(method, path, kwargs, cancel_check, progress_callback, limits, s
         request = {"schema": 1, "request_id": request_id, "method": method,
                    "path": str(path), "snapshot": snapshot,
                    "wait_for_admission": os.name == "nt",
-                   "limits": asdict(limits), "runtime": _runtime_identity()}
+                   "limits": asdict(limits), "runtime": runtime}
         request_path = root / "request.json"
-        request_path.write_text(json.dumps(request), encoding="utf-8")
-        env = os.environ.copy()
-        package_root = str(Path(__file__).resolve().parents[2])
-        env["PYTHONPATH"] = os.pathsep.join(filter(None, [package_root, env.get("PYTHONPATH")]))
-        env["TRACELAB_IMPORT_CHILD"] = "1"
-        env["TRACELAB_STARTUP_SPLASH"] = "0"
-        options = {"start_new_session": True} if os.name != "nt" else {
-            "creationflags": subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP}
         stage = "启动读取进程"
         last_status = None
         last_memory_check = started
@@ -318,66 +462,61 @@ def _run_import(method, path, kwargs, cancel_check, progress_callback, limits, s
             raise ImportProcessError("cancelled", "已取消导入", stage=stage)
         if time.monotonic() - started >= limits.timeout_seconds:
             raise ImportProcessError("timeout", "等待或准备导入超过时间预算", stage=stage)
-        with stderr_path.open("wb") as diagnostics:
+        process_started = time.monotonic()
+        if ready is None:
+            request_path.write_text(json.dumps(request), encoding="utf-8")
+            diagnostics = resources.enter_context(stderr_path.open("wb"))
             try:
-                proc = subprocess.Popen(_worker_command(request_path), env=env,
-                                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                        stderr=diagnostics, **options)
+                proc = _launch_worker(request_path, diagnostics)
             except OSError as exc:
                 raise ImportProcessError("dependency_error", "无法启动读取进程", detail=str(exc)) from exc
-            job = None
             try:
-                if os.name == "nt" and proc.poll() is None:
-                    try:
-                        job = _WindowsJob(proc)
-                    except OSError as exc:
-                        if proc.poll() is None:
-                            raise ImportProcessError("dependency_error", "无法监督读取进程组", detail=str(exc)) from exc
-                    if job is not None:
-                        (root / "admitted").touch()
-                while proc.poll() is None:
-                    if _cancelled(cancel_check):
-                        raise ImportProcessError("cancelled", "已取消导入", stage=stage)
-                    now = time.monotonic()
-                    if now - started > limits.timeout_seconds:
-                        raise ImportProcessError("timeout", "文件读取超过时间预算，已停止", stage=stage)
-                    status = _read_json(root / "status.json", limits.max_manifest_bytes)
-                    if status is not None and status != last_status:
-                        if status.get("request_id") != request_id:
-                            raise ImportProcessError("internal_error", "读取进程状态身份不匹配")
-                        stage = str(status.get("stage") or stage)
-                        if progress_callback is not None:
-                            progress_callback(float(status.get("fraction", -1)), stage)
-                        last_status = status
-                    if now - last_memory_check >= .25:
-                        last_memory_check = now
-                        rss = _rss_bytes(proc.pid)
-                        if rss is not None and rss > limits.max_memory_bytes:
-                            raise _resource_error(
-                                worker_memory_envelope(requested=rss, limit=limits.max_memory_bytes, phase=stage),
-                                "文件读取超过内存预算，已停止", stage=stage,
-                                detail=f"RSS {rss} > {limits.max_memory_bytes}",
-                                request_id=request_id,
-                            )
-                        stderr_size = stderr_path.stat().st_size
-                        if stderr_size > limits.max_manifest_bytes:
-                            raise _resource_error(
-                                diagnostic_output_envelope(
-                                    requested=stderr_size, limit=limits.max_manifest_bytes, phase=stage),
-                                "读取进程诊断输出超过预算", stage=stage,
-                                detail=f"stderr {stderr_size} > {limits.max_manifest_bytes}",
-                                request_id=request_id,
-                            )
-                    time.sleep(.025)
-                proc.wait()
-            finally:
-                try:
-                    if proc.poll() is None:
-                        _stop_process(proc, root, limits.cancel_grace_seconds, job)
-                finally:
-                    if job is not None:
-                        job.close()
-                    _kill_owned_group(proc)
+                job = _admit_worker(proc, root)
+            except OSError as exc:
+                _reap_worker(proc, root, 0, None)
+                raise ImportProcessError("dependency_error", "无法监督读取进程组", detail=str(exc)) from exc
+            worker.callback(_reap_worker, proc, root, limits.cancel_grace_seconds, job)
+        else:
+            pending = request_path.with_suffix(".tmp")
+            pending.write_text(json.dumps(request), encoding="utf-8")
+            pending.replace(request_path)
+        while proc.poll() is None:
+            if _cancelled(cancel_check):
+                raise ImportProcessError("cancelled", "已取消导入", stage=stage)
+            now = time.monotonic()
+            if now - started > limits.timeout_seconds:
+                raise ImportProcessError("timeout", "文件读取超过时间预算，已停止", stage=stage)
+            status = _read_json(root / "status.json", limits.max_manifest_bytes)
+            if status is not None and status != last_status:
+                if status.get("request_id") != request_id:
+                    raise ImportProcessError("internal_error", "读取进程状态身份不匹配")
+                stage = str(status.get("stage") or stage)
+                if progress_callback is not None:
+                    progress_callback(float(status.get("fraction", -1)), stage)
+                last_status = status
+            if now - last_memory_check >= .25:
+                last_memory_check = now
+                rss = _rss_bytes(proc.pid)
+                if rss is not None and rss > limits.max_memory_bytes:
+                    raise _resource_error(
+                        worker_memory_envelope(requested=rss, limit=limits.max_memory_bytes, phase=stage),
+                        "文件读取超过内存预算，已停止", stage=stage,
+                        detail=f"RSS {rss} > {limits.max_memory_bytes}",
+                        request_id=request_id,
+                    )
+                stderr_size = stderr_path.stat().st_size
+                if stderr_size > limits.max_manifest_bytes:
+                    raise _resource_error(
+                        diagnostic_output_envelope(
+                            requested=stderr_size, limit=limits.max_manifest_bytes, phase=stage),
+                        "读取进程诊断输出超过预算", stage=stage,
+                        detail=f"stderr {stderr_size} > {limits.max_manifest_bytes}",
+                        request_id=request_id,
+                    )
+            time.sleep(.025)
+        proc.wait()
+        child_exited = time.monotonic()
+        worker.close()
         if _cancelled(cancel_check):
             raise ImportProcessError("cancelled", "已取消导入", stage=stage)
         outcome = _read_json(root / "outcome.json", limits.max_manifest_bytes)
@@ -410,6 +549,9 @@ def _run_import(method, path, kwargs, cancel_check, progress_callback, limits, s
             raise ImportProcessError("data_error", "读取期间源文件已不可用", detail=str(exc), stage=stage) from exc
         if current_snapshot != snapshot:
             raise ImportProcessError("data_error", "读取期间源文件发生变化，请重新打开", stage=stage)
+        receive_started = time.monotonic()
+        if progress_callback is not None:
+            progress_callback(-1, "校验并接收读取结果")
         try:
             value = read_import_result(root / "result", request_id=request_id,
                                        max_bytes=limits.max_output_bytes)
@@ -422,6 +564,22 @@ def _run_import(method, path, kwargs, cancel_check, progress_callback, limits, s
                                   request_id=request_id) from exc
         except (OSError, ValueError) as exc:
             raise ImportProcessError("internal_error", "读取结果不完整或超过预算", detail=str(exc)) from exc
+        if timing_enabled:
+            received = time.monotonic()
+            try:
+                sizes = [entry.stat().st_size for entry in (root / "result").iterdir()]
+            except OSError:
+                sizes = []
+            logger.info(
+                "Import timing gui_request=%s worker_request=%s method=%s warm=%s "
+                "queue_ms=%.1f setup_ms=%.1f child_ms=%.1f close_ms=%.1f receive_ms=%.1f "
+                "output_bytes=%d output_files=%d worker_timings_ms=%s",
+                diagnostic_id, request_id, method, ready is not None,
+                (setup_started - started) * 1000, (process_started - setup_started) * 1000,
+                (child_exited - process_started) * 1000,
+                (receive_started - child_exited) * 1000, (received - receive_started) * 1000,
+                sum(sizes), len(sizes), outcome.get("timings_ms", {}),
+            )
         if progress_callback is not None:
             progress_callback(1.0, "读取完成")
         return value

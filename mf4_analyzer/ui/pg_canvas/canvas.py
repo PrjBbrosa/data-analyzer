@@ -1503,6 +1503,7 @@ class TimeDomainCanvasPG(QWidget):
                 return {"applied": False, "reason": "source-revision-changed"}
 
         reshown = []
+        visibility_changed = False
         for ck, _name, (_handle, line) in self._channel_lines.composite_items():
             pdi = getattr(line, "plot_data_item", None)
             if pdi is None:
@@ -1515,6 +1516,7 @@ class TimeDomainCanvasPG(QWidget):
                 pdi.setVisible(should_show)
             except Exception:
                 continue
+            visibility_changed |= was_visible != should_show
             if was_visible and not should_show:
                 self._clear_hidden_line_cache(pdi)
             elif should_show and not was_visible:
@@ -1526,7 +1528,8 @@ class TimeDomainCanvasPG(QWidget):
             "reason": "visibility-only",
         }
         self._sync_companion_dash_styles()
-        self._reframe_companion_axes_after_visibility_change()
+        if visibility_changed:
+            self._reframe_companion_axes_after_visibility_change()
         if reshown:
             for key in reshown:
                 self._last_range_key.pop(key, None)
@@ -2447,6 +2450,7 @@ class TimeDomainCanvasPG(QWidget):
         # X-only geometry, so it cannot be carried into the final transaction.
         self._invalidate_presentation_paint_ack()
         if self._overlay_mode:
+            self._repin_overlay_channel_ticks(reframe=False)
             self._realize_overlay_axis_columns()
         if self._refresh_pending:
             # No pending work means this was a first visit (no stored xlim,

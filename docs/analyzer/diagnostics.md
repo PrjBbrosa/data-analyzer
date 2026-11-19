@@ -20,6 +20,11 @@ backups, so the active file plus backups are bounded at approximately 30 MiB.
 - `TRACELAB_LOG_DIR` selects another log directory.
 - `TRACELAB_LOG_LEVEL` selects the file threshold using a standard logging
   name such as `DEBUG`, `INFO`, `WARNING`, or `ERROR`. The default is `INFO`.
+- `TRACELAB_IMPORT_TIMINGS=1` logs import phase durations, MF4 prewarm
+  readiness, and transfer size and file count at INFO level. Search for
+  `Import timing` and correlate records via `gui_request`. The worker
+  timings are included in `child_ms`. Measure interactive selection and
+  the first painted chart separately for an end-to-end comparison.
 
 Warnings and errors are also written to stderr when the process has one.
 Windows `--windowed` packages normally do not expose stderr, so collect the log

@@ -9,6 +9,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from functools import partial
 import logging
+import os
 from pathlib import Path
 from threading import Event
 from time import monotonic
@@ -16,6 +17,7 @@ from uuid import uuid4
 from weakref import ref
 
 from PyQt5 import sip
+from PyQt5.QtGui import QGuiApplication
 from PyQt5.QtCore import QCoreApplication, QObject, QThread, QTimer, pyqtSignal, pyqtSlot
 
 from ...ui_kit.import_progress_dialog import (
@@ -39,6 +41,9 @@ def run_import(method, path, **kwargs):
     # Keep optional parser imports out of GUI module initialization.
     from ...io.import_process import run_import as supervised_import
     return supervised_import(method, path, **kwargs)
+
+
+_default_broker = run_import
 
 
 @dataclass(frozen=True)
@@ -106,7 +111,11 @@ class _Supervisor(QThread):
                 progress_callback=self.report, limits=self.limits,
             )
             if self.call.transform is not None and not self.request.cancel_event.is_set():
+                start = monotonic()
                 self.value = self.call.transform(self.call.path, self.value)
+                if os.environ.get("TRACELAB_IMPORT_TIMINGS") == "1":
+                    logger.info("Import timing gui_request=%s prepare_file_data_ms=%.1f",
+                                self.request.request_id, (monotonic() - start) * 1000)
         except Exception as exc:
             # Transport exceptions retain their type/code/stage and traceback.
             logger.exception('Import request=%s path=%s method=%s code=%s stage=%s failed',
@@ -174,6 +183,31 @@ class ImportCoordinator(QObject):
         self._progress_timer = QTimer(self)
         self._progress_timer.setInterval(1000)
         self._progress_timer.timeout.connect(self._on_progress_tick)
+        self._progress_show_timer = QTimer(self)
+        self._progress_show_timer.setSingleShot(True)
+        self._progress_show_timer.setInterval(250)
+        self._progress_show_timer.timeout.connect(self._show_progress_dialog)
+        self._prewarm = None
+        self._prewarm_timer = QTimer(self)
+        self._prewarm_timer.setSingleShot(True)
+        self._prewarm_timer.setInterval(750)
+        self._prewarm_timer.timeout.connect(self._start_prewarm)
+
+    def enable_prewarm(self):
+        if (self.broker is not _default_broker or self.closing
+                or self._prewarm is not None
+                or QGuiApplication.platformName() in {"offscreen", "minimal"}):
+            return
+        from ...io.import_process import MdfImportPrewarm
+        self._prewarm = MdfImportPrewarm()
+        self._prewarm_timer.start()
+
+    def _start_prewarm(self):
+        host = self.host
+        if (self._prewarm is not None and host is not None and host.isVisible()
+                and not self.closing and not self.busy):
+            self._prewarm.start()
+
 
     @pyqtSlot()
     def _host_destroyed(self):
@@ -189,7 +223,8 @@ class ImportCoordinator(QObject):
 
     @property
     def busy(self):
-        return self._active is not None or bool(self._queue) or self._thread is not None
+        return (self._active is not None or bool(self._queue) or self._thread is not None
+                or (self.closing and self._prewarm is not None and self._prewarm.running))
 
     def capture_target(self):
         host = self.host
@@ -231,6 +266,10 @@ class ImportCoordinator(QObject):
                 and (request.target is None or self.target_state(request.target) is not None))
 
     def _check_target(self):
+        if self.closing and not self.busy:
+            self._target_timer.stop()
+            self._start_next()
+            return
         if self._active is not None and not self.is_valid(self._active):
             self._active.cancel_event.set()
 
@@ -251,6 +290,12 @@ class ImportCoordinator(QObject):
         if self._active is not None or self._thread is not None:
             return
         if not self._queue:
+            if self.busy:
+                return
+            if self.closing:
+                self._target_timer.stop()
+            elif self._prewarm is not None and not self._prewarm.running:
+                self._prewarm_timer.start()
             self.drained.emit()
             if self.host is None:
                 self.deleteLater()
@@ -333,7 +378,16 @@ class ImportCoordinator(QObject):
         request.worker_request_id = uuid4().hex
         self._last_call = call
         self.note_call_started(request, call)
-        thread = self._thread = _Supervisor(self.broker, call, request)
+        broker = self.broker
+        if broker is _default_broker:
+            broker = partial(broker, diagnostic_id=request.request_id)
+        if self._prewarm is not None:
+            if (call.method in {"load_mf4", "load_mf4_native"}
+                    and not getattr(self.host, "_restoring_project", False)):
+                broker = partial(broker, prewarm=self._prewarm)
+            else:
+                self._prewarm.discard()
+        thread = self._thread = _Supervisor(broker, call, request)
         relay = self._relay = _RunRelay(self, request, thread)
         thread.progress.connect(relay.progress)
         thread.finished.connect(relay.finished)
@@ -481,13 +535,21 @@ class ImportCoordinator(QObject):
     def invalidate_session(self):
         self.generation += 1
         self.cancel()
+        if self._prewarm is not None:
+            self._prewarm.discard()
 
     def shutdown(self):
         self.closing = True
-        self._target_timer.stop()
+        self._prewarm_timer.stop()
+        if self._prewarm is not None:
+            self._prewarm.close()
         self._progress_timer.stop()
+        self._progress_show_timer.stop()
         self.invalidate_session()
-        return not self.busy
+        if not self.busy:
+            self._target_timer.stop()
+            return True
+        return False
 
     @property
     def current_progress(self):
@@ -531,6 +593,28 @@ class ImportCoordinator(QObject):
         self.progress_dialog = dialog
         self._push_current()
         self._progress_timer.start()
+        self._progress_show_timer.start()
+
+    def _show_progress_dialog(self):
+        session = self._progress
+        request = self._active
+        dialog = self.progress_dialog
+        if (session is not None and not session.terminal_sent
+                and request is not None and self.is_valid(request)
+                and request.request_id == session.request_id
+                and dialog is not None and not sip.isdeleted(dialog)
+                and not dialog.isVisible()):
+            self._progress_show_timer.stop()
+            dialog.show()
+
+    def note_handoff(self, request, phase):
+        session = self._editable(request)
+        if session is not None:
+            session.phase = phase
+            session.kind = KIND_HANDOFF
+            session.stage_fraction = None
+            session.message = ""
+            self._push_current()
 
     def note_file(self, request, *, index, total, path, phase):
         session = self._editable(request)
@@ -557,7 +641,7 @@ class ImportCoordinator(QObject):
         session.stage_fraction = None
         self._push_current()
 
-    def note_user_wait(self, request, message):
+    def note_user_wait(self, request, message, *, show_progress=True):
         session = self._editable(request)
         if session is None:
             return
@@ -565,6 +649,8 @@ class ImportCoordinator(QObject):
         session.message = str(message or "等待处理")
         session.stage_fraction = None
         self._push_current()
+        if show_progress:
+            self._show_progress_dialog()
 
     def resume_after_user_wait(self, request):
         session = self._editable(request)
@@ -590,6 +676,7 @@ class ImportCoordinator(QObject):
             return
         session.terminal_sent = True
         self._progress_timer.stop()
+        self._progress_show_timer.stop()
         session.kind = {
             "success": KIND_SUCCESS,
             "partial": KIND_PARTIAL,
@@ -609,6 +696,7 @@ class ImportCoordinator(QObject):
         if request is not None and session.request_id != request.request_id:
             return
         self._progress_timer.stop()
+        self._progress_show_timer.stop()
         dialog = self.progress_dialog
         finish = session.finish_status
         self._progress = None

@@ -370,3 +370,23 @@ def test_lifecycle_reports_four_kinds_without_changing_used_bytes():
     assert budget.used_bytes == 40
     budget.reserve(5, label="after")
     assert budget.used_bytes == 45
+
+
+def test_build_segments_preserves_order_across_fast_path_blocks():
+    from mf4_analyzer.io.native_signal_store import SegmentFact, build_segments
+
+    axis = (np.arange(131080, dtype=np.uint64) + np.uint64(2**63))[::2]
+    assert build_segments(axis) == (SegmentFact(0, 0, len(axis), True, False, False),)
+    axis[65536] = axis[65535]
+    assert build_segments(axis) == (SegmentFact(0, 0, len(axis), True, True, False),)
+    axis[65536] -= np.uint64(1)
+    assert build_segments(axis) == (
+        SegmentFact(0, 0, 65536, True, False, False),
+        SegmentFact(1, 65536, len(axis), True, False, False),
+    )
+    assert build_segments(np.array([np.inf, np.nan, 2.0, 3.0, -np.inf])) == (
+        SegmentFact(0, 0, 1, False, False, True),
+        SegmentFact(1, 1, 2, False, False, True),
+        SegmentFact(2, 2, 4, True, False, False),
+        SegmentFact(3, 4, 5, False, False, True),
+    )

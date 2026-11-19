@@ -5,6 +5,7 @@ import faulthandler
 import errno
 import inspect
 import json
+import os
 from pathlib import Path
 import sys
 import time
@@ -15,7 +16,8 @@ from .import_limits import (
     ImportResourceError, budget_context, envelope_for_known_resource,
     output_transfer_envelope,
 )
-from .import_process import IMPORT_METHODS, _read_json, _runtime_identity, source_snapshot
+from .import_process import (IMPORT_METHODS, IMPORT_TIMINGS_ENV, MDF_IMPORT_METHODS, _read_json,
+                             _runtime_identity, source_snapshot)
 
 
 class _Cancelled(Exception):
@@ -89,7 +91,72 @@ def _dispatch(method, path, kwargs, progress):
     return function(str(path), **kwargs)
 
 
+def _initialize_runtime(runtime):
+    # Bootstrap remains Qt-free and retains modular DLL/search-path leases.
+    from mf4_analyzer.app import bootstrap_extension_runtime
+    if runtime is None:
+        bootstrap_extension_runtime()
+    else:
+        bootstrap_extension_runtime(app_root=Path(runtime["app_root"]),
+                                    use_extensions=runtime["mode"] == "modular")
+        if _runtime_identity() != runtime:
+            raise ImportError("读取进程的依赖组件与主程序不一致")
+
+
+def _warm_once(root, runtime):
+    started = time.monotonic()
+    for name in ("ready.json", "ready.tmp", "request.json"):
+        if (root / name).exists() or (root / name).is_symlink():
+            return 2
+    if sys.platform == "win32" and not _wait_for_file(root, "admitted", 30):
+        return 2
+    try:
+        from . import import_transport  # preload pandas/NumPy transport
+        from .loader import ensure_mdf
+
+        _initialize_runtime(runtime)
+        imports_finished = time.monotonic()
+        ensure_mdf()
+        decoder_ready = time.monotonic()
+    except (ImportError, OSError):
+        with (root / "stderr.log").open("a", encoding="utf-8") as stream:
+            traceback.print_exc(file=stream)
+        return 1
+    _publish(root / "ready.json", {
+        "runtime": runtime,
+        "bootstrap_ms": round((imports_finished - started) * 1000, 1),
+        "mdf_dependency_ms": round((decoder_ready - imports_finished) * 1000, 1),
+    })
+    if not _wait_for_file(root, "request.json", 35):
+        return 2
+    return _parse_request(root / "request.json", warmed=True, runtime=runtime)
+
+
+def _wait_for_file(root, name, seconds):
+    deadline = time.monotonic() + seconds
+    while not (root / "cancel").exists() and time.monotonic() < deadline:
+        if (root / name).is_file():
+            return True
+        time.sleep(.01)
+    return False
+
+
 def main(request_path):
+    request_path = Path(request_path)
+    if request_path.name != "warmup.json":
+        return _parse_request(request_path)
+    if request_path.is_symlink() or request_path.parent.is_symlink():
+        return 2
+    root = request_path.resolve().parent
+    if not root.name.startswith("tracelab-import-"):
+        return 2
+    config = _read_json(request_path, 65536)
+    if config is None or set(config) != {"runtime"}:
+        return 2
+    return _warm_once(root, config["runtime"])
+
+
+def _parse_request(request_path, *, warmed=False, runtime=None):
     request_path = Path(request_path)
     if request_path.is_symlink() or request_path.parent.is_symlink():
         return 2
@@ -122,6 +189,17 @@ def main(request_path):
     if path.resolve().is_relative_to(root):
         return 2
     outcome = {"request_id": request_id, "state": "failed"}
+    timing_enabled = os.environ.get(IMPORT_TIMINGS_ENV) == "1"
+    timings = {}
+    previous = time.monotonic()
+
+    def mark(name):
+        nonlocal previous
+        if timing_enabled:
+            now = time.monotonic()
+            timings[name] = round((now - previous) * 1000, 1)
+            previous = now
+
     last_progress = [0.0]
 
     def progress(current=0, total=0, phase="读取数据"):
@@ -150,16 +228,13 @@ def main(request_path):
                     raise TimeoutError("读取进程未获监督授权")
                 time.sleep(.01)
         progress(phase="初始化读取器")
-        # Bootstrap remains Qt-free and retains modular DLL/search-path leases.
-        from mf4_analyzer.app import bootstrap_extension_runtime
-        runtime = request.get("runtime")
-        if runtime is None:
-            bootstrap_extension_runtime()
+        mark("transport_and_admission")
+        if warmed:
+            if request["method"] not in MDF_IMPORT_METHODS or request.get("runtime") != runtime:
+                raise ImportError("候命读取进程与导入请求不匹配")
         else:
-            bootstrap_extension_runtime(app_root=Path(runtime["app_root"]),
-                                        use_extensions=runtime["mode"] == "modular")
-            if _runtime_identity() != runtime:
-                raise ImportError("读取进程的依赖组件与主程序不一致")
+            _initialize_runtime(request.get("runtime"))
+        mark("runtime")
         operation = "source"
         if source_snapshot(path) != request["snapshot"]:
             raise ValueError("读取开始前源文件发生变化")
@@ -171,7 +246,13 @@ def main(request_path):
         with budget_context(limits):
             progress(phase="读取数据")
             operation = "parse"
+            mark("arguments_and_snapshot")
+            if timing_enabled and request["method"] in MDF_IMPORT_METHODS:
+                from .loader import ensure_mdf
+                ensure_mdf()
+                mark("mdf_dependency")
             result = _dispatch(request["method"], path, kwargs, progress)
+            mark("parse_and_alignment")
             if (root / "cancel").exists():
                 raise _Cancelled()
             operation = "source"
@@ -180,7 +261,9 @@ def main(request_path):
             progress(phase="交接读取结果")
             operation = "transfer"
             write_import_result(result, root / "result", request_id=request_id,
-                                max_bytes=limits.max_output_bytes)
+                                max_bytes=limits.max_output_bytes,
+                                packed_arrays=request["method"] in MDF_IMPORT_METHODS)
+            mark("write_result_and_snapshot")
         outcome["state"] = "complete"
         code = 0
     except _Cancelled:
@@ -217,6 +300,8 @@ def main(request_path):
         if kind == "resource_limit" and envelope is not None:
             outcome["resource"] = envelope
         code = 1
+    if timing_enabled:
+        outcome["timings_ms"] = timings
     outcome["reader_runtime"] = _reader_runtime()
     try:
         _publish(root / "outcome.json", outcome)

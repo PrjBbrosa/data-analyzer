@@ -251,3 +251,36 @@ def test_legacy_project_native_fields_do_not_reactivate_wwt_policy(
     assert window.canvas_time.axes_list[0].get_xlim() == (
         wwt.SFNS_NATIVE_X_LO, wwt.SFNS_NATIVE_X_HI,
     )
+
+
+def test_wwt_ordinary_replot_preserves_imported_viewport(qapp, qtbot, tmp_path, monkeypatch):
+    window, _ = _load_rack_initial_view(qapp, qtbot, tmp_path, monkeypatch)
+    canvas = window.canvas_time
+    # Model the user's zoom after importing the WWT View. These deliberately
+    # non-round limits also exercise ordinary refresh outside View restore.
+    canvas.axes_list[0].set_ylim(-7.123, 12.875)
+    expected_x = canvas.get_visible_xlim()
+    expected_y = [handle.get_ylim() for handle in canvas.axes_list]
+    for _ in range(2):
+        window.plot_time()
+        qapp.processEvents()
+        assert canvas.get_visible_xlim() == expected_x
+        assert [handle.get_ylim() for handle in canvas.axes_list] == expected_y
+
+
+def test_wwt_restore_keeps_progress_writes_outside_suppressed_canvas(
+    qapp, qtbot, tmp_path, monkeypatch,
+):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    observed = []
+    begin = MainWindow._begin_compute_progress
+
+    def record(window, *args, **kwargs):
+        observed.append(window.canvas_time.updatesEnabled())
+        return begin(window, *args, **kwargs)
+
+    monkeypatch.setattr(MainWindow, "_begin_compute_progress", record)
+    window, _ = _load_rack_initial_view(qapp, qtbot, tmp_path, monkeypatch)
+    assert window.canvas_time.axes_list
+    assert observed and all(observed)

@@ -156,6 +156,18 @@ def build_segments(values) -> tuple:
             has_duplicate_time=False, has_nonfinite_time=nonfinite,
         ),)
 
+    # Keep temporary masks bounded and compare the original dtype. Diff
+    # could overflow on uint64 or lose ordering after a float conversion.
+    if array.ndim == 1 and array.dtype.kind in "iuf" and np.isfinite(array[0]):
+        block_size = 65536
+        for start in range(1, n, block_size):
+            stop = min(start + block_size, n)
+            block = array[start:stop]
+            if not np.isfinite(block).all() or not (block > array[start - 1:stop - 1]).all():
+                break
+        else:
+            return (SegmentFact(0, 0, n, True, False, False),)
+
     segments = []
     start = 0
     duplicate = False

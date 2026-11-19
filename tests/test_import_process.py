@@ -616,3 +616,61 @@ def test_output_budget_is_transfer_not_memory_estimate(tmp_path):
     text = resource_user_text(error)
     assert "预计导入资源需求" not in text
     assert "recheck_retry" not in resource_action_ids(error)
+
+
+def test_preloaded_worker_accepts_one_mdf_and_leaves_no_task_directory(tmp_path, monkeypatch):
+    pytest.importorskip("asammdf")
+    from mf4_analyzer.io import import_process as process
+    from tests._helpers.mf4_factory import write_single_channel_mf4
+
+    source = write_single_channel_mf4(tmp_path / "one.mf4")
+    original_launch = process._launch_worker
+    launches = []
+
+    def launch(request_path, diagnostics):
+        proc = original_launch(request_path, diagnostics)
+        launches.append((request_path, proc))
+        return proc
+
+    monkeypatch.setattr(process, "_launch_worker", launch)
+    prewarm = process.MdfImportPrewarm()
+    try:
+        prewarm.start()
+        deadline = time.monotonic() + 15
+        while prewarm._ready is None and prewarm.running and time.monotonic() < deadline:
+            time.sleep(.01)
+        assert prewarm._ready is not None
+        frame, _, _ = run_import("load_mf4", source, prewarm=prewarm)
+        assert frame["sig"].tolist() == [1, 2, 3, 4]
+        assert len(launches) == 1
+        assert launches[0][1].returncode == 0
+        assert not launches[0][0].parent.exists()
+        run_import("load_mf4", source, prewarm=prewarm)
+        assert launches[1][0].name == "request.json"
+    finally:
+        prewarm.close()
+        prewarm._thread.join(timeout=10)
+        assert not prewarm.running
+
+
+def test_discard_unclaimed_prewarm_reaps_worker(tmp_path, monkeypatch):
+    from mf4_analyzer.io import import_process as process
+
+    created = []
+    launch = process._launch_worker
+
+    def observe(request, diagnostics):
+        proc = launch(request, diagnostics)
+        created.append((request.parent, proc))
+        return proc
+
+    monkeypatch.setattr(process, "_launch_worker", observe)
+    prewarm = process.MdfImportPrewarm()
+    prewarm.start()
+    prewarm.close()
+    prewarm._thread.join(timeout=10)
+    assert not prewarm.running
+    assert len(created) == 1
+    root, proc = created[0]
+    assert proc.poll() is not None
+    assert not root.exists()
