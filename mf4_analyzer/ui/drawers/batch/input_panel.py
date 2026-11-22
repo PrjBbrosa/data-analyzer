@@ -134,7 +134,13 @@ class _ProbeRunnable(QRunnable):
         try:
             result = self._probe_fn(self._path)
         except Exception as exc:  # broad on purpose: convert to UI state
-            msg = f"{type(exc).__name__}: {exc}"
+            if isinstance(exc, FileNotFoundError):
+                hint = "文件找不到，请移除后重新选择。"
+            elif isinstance(exc, PermissionError):
+                hint = "无法读取，请检查文件权限后重新添加。"
+            else:
+                hint = "请检查文件后重新添加，悬停可查看原因。"
+            msg = f"{hint}\n{type(exc).__name__}: {exc}"
             self.signals.failed.emit(self._path, msg)
             return
         self.signals.finished.emit(self._path, result)
@@ -240,7 +246,11 @@ class _StructuredFileRow(QWidget):
         copy_lay.setSpacing(1)
         name = QLabel(row.display_name or os.path.basename(row.path) or row.path, copy_host)
         name.setObjectName("BatchFileRowName")
-        path = QLabel(os.path.dirname(row.path) or row.path, copy_host)
+        subtitle = os.path.dirname(row.path) or row.path
+        if row.state == STATE_PROBE_FAILED:
+            subtitle = row.error.partition("\n")[0]
+        path = QLabel(subtitle, copy_host)
+        path.setTextFormat(Qt.PlainText)
         path.setObjectName("BatchFileRowPath")
         copy_lay.addWidget(name)
         copy_lay.addWidget(path)
@@ -678,12 +688,12 @@ class FileListWidget(QWidget):
         try:
             descriptors = tuple(result)
         except TypeError:
-            self._on_probe_failed(path, "bad probe result: expected source descriptors")
+            self._on_probe_failed(path, "无法读取通道列表，请检查文件格式后重新添加。")
             return
         if not descriptors or not all(
             isinstance(descriptor, SourceDescriptor) for descriptor in descriptors
         ):
-            self._on_probe_failed(path, "bad probe result: expected source descriptors")
+            self._on_probe_failed(path, "无法读取通道列表，请检查文件格式后重新添加。")
             return
 
         # Replace the physical-path placeholder with every logical group.  The

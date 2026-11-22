@@ -53,6 +53,7 @@ class ImportCall:
     kwargs: dict = field(default_factory=dict)
     phase: str = '读取数据'
     transform: object = None
+    multirate_available: bool = False
 
 
 @dataclass(frozen=True)
@@ -478,7 +479,9 @@ class ImportCoordinator(QObject):
         self.note_user_wait(request, "等待处理导入错误")
         dialog = build_import_resource_dialog(
             self.host,
-            text=resource_user_text(error),
+            text=resource_user_text(
+                error, multirate_available=bool(self._last_call and self._last_call.multirate_available),
+            ),
             detail=resource_technical_detail(
                 error,
                 stage=getattr(error, "stage", "") or "",

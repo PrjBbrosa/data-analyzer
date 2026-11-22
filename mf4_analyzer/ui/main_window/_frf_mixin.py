@@ -552,16 +552,19 @@ class FrfMixin:
         if not np.isclose(input_fs, output_fs, rtol=1e-9, atol=0.0):
             raise FrfPreflightError("输入和输出采样率不一致")
         if len(input_time) == 0 or len(output_time) == 0:
-            raise FrfPreflightError("输入和输出没有共同的物理时间样本")
+            raise FrfPreflightError("通道没有可用样本，请重新选择输入和输出。")
+
+        from ...analysis_signal_prepare import frf_coverage_hint
 
         requested_range = self._frf_requested_range_for_pane(state, pane)
         common_lo = max(float(input_time[0]), float(output_time[0]))
         common_hi = min(float(input_time[-1]), float(output_time[-1]))
+        full_overlap = (common_lo, common_hi)
         if requested_range is not None:
             common_lo = max(common_lo, float(requested_range[0]))
             common_hi = min(common_hi, float(requested_range[1]))
         if common_hi < common_lo:
-            raise FrfPreflightError("输入和输出在当前范围内没有共同的物理时间样本")
+            raise FrfPreflightError(frf_coverage_hint(*full_overlap, requested_range))
 
         input_mask = (input_time >= common_lo) & (input_time <= common_hi)
         output_mask = (output_time >= common_lo) & (output_time <= common_hi)
@@ -571,7 +574,7 @@ class FrfMixin:
             input_values = input_values[input_mask]
             output_values = output_values[output_mask]
         if len(input_time) == 0 or len(output_time) == 0:
-            raise FrfPreflightError("输入和输出在当前范围内没有共同的物理时间样本")
+            raise FrfPreflightError(frf_coverage_hint(*full_overlap, requested_range))
 
         time_facts = None
         cropped_input_time = input_time

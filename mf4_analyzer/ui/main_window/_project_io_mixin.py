@@ -852,7 +852,7 @@ class ProjectIOMixin:
         """「保存」handler: overwrite the current .tlproj if one is open,
         otherwise fall back to Save-As."""
         if self._project_path is not None:
-            return bool(self.save_project(self._project_path))
+            return self._save_project_from_ui(self._project_path)
         return bool(self.save_project_as_via_dialog())
 
     def save_project_as_via_dialog(self):
@@ -865,7 +865,19 @@ class ProjectIOMixin:
             return False
         if not fp.lower().endswith(".tlproj"):
             fp = fp + ".tlproj"
-        return bool(self.save_project(Path(fp)))
+        return self._save_project_from_ui(Path(fp))
+
+    def _save_project_from_ui(self, path):
+        try:
+            return bool(self.save_project(path))
+        except OSError:
+            logger.warning("Unable to save project %s", path, exc_info=True)
+            QMessageBox.warning(self, "工程未保存", f"无法写入 {Path(path).name}。请另存到可写且空间充足的位置。")
+            return False
+        except (ValueError, TypeError):
+            logger.exception("Unable to serialize project %s", path)
+            QMessageBox.warning(self, "工程未保存", "无法保存当前工程数据。请保留窗口并查看诊断日志。")
+            return False
 
     def _confirm_degraded_project_save(self, health):
         """Confirm overwrite/save-as after a degraded project restore.
@@ -1282,7 +1294,9 @@ class ProjectIOMixin:
             kwargs = {}
             can_metadata = None
         prepared, document = yield ImportCall(
-            method, fp, kwargs, transform=partial(
+            method, fp, kwargs,
+            multirate_available=(ext == ".mf4" and method == "load_mf4" and not self._restoring_project),
+            transform=partial(
                 self._prepare_import_result, method=method,
                 sampling_rate=sampling_rate, can_metadata=can_metadata,
             ),
@@ -3118,11 +3132,6 @@ class ProjectIOMixin:
         from .. import project_io as pio
         path = Path(path)
 
-        for section in getattr(self, "analysis_managers", {}) or {}:
-            page = self._analysis_page(section)
-            if page is not None:
-                page._overlay_session_bound = False
-
         try:
             doc = pio.load_project_from_json(path)
         except pio.UnsupportedProjectVersion as exc:
@@ -3135,6 +3144,20 @@ class ProjectIOMixin:
                 "请升级到可以打开该工程的版本",
             )
             return
+        except OSError:
+            logger.warning("Unable to read project %s", path, exc_info=True)
+            QMessageBox.warning(self, "无法打开工程", f"无法读取 {path.name}。请检查文件位置和读取权限。")
+            return
+        except (ValueError, KeyError, TypeError):
+            logger.warning("Invalid project document %s", path, exc_info=True)
+            QMessageBox.warning(self, "无法打开工程", f"{path.name} 格式无效。请选择有效的工程文件或备份。")
+            return
+
+        for section in getattr(self, "analysis_managers", {}) or {}:
+            page = self._analysis_page(section)
+            if page is not None:
+                page._overlay_session_bound = False
+
         self._imports.invalidate_session()
 
         def workflow(request):
@@ -3319,7 +3342,7 @@ class ProjectIOMixin:
                     lines.append("来源读取失败：\n" + "\n".join(failure_details))
                 if missing:
                     lines.append(
-                        "以下文件找不到，已跳过：\n" + "\n".join(missing)
+                        "以下来源未恢复。若文件已移动，请放回原位置再打开工程。\n" + "\n".join(missing)
                     )
                 if missing_sources:
                     lines.append(
@@ -3356,8 +3379,7 @@ class ProjectIOMixin:
                     )
                 else:
                     lines.append(
-                        "再次保存前会提示确认：Stage 1 不会保留未解析引用，"
-                        "保存会固化当前缺失状态。"
+                        "保存会移除未恢复的引用，建议另存为新工程。"
                     )
                 QMessageBox.warning(
                     self,
@@ -3368,7 +3390,7 @@ class ProjectIOMixin:
                 # Defensive: missing paths without a health holder still warn.
                 QMessageBox.warning(
                     self, "部分文件缺失",
-                    "以下文件找不到，已跳过：\n" + "\n".join(missing),
+                    "以下来源未恢复。若文件已移动，请放回原位置再打开工程。\n" + "\n".join(missing),
                 )
 
             if uv_warnings:

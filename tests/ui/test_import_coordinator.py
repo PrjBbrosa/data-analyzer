@@ -846,7 +846,7 @@ def test_active_host_deletion_retains_supervisor_until_cancelled_drain(qapp, qtb
 _SHARED_AXIS = "MDF shared-axis conversion/alignment/frame"
 
 
-def _resource_exc(kind, *, requested=None, limit=None, unit="bytes"):
+def _resource_exc(kind, *, requested=None, limit=None, unit="bytes", phase="admission"):
     from mf4_analyzer.io.import_limits import parse_resource_envelope
     from mf4_analyzer.io.import_process import ImportProcessError
 
@@ -854,7 +854,7 @@ def _resource_exc(kind, *, requested=None, limit=None, unit="bytes"):
         "schema": 1,
         "resource_kind": kind,
         "unit": unit,
-        "phase": "admission",
+        "phase": phase,
         "estimate_basis": "test",
         "label": _SHARED_AXIS,
     }
@@ -929,7 +929,7 @@ def _action_ids(dialog):
     ("kind", "unit", "requested", "limit", "needle", "recheck", "forbid"),
     [
         ("memory_estimate", "bytes", 638_976_000, 498_988_944, "约609 MiB", True, "638,976,000"),
-        ("temp_disk", "bytes", 10 * 1024 * 1024, 1024 * 1024, "这不是内存预算不足", False, None),
+        ("temp_disk", "bytes", 10 * 1024 * 1024, 1024 * 1024, "所在磁盘后重试", False, None),
         ("channel_count", "count", 120_000, 100_000, "通道数量为 120,000", False, "MiB"),
         ("not_a_real_kind", "bytes", None, None, "未提供估算", False, "MiB"),
     ],
@@ -1001,6 +1001,37 @@ def test_resource_failure_dialog_uses_structured_copy(
     assert not window.files
     assert str(path) not in recent
     assert not any(len(item) > 1 and item[1] == "success" for item in toasts)
+
+
+@pytest.mark.parametrize(
+    ("suffix", "native", "kind", "phase", "offer"),
+    [
+        (".mf4", False, "memory_estimate", "mdf_shared_axis", True),
+        (".mf4", False, "worker_memory", "runtime", True),
+        (".mf4", False, "memory_error", "runtime", True),
+        (".mf4", True, "memory_estimate", "mdf_shared_axis", False),
+        (".mdf", False, "memory_estimate", "mdf_shared_axis", False),
+        (".mf4", False, "memory_estimate", "mdf_admission", False),
+        (".mf4", False, "temp_disk", "storage", False),
+    ],
+)
+def test_multirate_hint_follows_failed_open(
+    qtbot, monkeypatch, tmp_path, suffix, native, kind, phase, offer,
+):
+    exc = _resource_exc(kind, requested=200, limit=100, phase=phase)
+
+    def broker(*args, **kwargs):
+        raise exc
+
+    shown, _ = _patch_message_boxes(monkeypatch, lambda dialog: None)
+    window, _, _ = _window_for_broker(qtbot, monkeypatch, broker)
+    window.navigator.set_mf4_multirate_enabled(native)
+    path = tmp_path / ("sample" + suffix)
+    path.touch()
+    window._load_one(str(path))
+    qtbot.waitUntil(lambda: not window._imports.busy, timeout=15000)
+    assert len(shown) == 1
+    assert ("多采样率" in shown[0]._captured_text) is offer
 
 
 def test_recheck_uses_new_default_limits_for_the_failed_file_only(
@@ -1239,8 +1270,10 @@ def test_project_restore_and_batch_dbc_use_the_resource_dialog(
 ):
     from mf4_analyzer.io.import_limits import resource_user_text
 
-    exc = _resource_exc("memory_estimate", requested=638_976_000, limit=498_988_944)
-    source = _csv_file(tmp_path / "restore.csv")
+    exc = _resource_exc("memory_estimate", requested=638_976_000, limit=498_988_944,
+                        phase="mdf_shared_axis")
+    source = tmp_path / "restore.mf4"
+    source.touch()
     state = {"fail": False}
     calls = []
 
@@ -1252,18 +1285,20 @@ def test_project_restore_and_batch_dbc_use_the_resource_dialog(
 
     shown, critical = _patch_message_boxes(monkeypatch, lambda dialog: None)
     window, _toasts, _recent = _window_for_broker(qtbot, monkeypatch, broker)
+    window.navigator.set_mf4_multirate_enabled(False)
     window._load_one(str(source))
     qtbot.waitUntil(lambda: not window._imports.busy, timeout=15000)
     project = tmp_path / "restore.tlproj"
     assert window.save_project(project)
     state["fail"] = True
     before = len(calls)
+    window.navigator.set_mf4_multirate_enabled(True)
     window.open_project(project)
     qtbot.waitUntil(lambda: not window._imports.busy, timeout=15000)
     assert len(shown) == 1 and not critical
     assert shown[0]._captured_text == resource_user_text(exc)
     assert "shared-axis" not in shown[0]._captured_text
-    assert calls[before:] == ["restore.csv"]
+    assert calls[before:] == ["restore.mf4"]
     assert not window.files
 
     blf = tmp_path / "batch.blf"

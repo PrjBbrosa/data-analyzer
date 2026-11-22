@@ -642,13 +642,23 @@ def _approx_mib(nbytes):
     return f"约{rounded} MiB"
 
 
-def _user_body(facts, original):
+def _user_body(facts, original, *, multirate_available=False):
     if not facts.supported:
         lines = [f"本次未导入此文件。{ESTIMATE_UNAVAILABLE}。"]
         if original:
             lines.append(original)
         return "\n".join(lines)
     kind = facts.resource_kind
+    if multirate_available and (
+        (kind == "memory_estimate" and facts.phase == "mdf_shared_axis")
+        or kind in {"worker_memory", "memory_error"}
+    ):
+        reason = {
+            "memory_estimate": "公共时间轴超出内存预算。",
+            "worker_memory": "读取内存超过预算。",
+            "memory_error": "读取文件时内存不足。",
+        }[kind]
+        return reason + "可在文件区的链接菜单勾选「多采样率（仅 MF4）」，再打开此文件。"
     if kind == "memory_estimate" and facts.numbers_available:
         return (
             f"本次未导入此文件。预计导入资源需求{_approx_mib(facts.requested)}，"
@@ -663,12 +673,12 @@ def _user_body(facts, original):
     if kind == "worker_memory" and facts.numbers_available:
         return (
             f"本次未导入此文件。读取进程监测到内存{_approx_mib(facts.requested)}，"
-            f"当前预算{_approx_mib(facts.limit)}。这是运行中的监测结果。"
+            f"当前预算{_approx_mib(facts.limit)}。请关闭不需要的来源后重新打开文件。"
         )
     if kind == "worker_memory":
-        return f"本次未导入此文件。读取进程内存超过预算。{ESTIMATE_UNAVAILABLE}。"
+        return f"本次未导入此文件。读取进程内存超过预算（{ESTIMATE_UNAVAILABLE}）。请关闭不需要的来源后重试。"
     if kind == "memory_error":
-        return f"本次未导入此文件。读取进程报告内存不足。{ESTIMATE_UNAVAILABLE}。"
+        return f"本次未导入此文件。读取进程报告内存不足（{ESTIMATE_UNAVAILABLE}）。请关闭占用内存的程序后重试。"
     if kind == "output_transfer" and facts.numbers_available:
         return (
             f"本次未导入此文件。读取结果传输量{_approx_mib(facts.requested)}，"
@@ -677,19 +687,17 @@ def _user_body(facts, original):
     if kind == "output_transfer":
         return f"本次未导入此文件。读取结果的传输量超过输出上限。{ESTIMATE_UNAVAILABLE}。"
     if kind == "temp_disk":
-        if facts.numbers_available:
-            text = (
-                f"本次未导入此文件。临时磁盘空间不足，需求{_approx_mib(facts.requested)}，"
-                f"可用上限{_approx_mib(facts.limit)}。这不是内存预算不足。"
-            )
-        else:
-            text = (
-                f"本次未导入此文件。临时磁盘空间不足，无法完成读取结果写入。"
-                f"{ESTIMATE_UNAVAILABLE}。这不是内存预算不足。"
-            )
-        if original:
-            text += "\n" + original
-        return text
+        import tempfile
+
+        try:
+            where = tempfile.gettempdir()
+        except FileNotFoundError:
+            where = "系统临时目录"
+        if facts.estimate_basis == "os_edquot":
+            return f"临时磁盘配额已用尽。请清理 {where} 所在磁盘的个人文件后重试。"
+        size = (f"需{_approx_mib(facts.requested)}，可用{_approx_mib(facts.limit)}"
+                if facts.numbers_available else ESTIMATE_UNAVAILABLE)
+        return f"临时磁盘空间不足（{size}）。请清理 {where} 所在磁盘后重试。"
     if kind == "channel_count" and facts.numbers_available:
         return (
             f"本次未导入此文件。通道数量为 {facts.requested:,}，"
@@ -714,12 +722,12 @@ def _user_body(facts, original):
     return f"本次未导入此文件。{ESTIMATE_UNAVAILABLE}。"
 
 
-def resource_user_text(error, *, message=None):
+def resource_user_text(error, *, message=None, multirate_available=False):
     """Ordinary copy. Quantities come from structured fields, never from prose."""
     facts, original, _stage, _detail, _request_id = _coerce(error, message=message)
     if facts is None:
         return original
-    return _user_body(facts, original)
+    return _user_body(facts, original, multirate_available=multirate_available)
 
 
 def resource_technical_detail(error, *, message=None, stage=None, detail=None, request_id=None):

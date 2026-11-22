@@ -5648,8 +5648,11 @@ class MainWindow(
             if not loaded:
                 self.toast("没有可导出的数据或未勾选通道", "warning")
                 return
-            if not _native_channels_share_clock(loaded) or _native_export_has_invalid(loaded):
-                self.toast("这些通道没有一条共同的有效时间轴，不能收成 WWT", "warning")
+            if not _native_channels_share_clock(loaded):
+                self.toast("通道时间轴不同。请只选同一时间轴的通道，或改用 Excel 导出。", "warning")
+                return
+            if _native_export_has_invalid(loaded):
+                self.toast("所选数据含失效样本。请选择有效时间段，或改用 Excel 导出。", "warning")
                 return
             t = np.asarray(loaded[0][1].time, dtype=np.float64)
             series = {

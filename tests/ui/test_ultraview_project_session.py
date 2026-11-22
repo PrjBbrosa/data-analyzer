@@ -329,7 +329,7 @@ def test_failed_sidecar_save_as_drops_old_project_relative_descriptor(qapp, qtbo
     assert "preview_sidecar" not in raw["ultraview"]
 
 
-def test_open_project_parse_failure_keeps_board(qapp, qtbot, tmp_path):
+def test_open_project_parse_failure_keeps_board(qapp, qtbot, tmp_path, monkeypatch):
     win = MainWindow()
     qtbot.addWidget(win)
     uv = win._ultraview
@@ -338,12 +338,11 @@ def test_open_project_parse_failure_keeps_board(qapp, qtbot, tmp_path):
     uv.board.name = "解析失败保留"
     bad = tmp_path / "broken.tlproj"
     bad.write_text("{not-json", encoding="utf-8")
-    try:
-        win.open_project(bad)
-        wait_for_imports(win)
-        raise AssertionError("open_project should reject invalid JSON")
-    except ValueError:
-        pass
+    messages = []
+    monkeypatch.setattr("PyQt5.QtWidgets.QMessageBox.warning",
+                        lambda parent, title, body: messages.append(body))
+    win.open_project(bad)
+    assert len(messages) == 1 and "备份" in messages[0]
     assert uv.board.name == "解析失败保留"
     assert UltraViewRef("time", view_id) in membership_set(uv.board)
 

@@ -748,12 +748,17 @@ def test_close_project_write_failure_keeps_dirty_binding(
     window.view_manager.rename(0, "写入失败")
     before = _binding_snapshot(window)
     monkeypatch.setattr(window, "_prompt_unsaved_project", lambda: "save")
-    monkeypatch.setattr(
-        window, "save_project_via_dialog",
-        lambda: (_ for _ in ()).throw(OSError("disk full")),
-    )
+    def reject_write(document, path):
+        raise PermissionError("read-only destination")
+
+    messages = []
+    monkeypatch.setattr(window, "_write_project_document", reject_write)
+    monkeypatch.setattr("PyQt5.QtWidgets.QMessageBox.warning",
+                        lambda parent, title, body: messages.append((title, body)))
 
     assert window.close_project() is False
+    assert len(messages) == 1
+    assert messages[0][0] == "工程未保存" and "另存" in messages[0][1]
     assert _binding_snapshot(window) == before
     assert window._project_dirty.is_dirty
     assert str(window._project_path) == str(project)

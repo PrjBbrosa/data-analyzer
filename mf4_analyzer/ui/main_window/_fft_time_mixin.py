@@ -244,6 +244,7 @@ class FFTTimeMixin:
         current selection. Returns ``(None,) * 5`` when the source is
         unavailable so the queue can skip that job without aborting the rest.
         """
+        self._native_prepare_block = None
         if not source:
             return None, None, None, None, None
         fid, ch = source
@@ -253,7 +254,6 @@ class FFTTimeMixin:
         if getattr(fd, "is_native", False):
             from ...analysis_signal_prepare import load_native_channel
             prepared = load_native_channel(fd, ch, time_range)
-            self._native_prepare_block = None
             if prepared.status != "ready":
                 self._native_prepare_block = prepared.reason or "时间轴无效"
                 return None, None, None, None, None
@@ -434,7 +434,7 @@ class FFTTimeMixin:
             prepared = self._fft_time_effective_params_for_source(
                 compute_p, fid, ch, time_range)
             if prepared is None:
-                outcome.skipped.append('源通道缺失或样本不足')
+                outcome.skipped.append(getattr(self, "_native_prepare_block", None) or "信号不可用，请检查通道和时间范围")
                 candidates.append({
                     'fid': fid,
                     'channel': ch,
@@ -525,7 +525,7 @@ class FFTTimeMixin:
         if rng is not None:
             t, sig = self._mask_time_range(t, sig, time_range=rng)
         if sig is None or len(sig) < 2:
-            self.toast("当前范围内样本不足", "warning")
+            self.toast("当前范围内样本不足。请扩大或取消时间范围。", "warning")
             return
         if getattr(fd, "is_native", False):
             from ...analysis_signal_prepare import load_native_channel
@@ -641,7 +641,7 @@ class FFTTimeMixin:
             self._record_fft_time_skip(reason)
             return None
         if len(sig) < 2:
-            self._record_fft_time_skip("信号过短")
+            self._record_fft_time_skip("信号过短，请选择样本更多的通道")
             return None
         if not getattr(fd, "is_native", False) and not self._check_uniform_or_prompt(fd, 'fft_time'):
             self._record_fft_time_skip("时间轴无效")
@@ -649,7 +649,7 @@ class FFTTimeMixin:
         if rng is not None:
             t, sig = self._mask_time_range(t, sig, time_range=rng)
             if len(sig) < 2:
-                self._record_fft_time_skip("样本不足")
+                self._record_fft_time_skip("样本不足，请扩大或取消时间范围")
                 return None
         if getattr(fd, "is_native", False):
             from ...analysis_signal_prepare import load_native_channel

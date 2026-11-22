@@ -791,7 +791,10 @@ class AnalysisMixin:
                     levels_locked=comp.levels_locked(section),
                 )
                 if on:
-                    self.toast("频率轴尺度不一致，未联动", "warning")
+                    message = ("请将两图的频率轴都设为线性或都设为对数，再联动。"
+                               if section == "frf" and not self._comparison_axes_compatible(section)
+                               else "无法联动，请确认两个对比视图均已打开。")
+                    self.toast(message, "warning")
             return
         if key != "levels_locked":
             return
@@ -806,11 +809,12 @@ class AnalysisMixin:
                 levels_locked=comp.levels_locked(section),
             )
         if bool(on):
-            self.toast("色阶不一致，未锁定", "warning")
+            message = self._comparison_level_issue(section) or "无法锁定色阶，请检查对比视图。"
+            self.toast(message, "warning")
             bar = getattr(self, "statusBar", None)
             show = getattr(bar, "showMessage", None)
             if callable(show):
-                show("两个热图色阶不一致，未锁定")
+                show(message)
 
     def _comparison_relations(self, section) -> dict:
         comp = self._comparison()
@@ -1252,29 +1256,34 @@ class AnalysisMixin:
         return True
 
     def _comparison_levels_compatible(self, section) -> bool:
+        return not self._comparison_level_issue(section)
+
+    def _comparison_level_issue(self, section) -> str:
         comp = self._comparison()
         pair = comp.displayed(section) if comp is not None else None
         if pair is None:
-            return False
+            return "请先打开两个对比视图。"
         host = self._analysis_state_by_id(section, pair[0])
         peer = self._analysis_state_by_id(section, pair[1])
         if host is None or peer is None:
-            return False
+            return "请先打开两个对比视图。"
         left = dict(host.params or {})
         right = dict(peer.params or {})
-        keys = ("amplitude_mode", "weighting")
-        if any(left.get(key) != right.get(key) for key in keys):
-            return False
+        for key, label in (("amplitude_mode", "幅值模式"), ("weighting", "计权方式")):
+            if left.get(key) != right.get(key):
+                return f"两图的{label}不同。请设为相同后再锁定色阶。"
         identities = set()
         for state in (host, peer):
             for pane in state.panes:
                 if not pane.sources:
-                    return False
+                    return "对比窗格缺少信号，请先选择通道。"
                 resolution = self._resolve_db_reference_for_source(
                     section, pane.sources[0], params=state.params,
                 )
                 identities.add((resolution.quantity, resolution.unit, resolution.value))
-        return len(identities) == 1
+        if len(identities) != 1:
+            return "色阶参考不同。请选择物理量、单位和参考值一致的通道。"
+        return ""
 
     def _link_comparison_cameras(self, section) -> bool:
         from ..analysis_section_page import _primary_vb

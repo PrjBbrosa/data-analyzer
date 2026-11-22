@@ -904,6 +904,20 @@ def _coverage_bounds(origin, fs, count, request):
     return max(float(origin), start), min(end, stop)
 
 
+def frf_coverage_hint(start, stop, requested_range):
+    if stop <= start:
+        return "两通道缺少共同时间段，请选择同时记录的输入和输出。"
+    if requested_range is None:
+        return "共同时间段内样本不足，请选择重叠时间更长的通道。"
+    return f"选区内共同样本不足，请在 {start} 至 {stop} 秒内重新选取时段。"
+
+
+def _native_coverage_hint(left, right, request):
+    left_start, left_stop = _coverage_bounds(left.origin, left.fs, left.count, None)
+    right_start, right_stop = _coverage_bounds(right.origin, right.fs, right.count, None)
+    return frf_coverage_hint(max(left_start, right_start), min(left_stop, right_stop), request)
+
+
 def _plan_same_axis(left: _NativeClock, right: _NativeClock, request):
     left_bounds = _coverage_bounds(left.origin, left.fs, left.count, request)
     right_bounds = _coverage_bounds(right.origin, right.fs, right.count, request)
@@ -912,15 +926,15 @@ def _plan_same_axis(left: _NativeClock, right: _NativeClock, request):
     start = max(left_bounds[0], right_bounds[0])
     stop = min(left_bounds[1], right_bounds[1])
     if not stop > start:
-        return None, "输入和输出在当前范围内没有共同的物理时间样本"
+        return None, _native_coverage_hint(left, right, request)
     left_span = _index_span(left.origin, left.fs, left.count, start, stop)
     right_span = _index_span(right.origin, right.fs, right.count, start, stop)
     if left_span is None or right_span is None:
-        return None, "输入和输出在当前范围内没有共同的物理时间样本"
+        return None, _native_coverage_hint(left, right, request)
     first = max(left_span[0], right_span[0])
     last = min(left_span[1], right_span[1])
     if last - first < 1:
-        return None, "输入和输出在当前范围内没有共同的物理时间样本"
+        return None, _native_coverage_hint(left, right, request)
     effective = (
         float(left.origin) + first / float(left.fs),
         float(left.origin) + last / float(left.fs),
@@ -955,14 +969,14 @@ def _plan_cross_rate(left: _NativeClock, right: _NativeClock, request):
     start = max(fast_bounds[0], slow_bounds[0])
     stop = min(fast_bounds[1], slow_bounds[1])
     if not stop > start:
-        return None, "输入和输出在当前范围内没有共同有效范围"
+        return None, _native_coverage_hint(left, right, request)
     fast_span = _index_span(fast.origin, fast.fs, fast.count, start, stop)
     slow_span = _index_span(slow.origin, slow.fs, slow.count, start, stop)
     if fast_span is None or slow_span is None:
-        return None, "输入和输出在当前范围内没有共同有效范围"
+        return None, _native_coverage_hint(left, right, request)
     request_count = fast_span[1] - fast_span[0] + 1
     if request_count < 2:
-        return None, "对齐后的共同网格不足 2 点"
+        return None, _native_coverage_hint(left, right, request)
     wanted = _halo_samples(request_count, support)
     left_halo = min(wanted, fast_span[0])
     right_halo = min(wanted, fast.count - 1 - fast_span[1])

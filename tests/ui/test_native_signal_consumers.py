@@ -572,7 +572,10 @@ def test_native_preview_stats_and_export_use_channel_clocks(native_file, tmp_pat
         )
         mw._do_export_wwt("f", ["fast", "other"], use_range=False)
         assert dialogs == []
-        assert notes and "共同" in notes[-1][0]
+        assert "时间轴不同" in notes[-1][0] and "Excel" in notes[-1][0]
+        mw._do_export_wwt("f", ["flagged"], use_range=False)
+        assert dialogs == []
+        assert "失效样本" in notes[-1][0] and "Excel" in notes[-1][0]
     finally:
         mw.files.pop("f", None)
         mw.close()
